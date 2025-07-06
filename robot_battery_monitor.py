@@ -3,12 +3,18 @@ import os
 
 
 class BatteryLogEntry:
-    """ this is gonna be awsome"""
-    
+    """ this is gonna be awsome""" # Keep your awesome comment!
+
     def __init__(self, time_stamp, robot_id, battery_level):
         self.time_stamp = time_stamp.strip()
         self.robot_id = robot_id.strip()
-        self.battery_level = int(battery_level.strip('%'))
+
+        # Check if battery_level is a string and needs stripping
+        if isinstance(battery_level, str):
+            self.battery_level = int(battery_level.strip('%').strip()) # .strip() again to remove any extra spaces
+        else:
+            # If it's not a string, assume it's already an int or can be directly converted
+            self.battery_level = int(battery_level)
         
     def __str__(self):
         """Return the easy answer for the user to understand what the log entry is."""

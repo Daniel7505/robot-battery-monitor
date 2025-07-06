@@ -1,4 +1,4 @@
-
+# This script analyzes robot battery log data.
 import os
 
 

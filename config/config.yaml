@@ -1,0 +1,27 @@
+dashboard:
+  host: 127.0.0.1
+  port: 5000
+  refresh_seconds: 5
+
+monitoring:
+  low_battery_threshold: 20
+  log_file: "logs/robot_battery_log.log"
+
+# One robot with multiple power channels
+robot:
+  name: "Optimus Unit 1"
+  main_battery_capacity: 100
+
+power_channels:
+  - id: "Legs"
+    name: "Leg Drive Motors"
+    max_draw: 35
+  - id: "Arms"
+    name: "Arm + Gripper Systems"
+    max_draw: 25
+  - id: "Torso"
+    name: "Torso & Balance Systems"
+    max_draw: 20
+  - id: "Compute"
+    name: "Main Computer & Sensors"
+    max_draw: 15

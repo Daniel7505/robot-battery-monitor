@@ -1,75 +1,69 @@
 # 🤖 Robot Fleet Energy Monitor
 
-**A real-time multi-channel battery and power consumption monitoring system for humanoid and mobile robots.**
+**Real-time multi-channel battery and power consumption monitoring system for humanoid and mobile robots.**
 
-Built to track the main battery and individual power draws from different subsystems (Legs, Arms, Torso, Compute, etc.).
+Tracks the main battery and individual power draws from subsystems (Legs, Arms, Torso, Compute, etc.).
 
 ---
 
 ## ✨ Features
 
-- Live multi-channel monitoring (Main Battery + individual power channels)
-- Clean, auto-refreshing web dashboard with toggleable history per channel
-- Realistic simulator with continuous drain, usage spikes, and charging events
-- SQLite database with persistent historical data
-- One-click actions: Clear data, Archive old readings, Toggle history
-- Fully configurable via `config.yaml`
-- Modular, clean code structure
+- Live multi-channel monitoring (Main Battery + per-channel power draw)
+- Clean auto-refreshing web dashboard with toggleable history per channel
+- Realistic simulator with continuous drain, usage spikes, and charging
+- SQLite database with automatic archiving
+- One-click Clear Data and Archive & Reset functions
+- Fully configurable via `config/config.yaml`
+- Proper logging and basic test coverage
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Clone or download the repo
 ```powershell
+# 1. Clone the repo
 git clone https://github.com/Daniel7505/robot-battery-monitor.git
 cd robot-battery-monitor
-2. Install dependencies
-PowerShellpip install -r requirements.txt
-3. Run the system
-PowerShellpython run_dashboard.py
-Open your browser and go to: http://127.0.0.1:5000
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. Run the system
+python run_dashboard.py
+Open your browser → http://127.0.0.1:5000
 
 📁 Project Structure
 textrobot-battery-monitor/
-├── config/config.yaml          # All settings (thresholds, channels, refresh rate, etc.)
+├── config/config.yaml          # Settings, power channels, thresholds
 ├── logs/                       # Live logs + SQLite database
 ├── archives/                   # Timestamped historical backups
 ├── src/
-│   ├── database.py             # SQLite handling
-│   ├── simulator.py            # Realistic multi-channel simulator
-│   └── dashboard.py            # Flask web UI
+│   ├── database.py
+│   ├── simulator.py
+│   └── dashboard.py
 ├── run_dashboard.py            # Main entry point
 ├── requirements.txt
 ├── README.md
 └── LICENSE
 
-Configuration
-Edit config/config.yaml to:
-
-Change robot name
-Add/remove power channels
-Adjust low battery thresholds
-Change dashboard refresh rate
-
-
 Safety Disclaimer
 This is an educational and development tool.
-It is not intended for use in safety-critical systems without proper hardware-level safety mechanisms, redundancy, and professional validation.
+It is not certified for safety-critical use. Real robot power systems require proper hardware safety mechanisms, redundancy, and professional engineering review.
 Use at your own risk.
 
 License
-This project is licensed under the MIT License — you are free to use, modify, and distribute it.
-See the LICENSE file for details.
+This project is licensed under the MIT License.
+See LICENSE for full details.
 
-Contributing
-Pull requests, suggestions, and real robot integration stories are very welcome!
-Especially interested in:
+Roadmap
 
-ROS2 / MQTT integration
-Real hardware testing (Optimus, Digit, Unitree, etc.)
-Better visualization ideas
+WebSocket real-time updates (no page refresh)
+Per-channel historical graphs
+Docker support for easy deployment
+ROS2 / MQTT integration for real robots
+Alert system (Discord/Telegram)
+Expanded test coverage
 
 
-Built with curiosity + Grok
-Made by Daniel
+Built with Grok
+Made by Daniel — May 2026

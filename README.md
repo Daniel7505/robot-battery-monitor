@@ -2,68 +2,56 @@
 
 **Real-time multi-channel battery and power consumption monitoring system for humanoid and mobile robots.**
 
-Tracks the main battery and individual power draws from subsystems (Legs, Arms, Torso, Compute, etc.).
-
 ---
 
 ## ✨ Features
 
-- Live multi-channel monitoring (Main Battery + per-channel power draw)
-- Clean auto-refreshing web dashboard with toggleable history per channel
-- Realistic simulator with continuous drain, usage spikes, and charging
+- Live multi-channel monitoring with dark theme dashboard
+- Realistic simulator with spikes and battery drain
+- Hardware Abstraction Layer (Simulator ↔ Real hardware / ROS2)
 - SQLite database with automatic archiving
-- One-click Clear Data and Archive & Reset functions
-- Fully configurable via `config/config.yaml`
-- Proper logging and basic test coverage
+- **Full Docker support** (one-command deploy)
+- Easy to extend for real robotics teams
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Local)
 
 ```powershell
-# 1. Clone the repo
 git clone https://github.com/Daniel7505/robot-battery-monitor.git
 cd robot-battery-monitor
-
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Run the system
 python run_dashboard.py
-Open your browser → http://127.0.0.1:5000
+Open: http://127.0.0.1:5000
+
+🐳 Docker (Recommended)
+PowerShell# 1. Build and run
+docker-compose up --build -d
+
+# 2. Open dashboard
+http://127.0.0.1:5000
+Useful commands:
+PowerShelldocker-compose logs -f          # Live logs
+docker-compose down             # Stop
+docker-compose up --build -d    # Restart with changes
+
+🔧 Switching Simulator ↔ Real Hardware
+Edit config/config.yaml:
+YAMLhardware:
+  mode: "simulator"     # or "real"
 
 📁 Project Structure
-textrobot-battery-monitor/
-├── config/config.yaml          # Settings, power channels, thresholds
-├── logs/                       # Live logs + SQLite database
-├── archives/                   # Timestamped historical backups
+text├── config/config.yaml
 ├── src/
+│   ├── dashboard.py
+│   ├── hardware.py          # Abstraction layer
 │   ├── database.py
-│   ├── simulator.py
-│   └── dashboard.py
-├── run_dashboard.py            # Main entry point
+│   └── ros2_node.py         # ROS2 publisher (coming soon)
+├── run_dashboard.py
+├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
-├── README.md
-└── LICENSE
+└── README.md
 
-Safety Disclaimer
-This is an educational and development tool.
-It is not certified for safety-critical use. Real robot power systems require proper hardware safety mechanisms, redundancy, and professional engineering review.
-Use at your own risk.
-
-License
-This project is licensed under the MIT License.
-See LICENSE for full details.
-
-Roadmap
-
-WebSocket real-time updates (no page refresh)
-Per-channel historical graphs
-Docker support for easy deployment
-ROS2 / MQTT integration for real robots
-Alert system (Discord/Telegram)
-Expanded test coverage
-
-
-Built with Grok
-Made by Daniel — May 2026
+Built with Grok — May 2026
+Ready for real robotics teams!

@@ -1,0 +1,13 @@
+services:
+  battery-monitor:
+    build: .
+    container_name: battery-monitor
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./logs:/app/logs
+      - ./archives:/app/archives
+      - ./config:/app/config
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1

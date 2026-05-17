@@ -25,3 +25,10 @@ power_channels:
   - id: "Compute"
     name: "Main Computer & Sensors"
     max_draw: 15
+
+# ======================
+# Hardware / Data Source
+# ======================
+hardware:
+  mode: "simulator"        # Options: "simulator" or "real"
+  # When mode = "real", we'll plug in actual hardware code here later

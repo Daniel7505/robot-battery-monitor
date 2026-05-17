@@ -11,3 +11,34 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
+    networks:
+      - robot-net
+
+  ros2:
+    image: osrf/ros:rolling-desktop
+    container_name: ros2-node
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./logs:/app/logs
+    working_dir: /app
+    environment:
+      - PYTHONPATH=/app
+    command: >
+      bash -c "
+        source /opt/ros/rolling/setup.bash &&
+        apt-get update && apt-get install -y python3-pip -qq &&
+        pip3 install pyyaml --break-system-packages --quiet &&
+        sleep 10 &&
+        python3 src/ros2_node.py
+      "
+    networks:
+      - robot-net
+    depends_on:
+      - battery-monitor
+
+networks:
+  robot-net:
+    driver: bridge

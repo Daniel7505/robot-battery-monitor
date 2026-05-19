@@ -1,7 +1,10 @@
 # src/dashboard.py
 from flask import Flask, render_template_string, jsonify
+from flask_socketio import SocketIO, emit
 from datetime import datetime
 import warnings
+import threading
+import time
 
 from src.config import config
 from src.logger import logger
@@ -10,6 +13,7 @@ from src.database import get_all_readings, get_channel_history
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -19,7 +23,7 @@ HTML_TEMPLATE = '''
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background: #0a0a0a; color: #0f0; }
         h1 { color: #0f0; text-align: center; }
-        .warning { background: #440000; color: #ff4444; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; margin: 10px 0; }
+        .warning { background: #440000; color: #ff4444; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; margin: 10px 0; display: none; }
         table { width: 100%; border-collapse: collapse; margin: 20px 0; }
         th, td { padding: 12px; border: 1px solid #333; text-align: left; }
         th { background: #222; }
@@ -30,37 +34,64 @@ HTML_TEMPLATE = '''
 </head>
 <body>
     <h1>🤖 {{ robot_name }} Live Monitor <span class="live-dot"></span></h1>
-    <p class="status">Live updates every 2 seconds • Last update: <span id="last-update">{{ now }}</span></p>
+    <p class="status">Real-time via WebSocket • Last update: <span id="last-update">—</span></p>
     
-    <div id="warning" style="display: none;" class="warning">⚠️ CRITICAL ALERT — Main battery low!</div>
+    <div id="warning" class="warning">⚠️ CRITICAL ALERT — Main battery low!</div>
 
-    <h2>Main Battery: <span id="main-battery">{{ main_battery }}</span>%</h2>
+    <h2>Main Battery: <span id="main-battery">—</span>%</h2>
     
     <h2>Power Channels</h2>
-    <table>
+    <table id="channels-table">
         <tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>
-        {% for ch in channels %}
-        <tr>
-            <td>{{ ch.name }}</td>
-            <td>{{ ch.draw }}W</td>
-            <td>{{ ch.battery }}%</td>
-        </tr>
-        {% endfor %}
     </table>
 
+    <script src="/socket.io/socket.io.js"></script>
     <script>
-        async function update() {
-            try {
-                const res = await fetch('/api/data');
-                const data = await res.json();
-                document.getElementById('main-battery').innerText = data.main_battery;
-                const warn = document.getElementById('warning');
-                warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
-                document.getElementById('last-update').innerText = data.timestamp;
-            } catch(e) {}
+    console.log("Socket.IO script loaded");
+
+    const socket = io({
+        transports: ['websocket'],
+        reconnection: true,
+        reconnectionAttempts: 5
+    });
+
+    socket.on('connect', () => {
+        console.log('%c[WebSocket] Connected successfully!', 'color: lime');
+    });
+
+    socket.on('connect_error', (err) => {
+        console.error('[WebSocket] Connection error:', err);
+    });
+
+    socket.on('battery_update', function(data) {
+        console.log('[WebSocket] Received battery_update:', data);
+
+        // Update Main Battery
+        const mainEl = document.getElementById('main-battery');
+        if (mainEl) mainEl.innerText = data.main_battery;
+
+        // Update timestamp
+        const timeEl = document.getElementById('last-update');
+        if (timeEl) timeEl.innerText = data.timestamp;
+
+        // Warning
+        const warn = document.getElementById('warning');
+        if (warn) warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
+
+        // Update channels table
+        const table = document.getElementById('channels-table');
+        if (table) {
+            table.innerHTML = '<tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>';
+            data.channels.forEach(ch => {
+                const row = table.insertRow();
+                row.innerHTML = `<td>${ch.name}</td><td>${ch.draw}W</td><td>${ch.battery}%</td>`;
+            });
         }
-        setInterval(update, 2000);
-        update();
+    });
+
+    socket.on('disconnect', () => {
+        console.warn('[WebSocket] Disconnected');
+    });
     </script>
 </body>
 </html>
@@ -126,10 +157,77 @@ def run_dashboard():
     hardware = get_hardware_source()
     hardware.start()
 
+    # Start auto archiver + websocket broadcaster
+    start_auto_archiver()
+    threading.Thread(target=broadcast_updates, daemon=True, name="WebSocketBroadcaster").start()
+
     port = config.get("dashboard", "port", 5000)
-    logger.info(f"🚀 Dashboard started on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info(f"🚀 Dashboard + WebSocket started on port {port}")
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    
 
 
+import threading
+import time
+
+def start_auto_archiver():
+    """Background thread that periodically archives old data."""
+    archive_days = config.get("monitoring", "archive_after_days", 30)
+    interval_hours = config.get("monitoring", "archive_interval_hours", 24)
+
+    def _archiver():
+        while True:
+            try:
+                from src.database import archive_old_data
+                logger.info(f"Running scheduled archive (older than {archive_days} days)...")
+                archive_old_data(days=archive_days)
+            except Exception as e:
+                logger.error(f"Auto-archive job failed: {e}")
+            time.sleep(interval_hours * 3600)
+
+    thread = threading.Thread(target=_archiver, daemon=True, name="AutoArchiver")
+    thread.start()
+    logger.info(f"✅ Auto-archiver started (every {interval_hours}h, archive data older than {archive_days} days)")
+    
+def broadcast_updates():
+    """Background thread that emits lightweight updates via WebSocket."""
+    while True:
+        try:
+            entries = get_all_readings(limit=50)
+            if not entries:
+                time.sleep(2)
+                continue
+
+            main_battery = entries[0]["battery"]
+
+            latest = {}
+            for e in entries:
+                if e["channel"] not in latest:
+                    latest[e["channel"]] = e
+
+            channels = []
+            power_channels = config.get('power_channels') or []
+            for ch in power_channels:
+                data = latest.get(ch.get('id', ''), {})
+                channels.append({
+                    "id": ch.get('id'),
+                    "name": ch.get('name', ch.get('id')),
+                    "draw": data.get("draw", 0),
+                    "battery": main_battery
+                })
+
+            socketio.emit('battery_update', {
+                "main_battery": main_battery,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "channels": channels
+            })
+            
+            logger.info(f"Emitted battery_update → Main: {main_battery}% | Channels: {len(channels)}")
+
+        except Exception as e:
+            logger.error(f"WebSocket broadcast error: {e}")
+
+        time.sleep(2)   # ← Update every 2 seconds (adjust if needed)
+    
 if __name__ == "__main__":
     run_dashboard()

@@ -7,6 +7,8 @@ monitoring:
   low_battery_threshold: 20
   archive_after_days: 30
   log_level: "INFO"
+  archive_after_days: 30          # ← How old data must be before archiving
+  archive_interval_hours: 24      # ← How often to run auto-archive (in background)
 
 robot:
   name: "Optimus Unit 1"

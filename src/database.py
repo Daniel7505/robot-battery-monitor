@@ -5,11 +5,9 @@ Database layer with reliability, performance, and archiving features.
 
 import sqlite3
 import os
-from datetime import datetime, timedelta
 import logging
-import shutil
-
-logger = logging.getLogger(__name__)
+from datetime import datetime
+from src.logger import logger          # ← Our custom logger
 
 DB_PATH = "logs/robot_battery.db"
 ARCHIVE_DIR = "logs/archives"
@@ -73,28 +71,40 @@ def log_channel_reading(channel: str, battery_level: int, power_draw: int = 0):
                 time.sleep(0.2)
 
 
-def archive_old_data(days=30):
-    """Move old records to archive to keep main DB fast."""
+def archive_old_data(days: int = 30):
+    """Archive and delete readings older than X days."""
     try:
-        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        from datetime import datetime, timedelta
+        import shutil
+
+        cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        
         conn = get_db_connection()
         
-        # Count records to archive
-        count = conn.execute("SELECT COUNT(*) FROM battery_readings WHERE timestamp < ?", 
-                           (cutoff,)).fetchone()[0]
-        
-        if count > 0:
-            # Create archive table/file if needed
-            archive_path = f"{ARCHIVE_DIR}/battery_archive_{datetime.now().strftime('%Y%m%d')}.db"
-            shutil.copy(DB_PATH, archive_path)
-            
-            # Delete old data
-            conn.execute("DELETE FROM battery_readings WHERE timestamp < ?", (cutoff,))
-            conn.commit()
-            conn.execute("VACUUM")   # Reclaim space
-            logger.info(f"✅ Archived {count} old records and vacuumed DB")
-        
+        # Count how many we're archiving
+        count = conn.execute(
+            "SELECT COUNT(*) FROM battery_readings WHERE timestamp < ?", 
+            (cutoff,)
+        ).fetchone()[0]
+
+        if count == 0:
+            logger.info(f"No data older than {days} days to archive.")
+            conn.close()
+            return
+
+        # Create timestamped archive copy
+        archive_name = f"battery_archive_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        archive_path = f"logs/archives/{archive_name}"
+        shutil.copy(DB_PATH, archive_path)
+
+        # Delete old records
+        conn.execute("DELETE FROM battery_readings WHERE timestamp < ?", (cutoff,))
+        conn.commit()
+        conn.execute("VACUUM")  # Reclaim disk space
         conn.close()
+
+        logger.info(f"✅ Archived {count} old records (> {days} days) → {archive_path}")
+
     except Exception as e:
         logger.error(f"Archiving failed: {e}")
 

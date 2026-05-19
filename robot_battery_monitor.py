@@ -55,16 +55,17 @@ def show_channel_history(channel: str, limit: int = 20):
 def main():
     parser = argparse.ArgumentParser(description="Robot Battery Monitor CLI")
     parser.add_argument('--summary', action='store_true', help="Show latest status")
-    parser.add_argument('--history', type=str, help="Show history for specific channel (e.g. Legs)")
-    parser.add_argument('--limit', type=int, default=30, help="Number of records to show")
-    parser.add_argument('--archive', action='store_true', help="Run manual archive of old data")
+    parser.add_argument('--history', type=str, help="Show history for a channel (e.g. Legs)")
+    parser.add_argument('--limit', type=int, default=30, help="Number of records for history")
+    parser.add_argument('--archive', action='store_true', help="Archive old data manually")
+    parser.add_argument('--archive-days', type=int, default=30, help="Days to keep (default 30)")
 
     args = parser.parse_args()
-
-    logger.info("CLI Tool started")
+    logger.info("CLI started")
 
     if args.archive:
-        archive_old_data(days=30)
+        from src.database import archive_old_data
+        archive_old_data(days=args.archive_days)
         return
 
     if args.history:
@@ -72,7 +73,7 @@ def main():
     else:
         print_summary()
 
-    logger.info("CLI Tool finished")
+    logger.info("CLI finished")
 
 
 if __name__ == "__main__":

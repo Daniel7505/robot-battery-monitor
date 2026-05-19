@@ -45,53 +45,50 @@ HTML_TEMPLATE = '''
         <tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>
     </table>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-    console.log("Socket.IO script loaded");
+        console.log("Socket.IO script loaded");
 
-    const socket = io({
-        transports: ['websocket'],
-        reconnection: true,
-        reconnectionAttempts: 5
-    });
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
+        });
 
-    socket.on('connect', () => {
-        console.log('%c[WebSocket] Connected successfully!', 'color: lime');
-    });
+        socket.on('connect', () => {
+            console.log('%c[WebSocket] Connected successfully!', 'color: lime');
+        });
 
-    socket.on('connect_error', (err) => {
-        console.error('[WebSocket] Connection error:', err);
-    });
+        socket.on('connect_error', (err) => {
+            console.error('[WebSocket] Connection error:', err);
+        });
 
-    socket.on('battery_update', function(data) {
-        console.log('[WebSocket] Received battery_update:', data);
+        socket.on('battery_update', function(data) {
+            console.log('[WebSocket] Received battery_update:', data);
 
-        // Update Main Battery
-        const mainEl = document.getElementById('main-battery');
-        if (mainEl) mainEl.innerText = data.main_battery;
+            const mainEl = document.getElementById('main-battery');
+            if (mainEl) mainEl.innerText = data.main_battery;
 
-        // Update timestamp
-        const timeEl = document.getElementById('last-update');
-        if (timeEl) timeEl.innerText = data.timestamp;
+            const timeEl = document.getElementById('last-update');
+            if (timeEl) timeEl.innerText = data.timestamp;
 
-        // Warning
-        const warn = document.getElementById('warning');
-        if (warn) warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
+            const warn = document.getElementById('warning');
+            if (warn) warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
 
-        // Update channels table
-        const table = document.getElementById('channels-table');
-        if (table) {
-            table.innerHTML = '<tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>';
-            data.channels.forEach(ch => {
-                const row = table.insertRow();
-                row.innerHTML = `<td>${ch.name}</td><td>${ch.draw}W</td><td>${ch.battery}%</td>`;
-            });
-        }
-    });
+            const table = document.getElementById('channels-table');
+            if (table) {
+                table.innerHTML = '<tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>';
+                data.channels.forEach(ch => {
+                    const row = table.insertRow();
+                    row.innerHTML = `<td>${ch.name}</td><td>${ch.draw}W</td><td>${ch.battery}%</td>`;
+                });
+            }
+        });
 
-    socket.on('disconnect', () => {
-        console.warn('[WebSocket] Disconnected');
-    });
+        socket.on('disconnect', () => {
+            console.warn('[WebSocket] Disconnected');
+        });
     </script>
 </body>
 </html>
@@ -189,45 +186,53 @@ def start_auto_archiver():
     thread.start()
     logger.info(f"✅ Auto-archiver started (every {interval_hours}h, archive data older than {archive_days} days)")
     
+def _build_battery_payload():
+    """Builds the data payload for WebSocket emission."""
+    entries = get_all_readings(limit=50)
+
+    if not entries:
+        return {
+            "main_battery": 0,
+            "timestamp": datetime.now().strftime("%H:%M:%S"),
+            "channels": []
+        }
+
+    main_battery = entries[0]["battery"]
+
+    latest = {}
+    for e in entries:
+        if e["channel"] not in latest:
+            latest[e["channel"]] = e
+
+    channels = []
+    power_channels = config.get('power_channels') or []
+    for ch in power_channels:
+        data = latest.get(ch.get('id', ''), {})
+        channels.append({
+            "id": ch.get('id'),
+            "name": ch.get('name', ch.get('id')),
+            "draw": data.get("draw", 0),
+            "battery": main_battery
+        })
+
+    return {
+        "main_battery": main_battery,
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "channels": channels
+    }
+
+
 def broadcast_updates():
-    """Background thread that emits lightweight updates via WebSocket."""
+    """Background thread that emits battery updates via WebSocket."""
     while True:
         try:
-            entries = get_all_readings(limit=50)
-            if not entries:
-                time.sleep(2)
-                continue
-
-            main_battery = entries[0]["battery"]
-
-            latest = {}
-            for e in entries:
-                if e["channel"] not in latest:
-                    latest[e["channel"]] = e
-
-            channels = []
-            power_channels = config.get('power_channels') or []
-            for ch in power_channels:
-                data = latest.get(ch.get('id', ''), {})
-                channels.append({
-                    "id": ch.get('id'),
-                    "name": ch.get('name', ch.get('id')),
-                    "draw": data.get("draw", 0),
-                    "battery": main_battery
-                })
-
-            socketio.emit('battery_update', {
-                "main_battery": main_battery,
-                "timestamp": datetime.now().strftime("%H:%M:%S"),
-                "channels": channels
-            })
-            
-            logger.info(f"Emitted battery_update → Main: {main_battery}% | Channels: {len(channels)}")
+            payload = _build_battery_payload()
+            socketio.emit('battery_update', payload)
 
         except Exception as e:
             logger.error(f"WebSocket broadcast error: {e}")
 
-        time.sleep(2)   # ← Update every 2 seconds (adjust if needed)
+        time.sleep(2)
     
 if __name__ == "__main__":
     run_dashboard()

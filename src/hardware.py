@@ -12,38 +12,19 @@ import functools
 import logging
 
 from src.database import log_channel_reading
-from src.config import config          
-from src.logger import logger          
-
-logger = logging.getLogger(__name__)
+from src.config import config
+from src.logger import logger
 
 
-def retry_on_failure(max_attempts=5, delay=1.0, backoff=2.0):
-    """Decorator for hardware operations that can fail temporarily."""
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            attempts = 0
-            while attempts < max_attempts:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    attempts += 1
-                    wait = delay * (backoff ** (attempts - 1))
-                    logger.warning(f"{func.__name__} failed (attempt {attempts}/{max_attempts}): {e}. Retrying in {wait:.1f}s...")
-                    time.sleep(wait)
-            logger.error(f"{func.__name__} failed after {max_attempts} attempts.")
-            raise
-        return wrapper
-    return decorator
-
-
+# ============================================================
+# BASE CLASS
+# ============================================================
 class HardwareSource(ABC):
-    """Base class for any data source."""
+    """Base class for any data source (simulator or real hardware)."""
 
     def __init__(self):
         self.running = False
-        self.last_readings = {}          # For sanity checks and fallback
+        self.last_readings = {}
         self.health_status = "STARTING"
         self.last_successful_read = None
 
@@ -61,23 +42,24 @@ class HardwareSource(ABC):
         return (datetime.now() - self.last_successful_read) < timedelta(seconds=30)
 
     def validate_reading(self, channel: str, battery_pct: float, current_draw: int) -> bool:
-        """Sanity check on incoming data."""
         if not (0 <= battery_pct <= 100):
             logger.warning(f"Invalid battery percentage: {battery_pct}%")
             return False
-        if current_draw < 0 or current_draw > 200:   # adjust per your robot
+        if current_draw < 0 or current_draw > 200:
             logger.warning(f"Suspicious current draw on {channel}: {current_draw}W")
             return False
 
-        # Check for unrealistic jumps
         if channel in self.last_readings:
             last_bat = self.last_readings[channel].get('battery', battery_pct)
-            if abs(last_bat - battery_pct) > 15:   # max 15% jump per reading
+            if abs(last_bat - battery_pct) > 15:
                 logger.warning(f"Large battery jump on {channel}: {last_bat}% → {battery_pct}%")
                 return False
         return True
 
 
+# ============================================================
+# SIMULATOR
+# ============================================================
 class SimulatorSource(HardwareSource):
     """Realistic simulator with health reporting."""
 
@@ -126,62 +108,88 @@ class SimulatorSource(HardwareSource):
         threading.Thread(target=_run, daemon=True, name="SimulatorThread").start()
 
 
+# ============================================================
+# REAL HARDWARE BASE CLASS
+# ============================================================
 class RealHardwareSource(HardwareSource):
     """
-    Real hardware implementation.
-    Add your actual sensors / BMS / ROS2 topics here.
+    Base class for connecting real robot hardware.
+
+    HOW TO USE:
+    -----------
+    1. Create a new class that inherits from RealHardwareSource
+    2. Override these two methods:
+       - _read_raw_data()   → Get data from your hardware (ROS2, serial, CAN, etc.)
+       - _parse_data()      → Convert that data into our standard format
+
+    EXAMPLES:
+    ---------
+    - ROS2BatterySource     (for ROS2 topics)
+    - SerialBMSHardware     (for JK-BMS, Daly, etc via serial/UART)
+    - CANBatteryHardware    (for CAN bus battery data)
+
+    This design makes it easy to support many different hardware types
+    without changing the core monitoring system.
     """
+
+    def __init__(self):
+        super().__init__()
+        self.hardware_name = "Generic Real Hardware"
 
     def start(self):
         if self.running:
             return
         self.running = True
         self.health_status = "RUNNING"
-        logger.info("🔌 RealHardwareSource started")
+        logger.info(f"🔌 {self.hardware_name} started")
 
-        # TODO: Put your real hardware reading code here
-        # Example placeholders are commented below
-
-        def _real_read_loop():
+        def _read_loop():
             while self.running:
                 try:
-                    # === YOUR REAL HARDWARE CODE GOES HERE ===
-                    # Example: read from INA219, serial BMS, ROS2, etc.
-                    # For now we simulate a small healthy signal
-                    data = {
-                        "Legs": (self.last_readings.get("Legs", {}).get("battery", 85.0), 12),
-                        "Arms": (self.last_readings.get("Arms", {}).get("battery", 85.0), 8),
-                        "Torso": (self.last_readings.get("Torso", {}).get("battery", 85.0), 15),
-                        "Compute": (self.last_readings.get("Compute", {}).get("battery", 85.0), 22),
-                    }
-
-                    for ch_id, (bat, draw) in data.items():
-                        if self.validate_reading(ch_id, bat, draw):
-                            log_channel_reading(ch_id, int(bat), draw)
-                            self.last_readings[ch_id] = {
-                                'battery': bat, 'draw': draw, 'timestamp': datetime.now()
-                            }
-                            self.last_successful_read = datetime.now()
-
-                    time.sleep(2.0)
-
+                    raw_data = self._read_raw_data()
+                    if raw_data:
+                        parsed = self._parse_data(raw_data)
+                        self._process_parsed_data(parsed)
+                    time.sleep(1.0)
                 except Exception as e:
-                    logger.error(f"Real hardware read error: {e}")
+                    logger.error(f"[{self.hardware_name}] Read error: {e}")
                     self.health_status = "DEGRADED"
-                    time.sleep(5.0)
+                    time.sleep(3.0)
 
-        threading.Thread(target=_real_read_loop, daemon=True, name="RealHardwareThread").start()
+        threading.Thread(target=_read_loop, daemon=True, name=f"{self.hardware_name}Thread").start()
+
+    def _read_raw_data(self):
+        """Override this. Return raw data from your hardware."""
+        return None
+
+    def _parse_data(self, raw_data):
+        """Override this. Convert raw data into standard dict format."""
+        return {}
+
+    def _process_parsed_data(self, parsed_data: dict):
+        for channel, values in parsed_data.items():
+            battery = values.get("battery", 0)
+            draw = values.get("draw", 0)
+
+            if self.validate_reading(channel, battery, draw):
+                log_channel_reading(channel, int(battery), draw)
+                self.last_readings[channel] = {
+                    "battery": battery,
+                    "draw": draw,
+                    "timestamp": datetime.now()
+                }
+                self.last_successful_read = datetime.now()
 
     def stop(self):
         super().stop()
-        # Add any serial port closing, ROS2 shutdown, etc. here
+        logger.info(f"🔌 {self.hardware_name} stopped")
 
 
+# ============================================================
+# FACTORY
+# ============================================================
 def get_hardware_source():
-    """Returns the correct hardware source using centralized config."""
-    from src.config import config
-    from src.logger import logger
-
+    """Returns the correct hardware source based on config."""
     mode = config.get("hardware", "mode", "simulator").lower()
 
     if mode == "real":

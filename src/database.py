@@ -121,5 +121,18 @@ def get_all_readings(limit=500):
 
 
 def get_channel_history(channel: str, limit=300):
-    conn = get_db_connection()
-   
+    """Always returns a list (never None)."""
+    try:
+        conn = get_db_connection()
+        rows = conn.execute("""
+            SELECT timestamp, battery_level, power_draw 
+            FROM battery_readings 
+            WHERE channel = ? 
+            ORDER BY id DESC LIMIT ?
+        """, (channel, limit)).fetchall()
+        conn.close()
+
+        return [{"time": r[0], "battery": r[1], "draw": r[2]} for r in rows]
+    except Exception as e:
+        logger.error(f"get_channel_history failed for channel '{channel}': {e}")
+        return []   # ← Always return a list

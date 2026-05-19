@@ -1,13 +1,20 @@
 # run_dashboard.py
-from src.dashboard import run_dashboard
+from src.logger import logger
 from src.hardware import get_hardware_source
+from src.dashboard import run_dashboard
 
 if __name__ == "__main__":
-    print("🤖 Starting Robot Battery Monitoring System\n")
-
-    # Start the correct hardware source (simulator or real)
-    hardware = get_hardware_source()
-    hardware.start()
-
-    # Start the web dashboard
-    run_dashboard()
+    logger.info("🤖 Starting Robot Battery Monitoring System")
+    
+    try:
+        hardware = get_hardware_source()
+        hardware.start()
+        logger.info("✅ Hardware source started")
+        
+        logger.info("🌐 Launching dashboard...")
+        run_dashboard()
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start system: {e}", exc_info=True)
+        raise
+    

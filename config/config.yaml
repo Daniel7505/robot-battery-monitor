@@ -1,16 +1,16 @@
 dashboard:
-  host: 127.0.0.1
+  host: "127.0.0.1"
   port: 5000
-  refresh_seconds: 5
+  refresh_seconds: 3
 
 monitoring:
   low_battery_threshold: 20
-  log_file: "logs/robot_battery_log.log"
+  archive_after_days: 30
+  log_level: "INFO"
 
-# One robot with multiple power channels
 robot:
   name: "Optimus Unit 1"
-  main_battery_capacity: 100
+  main_battery_capacity_wh: 1000   # Optional: for better runtime estimation later
 
 power_channels:
   - id: "Legs"
@@ -26,9 +26,5 @@ power_channels:
     name: "Main Computer & Sensors"
     max_draw: 15
 
-# ======================
-# Hardware / Data Source
-# ======================
 hardware:
-  mode: "simulator"        # Options: "simulator" or "real"
-  # When mode = "real", we'll plug in actual hardware code here later
+  mode: "simulator"        # "simulator" or "real"

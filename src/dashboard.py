@@ -1,26 +1,17 @@
-# src/dashboard.py - Reliable polling version (no SocketIO threading issues)
+# src/dashboard.py
 from flask import Flask, render_template_string, jsonify
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import io
-import base64
 from datetime import datetime
 import warnings
-import yaml
+
+from src.config import config
+from src.logger import logger
+from src.database import get_all_readings, get_channel_history
 
 warnings.filterwarnings("ignore")
 
-with open('config/config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-from src.database import get_all_readings, get_channel_history
-from src.hardware import get_hardware_source
-
 app = Flask(__name__)
 
-HTML_TEMPLATE = '''
-<!DOCTYPE html>
+HTML_TEMPLATE = '''<!DOCTYPE html>
 <html>
 <head>
     <title>🤖 {{ robot_name }} Live Monitor</title>
@@ -38,7 +29,6 @@ HTML_TEMPLATE = '''
         .status { text-align: center; color: #666; font-size: 0.9em; }
         .live-dot { display: inline-block; width: 10px; height: 10px; background: #0f0; border-radius: 50%; margin-left: 8px; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%,100% {opacity:1;} 50% {opacity:0.4;} }
-        .history-section { display: none; }
     </style>
 </head>
 <body>
@@ -50,77 +40,36 @@ HTML_TEMPLATE = '''
     <h2>Main Battery: <span id="main-battery">{{ main_battery }}</span>%</h2>
     
     <h2>Power Channels</h2>
-    <table id="channels-table">
-        <tr><th>Channel</th><th>Current Draw</th><th>Battery Impact</th><th>Action</th></tr>
+    <table>
+        <tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>
         {% for ch in channels %}
-        <tr id="row-{{ ch.id }}">
+        <tr>
             <td>{{ ch.name }}</td>
-            <td id="draw-{{ ch.id }}">{{ ch.draw }}W</td>
-            <td id="bat-{{ ch.id }}">{{ ch.battery }}%</td>
-            <td><button onclick="toggleHistory('{{ ch.id }}')">Toggle History</button></td>
+            <td>{{ ch.draw }}W</td>
+            <td>{{ ch.battery }}%</td>
         </tr>
         {% endfor %}
     </table>
 
-    {% for ch in channels %}
-    <div id="history-{{ ch.id }}" class="history-section">
-        <h2>{{ ch.name }} — Last 30 Readings</h2>
-        <table>
-            <tr><th>Time</th><th>Battery %</th><th>Draw (W)</th></tr>
-            {% for e in ch.history %}
-            <tr><td>{{ e.time }}</td><td>{{ e.battery }}%</td><td>{{ e.draw }}W</td></tr>
-            {% endfor %}
-        </table>
-    </div>
-    {% endfor %}
-
     <script>
-        function updateDashboard(data) {
-            // Main battery
-            const mainEl = document.getElementById('main-battery');
-            if (mainEl) mainEl.innerText = data.main_battery;
-            
-            // Warning
-            const warn = document.getElementById('warning');
-            if (warn) warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
-            
-            // Timestamp
-            const timeEl = document.getElementById('last-update');
-            if (timeEl) timeEl.innerText = data.timestamp;
-            
-            // Update each channel
-            if (data.channels) {
-                data.channels.forEach(ch => {
-                    const drawEl = document.getElementById('draw-' + ch.id);
-                    const batEl = document.getElementById('bat-' + ch.id);
-                    if (drawEl) drawEl.innerText = ch.draw + 'W';
-                    if (batEl) batEl.innerText = ch.battery + '%';
-                });
-            }
-        }
-
         async function fetchAndUpdate() {
             try {
                 const res = await fetch('/api/data');
                 const data = await res.json();
-                updateDashboard(data);
-            } catch (e) {
-                console.log('Update error (will retry):', e);
-            }
+                
+                document.getElementById('main-battery').innerText = data.main_battery;
+                
+                const warn = document.getElementById('warning');
+                warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
+                
+                document.getElementById('last-update').innerText = data.timestamp;
+            } catch(e) {}
         }
-
-        // Initial load + poll every 2 seconds
         setInterval(fetchAndUpdate, 2000);
-        fetchAndUpdate(); // run immediately
-
-        function toggleHistory(channel) {
-            const section = document.getElementById('history-' + channel);
-            section.style.display = (section.style.display === 'none' || section.style.display === '') ? 'block' : 'none';
-        }
+        fetchAndUpdate();
     </script>
 </body>
-</html>
-'''
+</html>'''
 
 @app.route('/')
 def dashboard():
@@ -133,27 +82,26 @@ def dashboard():
             latest[e["channel"]] = e
 
     channels = []
-    for ch in config.get('power_channels', []):
-        data = latest.get(ch['id'], {})
-        history = get_channel_history(ch['id'], limit=30)
+    power_channels = config.get('power_channels') or []
+    for ch in power_channels:
+        data = latest.get(ch.get('id', ''), {})
         channels.append({
-            "id": ch['id'],
-            "name": ch['name'],
+            "id": ch.get('id'),
+            "name": ch.get('name', ch.get('id')),
             "draw": data.get("draw", 0),
-            "battery": main_battery,
-            "history": history
+            "battery": main_battery
         })
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return render_template_string(HTML_TEMPLATE,
-                                  robot_name=config['robot']['name'],
+                                  robot_name=config.get('robot', 'name', 'Robot'),
                                   main_battery=main_battery,
                                   channels=channels,
                                   now=now)
 
+
 @app.route('/api/data')
 def api_data():
-    """JSON endpoint for live polling"""
     entries = get_all_readings(limit=300)
     main_battery = entries[0]["battery"] if entries else 94
 
@@ -163,10 +111,11 @@ def api_data():
             latest[e["channel"]] = e
 
     channels = []
-    for ch in config.get('power_channels', []):
-        data = latest.get(ch['id'], {})
+    power_channels = config.get('power_channels') or []
+    for ch in power_channels:
+        data = latest.get(ch.get('id', ''), {})
         channels.append({
-            "id": ch['id'],
+            "id": ch.get('id'),
             "draw": data.get("draw", 0),
             "battery": main_battery
         })
@@ -177,21 +126,8 @@ def api_data():
         "channels": channels
     })
 
+
 def run_dashboard():
     from src.hardware import get_hardware_source
-    import threading
-    
-    # Start the hardware source (simulator or real)
     hardware = get_hardware_source()
-    hardware.start()
-
-    print("🚀 Real-time Robot Battery Monitor started inside Docker")
-    print("🌐 Listening on http://0.0.0.0:5000")
-    print("   → Open in browser: http://127.0.0.1:5000\n")
-    
-    # CRITICAL for Docker: bind to all interfaces
-    app.run(host='0.0.0.0', port=config['dashboard']['port'], debug=False)
-    
-
-if __name__ == "__main__":
-    run_dashboard()
+    hardware

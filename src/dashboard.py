@@ -11,7 +11,8 @@ warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
 
-HTML_TEMPLATE = '''<!DOCTYPE html>
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
 <html>
 <head>
     <title>🤖 {{ robot_name }} Live Monitor</title>
@@ -19,13 +20,9 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
         body { font-family: Arial, sans-serif; margin: 20px; background: #0a0a0a; color: #0f0; }
         h1 { color: #0f0; text-align: center; }
         .warning { background: #440000; color: #ff4444; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; margin: 10px 0; }
-        button { padding: 8px 16px; margin: 4px; background: #222; color: #0f0; border: 1px solid #444; cursor: pointer; }
-        button:hover { background: #333; }
         table { width: 100%; border-collapse: collapse; margin: 20px 0; }
         th, td { padding: 12px; border: 1px solid #333; text-align: left; }
         th { background: #222; }
-        .low { color: #ff4444; font-weight: bold; }
-        .full { color: #00ff88; font-weight: bold; }
         .status { text-align: center; color: #666; font-size: 0.9em; }
         .live-dot { display: inline-block; width: 10px; height: 10px; background: #0f0; border-radius: 50%; margin-left: 8px; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%,100% {opacity:1;} 50% {opacity:0.4;} }
@@ -52,24 +49,22 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     </table>
 
     <script>
-        async function fetchAndUpdate() {
+        async function update() {
             try {
                 const res = await fetch('/api/data');
                 const data = await res.json();
-                
                 document.getElementById('main-battery').innerText = data.main_battery;
-                
                 const warn = document.getElementById('warning');
                 warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
-                
                 document.getElementById('last-update').innerText = data.timestamp;
             } catch(e) {}
         }
-        setInterval(fetchAndUpdate, 2000);
-        fetchAndUpdate();
+        setInterval(update, 2000);
+        update();
     </script>
 </body>
-</html>'''
+</html>
+'''
 
 @app.route('/')
 def dashboard():
@@ -86,7 +81,6 @@ def dashboard():
     for ch in power_channels:
         data = latest.get(ch.get('id', ''), {})
         channels.append({
-            "id": ch.get('id'),
             "name": ch.get('name', ch.get('id')),
             "draw": data.get("draw", 0),
             "battery": main_battery
@@ -115,7 +109,6 @@ def api_data():
     for ch in power_channels:
         data = latest.get(ch.get('id', ''), {})
         channels.append({
-            "id": ch.get('id'),
             "draw": data.get("draw", 0),
             "battery": main_battery
         })
@@ -129,5 +122,14 @@ def api_data():
 
 def run_dashboard():
     from src.hardware import get_hardware_source
+
     hardware = get_hardware_source()
-    hardware
+    hardware.start()
+
+    port = config.get("dashboard", "port", 5000)
+    logger.info(f"🚀 Dashboard started on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+
+if __name__ == "__main__":
+    run_dashboard()

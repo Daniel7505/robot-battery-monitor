@@ -193,8 +193,16 @@ def get_hardware_source():
     mode = config.get("hardware", "mode", "simulator").lower()
 
     if mode == "real":
-        logger.info("Using REAL hardware mode")
-        return RealHardwareSource()
+        # You can expand this later to support different real hardware types
+        hardware_type = config.get("hardware", "type", "generic")
+
+        if hardware_type == "ros2":
+            from src.hardware_ros2 import ROS2BatterySource
+            logger.info("Using ROS2 hardware mode")
+            return ROS2BatterySource()
+        else:
+            logger.info("Using REAL hardware mode (generic)")
+            return RealHardwareSource()
     else:
         logger.info("Using SIMULATOR mode")
         return SimulatorSource()

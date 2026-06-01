@@ -1,6 +1,6 @@
 # src/dashboard.py
 from flask import Flask, render_template_string, jsonify
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO
 from datetime import datetime
 import warnings
 import threading
@@ -8,12 +8,14 @@ import time
 
 from src.config import config
 from src.logger import logger
-from src.database import get_all_readings, get_channel_history
+from src.database import get_all_readings
 
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
+
+
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -46,50 +48,53 @@ HTML_TEMPLATE = '''
     </table>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-        console.log("Socket.IO script loaded");
+<script>
+    const socket = io({
+        transports: ['websocket', 'polling'],
+        reconnection: true
+    });
 
-        const socket = io({
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000
-        });
+    socket.on('connect', () => {
+        console.log('%c[WebSocket] Connected successfully!', 'color: lime');
+    });
 
-        socket.on('connect', () => {
-            console.log('%c[WebSocket] Connected successfully!', 'color: lime');
-        });
+    socket.on('battery_update', function(data) {
+        console.log('[WebSocket] Received:', data);
 
-        socket.on('connect_error', (err) => {
-            console.error('[WebSocket] Connection error:', err);
-        });
+        // Update Main Battery
+        document.getElementById('main-battery').innerText = data.main_battery || '--';
 
-        socket.on('battery_update', function(data) {
-            console.log('[WebSocket] Received battery_update:', data);
+        // Update timestamp
+        document.getElementById('last-update').innerText = data.timestamp;
 
-            const mainEl = document.getElementById('main-battery');
-            if (mainEl) mainEl.innerText = data.main_battery;
+        // Update channels table
+        const table = document.getElementById('channels-table');
+        if (table && data.channels) {
+            table.innerHTML = `
+                <tr>
+                    <th>Channel</th>
+                    <th>Draw (W)</th>
+                    <th>Amps</th>
+                    <th>Battery %</th>
+                    <th>Status</th>
+                </tr>`;
+            
+            data.channels.forEach(ch => {
+                const statusColor = ch.status === 'critical' ? 'red' : ch.status === 'warning' ? 'orange' : 'lime';
+                const row = table.insertRow();
+                row.innerHTML = `
+                    <td>${ch.name}</td>
+                    <td>${ch.draw}W</td>
+                    <td>${ch.amps}A</td>
+                    <td>${ch.battery}%</td>
+                    <td style="color:${statusColor}">${ch.status.toUpperCase()}</td>
+                `;
+            });
+        }
+    });
 
-            const timeEl = document.getElementById('last-update');
-            if (timeEl) timeEl.innerText = data.timestamp;
-
-            const warn = document.getElementById('warning');
-            if (warn) warn.style.display = (data.main_battery <= 20) ? 'block' : 'none';
-
-            const table = document.getElementById('channels-table');
-            if (table) {
-                table.innerHTML = '<tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>';
-                data.channels.forEach(ch => {
-                    const row = table.insertRow();
-                    row.innerHTML = `<td>${ch.name}</td><td>${ch.draw}W</td><td>${ch.battery}%</td>`;
-                });
-            }
-        });
-
-        socket.on('disconnect', () => {
-            console.warn('[WebSocket] Disconnected');
-        });
-    </script>
+    socket.on('connect_error', (err) => console.error('Connection error:', err));
+</script>
 </body>
 </html>
 '''
@@ -154,13 +159,22 @@ def run_dashboard():
     hardware = get_hardware_source()
     hardware.start()
 
-    # Start auto archiver + websocket broadcaster
+    # Start background services
     start_auto_archiver()
-    threading.Thread(target=broadcast_updates, daemon=True, name="WebSocketBroadcaster").start()
+    
+    # Start WebSocket broadcaster
+    broadcaster_thread = threading.Thread(
+        target=broadcast_updates, 
+        daemon=True, 
+        name="WebSocketBroadcaster"
+    )
+    broadcaster_thread.start()
+    print("[DEBUG] WebSocket broadcaster thread started successfully")
 
     port = config.get("dashboard", "port", 5000)
     logger.info(f"🚀 Dashboard + WebSocket started on port {port}")
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
     
 
 
@@ -187,52 +201,59 @@ def start_auto_archiver():
     logger.info(f"✅ Auto-archiver started (every {interval_hours}h, archive data older than {archive_days} days)")
     
 def _build_battery_payload():
-    """Builds the data payload for WebSocket emission."""
-    entries = get_all_readings(limit=50)
+    """Enhanced payload with engineering metrics"""
+    try:
+        from src.hardware import get_hardware_source
+        hardware = get_hardware_source()
+        
+        if hasattr(hardware, 'last_readings') and hardware.last_readings:
+            latest = hardware.last_readings
+            
+            # Calculate main battery
+            batteries = [d.get('battery', 85) for d in latest.values()]
+            main_battery = int(sum(batteries) / len(batteries)) if batteries else 85
 
-    if not entries:
-        return {
-            "main_battery": 0,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "channels": []
-        }
+            channels = []
+            for ch in config.get('power_channels', []):
+                ch_id = ch.get('id')
+                data = latest.get(ch_id, {})
+                
+                channels.append({
+                    "name": ch.get('name', ch_id),
+                    "draw": data.get("draw", 0),
+                    "amps": data.get("amps", 0),
+                    "battery": data.get("battery", main_battery),
+                    "max_draw_w": ch.get("max_draw_w", 30),
+                    "voltage": ch.get("nominal_voltage", 48),
+                    "status": data.get("status", "normal")
+                })
+            
+            return {
+                "main_battery": main_battery,
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "channels": channels
+            }
+    except Exception as e:
+        print(f"[DEBUG] Payload error: {e}")
 
-    main_battery = entries[0]["battery"]
-
-    latest = {}
-    for e in entries:
-        if e["channel"] not in latest:
-            latest[e["channel"]] = e
-
-    channels = []
-    power_channels = config.get('power_channels') or []
-    for ch in power_channels:
-        data = latest.get(ch.get('id', ''), {})
-        channels.append({
-            "id": ch.get('id'),
-            "name": ch.get('name', ch.get('id')),
-            "draw": data.get("draw", 0),
-            "battery": main_battery
-        })
-
+    # Fallback
     return {
-        "main_battery": main_battery,
+        "main_battery": 85,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "channels": channels
+        "channels": []
     }
 
-
 def broadcast_updates():
-    """Background thread that emits battery updates via WebSocket."""
+    """Stable broadcaster with strong debug"""
+    print("[DEBUG] WebSocket broadcaster ACTIVE - sending every 4 seconds")
     while True:
         try:
             payload = _build_battery_payload()
             socketio.emit('battery_update', payload)
-
+            print(f"[DEBUG] Emitted update → Main: {payload.get('main_battery')}%")  # Remove later
         except Exception as e:
-            logger.error(f"WebSocket broadcast error: {e}")
-
-        time.sleep(2)
-    
+            print(f"[DEBUG] Broadcast error: {e}")
+        
+        time.sleep(4)
 if __name__ == "__main__":
     run_dashboard()

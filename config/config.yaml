@@ -17,16 +17,25 @@ robot:
 power_channels:
   - id: "Legs"
     name: "Leg Drive Motors"
-    max_draw: 35
+    max_draw_w: 35        # New: Max allowed watts
+    nominal_voltage: 48   # Volts (for Amps calculation)
   - id: "Arms"
     name: "Arm + Gripper Systems"
-    max_draw: 25
+    max_draw_w: 25
+    nominal_voltage: 48
   - id: "Torso"
     name: "Torso & Balance Systems"
-    max_draw: 20
+    max_draw_w: 20
+    nominal_voltage: 48
   - id: "Compute"
     name: "Main Computer & Sensors"
-    max_draw: 15
+    max_draw_w: 15
+    nominal_voltage: 24     # Often lower voltage rail
 
 hardware:
-  mode: "simulator"        # "simulator" or "real"
+  mode: "real"
+  type: "ros2"
+
+# Other settings...
+logging:
+  level: "INFO"

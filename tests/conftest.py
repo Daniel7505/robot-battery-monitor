@@ -1,9 +1,20 @@
-import pytest
 import os
-import tempfile
-import shutil
+import pytest
 from src.config import Config
-from src.database import init_db, get_db_connection
+from src.database import init_db, truncate_tables
+
+
+def _test_database_url() -> str:
+    return os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql://robot:robot@localhost:5432/robot_battery_test",
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _configure_test_database():
+    os.environ["DATABASE_URL"] = _test_database_url()
+    init_db()
 
 
 @pytest.fixture(scope="session")
@@ -13,24 +24,8 @@ def test_config():
 
 
 @pytest.fixture
-def clean_database(tmp_path, monkeypatch):
-    """
-    Creates a fresh, isolated database for each test.
-    This prevents tests from polluting the real logs/robot_battery.db
-    """
-    # Create a temporary directory for this test
-    temp_dir = tmp_path / "logs"
-    temp_dir.mkdir()
-
-    temp_db = temp_dir / "robot_battery.db"
-
-    # Monkeypatch the DB_PATH so all database functions use the temp one
-    import src.database as db_module
-    monkeypatch.setattr(db_module, "DB_PATH", str(temp_db))
-
-    # Initialize a clean database
-    init_db()
-
-    yield str(temp_db)
-
-    # Cleanup happens automatically because tmp_path is deleted after test
+def clean_database():
+    """Fresh PostgreSQL tables for each test."""
+    truncate_tables()
+    yield
+    truncate_tables()

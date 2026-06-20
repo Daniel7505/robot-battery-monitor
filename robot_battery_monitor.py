@@ -9,6 +9,7 @@ import sys
 from datetime import datetime
 from src.logger import logger
 from src.database import get_all_readings, get_channel_history, archive_old_data
+from src.analytics import build_report, format_report_text
 
 
 def print_summary():
@@ -59,13 +60,19 @@ def main():
     parser.add_argument('--limit', type=int, default=30, help="Number of records for history")
     parser.add_argument('--archive', action='store_true', help="Archive old data manually")
     parser.add_argument('--archive-days', type=int, default=30, help="Days to keep (default 30)")
+    parser.add_argument('--report', action='store_true', help="Generate analytics report")
+    parser.add_argument('--hours', type=float, default=24.0, help="Hours of data for report (default 24)")
 
     args = parser.parse_args()
     logger.info("CLI started")
 
     if args.archive:
-        from src.database import archive_old_data
         archive_old_data(days=args.archive_days)
+        return
+
+    if args.report:
+        report = build_report(hours=args.hours)
+        print(format_report_text(report))
         return
 
     if args.history:

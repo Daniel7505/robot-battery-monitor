@@ -45,9 +45,16 @@ class Config:
     def _override_with_env(self):
         env_map = {
             "HARDWARE_MODE": ("hardware", "mode"),
+            "HARDWARE_TYPE": ("hardware", "type"),
             "DASHBOARD_PORT": ("dashboard", "port"),
             "LOG_LEVEL": ("monitoring", "log_level"),
         }
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            if "database" not in self._config:
+                self._config["database"] = {}
+            self._config["database"]["url"] = database_url
+            logger.info("Overrode database with env var: DATABASE_URL")
         for env_key, (section, key) in env_map.items():
             value = os.getenv(env_key)
             if value is not None:
@@ -57,6 +64,17 @@ class Config:
                     value = int(value)
                 self._config[section][key] = value
                 logger.info(f"Overrode with env var: {env_key}={value}")
+
+        ros2_mock = os.getenv("ROS2_MOCK")
+        if ros2_mock is not None:
+            if "hardware" not in self._config:
+                self._config["hardware"] = {}
+            if "ros2" not in self._config["hardware"]:
+                self._config["hardware"]["ros2"] = {}
+            self._config["hardware"]["ros2"]["mock"] = ros2_mock.lower() in (
+                "1", "true", "yes", "on"
+            )
+            logger.info(f"Overrode with env var: ROS2_MOCK={ros2_mock}")
 
     def get(self, section: str, key: str = None, default=None):
         """

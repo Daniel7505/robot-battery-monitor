@@ -4,11 +4,14 @@ from src.config import config
 
 
 def test_get_hardware_source_returns_simulator_by_default():
-    original_mode = config.get("hardware", "mode", "simulator")
-    config._config["hardware"]["mode"] = "simulator"
-    source = get_hardware_source()
+    from src.hardware import reset_hardware_source
+    original_hw = dict(config._config.get("hardware", {}))
+    config._config["hardware"] = {"mode": "simulator", "type": "generic"}
+    reset_hardware_source()
+    source = get_hardware_source(force_reload=True)
     assert isinstance(source, SimulatorSource)
-    config._config["hardware"]["mode"] = original_mode
+    config._config["hardware"] = original_hw
+    reset_hardware_source()
 
 
 def test_validate_reading_works():

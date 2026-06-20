@@ -1,44 +1,101 @@
+# Robot Battery Monitor — full deployment stack
+#
+# Core (one command):
+#   docker compose up --build -d
+#   ./scripts/start.sh          (Linux/macOS)
+#   .\scripts\start.ps1         (Windows)
+#
+# Full stack with ROS2 sim:
+#   docker compose --profile full up --build -d
+#   ./scripts/start.sh full
+#   .\scripts\start.ps1 -Profile full
+
 services:
-  battery-monitor:
-    build: .
-    container_name: battery-monitor
+  postgres:
+    image: postgres:16-alpine
+    container_name: robot-battery-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-robot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robot}
+      POSTGRES_DB: ${POSTGRES_DB:-robot_battery}
     ports:
-      - "5000:5000"
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - robot-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-robot} -d ${POSTGRES_DB:-robot_battery}"]
+      interval: 5s
+      timeout: 5s
+      retries: 8
+      start_period: 5s
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: robot-battery-dashboard
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_PORT:-5000}:5000"
     volumes:
       - ./logs:/app/logs
       - ./archives:/app/archives
-      - ./config:/app/config
-    restart: unless-stopped
+      - ./config:/app/config:ro
+    env_file:
+      - .env
     environment:
-      - PYTHONUNBUFFERED=1
-    networks:
-      - robot-net
-
-  ros2:
-    image: osrf/ros:rolling-desktop
-    container_name: ros2-node
-    tty: true
-    stdin_open: true
-    volumes:
-      - ./src:/app/src
-      - ./config:/app/config
-      - ./logs:/app/logs
-    working_dir: /app
-    environment:
-      - PYTHONPATH=/app
-    command: >
-      bash -c "
-        source /opt/ros/rolling/setup.bash &&
-        apt-get update && apt-get install -y python3-pip -qq &&
-        pip3 install pyyaml --break-system-packages --quiet &&
-        sleep 10 &&
-        python3 src/ros2_node.py
-      "
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD:-robot}@postgres:5432/${POSTGRES_DB:-robot_battery}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-robot}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-robot}
+      PGDATABASE: ${POSTGRES_DB:-robot_battery}
+      HARDWARE_MODE: ${HARDWARE_MODE:-real}
+      HARDWARE_TYPE: ${HARDWARE_TYPE:-ros2}
+      ROS2_MOCK: ${ROS2_MOCK:-true}
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - robot-net
     depends_on:
-      - battery-monitor
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+  ros2-sim:
+    profiles: ["full"]
+    image: osrf/ros:rolling-ros-base
+    container_name: robot-battery-ros2-sim
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - .:/app:ro
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS2_START_DELAY: ${ROS2_START_DELAY:-10}
+      ROS2_SIM_INTERVAL: ${ROS2_SIM_INTERVAL:-5}
+    entrypoint: ["/bin/bash", "/app/scripts/ros2_sim_entrypoint.sh"]
+    networks:
+      - robot-net
+    depends_on:
+      dashboard:
+        condition: service_healthy
 
 networks:
   robot-net:
     driver: bridge
+
+volumes:
+  pgdata:

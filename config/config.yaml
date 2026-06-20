@@ -7,12 +7,90 @@ monitoring:
   low_battery_threshold: 20
   archive_after_days: 30
   log_level: "INFO"
-  archive_after_days: 30          # ← How old data must be before archiving
   archive_interval_hours: 24      # ← How often to run auto-archive (in background)
+
+safety:
+  low_battery_warning_pct: 20
+  low_battery_critical_pct: 10
+  spike_threshold_pct: 35
+  over_draw_warning_pct: 92
+  system_over_budget_pct: 98
+  thermal_ambient_c: 22.0
+  thermal_warning_c: 55.0
+  thermal_critical_c: 68.0
+  thermal_max_c: 75.0
+  thermal_heating_factor: 0.42
+  thermal_cooling_rate: 0.08
+  safety_throttle_factor: 0.85
+  critical_throttle_factor: 0.70
+
+lru:
+  groups:
+    - id: eps
+      label: EPS (Power System)
+      channels: ["Legs", "Arms", "Torso", "Compute"]
+      degrade_priority: 5
+      tier: 1
+    - id: locomotion
+      label: Locomotion (LRUA)
+      channels: ["Legs"]
+      degrade_priority: 3
+      tier: 2
+    - id: arms
+      label: Arms
+      channels: ["Arms"]
+      degrade_priority: 1
+      tier: 2
+    - id: torso
+      label: Torso
+      channels: ["Torso"]
+      degrade_priority: 2
+      tier: 2
+    - id: compute
+      label: Compute
+      channels: ["Compute"]
+      degrade_priority: 4
+      tier: 2
+  thresholds:
+    over_draw_warning_pct: 90
+    spike_threshold_pct: 30
+    voltage_sag_factor: 0.18
+    low_voltage_warning_pct: 0.92
+    low_voltage_critical_pct: 0.85
+    degrade_throttle_caution: 0.92
+    degrade_throttle_degraded: 0.80
+    degrade_throttle_critical: 0.65
+
+requirements:
+  startup_cost_wh: 6.0
+  eps_reserve_pct: 12
+  system_min_draw_w: 18
+  system_max_draw_w: 72
+  lru_budgets:
+    moving:
+      locomotion: {min_draw_w: 18, max_draw_w: 35, budget_w: 28}
+      arms: {min_draw_w: 8, max_draw_w: 25, budget_w: 14}
+      torso: {min_draw_w: 10, max_draw_w: 20, budget_w: 15}
+      compute: {min_draw_w: 9, max_draw_w: 15, budget_w: 13}
+    high_load:
+      locomotion: {min_draw_w: 24, max_draw_w: 35, budget_w: 32}
+      arms: {min_draw_w: 16, max_draw_w: 25, budget_w: 24}
+      torso: {min_draw_w: 12, max_draw_w: 20, budget_w: 18}
+      compute: {min_draw_w: 10, max_draw_w: 15, budget_w: 14}
 
 robot:
   name: "Optimus Unit 1"
   main_battery_capacity_wh: 1000   # Optional: for better runtime estimation later
+
+power:
+  system_budget_w: 72   # Total allocatable watts across all channels
+
+database:
+  host: "localhost"
+  port: 5432
+  name: "robot_battery"
+  user: "robot"
+  password: "robot"
 
 power_channels:
   - id: "Legs"
@@ -35,6 +113,16 @@ power_channels:
 hardware:
   mode: "real"
   type: "ros2"
+  ros2:
+    node_name: "robot_battery_monitor"
+    mock: false          # true = mock pub/sub even if rclpy is installed
+    topics:
+      main_battery: "/robot/battery/main_level"
+      power_draw: "/robot/battery/power_draw"
+      power_status: "/robot/battery/status"
+      mission_command: "/robot/battery/command/mission"
+      throttle_command: "/robot/battery/command/throttle"
+      sensor_power: "/robot/sensors/power_draw"
 
 # Other settings...
 logging:

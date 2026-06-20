@@ -1,75 +1,88 @@
 #!/usr/bin/env python3
 """
-ROS2 Battery Publisher Node (Improved)
+Standalone ROS2 publisher — reads live hardware telemetry and publishes to topics.
+Run separately: python -m src.ros2_node
 """
 
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import Float32, Float32MultiArray
+import json
 import sys
-import os
 import time
 
-# Allow importing from src/ when running inside Docker
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.logger import logger
 
-from src.database import get_all_readings
+try:
+    import rclpy
+    from rclpy.node import Node
+    from std_msgs.msg import Float32, Float32MultiArray, String
+    _RCLPY_AVAILABLE = True
+except ImportError:
+    _RCLPY_AVAILABLE = False
+
+_CHANNEL_ORDER = ["Legs", "Arms", "Torso", "Compute"]
 
 
 class BatteryPublisher(Node):
     def __init__(self):
-        super().__init__('robot_battery_publisher')
+        super().__init__("robot_battery_publisher")
+        from src.config import config
 
-        self.main_battery_pub = self.create_publisher(Float32, '/robot/battery/main_level', 10)
-        self.power_draw_pub = self.create_publisher(Float32MultiArray, '/robot/battery/power_draw', 10)
+        topics = (config.get("hardware", "ros2") or {}).get("topics") or {}
+        self._main_topic = topics.get("main_battery", "/robot/battery/main_level")
+        self._draw_topic = topics.get("power_draw", "/robot/battery/power_draw")
+        self._status_topic = topics.get("power_status", "/robot/battery/status")
 
-        self.get_logger().info("🚀 Robot Battery ROS2 Publisher started")
-        self.get_logger().info("   Publishing on: /robot/battery/main_level and /robot/battery/power_draw")
+        self._main_pub = self.create_publisher(Float32, self._main_topic, 10)
+        self._draw_pub = self.create_publisher(Float32MultiArray, self._draw_topic, 10)
+        self._status_pub = self.create_publisher(String, self._status_topic, 10)
+        self.create_timer(2.0, self.publish_battery_data)
 
-        # Publish every 2 seconds
-        self.timer = self.create_timer(2.0, self.publish_battery_data)
-        self.get_logger().info("Node is running. Press Ctrl+C to stop.")
+        self.get_logger().info(
+            f"ROS2 publisher started — {self._main_topic}, {self._draw_topic}, {self._status_topic}"
+        )
 
     def publish_battery_data(self):
-        try:
-            entries = get_all_readings(limit=50)
+        from src.hardware import get_hardware_source
 
-            if not entries:
-                self.get_logger().warn("No data in database yet. Waiting...")
+        try:
+            hardware = get_hardware_source()
+            readings = getattr(hardware, "last_readings", {}) or {}
+            if not readings:
+                self.get_logger().warn("No live readings yet — is the dashboard running?")
                 return
 
-            main_battery = float(entries[0]["battery"])
+            batteries = [d.get("battery", 0) for d in readings.values()]
+            main_battery = sum(batteries) / len(batteries) if batteries else 0
 
-            # Publish main battery
-            msg = Float32()
-            msg.data = main_battery
-            self.main_battery_pub.publish(msg)
+            bat_msg = Float32()
+            bat_msg.data = float(main_battery)
+            self._main_pub.publish(bat_msg)
 
-            # Publish power draw per channel
             draw_msg = Float32MultiArray()
-            channels = ["Legs", "Arms", "Torso", "Compute"]
-            draws = []
-            for ch in channels:
-                latest = next((e for e in entries if e["channel"] == ch), None)
-                draws.append(float(latest["draw"]) if latest else 0.0)
+            draw_msg.data = [float(readings.get(ch, {}).get("draw", 0)) for ch in _CHANNEL_ORDER]
+            self._draw_pub.publish(draw_msg)
 
-            draw_msg.data = draws
-            self.power_draw_pub.publish(draw_msg)
+            status = {
+                "main_battery": main_battery,
+                "channel_draws": {ch: readings.get(ch, {}).get("draw", 0) for ch in _CHANNEL_ORDER},
+                "ros2_status": getattr(hardware, "ros2_status", {}),
+            }
+            status_msg = String()
+            status_msg.data = json.dumps(status, default=str)
+            self._status_pub.publish(status_msg)
 
-            self.get_logger().info(f"Published → Main: {main_battery:.1f}% | Draws: {draws}")
+            self.get_logger().info(f"Published main={main_battery:.1f}% draws={draw_msg.data}")
 
         except Exception as e:
-            self.get_logger().error(f"Error publishing battery data: {e}")
-
-    def destroy_node(self):
-        self.get_logger().info("Shutting down ROS2 Battery Publisher...")
-        super().destroy_node()
+            self.get_logger().error(f"Publish error: {e}")
 
 
 def main(args=None):
+    if not _RCLPY_AVAILABLE:
+        logger.error("rclpy not installed — cannot run ROS2 publisher node")
+        sys.exit(1)
+
     rclpy.init(args=args)
     node = BatteryPublisher()
-
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -79,5 +92,5 @@ def main(args=None):
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

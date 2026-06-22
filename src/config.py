@@ -76,6 +76,28 @@ class Config:
             )
             logger.info(f"Overrode with env var: ROS2_MOCK={ros2_mock}")
 
+        sim_enabled = os.getenv("SIMULATION_ENABLED")
+        if sim_enabled is not None:
+            if "simulation" not in self._config:
+                self._config["simulation"] = {}
+            self._config["simulation"]["enabled"] = sim_enabled.lower() in (
+                "1", "true", "yes", "on"
+            )
+        sim_loop = os.getenv("SIMULATION_LOOP")
+        if sim_loop is not None:
+            if "simulation" not in self._config:
+                self._config["simulation"] = {}
+            self._config["simulation"]["loop"] = sim_loop.lower() in (
+                "1", "true", "yes", "on"
+            )
+        sim_auto = os.getenv("SIMULATION_AUTO_START")
+        if sim_auto is not None:
+            if "simulation" not in self._config:
+                self._config["simulation"] = {}
+            self._config["simulation"]["auto_start"] = sim_auto.lower() in (
+                "1", "true", "yes", "on"
+            )
+
     def get(self, section: str, key: str = None, default=None):
         """
         Flexible getter.

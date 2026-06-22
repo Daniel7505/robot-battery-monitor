@@ -49,3 +49,4 @@ docker-compose.override.yml
 # Local session / tooling (not part of the app)
 terminals/
 mcps/
+agent-tools/

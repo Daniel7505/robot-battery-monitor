@@ -17,6 +17,7 @@ from src.energy_predictor import EnergyPredictor
 from src.safety_monitor import SafetyMonitor
 from src.power_requirements import PowerRequirements
 from src.ros2_bridge import ROS2Bridge
+from src.mission_simulator import MissionSimulator
 from src.database import log_power_snapshot
 
 _START_BATTERY_PCT = 92.0
@@ -45,13 +46,28 @@ class ROS2BatterySource(RealHardwareSource):
         self.requirements_status: dict = {}
         self.ros2_status: dict = {}
         self._requirements = PowerRequirements(self._power_channels, budget)
+        self._ros2_throttle_pulse: float | None = None
+        self._simulator = MissionSimulator()
+        self.simulation_status: dict = {}
 
     def _apply_ros2_commands(self) -> None:
+        if self._simulator.enabled and self._simulator.running:
+            self._ros2.consume_commanded_task()
+            return
+
         task = self._ros2.consume_commanded_task()
-        if task and self._mission.force_task(task):
-            for ch_id, draw in self._channel_draw.items():
-                self._mission._blend[ch_id] = draw
-            logger.info(f"{self.hardware_name} ROS2 mission override → {task}")
+        if task:
+            if self._mission.force_task(task):
+                for ch_id, draw in self._channel_draw.items():
+                    self._mission._blend[ch_id] = draw
+                logger.info(f"{self.hardware_name} ROS2 mission override → {task}")
+            else:
+                logger.warning(f"{self.hardware_name} ignored invalid ROS2 mission: {task}")
+
+        throttle = self._ros2.consume_throttle_override()
+        if throttle is not None:
+            self._ros2_throttle_pulse = throttle
+            logger.info(f"{self.hardware_name} ROS2 throttle pulse → {throttle:.0%}")
 
     def _blend_sensor_draw(self, ch_id: str, requested: float) -> float:
         sensor = self._ros2.get_sensor_draws().get(ch_id)
@@ -81,9 +97,8 @@ class ROS2BatterySource(RealHardwareSource):
         return requested
 
     def _apply_allocated_draw(self, ch_id: str, allocated_w: float) -> float:
-        throttle = self._ros2.get_throttle_override()
-        if throttle is not None:
-            allocated_w = round(allocated_w * throttle, 1)
+        if self._ros2_throttle_pulse is not None and self._ros2_throttle_pulse < 1.0:
+            allocated_w = round(allocated_w * self._ros2_throttle_pulse, 1)
 
         if ch_id not in self._channel_draw:
             self._channel_draw[ch_id] = allocated_w
@@ -137,7 +152,7 @@ class ROS2BatterySource(RealHardwareSource):
 
     def _build_readings_inner(self) -> dict:
         self._apply_ros2_commands()
-        task_changed = self._mission.advance()
+        task_changed = self._simulator.advance(self._mission)
         if task_changed:
             for ch_id, draw in self._channel_draw.items():
                 self._mission._blend[ch_id] = draw
@@ -196,6 +211,8 @@ class ROS2BatterySource(RealHardwareSource):
             current_draw_w=total_draw,
         )
         self.mission_info.update(self.prediction_status)
+        self.simulation_status = self._simulator.status(self._mission)
+        self.mission_info["simulation"] = self.simulation_status
         allocation.update(self.mission_info)
 
         battery_pct = round(self._main_battery, 1)
@@ -290,14 +307,28 @@ class ROS2BatterySource(RealHardwareSource):
         except Exception as e:
             logger.warning(f"ROS2 publish failed (non-fatal): {e}")
 
+        self._ros2_throttle_pulse = None
         self.health_status = "RUNNING"
         return readings
+
+    def _seed_channel_draws(self) -> None:
+        profile = self._mission.profile
+        for ch in self._power_channels:
+            ch_id = ch.get("id")
+            if not ch_id:
+                continue
+            seed = profile.draw_targets.get(ch_id, ch.get("max_draw_w", 20) * 0.35)
+            self._channel_draw[ch_id] = round(seed, 1)
+            self._mission._blend[ch_id] = self._channel_draw[ch_id]
 
     def start(self):
         if self.running:
             return
         super().start()
+        self._seed_channel_draws()
         self._ros2.start()
+        if self._simulator.auto_start:
+            self._simulator.start(self._mission)
         capacity_wh = config.get("robot", "main_battery_capacity_wh", 1000) or 1000
         info = self._mission.mission_info(_START_BATTERY_PCT, capacity_wh, 0)
         ros_mode = self._ros2.status.get("mode", "mock")
@@ -329,6 +360,17 @@ class ROS2BatterySource(RealHardwareSource):
                 self.health_status = "DEGRADED"
             time.sleep(TICK_SECONDS)
 
+    def start_simulation(self) -> dict:
+        self._simulator.start(self._mission)
+        self.simulation_status = self._simulator.status(self._mission)
+        return self.simulation_status
+
+    def stop_simulation(self) -> dict:
+        self._simulator.stop()
+        self.simulation_status = self._simulator.status(self._mission)
+        return self.simulation_status
+
     def stop(self):
+        self._simulator.stop()
         self._ros2.stop()
         super().stop()

@@ -31,7 +31,16 @@ HTML_TEMPLATE = '''
         th { background: #222; }
         .status { text-align: center; color: #666; font-size: 0.9em; }
         .live-dot { display: inline-block; width: 10px; height: 10px; background: #0f0; border-radius: 50%; margin-left: 8px; animation: pulse 1.5s infinite; }
+        .live-dot.paused { background: #fa0; animation: none; box-shadow: 0 0 8px #fa0; }
         @keyframes pulse { 0%,100% {opacity:1;} 50% {opacity:0.4;} }
+        .live-controls { text-align: center; margin: 12px 0 16px; }
+        .pause-btn { font-size: 1.05em; font-weight: bold; padding: 10px 28px; border-radius: 8px; cursor: pointer; border: 2px solid #3a3; }
+        .pause-btn.live { background: #132; color: #8f8; border-color: #3a3; }
+        .pause-btn.live:hover { background: #1a3a1a; }
+        .pause-btn.paused { background: #432; color: #fc8; border-color: #a80; }
+        .pause-btn.paused:hover { background: #533; }
+        .pause-banner { background: #3a2a00; color: #fc8; border: 2px solid #a80; border-radius: 8px; padding: 12px 18px; text-align: center; font-weight: bold; margin: 0 0 16px; }
+        .pause-hint { display: block; color: #888; font-size: 0.82em; margin-top: 6px; }
         .allocation-panel { background: #111; border: 1px solid #333; border-radius: 8px; padding: 16px; margin: 16px 0; }
         .allocation-panel.ok { border-color: #0f0; }
         .allocation-panel.warning { border-color: #fa0; }
@@ -51,6 +60,18 @@ HTML_TEMPLATE = '''
         .mission-desc { font-size: 0.95em; color: #aaa; max-width: 640px; margin: 0 auto; }
         .mission-meta { display: flex; justify-content: center; gap: 24px; flex-wrap: wrap; margin-top: 10px; font-size: 0.9em; color: #888; }
         .mission-meta strong { color: #ccc; }
+        .sim-panel { background: #101820; border: 1px solid #356; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+        .sim-badge { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 0.8em; margin-left: 8px; }
+        .sim-badge.running { background: #132; color: #8f8; border: 1px solid #3a3; }
+        .sim-badge.stopped { background: #331; color: #fc8; border: 1px solid #a80; }
+        .sim-badge.off { background: #222; color: #888; border: 1px solid #444; }
+        .sim-timeline { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+        .sim-step { flex: 1; min-width: 120px; background: #111; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; font-size: 0.82em; color: #888; }
+        .sim-step.active { border-color: #58f; color: #cef; background: #152030; }
+        .sim-step.done { border-color: #363; color: #6a8; }
+        .sim-controls button { background: #1a2a3a; border: 1px solid #456; color: #9cf; padding: 5px 14px; border-radius: 5px; cursor: pointer; margin-right: 8px; font-size: 0.85em; }
+        .sim-controls button:hover { background: #243448; }
+        .sim-meta { font-size: 0.85em; color: #8ab; margin-top: 6px; }
         .prediction-panel { background: #0d1117; border: 1px solid #334; border-radius: 8px; padding: 14px 18px; margin: 12px 0; }
         .confidence-bar { height: 8px; background: #222; border-radius: 4px; overflow: hidden; margin: 6px 0; max-width: 280px; display: inline-block; vertical-align: middle; }
         .confidence-fill { height: 100%; background: #6cf; transition: width 0.4s; }
@@ -73,8 +94,17 @@ HTML_TEMPLATE = '''
         .analytics-stat span { font-size: 0.8em; color: #888; }
         .trend-chart { display: flex; align-items: flex-end; gap: 3px; height: 64px; margin: 12px 0 4px; }
         .trend-bar { flex: 1; background: #2a4a6a; border-radius: 2px 2px 0 0; min-width: 6px; transition: height 0.4s; }
-        .analytics-table { width: 100%; font-size: 0.85em; margin-top: 8px; }
+        .analytics-table { width: 100%; font-size: 0.85em; margin-top: 8px; border-collapse: collapse; }
+        .analytics-table th { text-align: left; color: #8ab; padding: 4px 8px; border-bottom: 1px solid #333; }
         .analytics-table td { padding: 4px 8px; border-bottom: 1px solid #222; }
+        .analytics-section { margin-top: 14px; }
+        .analytics-section h3 { font-size: 0.92em; color: #9ab; margin: 0 0 6px; font-weight: normal; }
+        .analytics-hours-btn { background: #1a2433; border: 1px solid #345; color: #9cf; padding: 3px 10px; border-radius: 4px; cursor: pointer; margin-right: 6px; font-size: 0.82em; }
+        .analytics-hours-btn.active { background: #234; border-color: #58f; color: #def; }
+        .battery-trend { display: flex; align-items: flex-end; gap: 3px; height: 40px; margin: 8px 0; }
+        .battery-trend-bar { flex: 1; background: #2a5a3a; border-radius: 2px 2px 0 0; min-width: 6px; }
+        .ros2-topics { font-size: 0.78em; color: #678; margin-top: 6px; }
+        .ros2-cmd-log { font-size: 0.78em; color: #7a9; margin-top: 4px; }
         .ros2-panel { background: #0a1018; border: 1px solid #345; border-radius: 8px; padding: 12px 16px; margin: 12px 0; font-size: 0.9em; }
         .ros2-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px; }
         .ros2-live { background: #132; color: #8f8; border: 1px solid #3a3; }
@@ -121,8 +151,16 @@ HTML_TEMPLATE = '''
     </style>
 </head>
 <body>
-    <h1>🤖 {{ robot_name }} Live Monitor <span class="live-dot"></span></h1>
-    <p class="status">Real-time via WebSocket • Last update: <span id="last-update">—</span>
+    <h1>🤖 {{ robot_name }} Live Monitor <span class="live-dot" id="live-dot"></span></h1>
+    <div class="live-controls">
+        <button type="button" id="pause-resume-btn" class="pause-btn live">⏸ Pause Live Updates</button>
+        <span class="pause-hint" id="pause-hint">Freeze the dashboard to inspect allocation, LRU, and forecasts</span>
+    </div>
+    <div id="pause-banner" class="pause-banner" style="display:none">
+        ⏸ LIVE UPDATES PAUSED — frozen snapshot at <strong id="pause-frozen-at">—</strong>
+        &nbsp;·&nbsp; Allocation, LRU, and forecast panels hold their last values
+    </div>
+    <p class="status"><span id="live-status-label">Real-time via WebSocket</span> • Last update: <span id="last-update">—</span>
         • Hardware: <span id="hw-mode">—</span></p>
 
     <div id="ros2-panel" class="ros2-panel" style="display:none">
@@ -132,7 +170,11 @@ HTML_TEMPLATE = '''
             Publishes: <span id="ros2-pub-count">0</span>
             &nbsp;|&nbsp; Mode: <span id="ros2-mode">—</span>
             &nbsp;|&nbsp; Node: <span id="ros2-node">—</span>
+            &nbsp;|&nbsp; Last task: <span id="ros2-last-task">—</span>
+            &nbsp;|&nbsp; Draw: <span id="ros2-last-draw">—</span>W
         </span>
+        <div id="ros2-topics" class="ros2-topics"></div>
+        <div id="ros2-cmd-log" class="ros2-cmd-log"></div>
     </div>
     
     <div id="warning" class="warning"></div>
@@ -160,6 +202,17 @@ HTML_TEMPLATE = '''
         <span id="req-compliant-badge" class="lru-status-pill ok" style="margin-left:8px">REQUIREMENTS OK</span>
         <div id="lru-summary" class="lru-summary"></div>
         <div id="lru-grid" class="lru-grid"></div>
+    </div>
+
+    <div id="sim-panel" class="sim-panel">
+        <strong>Mission Simulation</strong>
+        <span id="sim-badge" class="sim-badge off">OFF</span>
+        <div class="sim-controls" style="margin-top:8px">
+            <button type="button" id="sim-start-btn">Start Script</button>
+            <button type="button" id="sim-stop-btn">Stop Script</button>
+        </div>
+        <div id="sim-meta" class="sim-meta">Script: Idle → Transit → Idle → High Load</div>
+        <div id="sim-timeline" class="sim-timeline"></div>
     </div>
 
     <div id="mission-banner" class="mission-banner idle">
@@ -216,18 +269,53 @@ HTML_TEMPLATE = '''
     </div>
     
     <div id="analytics-panel" class="analytics-panel">
-        <strong>Historical Analytics</strong> <span style="color:#666;font-size:0.85em">(last <span id="analytics-hours">1</span>h)</span>
+        <strong>Historical Analytics</strong>
+        <span style="color:#666;font-size:0.85em;margin-left:8px">(last <span id="analytics-hours">1</span>h)</span>
+        <span style="margin-left:12px">
+            <button class="analytics-hours-btn active" data-hours="1">1h</button>
+            <button class="analytics-hours-btn" data-hours="6">6h</button>
+            <button class="analytics-hours-btn" data-hours="24">24h</button>
+        </span>
         <div class="analytics-grid">
             <div class="analytics-stat"><strong id="hist-snapshots">—</strong><span>Snapshots</span></div>
             <div class="analytics-stat"><strong id="hist-avg-draw">—</strong><span>Avg Draw (W)</span></div>
             <div class="analytics-stat"><strong id="hist-peak-draw">—</strong><span>Peak Draw (W)</span></div>
             <div class="analytics-stat"><strong id="hist-battery-range">—</strong><span>Battery Range</span></div>
             <div class="analytics-stat"><strong id="hist-throttles">—</strong><span>Throttle Events</span></div>
+            <div class="analytics-stat"><strong id="hist-tasks">—</strong><span>Distinct Tasks</span></div>
         </div>
-        <div id="trend-chart" class="trend-chart"></div>
-        <table class="analytics-table" id="mission-summary-table">
-            <tr><th>Task</th><th>Samples</th><th>Avg W</th><th>Util %</th><th>Alerts</th></tr>
-        </table>
+        <div class="analytics-section">
+            <h3>Power draw trend (minute buckets)</h3>
+            <div id="trend-chart" class="trend-chart"></div>
+        </div>
+        <div class="analytics-section">
+            <h3>Battery trend</h3>
+            <div id="battery-trend-chart" class="battery-trend"></div>
+        </div>
+        <div class="analytics-section">
+            <h3>LRU group summary</h3>
+            <table class="analytics-table" id="lru-summary-table">
+                <tr><th>LRU</th><th>Avg W</th><th>Peak W</th><th>Alerts</th><th>Throttles</th></tr>
+            </table>
+        </div>
+        <div class="analytics-section">
+            <h3>Channel summary</h3>
+            <table class="analytics-table" id="channel-summary-table">
+                <tr><th>Channel</th><th>Readings</th><th>Avg W</th><th>Peak W</th><th>Throttles</th></tr>
+            </table>
+        </div>
+        <div class="analytics-section">
+            <h3>Mission summaries</h3>
+            <table class="analytics-table" id="mission-summary-table">
+                <tr><th>Task</th><th>Samples</th><th>Avg W</th><th>Util %</th><th>Alerts</th></tr>
+            </table>
+        </div>
+        <div class="analytics-section">
+            <h3>Recent mission history</h3>
+            <table class="analytics-table" id="mission-history-table">
+                <tr><th>Time</th><th>Task</th><th>Draw W</th><th>Battery %</th><th>Status</th></tr>
+            </table>
+        </div>
     </div>
 
     <h2>Power Channels</h2>
@@ -242,12 +330,27 @@ HTML_TEMPLATE = '''
         reconnection: true
     });
 
+    let analyticsHours = 1;
+
+    function fillTable(tableId, headers, rows, rowHtml) {
+        const table = document.getElementById(tableId);
+        table.innerHTML = '<tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
+        rows.forEach(item => {
+            const row = table.insertRow();
+            row.innerHTML = rowHtml(item);
+        });
+        if (!rows.length) {
+            const row = table.insertRow();
+            row.innerHTML = `<td colspan="${headers.length}" style="color:#666">No data yet — keep the dashboard running.</td>`;
+        }
+    }
+
     function loadAnalytics() {
-        fetch('/api/analytics?hours=1')
+        fetch('/api/analytics?hours=' + analyticsHours)
             .then(r => r.json())
             .then(data => {
                 const s = data.summary || {};
-                document.getElementById('analytics-hours').innerText = data.window_hours || 1;
+                document.getElementById('analytics-hours').innerText = data.window_hours || analyticsHours;
                 document.getElementById('hist-snapshots').innerText = s.snapshot_count ?? '—';
                 document.getElementById('hist-avg-draw').innerText = s.avg_draw_w ?? '—';
                 document.getElementById('hist-peak-draw').innerText = s.peak_draw_w ?? '—';
@@ -255,40 +358,135 @@ HTML_TEMPLATE = '''
                     (s.min_battery_pct != null && s.max_battery_pct != null)
                         ? s.min_battery_pct + '–' + s.max_battery_pct + '%' : '—';
                 document.getElementById('hist-throttles').innerText = s.throttle_events ?? '—';
+                document.getElementById('hist-tasks').innerText = s.distinct_tasks ?? '—';
 
                 const trends = data.power_trends || [];
                 const chart = document.getElementById('trend-chart');
                 if (trends.length) {
-                    const maxW = Math.max(...trends.map(t => t.avg_draw_w), 1);
+                    const maxW = Math.max(...trends.map(t => t.avg_draw_w || 0), 1);
                     chart.innerHTML = trends.map(t => {
-                        const h = Math.max(4, (t.avg_draw_w / maxW) * 56);
+                        const h = Math.max(4, ((t.avg_draw_w || 0) / maxW) * 56);
                         return `<div class="trend-bar" style="height:${h}px" title="${t.bucket}: ${t.avg_draw_w}W"></div>`;
                     }).join('');
                 } else {
                     chart.innerHTML = '<span style="color:#666;font-size:0.85em">Collecting trend data…</span>';
                 }
 
-                const table = document.getElementById('mission-summary-table');
-                const missions = data.missions || [];
-                table.innerHTML = '<tr><th>Task</th><th>Samples</th><th>Avg W</th><th>Util %</th><th>Alerts</th></tr>';
-                missions.forEach(m => {
-                    const row = table.insertRow();
-                    row.innerHTML = `<td>${m.task}</td><td>${m.snapshot_count}</td>`
+                const batChart = document.getElementById('battery-trend-chart');
+                if (trends.length) {
+                    const minB = Math.min(...trends.map(t => t.avg_battery_pct || 100));
+                    const maxB = Math.max(...trends.map(t => t.avg_battery_pct || 0));
+                    const span = Math.max(1, maxB - minB);
+                    batChart.innerHTML = trends.map(t => {
+                        const pct = t.avg_battery_pct || 0;
+                        const h = Math.max(4, ((pct - minB) / span) * 36 + 4);
+                        return `<div class="battery-trend-bar" style="height:${h}px" title="${t.bucket}: ${pct}%"></div>`;
+                    }).join('');
+                } else {
+                    batChart.innerHTML = '<span style="color:#666;font-size:0.85em">—</span>';
+                }
+
+                fillTable('lru-summary-table',
+                    ['LRU', 'Avg W', 'Peak W', 'Alerts', 'Throttles'],
+                    data.lru_groups || [],
+                    l => `<td>${l.lru_label}</td><td>${l.avg_draw_w ?? '—'}</td>`
+                        + `<td>${l.max_draw_w ?? '—'}</td><td>${l.alert_count ?? 0}</td>`
+                        + `<td>${l.throttle_count ?? 0}</td>`);
+
+                fillTable('channel-summary-table',
+                    ['Channel', 'Readings', 'Avg W', 'Peak W', 'Throttles'],
+                    data.channels || [],
+                    c => `<td>${c.channel}</td><td>${c.reading_count}</td>`
+                        + `<td>${c.avg_draw_w ?? '—'}</td><td>${c.max_draw_w ?? '—'}</td>`
+                        + `<td>${c.throttle_count ?? 0}</td>`);
+
+                fillTable('mission-summary-table',
+                    ['Task', 'Samples', 'Avg W', 'Util %', 'Alerts'],
+                    data.missions || [],
+                    m => `<td>${m.task}</td><td>${m.snapshot_count}</td>`
                         + `<td>${m.avg_allocated_w ?? '—'}</td>`
                         + `<td>${m.avg_utilization_pct ?? '—'}</td>`
-                        + `<td>${m.alert_events ?? 0}</td>`;
-                });
+                        + `<td>${m.alert_events ?? 0}</td>`);
+
+                fillTable('mission-history-table',
+                    ['Time', 'Task', 'Draw W', 'Battery %', 'Status'],
+                    data.mission_history || [],
+                    h => `<td>${h.time}</td><td>${h.task}</td>`
+                        + `<td>${h.allocated_w ?? '—'}</td><td>${h.battery_pct ?? '—'}</td>`
+                        + `<td>${h.status ?? '—'}</td>`);
             })
             .catch(err => console.warn('Analytics fetch failed:', err));
     }
 
+    document.querySelectorAll('.analytics-hours-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.analytics-hours-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            analyticsHours = parseFloat(btn.dataset.hours);
+            loadAnalytics();
+        });
+    });
+
+    function simControl(action) {
+        fetch('/api/simulation/' + action, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => console.log('Simulation', action, data))
+            .catch(err => console.warn('Simulation control failed:', err));
+    }
+    document.getElementById('sim-start-btn').addEventListener('click', () => simControl('start'));
+    document.getElementById('sim-stop-btn').addEventListener('click', () => simControl('stop'));
+
+    let livePaused = false;
+    let analyticsTimer = null;
+
+    function setLivePaused(paused) {
+        livePaused = paused;
+        const btn = document.getElementById('pause-resume-btn');
+        const dot = document.getElementById('live-dot');
+        const banner = document.getElementById('pause-banner');
+        const hint = document.getElementById('pause-hint');
+        const statusLabel = document.getElementById('live-status-label');
+
+        if (paused) {
+            document.getElementById('pause-frozen-at').innerText =
+                document.getElementById('last-update').innerText || '—';
+            btn.className = 'pause-btn paused';
+            btn.innerText = '▶ Resume Live Updates';
+            dot.classList.add('paused');
+            banner.style.display = 'block';
+            hint.innerText = 'WebSocket updates frozen — scroll and inspect any panel';
+            statusLabel.innerText = 'Paused (snapshot frozen)';
+            if (analyticsTimer) {
+                clearInterval(analyticsTimer);
+                analyticsTimer = null;
+            }
+        } else {
+            btn.className = 'pause-btn live';
+            btn.innerText = '⏸ Pause Live Updates';
+            dot.classList.remove('paused');
+            banner.style.display = 'none';
+            hint.innerText = 'Freeze the dashboard to inspect allocation, LRU, and forecasts';
+            statusLabel.innerText = 'Real-time via WebSocket';
+            if (!analyticsTimer) {
+                analyticsTimer = setInterval(loadAnalytics, 30000);
+            }
+        }
+    }
+
+    document.getElementById('pause-resume-btn').addEventListener('click', () => {
+        setLivePaused(!livePaused);
+    });
+
     socket.on('connect', () => {
         console.log('%c[WebSocket] Connected successfully!', 'color: lime');
         loadAnalytics();
-        setInterval(loadAnalytics, 30000);
+        if (!livePaused && !analyticsTimer) {
+            analyticsTimer = setInterval(loadAnalytics, 30000);
+        }
     });
 
     socket.on('battery_update', function(data) {
+        if (livePaused) return;
         console.log('[WebSocket] Received:', data);
 
         // Update Main Battery
@@ -320,6 +518,16 @@ HTML_TEMPLATE = '''
             document.getElementById('ros2-pub-count').innerText = r.publish_count ?? 0;
             document.getElementById('ros2-mode').innerText = r.mode ?? '—';
             document.getElementById('ros2-node').innerText = r.node_name ?? '—';
+            document.getElementById('ros2-last-task').innerText = r.last_payload_task ?? '—';
+            document.getElementById('ros2-last-draw').innerText = r.last_total_draw_w ?? '—';
+            const topics = r.topics || {};
+            document.getElementById('ros2-topics').innerText =
+                'Topics: ' + (topics.main_battery || '—') + ' · ' + (topics.mission_command || '—');
+            const cmds = (r.recent_commands || []).slice(-3).map(c =>
+                (c.accepted ? '✓' : '✗') + ' ' + c.kind + '=' + JSON.stringify(c.value)
+            ).join(' · ');
+            document.getElementById('ros2-cmd-log').innerText =
+                (r.mock_feed_enabled ? 'Mock feed on. ' : '') + (cmds || 'No recent commands');
         }
 
         // Safety & thermal panel
@@ -441,6 +649,37 @@ HTML_TEMPLATE = '''
                     </div>
                     ${reqLine}
                 </div>`;
+            }).join('');
+        }
+
+        // Mission simulation panel
+        const sim = data.simulation || (data.mission && data.mission.simulation) || {};
+        if (sim.enabled !== false) {
+            const simBadge = document.getElementById('sim-badge');
+            if (sim.running) {
+                simBadge.className = 'sim-badge running';
+                simBadge.innerText = 'SCRIPT RUNNING';
+            } else if (sim.enabled) {
+                simBadge.className = 'sim-badge stopped';
+                simBadge.innerText = 'STOPPED';
+            } else {
+                simBadge.className = 'sim-badge off';
+                simBadge.innerText = 'DISABLED';
+            }
+            const loopTxt = sim.loop ? 'loop on' : 'loop off';
+            const loops = sim.loops_completed ? ` · ${sim.loops_completed} loop(s)` : '';
+            document.getElementById('sim-meta').innerText =
+                `Segment ${sim.segment_index || 0}/${sim.segment_total || 0}: ${sim.segment_label || '—'}`
+                + ` · ${sim.segment_remaining_s ?? '—'}s left · ${loopTxt}${loops}`;
+
+            const timeline = document.getElementById('sim-timeline');
+            const script = sim.script || [];
+            const activeIdx = (sim.segment_index || 1) - 1;
+            timeline.innerHTML = script.map((step, i) => {
+                const cls = i === activeIdx && sim.running ? 'active'
+                    : i < activeIdx && sim.running ? 'done' : '';
+                return `<div class="sim-step ${cls}"><strong>${step.label || step.task}</strong><br>`
+                    + `${step.duration_s}s · ${step.task}</div>`;
             }).join('');
         }
 
@@ -607,6 +846,18 @@ def dashboard():
                                   now=now)
 
 
+@app.route('/api/simulation/<action>', methods=['POST'])
+def api_simulation(action):
+    from src.hardware import get_hardware_source
+
+    hardware = get_hardware_source()
+    if action == 'start' and hasattr(hardware, 'start_simulation'):
+        return jsonify(hardware.start_simulation())
+    if action == 'stop' and hasattr(hardware, 'stop_simulation'):
+        return jsonify(hardware.stop_simulation())
+    return jsonify({"error": "Simulation not available for this hardware mode"}), 400
+
+
 @app.route('/api/analytics')
 def api_analytics():
     from flask import request
@@ -740,12 +991,14 @@ def _build_battery_payload():
             safety = getattr(hardware, "safety_status", {}) or {}
             requirements = getattr(hardware, "requirements_status", {}) or safety.get("requirements", {})
             ros2 = getattr(hardware, "ros2_status", {}) or {}
+            simulation = getattr(hardware, "simulation_status", {}) or mission.get("simulation", {})
 
             return {
                 "main_battery": main_battery,
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "hardware_mode": get_hardware_mode(),
                 "ros2": ros2,
+                "simulation": simulation,
                 "channels": channels,
                 "mission": mission,
                 "prediction": prediction,

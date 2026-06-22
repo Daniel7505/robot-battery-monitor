@@ -4,6 +4,8 @@ from src.analytics import (
     build_report,
     format_report_text,
     get_channel_summary,
+    get_lru_summaries,
+    get_mission_history,
     get_mission_summaries,
     get_power_trends,
     get_system_summary,
@@ -50,9 +52,14 @@ def test_analytics_views_initialize(clean_database):
     init_analytics_views()
     with db_cursor() as (conn, cur):
         cur.execute(
-            "SELECT COUNT(*) FROM information_schema.views WHERE table_name = 'v_power_trends'"
+            """
+            SELECT COUNT(*) FROM information_schema.views
+            WHERE table_name IN (
+                'v_power_trends', 'v_lru_summaries', 'v_mission_history', 'v_power_trends_by_task'
+            )
+            """
         )
-        assert cur.fetchone()[0] == 1
+        assert cur.fetchone()[0] == 4
 
 
 def test_system_summary_with_data(clean_database):
@@ -87,14 +94,29 @@ def test_power_trends_returns_buckets(clean_database):
     assert "avg_draw_w" in trends[0]
 
 
+def test_lru_and_mission_history(clean_database):
+    init_db()
+    _seed_snapshots()
+    lru = get_lru_summaries(hours=24)
+    assert len(lru) == 1
+    assert lru[0]["lru_id"] == "locomotion"
+
+    history = get_mission_history(hours=24, limit=5)
+    assert len(history) == 3
+    assert history[0]["task"] in ("idle", "moving", "high_load")
+
+
 def test_build_report_and_format(clean_database):
     init_db()
     _seed_snapshots()
     report = build_report(hours=24)
     text = format_report_text(report)
     assert "Analytics Report" in text
+    assert "LRU Group Summary" in text
     assert "idle" in text
     assert report["summary"]["snapshot_count"] == 3
+    assert len(report["lru_groups"]) >= 1
+    assert len(report["mission_history"]) == 3
 
 
 def test_report_empty_window(clean_database):

@@ -110,6 +110,24 @@ power_channels:
     max_draw_w: 15
     nominal_voltage: 24     # Often lower voltage rail
 
+simulation:
+  enabled: true
+  auto_start: true
+  loop: true
+  script:
+    - task: idle
+      duration_s: 18
+      label: "Idle / Standby"
+    - task: moving
+      duration_s: 24
+      label: "Walking / Transit"
+    - task: idle
+      duration_s: 15
+      label: "Idle / Rest"
+    - task: high_load
+      duration_s: 20
+      label: "High Load / Manipulation"
+
 hardware:
   mode: "real"
   type: "ros2"

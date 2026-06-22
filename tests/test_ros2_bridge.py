@@ -30,6 +30,30 @@ def test_ros2_bridge_mission_command():
     assert bridge.consume_commanded_task() is None
 
 
+def test_ros2_bridge_rejects_invalid_mission():
+    bridge = ROS2Bridge()
+    bridge.inject_command(mission="fly_to_moon")
+    assert bridge.consume_commanded_task() is None
+    assert bridge.status["rejected_commands"] == 1
+
+
+def test_ros2_bridge_rich_publish_payload():
+    bridge = ROS2Bridge()
+    bridge.start()
+    bridge.publish(
+        88.5,
+        {"Legs": {"draw": 22}, "Arms": {"draw": 11}, "Torso": {"draw": 9}, "Compute": {"draw": 7}},
+        allocation={"task": "moving", "status": "ok", "utilization_pct": 65, "budget_w": 72},
+        mission_info={"task": "moving", "task_label": "Moving"},
+    )
+    last = bridge.last_published()
+    assert last["total_draw_w"] == 49.0
+    assert last["bridge_mode"] == "mock"
+    assert "channel_order" in last
+    assert bridge.status["last_payload_task"] == "moving"
+    bridge.stop()
+
+
 def test_ros2_bridge_sensor_blend():
     bridge = ROS2Bridge()
     bridge.inject_command(sensor_draws={"Legs": 30.0, "Arms": 15.0})

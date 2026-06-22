@@ -1,0 +1,374 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
+
+WorldInfo {
+  basicTimeStep 32
+  coordinateSystem "ENU"
+  contactProperties [
+    ContactProperties {
+      coulombFriction [
+        4
+      ]
+      bounce 0
+      softCFM 0.0001
+    }
+  ]
+  info [
+    "ButlerBot digital twin — wheeled mobile manipulator"
+    "Feeds power telemetry to Robot Battery Monitor dashboard"
+  ]
+}
+
+Viewpoint {
+  follow "ButlerBot"
+  followType "Tracking Shot"
+  orientation 1 0 0 1.5708
+  position 0 0 3.2
+  fieldOfView 0.95
+}
+
+TexturedBackground {
+  texture "noon_cloudy_countryside"
+  luminosity 1.2
+}
+
+TexturedBackgroundLight {
+  texture "noon_cloudy_countryside"
+  castShadows TRUE
+}
+
+Floor {
+  name "ground"
+  size 16 16
+  tileSize 0.5 0.5
+  appearance Parquetry {
+    type "chequered"
+    colorOverride 0.55 0.56 0.58
+  }
+}
+
+Robot {
+  translation 0 0 0.105
+  rotation 0 0 1 0
+  name "ButlerBot"
+  controller "butlerbot_controller"
+  controllerArgs [
+    "--dashboard-url=http://127.0.0.1:5000"
+  ]
+  customData "ButlerBot wheeled base + torso + dual arms"
+  children [
+    DEF BODY_TRANSFORM Transform {
+      translation 0 0 0.09
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.18 0.32 0.52
+            roughness 0.6
+            metalness 0.1
+          }
+          geometry Box {
+            size 0.36 0.30 0.16
+          }
+        }
+      ]
+    }
+    DEF LEFT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.14 0.11 -0.03
+        dampingConstant 0.5
+      }
+      device [
+        RotationalMotor {
+          name "left_wheel"
+          maxVelocity 10
+          maxTorque 5
+        }
+        PositionSensor {
+          name "left_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "left_wheel_solid"
+        translation -0.14 0.11 -0.03
+        rotation 1 0 0 1.5708
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.12 0.12 0.12
+            }
+            geometry Cylinder {
+              height 0.04
+              radius 0.065
+            }
+          }
+        ]
+        boundingObject Transform {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.04
+              radius 0.065
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.35
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            4.16e-04 7.39e-04 4.16e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF RIGHT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.14 -0.11 -0.03
+        dampingConstant 0.5
+      }
+      device [
+        RotationalMotor {
+          name "right_wheel"
+          maxVelocity 10
+          maxTorque 5
+        }
+        PositionSensor {
+          name "right_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "right_wheel_solid"
+        translation -0.14 -0.11 -0.03
+        rotation 1 0 0 1.5708
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.12 0.12 0.12
+            }
+            geometry Cylinder {
+              height 0.04
+              radius 0.065
+            }
+          }
+        ]
+        boundingObject Transform {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.04
+              radius 0.065
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.35
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            4.16e-04 7.39e-04 4.16e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF CASTER Solid {
+      name "caster_solid"
+      translation 0.15 0 -0.045
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.25 0.25 0.28
+          }
+          geometry Sphere {
+            radius 0.035
+          }
+        }
+      ]
+      boundingObject Sphere {
+        radius 0.035
+      }
+      physics Physics {
+        density -1
+        mass 0.08
+        centerOfMass [
+          0 0 0
+        ]
+        inertiaMatrix [
+          3.92e-05 3.92e-05 3.92e-05
+          0 0 0
+        ]
+      }
+    }
+    DEF TORSO_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 0 1
+        anchor 0 0 0.17
+        dampingConstant 2.0
+      }
+      device [
+        RotationalMotor {
+          name "torso_joint"
+          maxVelocity 1.2
+          maxTorque 1.8
+        }
+        PositionSensor {
+          name "torso_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "torso_solid"
+        translation 0 0 0.17
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.25 0.42 0.55
+            }
+            geometry Box {
+              size 0.22 0.18 0.12
+            }
+          }
+          DEF LEFT_ARM_JOINT HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 0.12 0.04
+              dampingConstant 1.5
+            }
+            device [
+              RotationalMotor {
+                name "left_arm"
+                maxVelocity 1.5
+                maxTorque 1.2
+              }
+              PositionSensor {
+                name "left_arm_sensor"
+              }
+            ]
+            endPoint Solid {
+              name "left_arm_solid"
+              translation 0 0.12 0.04
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.55 0.45 0.35
+                  }
+                  geometry Box {
+                    size 0.06 0.06 0.22
+                  }
+                }
+              ]
+              boundingObject Box {
+                size 0.06 0.06 0.22
+              }
+              physics Physics {
+                density -1
+                mass 0.15
+                centerOfMass [
+                  0 0 0
+                ]
+                inertiaMatrix [
+                  6.5e-04 6.5e-04 9.0e-05
+                  0 0 0
+                ]
+              }
+            }
+          }
+          DEF RIGHT_ARM_JOINT HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 -0.12 0.04
+              dampingConstant 1.5
+            }
+            device [
+              RotationalMotor {
+                name "right_arm"
+                maxVelocity 1.5
+                maxTorque 1.2
+              }
+              PositionSensor {
+                name "right_arm_sensor"
+              }
+            ]
+            endPoint Solid {
+              name "right_arm_solid"
+              translation 0 -0.12 0.04
+              children [
+                Shape {
+                  appearance PBRAppearance {
+                    baseColor 0.55 0.45 0.35
+                  }
+                  geometry Box {
+                    size 0.06 0.06 0.22
+                  }
+                }
+              ]
+              boundingObject Box {
+                size 0.06 0.06 0.22
+              }
+              physics Physics {
+                density -1
+                mass 0.15
+                centerOfMass [
+                  0 0 0
+                ]
+                inertiaMatrix [
+                  6.5e-04 6.5e-04 9.0e-05
+                  0 0 0
+                ]
+              }
+            }
+          }
+        ]
+        boundingObject Box {
+          size 0.22 0.18 0.12
+        }
+        physics Physics {
+          density -1
+          mass 0.6
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            2.34e-03 3.14e-03 4.04e-03
+            0 0 0
+          ]
+        }
+      }
+    }
+    GPS {
+      name "gps"
+    }
+    InertialUnit {
+      name "imu"
+    }
+  ]
+  boundingObject Transform {
+    translation 0 0 0.09
+    children [
+      Box {
+        size 0.40 0.34 0.28
+      }
+    ]
+  }
+  physics Physics {
+    density -1
+    mass 2.8
+    centerOfMass [
+      0 0 0.09
+    ]
+    inertiaMatrix [
+      4.53e-02 5.56e-02 6.43e-02
+      0 0 0
+    ]
+  }
+}

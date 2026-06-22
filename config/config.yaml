@@ -19,8 +19,9 @@ safety:
   thermal_warning_c: 55.0
   thermal_critical_c: 68.0
   thermal_max_c: 75.0
-  thermal_heating_factor: 0.42
-  thermal_cooling_rate: 0.08
+  thermal_heating_factor: 0.78
+  thermal_cooling_rate: 0.035
+  twin_thermal_stress_mult: 1.9
   safety_throttle_factor: 0.85
   critical_throttle_factor: 0.70
 
@@ -65,25 +66,30 @@ requirements:
   startup_cost_wh: 6.0
   eps_reserve_pct: 12
   system_min_draw_w: 18
-  system_max_draw_w: 72
+  system_max_draw_w: 55
   lru_budgets:
     moving:
-      locomotion: {min_draw_w: 18, max_draw_w: 35, budget_w: 28}
-      arms: {min_draw_w: 8, max_draw_w: 25, budget_w: 14}
-      torso: {min_draw_w: 10, max_draw_w: 20, budget_w: 15}
-      compute: {min_draw_w: 9, max_draw_w: 15, budget_w: 13}
+      locomotion: {min_draw_w: 14, max_draw_w: 28, budget_w: 22}
+      arms: {min_draw_w: 5, max_draw_w: 18, budget_w: 10}
+      torso: {min_draw_w: 7, max_draw_w: 14, budget_w: 11}
+      compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
+    balanced:
+      locomotion: {min_draw_w: 8, max_draw_w: 28, budget_w: 14}
+      arms: {min_draw_w: 6, max_draw_w: 18, budget_w: 10}
+      torso: {min_draw_w: 5, max_draw_w: 14, budget_w: 8}
+      compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
     high_load:
-      locomotion: {min_draw_w: 24, max_draw_w: 35, budget_w: 32}
-      arms: {min_draw_w: 16, max_draw_w: 25, budget_w: 24}
-      torso: {min_draw_w: 12, max_draw_w: 20, budget_w: 18}
-      compute: {min_draw_w: 10, max_draw_w: 15, budget_w: 14}
+      locomotion: {min_draw_w: 18, max_draw_w: 28, budget_w: 26}
+      arms: {min_draw_w: 12, max_draw_w: 18, budget_w: 17}
+      torso: {min_draw_w: 8, max_draw_w: 14, budget_w: 12}
+      compute: {min_draw_w: 7, max_draw_w: 12, budget_w: 10}
 
 robot:
-  name: "Optimus Unit 1"
-  main_battery_capacity_wh: 1000   # Optional: for better runtime estimation later
+  name: "ButlerBot"
+  main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
 
 power:
-  system_budget_w: 72   # Total allocatable watts across all channels
+  system_budget_w: 55   # Total allocatable watts (small/medium servo scale)
 
 database:
   host: "localhost"
@@ -95,38 +101,74 @@ database:
 power_channels:
   - id: "Legs"
     name: "Leg Drive Motors"
-    max_draw_w: 35        # New: Max allowed watts
-    nominal_voltage: 48   # Volts (for Amps calculation)
+    max_draw_w: 28        # 4–6 small leg servos under load
+    nominal_voltage: 48
   - id: "Arms"
     name: "Arm + Gripper Systems"
-    max_draw_w: 25
+    max_draw_w: 18
     nominal_voltage: 48
   - id: "Torso"
     name: "Torso & Balance Systems"
-    max_draw_w: 20
+    max_draw_w: 14
     nominal_voltage: 48
   - id: "Compute"
     name: "Main Computer & Sensors"
-    max_draw_w: 15
-    nominal_voltage: 24     # Often lower voltage rail
+    max_draw_w: 12
+    nominal_voltage: 24
+
+digital_twin:
+  enabled: true
+  adapter: generic
+  webots:
+    dashboard_url: "http://127.0.0.1:5000"
+    telemetry_interval_s: 0.5
+  accept_external_commands: true
+  accept_external_telemetry: true
+  prefer_external: true
+  stale_after_s: 12
+  apply_battery_override: false
+  sync_interval_s: 3
+
+agent:
+  enabled: true
+  auto_apply_throttle: true
+  auto_apply_task_suggestions: true
+  twin_auto_apply: true
+  history_limit: 32
+  low_battery_suggest_pct: 22
+  critical_battery_pct: 12
+  high_utilization_pct: 72
+  twin_stress_utilization_pct: 62
+  task_override_hold_s: 14
 
 simulation:
   enabled: true
   auto_start: true
   loop: true
+  driver: butlerbot
+  robot_name: ButlerBot
+  battery_capacity_wh: 480
   script:
     - task: idle
-      duration_s: 18
+      duration_s: 20
       label: "Idle / Standby"
     - task: moving
-      duration_s: 24
+      duration_s: 28
       label: "Walking / Transit"
-    - task: idle
-      duration_s: 15
-      label: "Idle / Rest"
+    - task: balanced
+      duration_s: 22
+      label: "Balanced / Patrol"
     - task: high_load
-      duration_s: 20
+      duration_s: 18
       label: "High Load / Manipulation"
+    - task: idle
+      duration_s: 14
+      label: "Return to Idle"
+  draw_profiles:
+    idle:       {Legs: 3.5, Arms: 5.0, Torso: 3.5, Compute: 7.5}
+    moving:     {Legs: 20.0, Arms: 8.0, Torso: 10.5, Compute: 9.0}
+    balanced:   {Legs: 12.0, Arms: 9.0, Torso: 7.5, Compute: 8.5}
+    high_load:  {Legs: 24.0, Arms: 16.0, Torso: 12.0, Compute: 10.0}
 
 hardware:
   mode: "real"

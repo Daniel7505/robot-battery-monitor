@@ -143,6 +143,7 @@ class MissionTaskManager:
         self._ticks_remaining = random.randint(12, 22)
         self._blend: dict[str, float] = {}
         self._blend_progress = 1.0
+        self._sim_driver = None
 
     @property
     def task_id(self) -> str:
@@ -168,8 +169,22 @@ class MissionTaskManager:
         """Smooth ease-in-out for task transitions."""
         return t * t * (3 - 2 * t)
 
+    def _resolve_draw_targets(self) -> dict[str, float]:
+        try:
+            from src.simulation_driver import SimulationDriver
+
+            sim = getattr(self, "_sim_driver", None)
+            if sim and sim.enabled and sim.running:
+                return sim.draw_targets_for(self._task)
+        except ImportError:
+            pass
+        return self.profile.draw_targets
+
+    def attach_simulation_driver(self, driver) -> None:
+        self._sim_driver = driver
+
     def target_draw(self, channel_id: str, max_draw_w: float, current_draw: float | None = None) -> float:
-        new_target = self.profile.draw_targets.get(channel_id, max_draw_w * 0.35)
+        new_target = self._resolve_draw_targets().get(channel_id, max_draw_w * 0.35)
         new_target = min(new_target, max_draw_w * 0.92)
 
         if channel_id not in self._blend:

@@ -1,6 +1,6 @@
 import time
 
-from src.mission_simulator import MissionSimulator
+from src.simulation_driver import SimulationDriver as MissionSimulator
 from src.mission_tasks import MissionTaskManager, TICK_SECONDS
 from src.hardware import reset_hardware_source
 from src.hardware_ros2 import ROS2BatterySource

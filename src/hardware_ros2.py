@@ -17,7 +17,10 @@ from src.energy_predictor import EnergyPredictor
 from src.safety_monitor import SafetyMonitor
 from src.power_requirements import PowerRequirements
 from src.ros2_bridge import ROS2Bridge
-from src.mission_simulator import MissionSimulator
+from src.simulation_driver import SimulationDriver
+from src.onboard_agent import OnboardAgent
+from src.twin import get_twin_bridge
+from src.twin.control import build_twin_control_status, is_twin_stress_phase
 from src.database import log_power_snapshot
 
 _START_BATTERY_PCT = 92.0
@@ -47,11 +50,19 @@ class ROS2BatterySource(RealHardwareSource):
         self.ros2_status: dict = {}
         self._requirements = PowerRequirements(self._power_channels, budget)
         self._ros2_throttle_pulse: float | None = None
-        self._simulator = MissionSimulator()
+        self._simulator = SimulationDriver()
+        self._mission.attach_simulation_driver(self._simulator)
         self.simulation_status: dict = {}
+        self._agent = OnboardAgent()
+        self.agent_status: dict = {}
+        self._twin = get_twin_bridge()
+        self.twin_status: dict = {}
+        self.twin_control_status: dict = {}
+        self._agent_task_hold_remaining: float = 0.0
 
     def _apply_ros2_commands(self) -> None:
-        if self._simulator.enabled and self._simulator.running:
+        twin_active = self._twin._is_external_active()
+        if self._simulator.enabled and self._simulator.running and not twin_active:
             self._ros2.consume_commanded_task()
             return
 
@@ -110,7 +121,12 @@ class ROS2BatterySource(RealHardwareSource):
         return smoothed
 
     def _drain_battery(self, total_draw_w: float) -> None:
-        capacity_wh = config.get("robot", "main_battery_capacity_wh", 1000) or 1000
+        sim_cfg = config.get("simulation") or {}
+        capacity_wh = (
+            sim_cfg.get("battery_capacity_wh")
+            or config.get("robot", "main_battery_capacity_wh", 480)
+            or 480
+        )
         energy_wh = total_draw_w * (TICK_SECONDS / 3600)
         drain_pct = (energy_wh / capacity_wh) * 100
         self._main_battery = max(5.0, round(self._main_battery - drain_pct, 3))
@@ -150,14 +166,52 @@ class ROS2BatterySource(RealHardwareSource):
             self.health_status = "DEGRADED"
             return self.last_readings if self.last_readings else {}
 
+    def _sync_twin_feed(self, twin_active: bool) -> None:
+        if not twin_active:
+            self._twin.sync_to_hardware(self)
+            return
+        if self._agent_task_hold_remaining > 0:
+            self._agent_task_hold_remaining = max(
+                0.0, self._agent_task_hold_remaining - TICK_SECONDS
+            )
+            tel = self._twin._last_telemetry
+            if tel and tel.channel_draws:
+                self._ros2.inject_command(sensor_draws=tel.channel_draws)
+            return
+        self._twin.sync_to_hardware(self)
+
     def _build_readings_inner(self) -> dict:
+        self.twin_status = self._twin.status()
+        twin_active = self._twin._is_external_active()
+        self._sync_twin_feed(twin_active)
+        tel = self._twin._last_telemetry if twin_active else None
+        twin_ctx: dict = {}
+        if tel:
+            loc = tel.locomotion or {}
+            phase = loc.get("phase")
+            gait = loc.get("gait")
+            if phase:
+                self._agent.record_phase_change(phase, gait, tel.task)
+            twin_ctx = {
+                "phase": phase,
+                "gait": gait,
+                "source": tel.source,
+            }
         self._apply_ros2_commands()
-        task_changed = self._simulator.advance(self._mission)
+        if twin_active:
+            task_changed = False
+        else:
+            task_changed = self._simulator.advance(self._mission)
         if task_changed:
             for ch_id, draw in self._channel_draw.items():
                 self._mission._blend[ch_id] = draw
 
-        capacity_wh = config.get("robot", "main_battery_capacity_wh", 1000) or 1000
+        sim_cfg = config.get("simulation") or {}
+        capacity_wh = (
+            sim_cfg.get("battery_capacity_wh")
+            or config.get("robot", "main_battery_capacity_wh", 480)
+            or 480
+        )
 
         recent_draw = sum(self._channel_draw.values()) if self._channel_draw else 0
         pre_prediction = self._predictor.forecast(
@@ -216,6 +270,10 @@ class ROS2BatterySource(RealHardwareSource):
         allocation.update(self.mission_info)
 
         battery_pct = round(self._main_battery, 1)
+        thermal_stress = 1.0
+        if twin_active and is_twin_stress_phase(twin_ctx.get("phase")):
+            safety_cfg = config.get("safety") or {}
+            thermal_stress = float(safety_cfg.get("twin_thermal_stress_mult", 1.9))
         safety = self._safety.evaluate(
             battery_pct=battery_pct,
             requested=allocation["requested"],
@@ -225,6 +283,7 @@ class ROS2BatterySource(RealHardwareSource):
             channel_meta=channel_meta,
             task_id=self._mission.task_id,
             task_budget_w=allocation.get("budget_w"),
+            thermal_stress=thermal_stress,
         )
         self.requirements_status = safety.get("requirements", {})
         if safety.get("throttle_required"):
@@ -235,14 +294,23 @@ class ROS2BatterySource(RealHardwareSource):
             for w in safety.get("warnings", []):
                 if w not in allocation["warnings"]:
                     allocation["warnings"].append(w)
-            allocation["warnings"].append(
+            throttle_msg = (
                 f"Safety throttle ({safety.get('throttle_reason', 'limit')}): "
                 f"factor {safety.get('throttle_factor', 1):.0%}"
             )
+            allocation["warnings"].append(throttle_msg)
             allocation["status"] = "throttled"
             for ch_id in allocation["allocated"]:
                 if ch_id not in allocation["throttled_channels"]:
                     allocation["throttled_channels"].append(ch_id)
+            if twin_active:
+                self._agent.record_pms_influence(
+                    throttle_msg,
+                    sim_phase=twin_ctx.get("phase"),
+                    gait=twin_ctx.get("gait"),
+                    pms_task=self._mission.task_id,
+                    priority="high" if safety.get("status") == "fault" else "medium",
+                )
 
         if safety.get("faults"):
             allocation["status"] = "fault"
@@ -261,7 +329,58 @@ class ROS2BatterySource(RealHardwareSource):
             "requirements": safety.get("requirements"),
         }
         self.safety_status = safety
+
+        agent_result = self._agent.evaluate(
+            battery_pct=battery_pct,
+            task_id=self._mission.task_id,
+            allocation=allocation,
+            safety=safety,
+            prediction=self.prediction_status,
+            mission=self.mission_info,
+            readings={},
+            twin_context=twin_ctx,
+        )
+        if self._agent.should_auto_apply(twin_active) and agent_result.recommendations:
+            allocation["allocated"], throttle_applied = self._agent.apply_throttle(
+                allocation["allocated"], agent_result
+            )
+            if throttle_applied:
+                allocation["total_allocated_w"] = round(
+                    sum(allocation["allocated"].values()), 1
+                )
+                msg = f"Agent throttle applied: {', '.join(throttle_applied)}"
+                allocation["warnings"].append(msg)
+                allocation["status"] = "throttled"
+                self._agent.record_pms_influence(
+                    msg,
+                    sim_phase=twin_ctx.get("phase"),
+                    gait=twin_ctx.get("gait"),
+                    pms_task=self._mission.task_id,
+                    priority="high",
+                )
+            if self._agent.auto_apply_task_suggestions or (
+                twin_active and self._agent.twin_auto_apply
+            ):
+                task_applied = self._agent.apply_task_suggestions(
+                    self._mission, agent_result
+                )
+                for item in task_applied:
+                    hold_s = float(self._agent._cfg.get("task_override_hold_s", 12))
+                    self._agent_task_hold_remaining = hold_s
+                    self._agent.record_event(
+                        "task_change",
+                        f"Agent set PMS task {item} (hold {hold_s:.0f}s)",
+                        priority="high",
+                        influence="agent",
+                        sim_phase=twin_ctx.get("phase"),
+                        gait=twin_ctx.get("gait"),
+                        pms_task=self._mission.task_id,
+                        applied=True,
+                    )
+        self.agent_status = self._agent.status_dict(agent_result)
+        allocation["agent"] = self.agent_status
         self.allocation_status = allocation
+        self.twin_control_status = build_twin_control_status(self._twin, self)
 
         readings = {}
         throttled_set = set(allocation["throttled_channels"])
@@ -312,12 +431,12 @@ class ROS2BatterySource(RealHardwareSource):
         return readings
 
     def _seed_channel_draws(self) -> None:
-        profile = self._mission.profile
+        targets = self._simulator.draw_targets_for(self._mission.task_id)
         for ch in self._power_channels:
             ch_id = ch.get("id")
             if not ch_id:
                 continue
-            seed = profile.draw_targets.get(ch_id, ch.get("max_draw_w", 20) * 0.35)
+            seed = targets.get(ch_id, ch.get("max_draw_w", 20) * 0.35)
             self._channel_draw[ch_id] = round(seed, 1)
             self._mission._blend[ch_id] = self._channel_draw[ch_id]
 
@@ -329,7 +448,12 @@ class ROS2BatterySource(RealHardwareSource):
         self._ros2.start()
         if self._simulator.auto_start:
             self._simulator.start(self._mission)
-        capacity_wh = config.get("robot", "main_battery_capacity_wh", 1000) or 1000
+        sim_cfg = config.get("simulation") or {}
+        capacity_wh = (
+            sim_cfg.get("battery_capacity_wh")
+            or config.get("robot", "main_battery_capacity_wh", 480)
+            or 480
+        )
         info = self._mission.mission_info(_START_BATTERY_PCT, capacity_wh, 0)
         ros_mode = self._ros2.status.get("mode", "mock")
         logger.info(

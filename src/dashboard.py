@@ -101,6 +101,13 @@ HTML_TEMPLATE = '''
         .analytics-section h3 { font-size: 0.92em; color: #9ab; margin: 0 0 6px; font-weight: normal; }
         .analytics-hours-btn { background: #1a2433; border: 1px solid #345; color: #9cf; padding: 3px 10px; border-radius: 4px; cursor: pointer; margin-right: 6px; font-size: 0.82em; }
         .analytics-hours-btn.active { background: #234; border-color: #58f; color: #def; }
+        .analytics-report-btn { background: #1a2a3a; border: 1px solid #456; color: #9cf; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 0.82em; margin-left: 8px; }
+        .analytics-report-btn:hover { background: #243448; }
+        .anomaly-pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.78em; background: #311; color: #f88; margin-right: 6px; }
+        .twin-panel { background: #0a1018; border: 1px solid #345; border-radius: 8px; padding: 12px 16px; margin: 12px 0; font-size: 0.88em; }
+        .twin-badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8em; margin-left: 8px; background: #123; color: #8cf; border: 1px solid #48f; }
+        .twin-endpoints { font-size: 0.78em; color: #678; margin-top: 6px; line-height: 1.6; }
+        .twin-endpoints code { color: #9cf; }
         .battery-trend { display: flex; align-items: flex-end; gap: 3px; height: 40px; margin: 8px 0; }
         .battery-trend-bar { flex: 1; background: #2a5a3a; border-radius: 2px 2px 0 0; min-width: 6px; }
         .ros2-topics { font-size: 0.78em; color: #678; margin-top: 6px; }
@@ -148,6 +155,80 @@ HTML_TEMPLATE = '''
         .req-fault { color: #f88; }
         .lru-summary { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 12px; font-size: 0.88em; color: #9ab; }
         .lru-summary strong { color: #cde; }
+        .agent-panel { background: #0a1218; border: 1px solid #356; border-radius: 8px; padding: 14px 18px; margin: 14px 0; }
+        .agent-panel.normal { border-color: #3a6; }
+        .agent-panel.advisory { border-color: #58a; }
+        .agent-panel.cautious { border-color: #a80; }
+        .agent-panel.critical { border-color: #a33; background: #180a0a; }
+        .agent-panel.disabled { border-color: #444; opacity: 0.75; }
+        .agent-badge { display: inline-block; padding: 4px 10px; border-radius: 5px; font-size: 0.82em; font-weight: bold; margin-left: 8px; }
+        .agent-badge.normal { background: #132; color: #8f8; border: 1px solid #3a3; }
+        .agent-badge.advisory { background: #123; color: #8cf; border: 1px solid #48f; }
+        .agent-badge.cautious { background: #331; color: #fc8; border: 1px solid #a80; }
+        .agent-badge.critical { background: #511; color: #f88; border: 1px solid #a33; }
+        .agent-badge.disabled { background: #222; color: #888; border: 1px solid #444; }
+        .agent-summary { color: #9ab; font-size: 0.92em; margin: 8px 0 10px; }
+        .agent-recs { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+        .agent-rec {
+            background: #111; border: 1px solid #333; border-radius: 6px; padding: 10px 12px;
+            font-size: 0.86em; display: flex; gap: 10px; align-items: flex-start;
+        }
+        .agent-rec.critical { border-color: #a33; }
+        .agent-rec.high { border-color: #a80; }
+        .agent-rec.medium { border-color: #58a; }
+        .agent-rec.low, .agent-rec.info { border-color: #444; }
+        .agent-rec-action { font-weight: bold; color: #8cf; min-width: 110px; text-transform: uppercase; font-size: 0.78em; }
+        .agent-rec-detail { color: #ccc; flex: 1; }
+        .agent-rec-priority { font-size: 0.72em; padding: 2px 6px; border-radius: 4px; background: #222; color: #aaa; }
+        .agent-log { margin-top: 12px; font-size: 0.8em; color: #678; max-height: 140px; overflow-y: auto; }
+        .agent-log-entry { padding: 3px 0; border-bottom: 1px solid #1a1a1a; }
+        .agent-log-entry span { color: #8ab; margin-right: 8px; }
+        .agent-meta { font-size: 0.8em; color: #666; margin-top: 6px; }
+        .twin-control-panel { background: linear-gradient(135deg, #0a1420 0%, #101828 100%); border: 2px solid #48f; border-radius: 10px; padding: 16px 18px; margin: 14px 0 18px; box-shadow: 0 0 24px rgba(68, 136, 255, 0.12); }
+        .twin-control-panel.inactive { border-color: #444; box-shadow: none; opacity: 0.85; }
+        .twin-control-panel.agent-active { border-color: #a80; box-shadow: 0 0 28px rgba(255, 170, 0, 0.15); }
+        .twin-control-panel.agent-intervening { border-color: #f84; box-shadow: 0 0 36px rgba(255, 100, 40, 0.35); animation: intervene-pulse 2s ease-in-out infinite; }
+        .twin-control-panel.stress-phase { background: linear-gradient(135deg, #141018 0%, #1a1020 100%); }
+        .twin-control-panel.pms-throttled { border-color: #f66; }
+        @keyframes intervene-pulse { 0%,100% { box-shadow: 0 0 24px rgba(255,120,40,0.25); } 50% { box-shadow: 0 0 42px rgba(255,80,20,0.55); } }
+        .agent-intervention-banner { display: none; margin: 10px 0; padding: 12px 16px; border-radius: 8px; background: #2a1408; border: 2px solid #f84; color: #fcc; font-weight: bold; font-size: 0.92em; animation: flash-entry 1.2s ease-out; }
+        .agent-intervention-banner.visible { display: block; }
+        .agent-intervention-banner .applied { color: #8f8; font-weight: normal; font-size: 0.88em; display: block; margin-top: 4px; }
+        .agent-panel.intervening { border-width: 2px; animation: intervene-pulse 2.5s ease-in-out infinite; }
+        .twin-control-header { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+        .twin-control-badge { display: inline-block; padding: 5px 12px; border-radius: 6px; font-size: 0.82em; font-weight: bold; background: #132; color: #8f8; border: 1px solid #3a3; animation: pulse 2s infinite; }
+        .twin-control-badge.off { background: #222; color: #888; border-color: #444; animation: none; }
+        .twin-control-badge.agent-on { background: #331; color: #fc8; border-color: #a80; }
+        .twin-phase-banner { text-align: center; padding: 12px 16px; margin: 10px 0; border-radius: 8px; background: #111820; border: 1px solid #356; }
+        .twin-phase-banner .phase-name { font-size: 1.45em; font-weight: bold; color: #9df; letter-spacing: 0.02em; }
+        .twin-phase-banner .phase-meta { font-size: 0.88em; color: #8ab; margin-top: 6px; }
+        .twin-phase-timeline { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+        .twin-phase-step { flex: 1; min-width: 100px; background: #0d1117; border: 1px solid #333; border-radius: 6px; padding: 8px 10px; font-size: 0.78em; color: #666; text-align: center; transition: all 0.35s; }
+        .twin-phase-step.active { border-color: #58f; color: #cef; background: #152238; box-shadow: 0 0 12px rgba(88, 136, 255, 0.35); transform: scale(1.03); }
+        .twin-phase-step.done { border-color: #363; color: #6a8; }
+        .twin-control-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 10px 0; font-size: 0.86em; }
+        .twin-control-stat { background: #0d1117; border: 1px solid #2a3a4a; border-radius: 6px; padding: 8px 12px; }
+        .twin-control-stat strong { color: #cde; display: block; margin-top: 2px; }
+        .twin-control-stat span { color: #678; font-size: 0.82em; }
+        .twin-influence-bar { padding: 10px 14px; margin: 10px 0; border-radius: 6px; font-size: 0.88em; background: #111; border: 1px solid #333; color: #bbb; }
+        .twin-influence-bar.highlight { background: #1a1408; border-color: #a80; color: #fc8; animation: flash-entry 1.5s ease-out; }
+        .twin-influence-bar.critical { background: #1a0808; border-color: #a33; color: #f88; }
+        .agent-action-log { margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.82em; border: 1px solid #2a3a4a; border-radius: 6px; background: #080c10; }
+        .agent-action-log-title { padding: 8px 12px; background: #0d1520; border-bottom: 1px solid #2a3a4a; color: #9cf; font-weight: bold; font-size: 0.9em; }
+        .agent-action-entry { padding: 8px 12px; border-bottom: 1px solid #151a20; display: flex; gap: 10px; align-items: flex-start; }
+        .agent-action-entry:last-child { border-bottom: none; }
+        .agent-action-entry.new { animation: flash-entry 1.4s ease-out; background: #101820; }
+        .agent-action-entry.throttle, .agent-action-entry.pms_throttle, .agent-action-entry.throttle_channel, .agent-action-entry.throttle_system { border-left: 3px solid #fa0; }
+        .agent-action-entry.suggest_task, .agent-action-entry.phase_change { border-left: 3px solid #58f; }
+        .agent-action-entry.safety_alert, .agent-action-entry.critical { border-left: 3px solid #f44; }
+        .agent-action-time { color: #678; min-width: 58px; font-family: monospace; }
+        .agent-action-tag { font-size: 0.72em; padding: 2px 6px; border-radius: 3px; background: #1a2433; color: #8cf; white-space: nowrap; }
+        .agent-action-tag.twin { color: #8f8; }
+        .agent-action-tag.pms { color: #fc8; }
+        .agent-action-tag.agent { color: #9df; }
+        .agent-action-detail { color: #ccc; flex: 1; }
+        .agent-rec.flash { animation: flash-entry 1.2s ease-out; }
+        @keyframes flash-entry { 0% { background: #1a3050; } 100% { background: transparent; } }
     </style>
 </head>
 <body>
@@ -179,6 +260,34 @@ HTML_TEMPLATE = '''
     
     <div id="warning" class="warning"></div>
 
+    <div id="twin-control-panel" class="twin-control-panel inactive">
+        <div class="twin-control-header">
+            <strong style="font-size:1.05em">PMS + Agent → Webots Twin</strong>
+            <span id="twin-control-badge" class="twin-control-badge off">AWAITING TWIN</span>
+            <span id="twin-control-source" class="twin-badge" style="margin-left:4px">—</span>
+        </div>
+        <div id="twin-phase-banner" class="twin-phase-banner">
+            <div class="phase-name" id="twin-sim-phase-label">—</div>
+            <div class="phase-meta" id="twin-sim-phase-meta">Connect Webots ButlerBot to see live simulation phase</div>
+        </div>
+        <div id="twin-phase-timeline" class="twin-phase-timeline"></div>
+        <div class="twin-control-grid">
+            <div class="twin-control-stat"><span>PMS Task</span><strong id="twin-pms-task">—</strong></div>
+            <div class="twin-control-stat"><span>Agent Posture</span><strong id="twin-agent-posture">—</strong></div>
+            <div class="twin-control-stat"><span>Allocation</span><strong id="twin-alloc-status">—</strong></div>
+            <div class="twin-control-stat"><span>Speed / Position</span><strong id="twin-loco-meta">—</strong></div>
+        </div>
+        <div id="agent-intervention-banner" class="agent-intervention-banner">
+            <span id="agent-intervention-text">⚡ Agent intervening</span>
+            <span class="applied" id="agent-intervention-applied"></span>
+        </div>
+        <div id="twin-influence-bar" class="twin-influence-bar">Power &amp; mission influence will appear when the agent or PMS acts on twin telemetry.</div>
+        <div class="agent-action-log">
+            <div class="agent-action-log-title">Agent Action Log <span style="font-weight:normal;color:#678;font-size:0.85em">— real-time decisions tied to simulation</span></div>
+            <div id="agent-action-log"></div>
+        </div>
+    </div>
+
     <div id="safety-panel" class="safety-panel ok">
         <h2>Safety &amp; Thermal Status <span id="degrade-badge" class="degrade-badge">NORMAL</span></h2>
         <div class="safety-indicators">
@@ -204,14 +313,23 @@ HTML_TEMPLATE = '''
         <div id="lru-grid" class="lru-grid"></div>
     </div>
 
+    <div id="agent-panel" class="agent-panel normal">
+        <strong>Onboard Agent</strong>
+        <span id="agent-badge" class="agent-badge normal">NORMAL</span>
+        <span id="agent-controlling-badge" class="tag" style="margin-left:8px;display:none">CONTROLLING</span>
+        <div id="agent-summary" class="agent-summary">Evaluating telemetry…</div>
+        <div id="agent-recs" class="agent-recs"></div>
+        <div id="agent-meta" class="agent-meta"></div>
+    </div>
+
     <div id="sim-panel" class="sim-panel">
-        <strong>Mission Simulation</strong>
+        <strong>ButlerBot Simulation</strong>
         <span id="sim-badge" class="sim-badge off">OFF</span>
         <div class="sim-controls" style="margin-top:8px">
-            <button type="button" id="sim-start-btn">Start Script</button>
-            <button type="button" id="sim-stop-btn">Stop Script</button>
+            <button type="button" id="sim-start-btn">Start Loop</button>
+            <button type="button" id="sim-stop-btn">Stop Loop</button>
         </div>
-        <div id="sim-meta" class="sim-meta">Script: Idle → Transit → Idle → High Load</div>
+        <div id="sim-meta" class="sim-meta">Idle → Transit → Patrol → High Load → Idle</div>
         <div id="sim-timeline" class="sim-timeline"></div>
     </div>
 
@@ -268,6 +386,22 @@ HTML_TEMPLATE = '''
         <div id="alloc-warnings" class="alloc-warnings"></div>
     </div>
     
+    <div id="twin-panel" class="twin-panel">
+        <strong>Digital Twin Bridge</strong>
+        <span id="twin-badge" class="twin-badge">—</span>
+        <span id="twin-source-badge" class="twin-badge" style="margin-left:4px">—</span>
+        <div id="twin-meta" style="color:#8ab;margin-top:6px;font-size:0.85em">—</div>
+        <div id="twin-flow" style="color:#678;font-size:0.8em;margin-top:4px">ButlerBot: stand → walk → patrol → manipulate → idle</div>
+        <div class="twin-endpoints">
+            <code>POST /api/twin/telemetry</code> — ingest from Webots/PyBullet/custom script<br>
+            <code>GET /api/twin/state</code> — export PMS state &nbsp;|&nbsp;
+            <code>POST /api/twin/command</code> — outbound commands<br>
+            <code>GET /api/twin/schema</code> — contract &nbsp;|&nbsp;
+            <code>GET /api/twin/example</code> — ButlerBot flow &nbsp;|&nbsp;
+            Webots: <code>webots/README.md</code>
+        </div>
+    </div>
+
     <div id="analytics-panel" class="analytics-panel">
         <strong>Historical Analytics</strong>
         <span style="color:#666;font-size:0.85em;margin-left:8px">(last <span id="analytics-hours">1</span>h)</span>
@@ -275,6 +409,7 @@ HTML_TEMPLATE = '''
             <button class="analytics-hours-btn active" data-hours="1">1h</button>
             <button class="analytics-hours-btn" data-hours="6">6h</button>
             <button class="analytics-hours-btn" data-hours="24">24h</button>
+            <button class="analytics-report-btn" id="analytics-report-btn" type="button">Download Report</button>
         </span>
         <div class="analytics-grid">
             <div class="analytics-stat"><strong id="hist-snapshots">—</strong><span>Snapshots</span></div>
@@ -283,7 +418,9 @@ HTML_TEMPLATE = '''
             <div class="analytics-stat"><strong id="hist-battery-range">—</strong><span>Battery Range</span></div>
             <div class="analytics-stat"><strong id="hist-throttles">—</strong><span>Throttle Events</span></div>
             <div class="analytics-stat"><strong id="hist-tasks">—</strong><span>Distinct Tasks</span></div>
+            <div class="analytics-stat"><strong id="hist-anomalies">—</strong><span>Anomalies</span></div>
         </div>
+        <div id="anomaly-summary" style="margin:6px 0;font-size:0.82em;color:#888"></div>
         <div class="analytics-section">
             <h3>Power draw trend (minute buckets)</h3>
             <div id="trend-chart" class="trend-chart"></div>
@@ -316,6 +453,24 @@ HTML_TEMPLATE = '''
                 <tr><th>Time</th><th>Task</th><th>Draw W</th><th>Battery %</th><th>Status</th></tr>
             </table>
         </div>
+        <div class="analytics-section">
+            <h3>Mission transitions</h3>
+            <table class="analytics-table" id="mission-transitions-table">
+                <tr><th>Time</th><th>From</th><th>To</th><th>Duration</th><th>Draw W</th></tr>
+            </table>
+        </div>
+        <div class="analytics-section">
+            <h3>Anomaly events</h3>
+            <table class="analytics-table" id="anomaly-table">
+                <tr><th>Time</th><th>Type</th><th>Context</th><th>Value</th><th>Severity</th></tr>
+            </table>
+        </div>
+        <div class="analytics-section">
+            <h3>Forecast history (minute buckets)</h3>
+            <table class="analytics-table" id="forecast-table">
+                <tr><th>Bucket</th><th>Task</th><th>Pred W</th><th>Confidence</th><th>Marginal</th></tr>
+            </table>
+        </div>
     </div>
 
     <h2>Power Channels</h2>
@@ -331,6 +486,116 @@ HTML_TEMPLATE = '''
     });
 
     let analyticsHours = 1;
+    let lastActionLogSig = '';
+    let lastInfluenceSig = '';
+    let lastRecSig = '';
+
+    function renderAgentActionLog(log) {
+        const el = document.getElementById('agent-action-log');
+        if (!log || !log.length) {
+            el.innerHTML = '<div class="agent-action-entry"><span class="agent-action-detail" style="color:#666">Waiting for agent decisions…</span></div>';
+            return;
+        }
+        const sig = log.slice(0, 12).map(e =>
+            (e.time || '') + '|' + (e.action || '') + '|' + (e.detail || '')
+        ).join(';;');
+        const isNew = sig !== lastActionLogSig;
+        lastActionLogSig = sig;
+        el.innerHTML = log.slice(0, 12).map((e, i) => {
+            const tagCls = (e.influence || 'agent').toLowerCase();
+            const actionCls = (e.action || '').toLowerCase();
+            const priCls = (e.priority || '').toLowerCase();
+            const phase = e.sim_phase ? e.sim_phase.replace(/_/g, ' ') : '';
+            const newCls = (isNew && i === 0) ? ' new' : '';
+            const applied = e.applied ? ' ✓' : '';
+            return `<div class="agent-action-entry ${actionCls} ${priCls}${newCls}">
+                <span class="agent-action-time">${e.time || '—'}</span>
+                <span class="agent-action-tag ${tagCls}">${(e.influence || 'agent').toUpperCase()}</span>
+                <span class="agent-action-detail">${e.detail || e.action || ''}${applied}${phase ? ` <span style="color:#68a">[${phase}]</span>` : ''}</span>
+            </div>`;
+        }).join('');
+    }
+
+    function updateTwinControl(tc, agent, twin) {
+        const panel = document.getElementById('twin-control-panel');
+        const badge = document.getElementById('twin-control-badge');
+        const active = tc && tc.active;
+        const intervening = tc && tc.agent_intervening;
+        panel.className = 'twin-control-panel' + (active ? '' : ' inactive')
+            + (intervening ? ' agent-intervening' : (tc && tc.agent_controlling ? ' agent-active' : ''))
+            + (tc && tc.stress_phase ? ' stress-phase' : '')
+            + (tc && tc.allocation_status === 'throttled' ? ' pms-throttled' : '');
+
+        const intBanner = document.getElementById('agent-intervention-banner');
+        const intText = document.getElementById('agent-intervention-text');
+        const intApplied = document.getElementById('agent-intervention-applied');
+        if (active && intervening) {
+            intBanner.className = 'agent-intervention-banner visible';
+            intText.innerText = '⚡ AGENT INTERVENING'
+                + (tc.stress_phase ? ` — ${tc.sim_phase_label} stress` : '');
+            const applied = (tc.applied_actions || []).join(' · ');
+            intApplied.innerText = applied ? `Applied: ${applied}` : (agent.summary || '');
+        } else {
+            intBanner.className = 'agent-intervention-banner';
+            intApplied.innerText = '';
+        }
+
+        if (active) {
+            badge.className = 'twin-control-badge' + (intervening ? ' agent-on' : '');
+            badge.innerText = intervening ? 'AGENT INTERVENING' : (tc.agent_controlling ? 'AGENT ACTIVE' : 'TWIN LIVE');
+        } else {
+            badge.className = 'twin-control-badge off';
+            badge.innerText = 'AWAITING TWIN';
+        }
+
+        const srcEl = document.getElementById('twin-control-source');
+        const src = (tc && tc.source || twin && twin.active_source || 'internal').toUpperCase();
+        srcEl.innerText = active ? `FEED: ${src}` : 'NO EXTERNAL FEED';
+        srcEl.style.background = active ? '#132' : '#222';
+        srcEl.style.color = active ? '#8f8' : '#888';
+
+        document.getElementById('twin-sim-phase-label').innerText =
+            active ? (tc.sim_phase_label || '—') : '—';
+        const gait = tc && tc.gait ? tc.gait : '—';
+        const speed = tc && tc.speed_m_s != null ? tc.speed_m_s + ' m/s' : '—';
+        const pose = tc && tc.pose ? `(${tc.pose.x_m ?? '?' }, ${tc.pose.y_m ?? '?'})` : '—';
+        document.getElementById('twin-sim-phase-meta').innerText = active
+            ? `Gait: ${gait} · Speed: ${speed} · Pose: ${pose}`
+            : 'Launch Webots ButlerBot — telemetry drives this panel';
+
+        const flow = (tc && tc.phase_flow) || [];
+        const activeIdx = tc ? (tc.active_phase_index ?? -1) : -1;
+        document.getElementById('twin-phase-timeline').innerHTML = flow.length
+            ? flow.map((step, i) => {
+                const cls = i === activeIdx && active ? 'active' : (i < activeIdx && active ? 'done' : '');
+                return `<div class="twin-phase-step ${cls}"><strong>${step.label}</strong><br>${step.task}</div>`;
+            }).join('')
+            : '';
+
+        document.getElementById('twin-pms-task').innerText =
+            active ? (tc.pms_task_label || tc.pms_task || '—') : '—';
+        document.getElementById('twin-agent-posture').innerText =
+            (tc && tc.agent_posture || agent && agent.posture || '—').toUpperCase();
+        const allocSt = tc && tc.allocation_status ? tc.allocation_status.toUpperCase() : '—';
+        const util = tc && tc.utilization_pct != null ? ` (${tc.utilization_pct}%)` : '';
+        const throttled = (tc && tc.throttled_channels || []).join(', ');
+        document.getElementById('twin-alloc-status').innerText = allocSt + util
+            + (throttled ? ' · ' + throttled : '');
+        document.getElementById('twin-loco-meta').innerText = active ? `${speed} · ${pose}` : '—';
+
+        const infBar = document.getElementById('twin-influence-bar');
+        const influence = (tc && tc.power_influence) || '—';
+        const infSig = influence + (tc && tc.allocation_status || '');
+        const infNew = infSig !== lastInfluenceSig && active;
+        lastInfluenceSig = infSig;
+        infBar.innerText = active ? ('⚡ ' + influence) : influence;
+        infBar.className = 'twin-influence-bar'
+            + (infNew && tc && tc.agent_controlling ? ' highlight' : '')
+            + (tc && tc.allocation_status === 'throttled' ? ' critical' : '');
+
+        const log = (agent && (agent.action_log || agent.recent_log)) || [];
+        renderAgentActionLog(log);
+    }
 
     function fillTable(tableId, headers, rows, rowHtml) {
         const table = document.getElementById(tableId);
@@ -359,6 +624,28 @@ HTML_TEMPLATE = '''
                         ? s.min_battery_pct + '–' + s.max_battery_pct + '%' : '—';
                 document.getElementById('hist-throttles').innerText = s.throttle_events ?? '—';
                 document.getElementById('hist-tasks').innerText = s.distinct_tasks ?? '—';
+
+                const anom = data.anomaly_summary || {};
+                document.getElementById('hist-anomalies').innerText = anom.total_events ?? 0;
+                const anomEl = document.getElementById('anomaly-summary');
+                const byType = anom.by_type || {};
+                const pills = Object.entries(byType).map(([k, v]) =>
+                    `<span class="anomaly-pill">${k}: ${v}</span>`).join('');
+                anomEl.innerHTML = pills || '<span style="color:#666">No anomalies in window</span>';
+
+                const twin = data.twin || {};
+                document.getElementById('twin-badge').innerText =
+                    twin.enabled ? 'BRIDGE ON' : 'DISABLED';
+                const srcBadge = document.getElementById('twin-source-badge');
+                const src = (twin.active_source || 'internal').toUpperCase();
+                srcBadge.innerText = twin.external_active ? `FEED: ${src}` : 'SOURCE: INTERNAL';
+                srcBadge.style.background = twin.external_active ? '#132' : '#223';
+                srcBadge.style.color = twin.external_active ? '#8f8' : '#8cf';
+                document.getElementById('twin-meta').innerText = twin.enabled
+                    ? `Schema v${twin.schema_version || '1.1'} · adapter ${twin.adapter || 'generic'}`
+                      + ` · telemetry ${twin.telemetry_count || 0}`
+                      + (twin.external_active ? ' · external feed active' : ' · internal sim')
+                    : 'Digital twin bridge disabled in config';
 
                 const trends = data.power_trends || [];
                 const chart = document.getElementById('trend-chart');
@@ -414,9 +701,33 @@ HTML_TEMPLATE = '''
                     h => `<td>${h.time}</td><td>${h.task}</td>`
                         + `<td>${h.allocated_w ?? '—'}</td><td>${h.battery_pct ?? '—'}</td>`
                         + `<td>${h.status ?? '—'}</td>`);
+
+                fillTable('mission-transitions-table',
+                    ['Time', 'From', 'To', 'Duration', 'Draw W'],
+                    data.mission_transitions || [],
+                    t => `<td>${t.time}</td><td>${t.from_task}</td><td>${t.to_task}</td>`
+                        + `<td>${t.seconds_since_prev ?? '—'}s</td><td>${t.allocated_w ?? '—'}</td>`);
+
+                fillTable('anomaly-table',
+                    ['Time', 'Type', 'Context', 'Value', 'Severity'],
+                    data.anomalies || [],
+                    a => `<td>${a.time}</td><td>${a.type}</td><td>${a.context}</td>`
+                        + `<td>${a.metric_value ?? '—'}</td><td>${a.severity ?? '—'}</td>`);
+
+                fillTable('forecast-table',
+                    ['Bucket', 'Task', 'Pred W', 'Confidence', 'Marginal'],
+                    data.forecast_history || [],
+                    f => `<td>${f.bucket}</td><td>${f.task}</td>`
+                        + `<td>${f.avg_predicted_draw_w ?? '—'}</td>`
+                        + `<td>${f.avg_confidence_pct ?? '—'}%</td>`
+                        + `<td>${f.marginal_count ?? 0}</td>`);
             })
             .catch(err => console.warn('Analytics fetch failed:', err));
     }
+
+    document.getElementById('analytics-report-btn').addEventListener('click', () => {
+        window.open('/api/analytics/report?hours=' + analyticsHours + '&format=text', '_blank');
+    });
 
     document.querySelectorAll('.analytics-hours-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -652,6 +963,85 @@ HTML_TEMPLATE = '''
             }).join('');
         }
 
+        // Twin control + onboard agent
+        const agent = data.agent || (data.allocation && data.allocation.agent) || {};
+        const twin = data.twin || {};
+        const tc = data.twin_control || {};
+        updateTwinControl(tc, agent, twin);
+
+        const agentPanel = document.getElementById('agent-panel');
+        const agentBadge = document.getElementById('agent-badge');
+        const ctrlBadge = document.getElementById('agent-controlling-badge');
+        const posture = (agent.posture || 'normal').toLowerCase();
+        if (agent.enabled === false) {
+            agentPanel.className = 'agent-panel disabled';
+            agentBadge.className = 'agent-badge disabled';
+            agentBadge.innerText = 'DISABLED';
+            ctrlBadge.style.display = 'none';
+        } else {
+            agentPanel.className = 'agent-panel ' + posture;
+            agentBadge.className = 'agent-badge ' + posture;
+            agentBadge.innerText = posture.toUpperCase();
+            const intervening = agent.intervening || (tc && tc.agent_intervening);
+            const controlling = agent.controlling || agent.active || intervening;
+            ctrlBadge.style.display = controlling ? 'inline-block' : 'none';
+            agentPanel.classList.toggle('intervening', !!intervening);
+            if (intervening) {
+                ctrlBadge.className = 'tag throttled';
+                ctrlBadge.innerText = 'INTERVENING NOW';
+            } else if (controlling) {
+                ctrlBadge.className = 'tag';
+                ctrlBadge.innerText = 'CONTROLLING TWIN';
+            }
+        }
+        const twinPhase = tc.sim_phase_label && tc.active ? ` [${tc.sim_phase_label}]` : '';
+        document.getElementById('agent-summary').innerText = (agent.summary || '—') + twinPhase;
+        const recs = agent.recommendations || [];
+        const recSig = recs.map(r => r.action + (r.channel || '') + (r.task || '')).join('|');
+        const recNew = recSig !== lastRecSig && recs.length > 0;
+        lastRecSig = recSig;
+        const actionLabel = (r) => {
+            if (r.action === 'suggest_task') return `Task → ${r.task || '?'}`;
+            if (r.action === 'throttle_channel') return `Throttle ${r.channel || '?'}`;
+            if (r.action === 'throttle_system') return 'System throttle';
+            if (r.action === 'safety_alert') return 'Safety alert';
+            return r.action || 'note';
+        };
+        const recDetail = (r) => {
+            if (r.message) return r.message;
+            let d = r.reason || '';
+            if (r.factor != null) d += ` (${Math.round(r.factor * 100)}%)`;
+            if (r.applied) d += ' ✓ applied';
+            return d;
+        };
+        document.getElementById('agent-recs').innerHTML = recs.length
+            ? recs.map((r, i) => `<div class="agent-rec ${r.priority || 'info'}${recNew && i === 0 ? ' flash' : ''}">
+                <span class="agent-rec-action">${actionLabel(r)}</span>
+                <span class="agent-rec-detail">${recDetail(r)}</span>
+                <span class="agent-rec-priority">${(r.priority || 'info').toUpperCase()}</span>
+            </div>`).join('')
+            : '<div class="agent-rec info"><span class="agent-rec-detail" style="color:#888">No active recommendations</span></div>';
+        const rules = (agent.rules_fired || []).join(', ');
+        const applied = (agent.applied_actions || []).join(', ');
+        document.getElementById('agent-meta').innerText =
+            (rules ? `Rules: ${rules}` : '')
+            + (applied ? ` · Applied: ${applied}` : '')
+            + (agent.recommendation_count != null ? ` · ${agent.recommendation_count} recommendation(s)` : '')
+            + (tc.active ? ' · Linked to Webots twin' : '');
+
+        if (twin.enabled !== undefined) {
+            document.getElementById('twin-badge').innerText = twin.enabled ? 'BRIDGE ON' : 'DISABLED';
+            const srcBadge = document.getElementById('twin-source-badge');
+            const src = (twin.active_source || 'internal').toUpperCase();
+            srcBadge.innerText = twin.external_active ? `FEED: ${src}` : 'SOURCE: INTERNAL';
+            srcBadge.style.background = twin.external_active ? '#132' : '#223';
+            srcBadge.style.color = twin.external_active ? '#8f8' : '#8cf';
+            document.getElementById('twin-meta').innerText = twin.enabled
+                ? `Schema v${twin.schema_version || '1.1'} · ${twin.telemetry_count || 0} telemetry`
+                  + (twin.external_active ? ' · Webots feed active' : ' · internal sim')
+                : 'Digital twin bridge disabled';
+        }
+
         // Mission simulation panel
         const sim = data.simulation || (data.mission && data.mission.simulation) || {};
         if (sim.enabled !== false) {
@@ -668,8 +1058,11 @@ HTML_TEMPLATE = '''
             }
             const loopTxt = sim.loop ? 'loop on' : 'loop off';
             const loops = sim.loops_completed ? ` · ${sim.loops_completed} loop(s)` : '';
+            const robot = sim.robot_name || 'ButlerBot';
+            const draw = sim.expected_draw_w != null ? ` · ~${sim.expected_draw_w}W` : '';
             document.getElementById('sim-meta').innerText =
-                `Segment ${sim.segment_index || 0}/${sim.segment_total || 0}: ${sim.segment_label || '—'}`
+                `${robot} — phase ${sim.segment_index || 0}/${sim.segment_total || 0}: `
+                + `${sim.segment_label || '—'}${draw}`
                 + ` · ${sim.segment_remaining_s ?? '—'}s left · ${loopTxt}${loops}`;
 
             const timeline = document.getElementById('sim-timeline');
@@ -678,8 +1071,9 @@ HTML_TEMPLATE = '''
             timeline.innerHTML = script.map((step, i) => {
                 const cls = i === activeIdx && sim.running ? 'active'
                     : i < activeIdx && sim.running ? 'done' : '';
+                const w = step.expected_draw_w != null ? ` · ~${step.expected_draw_w}W` : '';
                 return `<div class="sim-step ${cls}"><strong>${step.label || step.task}</strong><br>`
-                    + `${step.duration_s}s · ${step.task}</div>`;
+                    + `${step.duration_s}s${w}</div>`;
             }).join('');
         }
 
@@ -862,11 +1256,82 @@ def api_simulation(action):
 def api_analytics():
     from flask import request
     from src.analytics import build_report
+    from src.twin import get_twin_bridge
 
     hours = request.args.get('hours', default=1, type=float)
     hours = max(0.25, min(hours, 168))
     report = build_report(hours=hours)
+    report["twin"] = get_twin_bridge().status()
     return jsonify(report)
+
+
+@app.route('/api/analytics/report')
+def api_analytics_report():
+    from flask import request, Response
+    from src.analytics import build_report, format_report_text
+
+    hours = request.args.get('hours', default=24, type=float)
+    hours = max(0.25, min(hours, 168))
+    fmt = request.args.get('format', default="json")
+    report = build_report(hours=hours)
+    if fmt == "text":
+        return Response(format_report_text(report), mimetype="text/plain")
+    return jsonify(report)
+
+
+@app.route('/api/twin/state')
+def api_twin_state():
+    from src.hardware import get_hardware_source
+    from src.twin import get_twin_bridge
+
+    bridge = get_twin_bridge()
+    if not bridge.enabled:
+        return jsonify({"error": "Digital twin bridge disabled"}), 503
+    hardware = get_hardware_source()
+    return jsonify(bridge.export_state(hardware))
+
+
+@app.route('/api/twin/telemetry', methods=['POST'])
+def api_twin_telemetry():
+    from flask import request
+    from src.twin import get_twin_bridge
+
+    bridge = get_twin_bridge()
+    payload = request.get_json(silent=True) or {}
+    adapter = request.args.get('adapter')
+    result = bridge.ingest_telemetry(payload, adapter=adapter)
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
+@app.route('/api/twin/command', methods=['POST'])
+def api_twin_command():
+    from flask import request
+    from src.hardware import get_hardware_source
+    from src.twin import get_twin_bridge
+
+    bridge = get_twin_bridge()
+    payload = request.get_json(silent=True) or {}
+    result = bridge.apply_command(get_hardware_source(), payload)
+    status = 200 if result.get("ok") else 400
+    return jsonify(result), status
+
+
+@app.route('/api/twin/schema')
+def api_twin_schema():
+    from src.twin import get_twin_bridge
+
+    return jsonify(get_twin_bridge().schema())
+
+
+@app.route('/api/twin/example')
+def api_twin_example():
+    from src.twin.butlerbot import butlerbot_flow_description, butlerbot_telemetry_step
+
+    return jsonify({
+        "flow": butlerbot_flow_description(),
+        "sample_step": butlerbot_telemetry_step(1),
+    })
 
 
 @app.route('/api/data')
@@ -992,6 +1457,9 @@ def _build_battery_payload():
             requirements = getattr(hardware, "requirements_status", {}) or safety.get("requirements", {})
             ros2 = getattr(hardware, "ros2_status", {}) or {}
             simulation = getattr(hardware, "simulation_status", {}) or mission.get("simulation", {})
+            agent = getattr(hardware, "agent_status", {}) or allocation.get("agent", {})
+            twin_status = getattr(hardware, "twin_status", {}) or {}
+            twin_control = getattr(hardware, "twin_control_status", {}) or {}
 
             return {
                 "main_battery": main_battery,
@@ -999,6 +1467,9 @@ def _build_battery_payload():
                 "hardware_mode": get_hardware_mode(),
                 "ros2": ros2,
                 "simulation": simulation,
+                "agent": agent,
+                "twin": twin_status,
+                "twin_control": twin_control,
                 "channels": channels,
                 "mission": mission,
                 "prediction": prediction,

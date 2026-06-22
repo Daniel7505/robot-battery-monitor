@@ -21,6 +21,7 @@ _DEFAULT_SAFETY = {
     "thermal_max_c": 75.0,
     "thermal_heating_factor": 0.42,
     "thermal_cooling_rate": 0.08,
+    "twin_thermal_stress_mult": 1.75,
     "safety_throttle_factor": 0.85,
     "critical_throttle_factor": 0.70,
 }
@@ -48,12 +49,16 @@ class SafetyMonitor:
                 cfg[key] = safety[key]
         return cfg
 
-    def _thermal_step(self, total_draw_w: float, tick_seconds: float) -> float:
+    def _thermal_step(
+        self, total_draw_w: float, tick_seconds: float, *, thermal_stress: float = 1.0
+    ) -> float:
         ambient = self._cfg["thermal_ambient_c"]
         max_c = self._cfg["thermal_max_c"]
+        stress = max(1.0, float(thermal_stress))
         load_ratio = min(1.5, total_draw_w / self.system_budget_w) if self.system_budget_w else 0
-        target = ambient + (max_c - ambient) * load_ratio * self._cfg["thermal_heating_factor"]
-        alpha = min(1.0, self._cfg["thermal_heating_factor"] * (tick_seconds / 3.0))
+        heating = self._cfg["thermal_heating_factor"] * stress
+        target = ambient + (max_c - ambient) * load_ratio * heating
+        alpha = min(1.0, heating * (tick_seconds / 2.0))
         heated = self._thermal_c + (target - self._thermal_c) * alpha
         cooled = heated - self._cfg["thermal_cooling_rate"] * (heated - ambient) * (tick_seconds / 3.0)
         return round(max(ambient, min(max_c, cooled)), 1)
@@ -75,6 +80,7 @@ class SafetyMonitor:
         channel_meta: dict[str, dict] | None = None,
         task_id: str = "idle",
         task_budget_w: float | None = None,
+        thermal_stress: float = 1.0,
     ) -> dict:
         faults: list[str] = []
         warnings: list[str] = []
@@ -162,7 +168,7 @@ class SafetyMonitor:
                     f"(+{total_delta * 100:.0f}%)"
                 )
 
-        thermal_c = self._thermal_step(total_draw, tick_seconds)
+        thermal_c = self._thermal_step(total_draw, tick_seconds, thermal_stress=thermal_stress)
         thermal_status = self._thermal_status(thermal_c)
         if thermal_status == "critical":
             faults.append(f"Thermal critical: {thermal_c}°C")

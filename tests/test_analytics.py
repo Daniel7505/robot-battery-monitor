@@ -1,12 +1,18 @@
 from datetime import datetime, timedelta, timezone
 
 from src.analytics import (
+    _ANALYTICS_VIEW_NAMES,
     build_report,
     format_report_text,
+    get_anomaly_events,
+    get_anomaly_summary,
     get_channel_summary,
+    get_forecast_history,
+    get_lru_history,
     get_lru_summaries,
     get_mission_history,
     get_mission_summaries,
+    get_mission_transitions,
     get_power_trends,
     get_system_summary,
     init_analytics_views,
@@ -54,12 +60,11 @@ def test_analytics_views_initialize(clean_database):
         cur.execute(
             """
             SELECT COUNT(*) FROM information_schema.views
-            WHERE table_name IN (
-                'v_power_trends', 'v_lru_summaries', 'v_mission_history', 'v_power_trends_by_task'
-            )
-            """
+            WHERE table_name = ANY(%s)
+            """,
+            (list(_ANALYTICS_VIEW_NAMES),),
         )
-        assert cur.fetchone()[0] == 4
+        assert cur.fetchone()[0] == len(_ANALYTICS_VIEW_NAMES)
 
 
 def test_system_summary_with_data(clean_database):
@@ -124,3 +129,34 @@ def test_report_empty_window(clean_database):
     report = build_report(hours=1)
     text = format_report_text(report)
     assert "No telemetry" in text
+
+
+def test_anomaly_and_transition_views(clean_database):
+    init_db()
+    _seed_snapshots()
+    anomalies = get_anomaly_events(hours=24, limit=10)
+    assert isinstance(anomalies, list)
+
+    summary = get_anomaly_summary(hours=24)
+    assert "by_type" in summary
+
+    transitions = get_mission_transitions(hours=24, limit=10)
+    assert len(transitions) >= 2
+    assert transitions[0]["from_task"] in ("idle", "moving", "balanced", "high_load")
+
+    lru_hist = get_lru_history(hours=24, limit=20)
+    assert len(lru_hist) >= 1
+    assert lru_hist[0]["lru_id"] == "locomotion"
+
+
+def test_build_report_includes_extended_sections(clean_database):
+    init_db()
+    _seed_snapshots()
+    report = build_report(hours=24)
+    assert "anomaly_summary" in report
+    assert "mission_transitions" in report
+    assert "anomalies" in report
+    assert "forecast_history" in report
+    assert "lru_history" in report
+    text = format_report_text(report)
+    assert "Mission Transitions" in text or report["mission_transitions"]

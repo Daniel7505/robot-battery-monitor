@@ -98,6 +98,15 @@ class Config:
                 "1", "true", "yes", "on"
             )
 
+        agent_enabled = os.getenv("AGENT_ENABLED")
+        if agent_enabled is not None:
+            if "agent" not in self._config:
+                self._config["agent"] = {}
+            self._config["agent"]["enabled"] = agent_enabled.lower() in (
+                "1", "true", "yes", "on"
+            )
+            logger.info(f"Overrode with env var: AGENT_ENABLED={agent_enabled}")
+
     def get(self, section: str, key: str = None, default=None):
         """
         Flexible getter.

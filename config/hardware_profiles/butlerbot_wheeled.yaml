@@ -1,0 +1,100 @@
+# Reference hardware profile — ButlerBot wheeled mobile manipulator.
+# Power estimates map Webots motor telemetry to realistic actuator classes.
+
+profile_id: butlerbot_wheeled
+label: "ButlerBot Wheeled (reference hardware)"
+description: >
+  Compact warehouse-butler scale: 48V Li-ion pack, BLDC drive wheels,
+  RS485-class arm/torso servos, Jetson Orin Nano–class compute.
+
+battery:
+  chemistry: Li-ion
+  nominal_voltage_v: 48
+  capacity_ah: 10
+  capacity_wh: 480
+
+compute:
+  model: "Jetson Orin Nano class"
+  idle_w: 8.0
+  active_w: 12.0
+  peak_w: 22.0
+  nominal_voltage_v: 24
+
+motors:
+  left_wheel:
+    label: "BLDC hub motor (100W class)"
+    channel: Legs
+    cont_w: 35
+    peak_w: 90
+    idle_w: 2.5
+    scale: 3.6
+  right_wheel:
+    label: "BLDC hub motor (100W class)"
+    channel: Legs
+    cont_w: 35
+    peak_w: 90
+    idle_w: 2.5
+    scale: 3.6
+  torso_joint:
+    label: "RS485 servo 50W (torso)"
+    channel: Torso
+    cont_w: 18
+    peak_w: 45
+    idle_w: 1.8
+    scale: 4.8
+  left_arm:
+    label: "RS485 servo 50W (arm)"
+    channel: Arms
+    cont_w: 16
+    peak_w: 42
+    idle_w: 1.6
+    scale: 4.5
+  right_arm:
+    label: "RS485 servo 50W (arm)"
+    channel: Arms
+    cont_w: 16
+    peak_w: 42
+    idle_w: 1.6
+    scale: 4.5
+
+channels:
+  Legs:
+    description: "Differential drive wheels"
+    max_draw_w: 28
+    nominal_voltage_v: 48
+    motors: [left_wheel, right_wheel]
+  Arms:
+    description: "Dual arm joints + gripper budget"
+    max_draw_w: 18
+    nominal_voltage_v: 48
+    motors: [left_arm, right_arm]
+  Torso:
+    description: "Torso lift / balance"
+    max_draw_w: 14
+    nominal_voltage_v: 48
+    motors: [torso_joint]
+  Compute:
+    description: "Main computer, IMU, cameras"
+    max_draw_w: 12
+    nominal_voltage_v: 24
+    motors: []
+  Cooling:
+    description: "Dry-ice sublimation fan / active thermal loop"
+    max_draw_w: 10
+    nominal_voltage_v: 24
+    motors: []
+
+# Expected mean draw (W) per Webots mission phase — used for loop feasibility.
+phase_draw_w:
+  standby: 23.5
+  drive_transit: 52.5
+  patrol: 41.5
+  manipulate: 60.0
+  return_idle: 22.0
+
+phase_duration_s:
+  standby: 6
+  drive_transit: 14
+  patrol: 12
+  manipulate: 10
+  return_idle: 10

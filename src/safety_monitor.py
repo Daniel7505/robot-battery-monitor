@@ -7,6 +7,12 @@ from __future__ import annotations
 from src.config import config
 from src.logger import logger
 from src.lru_monitor import LRUMonitor
+from src.mission_context import (
+    context_summary,
+    filter_lru_result,
+    filter_requirements,
+    throttle_exempt_channels,
+)
 from src.power_requirements import PowerRequirements
 
 _DEFAULT_SAFETY = {
@@ -81,6 +87,7 @@ class SafetyMonitor:
         task_id: str = "idle",
         task_budget_w: float | None = None,
         thermal_stress: float = 1.0,
+        twin_phase: str | None = None,
     ) -> dict:
         faults: list[str] = []
         warnings: list[str] = []
@@ -102,6 +109,8 @@ class SafetyMonitor:
 
         # LRU-level checks
         lru_result = self._lru.evaluate(allocated, meta)
+        if twin_phase:
+            lru_result = filter_lru_result(lru_result, twin_phase)
         faults.extend(lru_result["faults"])
         warnings.extend(lru_result["warnings"])
 
@@ -111,6 +120,8 @@ class SafetyMonitor:
             total_draw_w=total_draw,
             task_budget_w=task_budget_w,
         )
+        if twin_phase:
+            req_result = filter_requirements(req_result, twin_phase)
         if req_result["violations"]:
             warnings.extend(req_result["violations"][:3])
         if not req_result["overall_compliant"] and req_result["violations"]:
@@ -177,6 +188,7 @@ class SafetyMonitor:
             warnings.append(f"Thermal warning: {thermal_c}°C")
 
         degradation = lru_result["degradation_level"]
+        exempt = throttle_exempt_channels(twin_phase) if twin_phase else frozenset()
         if degradation == "degraded" and thermal_status == "critical":
             degradation = "critical"
         elif degradation == "caution" and (faults or thermal_status == "warning"):
@@ -206,9 +218,14 @@ class SafetyMonitor:
             throttle_factor = self._cfg["safety_throttle_factor"]
             throttle_reason = "thermal warning" if thermal_status == "warning" else "power spike"
         elif degradation == "caution":
-            throttle_required = True
-            throttle_factor = self._lru._cfg.get("degrade_throttle_caution", 0.92)
-            throttle_reason = "LRU caution"
+            active_lrus = [
+                l for l in lru_result.get("lrus", [])
+                if l.get("mission_role") == "active" and l.get("status") in ("warning", "fault")
+            ]
+            if active_lrus or not twin_phase:
+                throttle_required = True
+                throttle_factor = self._lru._cfg.get("degrade_throttle_caution", 0.92)
+                throttle_reason = "LRU caution"
 
         if battery_pct <= self._cfg["low_battery_critical_pct"]:
             throttle_required = True
@@ -242,6 +259,8 @@ class SafetyMonitor:
             "lru": lru_result,
             "lru_factors": lru_factors,
             "requirements": req_result,
+            "mission_context": context_summary(twin_phase, task_id) if twin_phase else {},
+            "throttle_exempt_channels": sorted(exempt),
         }
 
         self._prev_draw = dict(allocated)
@@ -264,10 +283,14 @@ class SafetyMonitor:
         factor = safety.get("throttle_factor", 1.0)
         reason = safety.get("throttle_reason", "safety")
         lru_factors = safety.get("lru_factors") or {}
+        exempt = set(safety.get("throttle_exempt_channels") or [])
         spike_set = set(safety.get("spike_channels", []))
         throttled: dict[str, float] = {}
 
         for ch_id, draw_w in allocated.items():
+            if ch_id in exempt:
+                throttled[ch_id] = draw_w
+                continue
             ch_factor = lru_factors.get(ch_id, factor)
             if ch_id in spike_set:
                 ch_factor = min(ch_factor, self._cfg["safety_throttle_factor"])

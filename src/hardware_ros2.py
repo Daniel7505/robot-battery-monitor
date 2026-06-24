@@ -17,13 +17,15 @@ from src.energy_predictor import EnergyPredictor
 from src.safety_monitor import SafetyMonitor
 from src.power_requirements import PowerRequirements
 from src.ros2_bridge import ROS2Bridge
-from src.simulation_driver import SimulationDriver
+from src.simulation_driver import SimulationDriver, status_for_external_twin
 from src.onboard_agent import OnboardAgent
 from src.twin import get_twin_bridge
+from src.cooling_channel import estimate_cooling_draw_w
+from src.mission_forecast import forecast_twin_loop
 from src.twin.control import build_twin_control_status, is_twin_stress_phase
 from src.database import log_power_snapshot
 
-_START_BATTERY_PCT = 92.0
+_START_BATTERY_PCT = 100.0
 _SENSOR_BLEND = 0.30
 
 
@@ -226,12 +228,21 @@ class ROS2BatterySource(RealHardwareSource):
 
         requested: dict[str, float] = {}
         channel_meta: dict[str, dict] = {}
+        prev_thermal = (self.safety_status or {}).get("thermal_c", 22.0)
+        cooling_target = estimate_cooling_draw_w(
+            prev_thermal,
+            twin_ctx.get("phase") if twin_active else None,
+        )
 
         for ch in self._power_channels:
             ch_id = ch.get("id")
             max_w = ch.get("max_draw_w", 30)
             current = self._channel_draw.get(ch_id)
-            target = self._mission.target_draw(ch_id, max_w, current)
+            if ch_id == "Cooling":
+                mission_target = self._mission.target_draw(ch_id, max_w, current)
+                target = max(mission_target, cooling_target)
+            else:
+                target = self._mission.target_draw(ch_id, max_w, current)
             requested[ch_id] = self._request_draw(ch_id, target)
             channel_meta[ch_id] = {"max_w": max_w, "voltage": ch.get("nominal_voltage", 48)}
 
@@ -265,9 +276,47 @@ class ROS2BatterySource(RealHardwareSource):
             current_draw_w=total_draw,
         )
         self.mission_info.update(self.prediction_status)
-        self.simulation_status = self._simulator.status(self._mission)
+        loop_forecast: dict = {}
+        if twin_active and twin_ctx.get("phase"):
+            loop_forecast = forecast_twin_loop(
+                battery_pct=self._main_battery,
+                capacity_wh=capacity_wh,
+                current_phase=twin_ctx.get("phase"),
+                current_draw_w=total_draw,
+            )
+            self.prediction_status["loop_forecast"] = loop_forecast
+            self.mission_info["loop_forecast"] = loop_forecast
+        if twin_active and twin_ctx.get("phase"):
+            self.simulation_status = status_for_external_twin(
+                self._mission,
+                twin_ctx.get("phase"),
+                twin_ctx.get("gait"),
+                source=twin_ctx.get("source", "webots"),
+            )
+        else:
+            self.simulation_status = self._simulator.status(self._mission)
         self.mission_info["simulation"] = self.simulation_status
         allocation.update(self.mission_info)
+
+        if twin_active and twin_ctx.get("phase"):
+            from src.twin.control import PHASE_LABELS
+
+            phase = twin_ctx.get("phase", "")
+            phase_label = PHASE_LABELS.get(phase, phase.replace("_", " ").title())
+            gait = twin_ctx.get("gait") or "—"
+            speed = (tel.locomotion or {}).get("speed_m_s") if tel else None
+            speed_txt = f"{speed:.2f} m/s" if speed is not None else "—"
+            self.prediction_status["locomotion_outlook"] = {
+                "current_phase": phase,
+                "current_phase_label": phase_label,
+                "outlook": (
+                    f"Webots live — {phase_label} (gait {gait}, speed {speed_txt})"
+                ),
+                "transition_in_s": None,
+                "likely_next_phase": None,
+                "likely_next_label": None,
+            }
+            self.mission_info["locomotion_outlook"] = self.prediction_status["locomotion_outlook"]
 
         battery_pct = round(self._main_battery, 1)
         thermal_stress = 1.0
@@ -284,6 +333,7 @@ class ROS2BatterySource(RealHardwareSource):
             task_id=self._mission.task_id,
             task_budget_w=allocation.get("budget_w"),
             thermal_stress=thermal_stress,
+            twin_phase=twin_ctx.get("phase") if twin_active else None,
         )
         self.requirements_status = safety.get("requirements", {})
         if safety.get("throttle_required"):
@@ -414,7 +464,8 @@ class ROS2BatterySource(RealHardwareSource):
             if ch_id not in self._peak_power or draw_w > self._peak_power[ch_id]:
                 self._peak_power[ch_id] = draw_w
 
-        self._drain_battery(total_draw)
+        if not (twin_active and self._twin._apply_battery):
+            self._drain_battery(total_draw)
         try:
             log_power_snapshot(allocation, readings, battery_pct, self.prediction_status)
         except Exception as e:

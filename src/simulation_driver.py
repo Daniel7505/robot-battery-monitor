@@ -190,3 +190,68 @@ class SimulationDriver:
                 for s in self._script
             ],
         }
+
+
+def status_for_external_twin(
+    mission: MissionTaskManager | None,
+    phase: str | None,
+    gait: str | None = None,
+    *,
+    source: str = "webots",
+) -> dict:
+    """Dashboard simulation panel when Webots (not internal script) drives the loop."""
+    from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
+    from src.twin.control import PHASE_LABELS, webots_phase_flow
+
+    flow = webots_phase_flow()
+    norm = (phase or "").lower()
+    idx = 0
+    for i, step in enumerate(flow):
+        sp = step.get("phase", "").lower()
+        if sp == norm or (norm == "walk_transit" and sp == "drive_transit"):
+            idx = i
+            break
+
+    step = flow[idx] if flow else {}
+    script_step = BUTLERBOT_MISSION_FLOW[idx] if idx < len(BUTLERBOT_MISSION_FLOW) else {}
+    draws = script_step.get("channel_draws") or {}
+    return {
+        "driver": source,
+        "robot_name": config.get("robot", "name", "ButlerBot"),
+        "enabled": True,
+        "running": True,
+        "external_twin": True,
+        "twin_source": source,
+        "loop": True,
+        "loops_completed": None,
+        "segment_index": idx + 1,
+        "segment_total": len(flow),
+        "segment_label": step.get("label") or PHASE_LABELS.get(norm, phase or "—"),
+        "segment_task": script_step.get("task") or step.get("task", ""),
+        "segment_remaining_s": None,
+        "webots_phase": phase,
+        "webots_gait": gait,
+        "expected_draw_w": round(sum(float(v) for v in draws.values()), 1) if draws else None,
+        "current_task": mission.task_id if mission else None,
+        "note": "Internal script paused — Webots twin drives the mission loop",
+        "script": [
+            {
+                "task": s.get("task", ""),
+                "label": s.get("label", ""),
+                "duration_s": s.get("duration_s"),
+                "phase": s.get("phase"),
+                "expected_draw_w": round(
+                    sum(
+                        float(v)
+                        for v in (
+                            BUTLERBOT_MISSION_FLOW[i].get("channel_draws") or {}
+                        ).values()
+                    ),
+                    1,
+                )
+                if i < len(BUTLERBOT_MISSION_FLOW)
+                else None,
+            }
+            for i, s in enumerate(flow)
+        ],
+    }

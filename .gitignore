@@ -45,6 +45,7 @@ Thumbs.db
 # Docker
 docker-compose.override.yml
 .env
+.grok/
 
 # Local session / tooling (not part of the app)
 terminals/

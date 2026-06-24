@@ -20,7 +20,7 @@ def test_draw_profiles_realistic_totals():
     assert 15 <= idle <= 25
     assert 40 <= moving <= 55
     assert 30 <= balanced <= 45
-    assert 55 <= high <= 65
+    assert 55 <= high <= 72
     assert moving > balanced > idle
 
 

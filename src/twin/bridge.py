@@ -7,6 +7,7 @@ hardware; routes it into the power monitor without breaking internal simulation.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from src.config import config
@@ -41,6 +42,14 @@ class DigitalTwinBridge:
         self._last_command_at: datetime | None = None
         self._command_count = 0
         self._active_source = "internal"
+        self._webots_teleop: dict = {
+            "left_v": 0.0,
+            "right_v": 0.0,
+            "drive_until": 0.0,
+            "source": "",
+            "battery_pct": None,
+            "reset_thermal": False,
+        }
 
     @property
     def enabled(self) -> bool:
@@ -188,11 +197,15 @@ class DigitalTwinBridge:
                 "thermal_c": safety.get("thermal_c"),
                 "thermal_status": safety.get("thermal_status"),
                 "degradation_level": safety.get("degradation_level"),
+                "throttle_required": safety.get("throttle_required"),
+                "throttle_factor": safety.get("throttle_factor"),
             },
             "agent": {
                 "posture": agent.get("posture"),
                 "summary": agent.get("summary"),
                 "recommendation_count": agent.get("recommendation_count", 0),
+                "intervening": bool(agent.get("intervening") or agent.get("applied_actions")),
+                "throttle_factor": safety.get("throttle_factor"),
             },
             "simulation": {
                 "running": simulation.get("running", False),
@@ -200,7 +213,34 @@ class DigitalTwinBridge:
                 "expected_draw_w": simulation.get("expected_draw_w"),
             },
             "external_feed": tel.to_dict() if tel and self._is_external_active() else None,
+            "teleop": self._export_teleop(),
         }
+
+    def _export_teleop(self) -> dict:
+        """Active external drive / battery commands for Webots to poll."""
+        now = time.time()
+        left = float(self._webots_teleop.get("left_v", 0.0))
+        right = float(self._webots_teleop.get("right_v", 0.0))
+        until = float(self._webots_teleop.get("drive_until", 0.0))
+        if until and now > until:
+            left = right = 0.0
+            self._webots_teleop["left_v"] = 0.0
+            self._webots_teleop["right_v"] = 0.0
+            self._webots_teleop["drive_until"] = 0.0
+        out = {
+            "left_v": left,
+            "right_v": right,
+            "active": abs(left) > 0.01 or abs(right) > 0.01,
+            "source": self._webots_teleop.get("source") or "",
+            "drive_until": until if until > now else None,
+        }
+        pending_batt = self._webots_teleop.get("battery_pct")
+        if pending_batt is not None:
+            out["battery_pct"] = float(pending_batt)
+            out["reset_thermal"] = bool(self._webots_teleop.get("reset_thermal"))
+            self._webots_teleop["battery_pct"] = None
+            self._webots_teleop["reset_thermal"] = False
+        return out
 
     def apply_command(self, hardware, command: dict) -> dict:
         """Apply outbound commands from twin consumers into the PMS."""
@@ -252,6 +292,46 @@ class DigitalTwinBridge:
         elif sim_action == "stop" and hasattr(hardware, "stop_simulation"):
             hardware.stop_simulation()
             applied.append("simulation=stop")
+
+        if command.get("battery_reset"):
+            try:
+                pct = float(command.get("battery_pct", 100))
+            except (TypeError, ValueError):
+                errors.append("Invalid battery_pct")
+            else:
+                pct = max(5.0, min(100.0, pct))
+                if hasattr(hardware, "_main_battery"):
+                    hardware._main_battery = pct
+                self._webots_teleop["battery_pct"] = pct
+                self._webots_teleop["reset_thermal"] = True
+                applied.append(f"battery_reset={pct:.0f}%")
+
+        drive = command.get("drive")
+        if isinstance(drive, dict):
+            try:
+                left = float(drive.get("left", 0.0))
+                right = float(drive.get("right", 0.0))
+                duration = float(drive.get("duration_s", 2.0))
+            except (TypeError, ValueError):
+                errors.append("Invalid drive command")
+            else:
+                duration = max(0.2, min(30.0, duration))
+                self._webots_teleop.update({
+                    "left_v": left,
+                    "right_v": right,
+                    "drive_until": time.time() + duration,
+                    "source": str(command.get("source") or "api"),
+                })
+                applied.append(f"drive L={left:.1f} R={right:.1f} ({duration:.1f}s)")
+
+        if command.get("drive_stop"):
+            self._webots_teleop.update({
+                "left_v": 0.0,
+                "right_v": 0.0,
+                "drive_until": 0.0,
+                "source": "stop",
+            })
+            applied.append("drive_stop")
 
         self._last_command_at = datetime.now(timezone.utc)
         if applied:

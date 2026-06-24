@@ -1,52 +1,60 @@
 """
-ButlerBot walking robot — example digital twin data flow.
+ButlerBot wheeled robot — example digital twin data flow.
 
-Demonstrates how a compact mobile manipulator cycles through stand → walk →
-patrol → manipulate phases with realistic per-channel draw for external simulators.
+Demonstrates how a compact wheeled mobile manipulator cycles through
+standby → drive → patrol → manipulate phases with reference-hardware draws.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-# Example walking cycle for ButlerBot (servo-scale watts)
-BUTLERBOT_WALKING_FLOW = [
+# Wheeled mission cycle for ButlerBot (reference-hardware watts)
+BUTLERBOT_MISSION_FLOW = [
     {
         "phase": "standby",
-        "task": "idle",
-        "duration_s": 8,
-        "locomotion": {"gait": "stand", "speed_m_s": 0.0},
-        "channel_draws": {"Legs": 3.5, "Arms": 5.0, "Torso": 3.5, "Compute": 7.5},
-    },
-    {
-        "phase": "walk_transit",
-        "task": "moving",
-        "duration_s": 12,
-        "locomotion": {"gait": "walk", "speed_m_s": 0.45, "step_hz": 1.2},
-        "channel_draws": {"Legs": 20.0, "Arms": 8.0, "Torso": 10.5, "Compute": 9.0},
-    },
-    {
-        "phase": "patrol",
-        "task": "balanced",
-        "duration_s": 10,
-        "locomotion": {"gait": "patrol", "speed_m_s": 0.25},
-        "channel_draws": {"Legs": 12.0, "Arms": 9.0, "Torso": 7.5, "Compute": 8.5},
-    },
-    {
-        "phase": "manipulate",
-        "task": "high_load",
-        "duration_s": 8,
-        "locomotion": {"gait": "stand", "speed_m_s": 0.0, "payload_kg": 2.5},
-        "channel_draws": {"Legs": 24.0, "Arms": 16.0, "Torso": 12.0, "Compute": 10.0},
-    },
-    {
-        "phase": "return_idle",
+        "label": "Standby",
         "task": "idle",
         "duration_s": 6,
         "locomotion": {"gait": "stand", "speed_m_s": 0.0},
-        "channel_draws": {"Legs": 3.5, "Arms": 5.0, "Torso": 3.5, "Compute": 7.5},
+        "channel_draws": {"Legs": 4.0, "Arms": 5.5, "Torso": 3.5, "Compute": 9.0, "Cooling": 1.5},
+    },
+    {
+        "phase": "drive_transit",
+        "label": "Drive / Transit",
+        "task": "moving",
+        "duration_s": 14,
+        "locomotion": {"gait": "drive", "speed_m_s": 0.42},
+        "channel_draws": {"Legs": 22.0, "Arms": 6.0, "Torso": 8.0, "Compute": 12.0, "Cooling": 4.5},
+    },
+    {
+        "phase": "patrol",
+        "label": "Patrol",
+        "task": "balanced",
+        "duration_s": 12,
+        "locomotion": {"gait": "patrol", "speed_m_s": 0.28},
+        "channel_draws": {"Legs": 14.0, "Arms": 7.5, "Torso": 7.0, "Compute": 11.5, "Cooling": 3.5},
+    },
+    {
+        "phase": "manipulate",
+        "label": "Manipulate",
+        "task": "high_load",
+        "duration_s": 10,
+        "locomotion": {"gait": "manipulate", "speed_m_s": 0.0},
+        "channel_draws": {"Legs": 6.0, "Arms": 18.0, "Torso": 12.0, "Compute": 13.0, "Cooling": 8.0},
+    },
+    {
+        "phase": "return_idle",
+        "label": "Return to Idle",
+        "task": "idle",
+        "duration_s": 10,
+        "locomotion": {"gait": "stand", "speed_m_s": 0.0},
+        "channel_draws": {"Legs": 5.0, "Arms": 5.5, "Torso": 3.5, "Compute": 9.0, "Cooling": 2.0},
     },
 ]
+
+# Backward-compatible alias
+BUTLERBOT_WALKING_FLOW = BUTLERBOT_MISSION_FLOW
 
 
 def butlerbot_telemetry_step(
@@ -57,8 +65,8 @@ def butlerbot_telemetry_step(
     battery_pct: float = 88.0,
     robot_name: str = "ButlerBot",
 ) -> dict:
-    """Build a twin telemetry payload for one step of the ButlerBot walking flow."""
-    step = BUTLERBOT_WALKING_FLOW[step_index % len(BUTLERBOT_WALKING_FLOW)]
+    """Build a twin telemetry payload for one step of the ButlerBot mission flow."""
+    step = BUTLERBOT_MISSION_FLOW[step_index % len(BUTLERBOT_MISSION_FLOW)]
     total_draw = round(sum(step["channel_draws"].values()), 1)
     return {
         "schema_version": "1.1",
@@ -73,7 +81,7 @@ def butlerbot_telemetry_step(
         "mission": {
             "task": step["task"],
             "phase": step["phase"],
-            "phase_label": step["phase"].replace("_", " ").title(),
+            "phase_label": step.get("label") or step["phase"].replace("_", " ").title(),
         },
         "channel_draws": dict(step["channel_draws"]),
         "power": {
@@ -93,17 +101,19 @@ def butlerbot_flow_description() -> dict:
     """Document the example ButlerBot twin data flow for integrators."""
     return {
         "robot": "ButlerBot",
-        "description": "Compact walking manipulator — stand → walk → patrol → manipulate → idle",
-        "cycle_steps": len(BUTLERBOT_WALKING_FLOW),
+        "description": "Wheeled mobile manipulator — standby → drive → patrol → manipulate → idle",
+        "locomotion": "wheeled (differential drive)",
+        "cycle_steps": len(BUTLERBOT_MISSION_FLOW),
         "phases": [
             {
                 "phase": s["phase"],
+                "label": s.get("label", s["phase"]),
                 "task": s["task"],
                 "duration_s": s["duration_s"],
                 "expected_draw_w": round(sum(s["channel_draws"].values()), 1),
                 "locomotion": s["locomotion"],
             }
-            for s in BUTLERBOT_WALKING_FLOW
+            for s in BUTLERBOT_MISSION_FLOW
         ],
         "integration": {
             "ingest": "POST /api/twin/telemetry",

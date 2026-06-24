@@ -23,7 +23,7 @@ def test_webots_phase_flow_has_five_steps():
     flow = webots_phase_flow()
     assert len(flow) == 5
     assert flow[0]["phase"] == "standby"
-    assert flow[1]["phase"] == "walk_transit"
+    assert flow[1]["phase"] == "drive_transit"
 
 
 def test_build_twin_control_status_with_external_feed():
@@ -50,6 +50,7 @@ def test_build_twin_control_status_with_external_feed():
 
 def test_twin_stress_phase_detection():
     from src.twin.control import is_twin_stress_phase
+    assert is_twin_stress_phase("drive_transit")
     assert is_twin_stress_phase("walk_transit")
     assert is_twin_stress_phase("manipulate")
     assert not is_twin_stress_phase("standby")

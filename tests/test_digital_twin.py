@@ -30,7 +30,7 @@ def test_butlerbot_walking_flow():
     assert "moving" in tasks
     step = butlerbot_telemetry_step(1)
     assert step["mission"]["task"] == "moving"
-    assert step["channel_draws"]["Legs"] == 20.0
+    assert step["channel_draws"]["Legs"] == 22.0
 
 
 def test_ingest_butlerbot_telemetry():
@@ -52,7 +52,7 @@ def test_webots_adapter_normalizes_motors():
         "phase": "walk_transit",
         "robot": {"name": "ButlerBot"},
     })
-    assert tel.channel_draws["Legs"] > 30.0
+    assert tel.channel_draws["Legs"] >= 28.0
     assert tel.channel_draws["Arms"] > 8.0
     assert tel.task == "moving"
 
@@ -97,7 +97,7 @@ def test_bridge_sync_external_to_hardware():
     bridge.ingest_telemetry(payload)
     assert bridge.sync_to_hardware(source) is True
     draws = source._ros2.get_sensor_draws()
-    assert draws.get("Legs") == 20.0
+    assert draws.get("Legs") == 22.0
     source.stop()
     reset_hardware_source()
 

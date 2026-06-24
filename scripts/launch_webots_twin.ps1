@@ -71,5 +71,5 @@ $env:TWIN_DASHBOARD_URL = $DashboardUrl
 $env:WEBOTS_PROJECT_HOME = $WebotsDir
 
 Set-Location $WebotsDir
-Write-Host "Launching ButlerBot world (realtime) — close Webots window to exit." -ForegroundColor Cyan
-& $WebotsExe --mode=realtime --stdout --stderr "worlds\butlerbot.wbt"
+Write-Host "Launching ButlerBot world (realtime) - close Webots window to exit." -ForegroundColor Cyan
+& $WebotsExe --mode=realtime --stdout --stderr 'worlds\butlerbot.wbt'

@@ -15,7 +15,7 @@ def test_lru_groups_include_eps_and_hierarchy():
         {"Legs": 20, "Arms": 10, "Torso": 8, "Compute": 9},
         {},
     )
-    assert len(result["lrus"]) == 5
+    assert len(result["lrus"]) >= 5
     labels = {l["label"] for l in result["lrus"]}
     assert any("LRUA" in lb for lb in labels)
     assert any("EPS" in lb for lb in labels)

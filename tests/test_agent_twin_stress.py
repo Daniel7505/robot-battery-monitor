@@ -14,7 +14,7 @@ def _alloc(**kw):
     return base
 
 
-def test_twin_stress_rule_fires_during_walk_transit():
+def test_twin_stress_rule_fires_during_drive_transit():
     agent = OnboardAgent()
     result = agent.evaluate(
         battery_pct=75,
@@ -24,7 +24,7 @@ def test_twin_stress_rule_fires_during_walk_transit():
         prediction={"risk_level": "medium", "mission_energy_ok": True},
         mission={"task": "moving"},
         readings={},
-        twin_context={"phase": "walk_transit", "gait": "walk", "source": "webots"},
+        twin_context={"phase": "drive_transit", "gait": "drive", "source": "webots"},
     )
     actions = {r.action for r in result.recommendations}
     assert "safety_alert" in actions

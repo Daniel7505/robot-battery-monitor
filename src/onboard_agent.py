@@ -13,6 +13,7 @@ from typing import Callable
 
 from src.config import config
 from src.logger import logger
+from src.mission_context import context_summary, is_standby_lru, throttle_exempt_channels
 from src.mission_tasks import TASK_PROFILES
 
 _DEFAULT_AGENT = {
@@ -27,9 +28,11 @@ _DEFAULT_AGENT = {
     "twin_stress_utilization_pct": 65,
     "task_override_hold_s": 12,
     "prediction_risk_tasks": ("high", "critical"),
+    "loop_margin_warn_pct": 18,
+    "loop_margin_critical_pct": 8,
 }
 
-_TWIN_STRESS_PHASES = frozenset({"walk_transit", "patrol", "manipulate"})
+_TWIN_STRESS_PHASES = frozenset({"drive_transit", "walk_transit", "patrol", "manipulate"})
 
 _TASK_DOWNGRADE = {
     "high_load": "balanced",
@@ -56,6 +59,7 @@ class AgentContext:
     twin_phase: str | None = None
     twin_gait: str | None = None
     twin_source: str | None = None
+    loop_forecast: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +191,8 @@ class OnboardAgent:
             ("power_spike", self._rule_power_spike),
             ("safety_mirror", self._rule_safety_mirror),
             ("twin_stress", self._rule_twin_stress),
+            ("loop_forecast", self._rule_loop_forecast),
+            ("negotiator", self._rule_negotiator),
         ]
 
     def evaluate(
@@ -219,6 +225,7 @@ class OnboardAgent:
             twin_phase=twin.get("phase"),
             twin_gait=twin.get("gait"),
             twin_source=twin.get("source"),
+            loop_forecast=dict(mission.get("loop_forecast") or {}),
         )
 
         recommendations: list[AgentRecommendation] = []
@@ -236,6 +243,7 @@ class OnboardAgent:
                     rec.rule_id = rule_id
                 recommendations.extend(recs)
 
+        recommendations = self._phase_filter_recommendations(recommendations, ctx)
         recommendations = self._dedupe_recommendations(recommendations)
         posture, summary = self._derive_posture(ctx, recommendations)
         result = AgentResult(
@@ -319,6 +327,27 @@ class OnboardAgent:
             applied=True,
         )
 
+    def _phase_exempt_channels(self, ctx: AgentContext) -> frozenset[str]:
+        if not ctx.twin_phase:
+            return frozenset()
+        return throttle_exempt_channels(ctx.twin_phase)
+
+    def _lru_is_standby(self, lru: dict, phase: str | None) -> bool:
+        if lru.get("mission_role") == "standby":
+            return True
+        return is_standby_lru(lru.get("id", ""), phase)
+
+    def _phase_filter_recommendations(
+        self, recs: list[AgentRecommendation], ctx: AgentContext
+    ) -> list[AgentRecommendation]:
+        exempt = self._phase_exempt_channels(ctx)
+        if not exempt:
+            return recs
+        return [
+            rec for rec in recs
+            if not (rec.action == "throttle_channel" and rec.channel in exempt)
+        ]
+
     def _dedupe_recommendations(self, recs: list[AgentRecommendation]) -> list[AgentRecommendation]:
         seen: set[str] = set()
         unique: list[AgentRecommendation] = []
@@ -348,6 +377,9 @@ class OnboardAgent:
             return "cautious", summary
         if recs:
             return "advisory", recs[0].reason
+        if ctx.twin_phase:
+            mctx = context_summary(ctx.twin_phase, ctx.task_id)
+            return "normal", mctx.get("summary", "Twin mission in progress")
         return "normal", "All systems nominal — no agent actions required"
 
     def _log_decisions(self, result: AgentResult, ctx: AgentContext) -> None:
@@ -487,12 +519,12 @@ class OnboardAgent:
                 factor=0.80,
             ),
         ]
-        if phase == "walk_transit":
+        if phase in ("drive_transit", "walk_transit"):
             recs.append(
                 AgentRecommendation(
                     action="throttle_channel",
                     priority="high",
-                    reason="Locomotion surge during walk transit",
+                    reason="Locomotion surge during wheeled transit",
                     channel="Legs",
                     factor=0.75,
                 )
@@ -523,6 +555,144 @@ class OnboardAgent:
                     priority="medium",
                     reason="Patrol weave + high utilization",
                     task="balanced",
+                )
+            )
+        return recs
+
+    def _rule_loop_forecast(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        fc = ctx.loop_forecast
+        if not fc or not fc.get("ok"):
+            return []
+        if ctx.twin_source != "webots" and not ctx.twin_phase:
+            return []
+
+        margin_pct = float(fc.get("margin_pct", 100))
+        finish_pct = float(fc.get("finish_battery_pct", 100))
+        warn_pct = cfg.get("loop_margin_warn_pct", 18)
+        crit_pct = cfg.get("loop_margin_critical_pct", 8)
+
+        if margin_pct >= warn_pct and fc.get("can_complete_loop", True):
+            return []
+
+        loop_wh = fc.get("loop_wh_remaining", 0)
+        energy_wh = fc.get("energy_wh_remaining", 0)
+        status = fc.get("feasibility_status", "unknown")
+
+        if not fc.get("can_complete_loop", True) or margin_pct < crit_pct:
+            priority = "critical"
+            msg = (
+                f"LOOP RISK — need {loop_wh:.2f} Wh, have {energy_wh:.2f} Wh "
+                f"(finish ~{finish_pct:.0f}%)"
+            )
+        else:
+            priority = "high"
+            msg = (
+                f"LOOP TIGHT — {loop_wh:.2f} Wh to finish cycle, "
+                f"~{finish_pct:.0f}% battery expected ({status})"
+            )
+
+        recs = [
+            AgentRecommendation(
+                action="safety_alert",
+                priority=priority,
+                reason=f"Mission loop energy {status} (margin {margin_pct:.0f}%)",
+                message=msg,
+            ),
+        ]
+        if not fc.get("can_complete_loop", True):
+            recs.append(
+                AgentRecommendation(
+                    action="suggest_task",
+                    priority="critical",
+                    reason="Insufficient energy to complete twin mission loop",
+                    task="idle",
+                )
+            )
+            recs.append(
+                AgentRecommendation(
+                    action="throttle_system",
+                    priority="critical",
+                    reason="Protect battery for safe return",
+                    factor=0.68,
+                )
+            )
+        return recs
+
+    def _rule_negotiator(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Trade time vs energy when loop margin is tight but completion is possible."""
+        fc = ctx.loop_forecast
+        if not fc or not fc.get("ok") or not fc.get("can_complete_loop", True):
+            return []
+
+        margin_pct = float(fc.get("margin_pct", 100))
+        warn_pct = cfg.get("loop_margin_warn_pct", 18)
+        if margin_pct >= warn_pct:
+            return []
+
+        phase = (ctx.twin_phase or "").lower()
+        recs: list[AgentRecommendation] = []
+
+        if phase in ("drive_transit", "walk_transit") and ctx.task_id == "moving":
+            recs.append(
+                AgentRecommendation(
+                    action="suggest_task",
+                    priority="medium",
+                    reason=(
+                        f"Loop margin {margin_pct:.0f}% — slower patrol saves ~25% locomotion Wh"
+                    ),
+                    task="balanced",
+                    message="NEGOTIATE — switch to balanced patrol to preserve loop headroom",
+                )
+            )
+            recs.append(
+                AgentRecommendation(
+                    action="throttle_channel",
+                    priority="medium",
+                    reason="Ease transit draw while keeping mission on track",
+                    channel="Legs",
+                    factor=0.88,
+                )
+            )
+        elif phase == "manipulate" and margin_pct < warn_pct * 0.7:
+            recs.append(
+                AgentRecommendation(
+                    action="suggest_task",
+                    priority="high",
+                    reason=f"Only {margin_pct:.0f}% loop margin — skip heavy manipulation",
+                    task="balanced",
+                    message="NEGOTIATE — defer manipulate, proceed to return_idle",
+                )
+            )
+            recs.append(
+                AgentRecommendation(
+                    action="throttle_channel",
+                    priority="high",
+                    reason="Reduce arm/torso peaks to protect finish margin",
+                    channel="Arms",
+                    factor=0.78,
+                )
+            )
+        elif phase == "patrol" and margin_pct < warn_pct:
+            recs.append(
+                AgentRecommendation(
+                    action="throttle_system",
+                    priority="medium",
+                    reason=f"Patrol weave costly with {margin_pct:.0f}% margin",
+                    factor=0.9,
+                    message="NEGOTIATE — gentle system throttle during patrol",
+                )
+            )
+
+        if margin_pct < cfg.get("loop_margin_critical_pct", 8) * 1.5:
+            recs.append(
+                AgentRecommendation(
+                    action="safety_alert",
+                    priority="high",
+                    reason="Agent negotiating time vs energy tradeoff",
+                    message=(
+                        f"Finish forecast {fc.get('finish_battery_pct', '?')}% — "
+                        "agent favoring energy over speed"
+                    ),
                 )
             )
         return recs
@@ -663,7 +833,11 @@ class OnboardAgent:
         lrus = (ctx.safety.get("lru") or {}).get("lrus") or []
         recs: list[AgentRecommendation] = []
         for lru in lrus:
+            if self._lru_is_standby(lru, ctx.twin_phase):
+                continue
             status = lru.get("status", "ok")
+            if status in ("standby", "ok"):
+                continue
             if status not in ("warning", "fault"):
                 continue
             channels = lru.get("channels") or []
@@ -688,6 +862,8 @@ class OnboardAgent:
             return []
         profile = TASK_PROFILES.get(ctx.task_id)
         order = list(profile.throttle_order) if profile else []
+        exempt = self._phase_exempt_channels(ctx)
+        order = [ch for ch in order if ch not in exempt]
         recs: list[AgentRecommendation] = []
         factor = 0.82 if ctx.twin_source == "webots" else 0.90
         priority = "high" if ctx.utilization_pct >= 80 else "medium"
@@ -716,6 +892,7 @@ class OnboardAgent:
 
     def _rule_power_spike(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
         spikes = ctx.safety.get("spike_channels") or []
+        exempt = self._phase_exempt_channels(ctx)
         return [
             AgentRecommendation(
                 action="throttle_channel",
@@ -725,7 +902,7 @@ class OnboardAgent:
                 factor=0.85,
             )
             for ch in spikes
-            if ch not in ctx.throttled_channels
+            if ch not in ctx.throttled_channels and ch not in exempt
         ]
 
     def _rule_safety_mirror(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:

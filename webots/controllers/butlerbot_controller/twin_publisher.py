@@ -25,11 +25,24 @@ def _load_build_webots_telemetry():
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return getattr(module, "build_webots_telemetry", None)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return module
 
 
-build_webots_telemetry = _load_build_webots_telemetry()
+_webots_power_module = _load_build_webots_telemetry()
+build_webots_telemetry = (
+    getattr(_webots_power_module, "build_webots_telemetry", None)
+    if _webots_power_module is not None
+    else None
+)
+estimate_motor_power_w = (
+    getattr(_webots_power_module, "estimate_motor_power_w", None)
+    if _webots_power_module is not None
+    else None
+)
 
 
 DEFAULT_DASHBOARD_URL = "http://127.0.0.1:5000"
@@ -55,6 +68,69 @@ def parse_controller_args() -> dict:
             except ValueError:
                 pass
     return opts
+
+
+def fetch_twin_state(base_url: str | None = None) -> dict:
+    """GET PMS/agent state — used for remote throttle override in teleop."""
+    base = (base_url or dashboard_url()).rstrip("/")
+    url = f"{base}/api/twin/state"
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return {}
+
+
+def remote_throttle_factor(state: dict) -> float | None:
+    """Extract agent/PMS throttle only when the dashboard agent is actively intervening."""
+    safety = state.get("safety") or {}
+    power = state.get("power") or {}
+    agent = state.get("agent") or {}
+    intervening = bool(
+        safety.get("throttle_required")
+        or agent.get("intervening")
+        or power.get("status") == "throttled"
+    )
+    if not intervening:
+        return None
+    for source in (safety, agent, power):
+        raw = source.get("throttle_factor")
+        if raw is None:
+            continue
+        try:
+            factor = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 < factor < 1.0:
+            return factor
+    if power.get("status") == "throttled":
+        return 0.7
+    return None
+
+
+def teleop_from_twin_state(state: dict) -> dict:
+    """Read polled dashboard/API drive + battery replenish for Webots."""
+    teleop = state.get("teleop") or {}
+    return {
+        "left_v": float(teleop.get("left_v") or 0.0),
+        "right_v": float(teleop.get("right_v") or 0.0),
+        "active": bool(teleop.get("active")),
+        "source": teleop.get("source") or "",
+        "battery_pct": teleop.get("battery_pct"),
+        "reset_thermal": bool(teleop.get("reset_thermal")),
+    }
+
+
+def battery_from_twin_state(state: dict, default: float = 100.0) -> float:
+    robot = state.get("robot") or {}
+    raw = robot.get("main_battery_pct")
+    if raw is None:
+        return default
+    try:
+        return max(5.0, min(100.0, float(raw)))
+    except (TypeError, ValueError):
+        return default
 
 
 def publish_telemetry(payload: dict, base_url: str | None = None) -> dict:

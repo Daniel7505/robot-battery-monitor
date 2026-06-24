@@ -13,6 +13,7 @@ _LRU_CHANNEL_MAP = {
     "arms": ["Arms"],
     "torso": ["Torso"],
     "compute": ["Compute"],
+    "cooling": ["Cooling"],
 }
 
 _DEFAULT_REQUIREMENTS = {

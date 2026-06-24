@@ -152,7 +152,8 @@ class LRUMonitor:
 
             over = draw_w > max_w + 0.05
             spike = prev > 1.0 and (draw_w - prev) / prev >= spike_pct
-            low_v = lru_id != "eps" and voltage_pct <= v_warn * 100 and draw_w > max_w * 0.5
+            util_floor = 0.70 if lru_id == "compute" else 0.5
+            low_v = lru_id != "eps" and voltage_pct <= v_warn * 100 and draw_w > max_w * util_floor
             crit_v = lru_id != "eps" and voltage_pct <= v_crit * 100
 
             if over:

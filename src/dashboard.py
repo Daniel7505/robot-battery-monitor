@@ -229,13 +229,47 @@ HTML_TEMPLATE = '''
         .agent-action-detail { color: #ccc; flex: 1; }
         .agent-rec.flash { animation: flash-entry 1.2s ease-out; }
         @keyframes flash-entry { 0% { background: #1a3050; } 100% { background: transparent; } }
+        .view-mode-btn { margin-left: 12px; padding: 6px 14px; border-radius: 6px; border: 1px solid #48f; background: #102030; color: #9cf; cursor: pointer; font-size: 0.88em; }
+        .view-mode-btn:hover { background: #1a3050; }
+        body.operator-view .panel-engineering { display: none !important; }
+        body.operator-view .lru-grid { display: none !important; }
+        body.operator-view .lru-condensed { display: block !important; }
+        .lru-condensed { display: none; color: #9ab; font-size: 0.88em; margin: 8px 0; padding: 8px 12px; background: #0a1018; border-radius: 6px; border: 1px solid #2a3a4a; }
+        .mission-context-line { color: #8cf; font-size: 0.85em; margin-top: 6px; }
+        .lru-card.standby { border-color: #445; background: #0c0e12; opacity: 0.92; }
+        .lru-status-pill.standby { color: #889; border: 1px solid #445; }
+        .operator-essentials { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+        body.engineering-view .operator-essentials { display: none; }
+        .ess-card { background: #0d1117; border: 1px solid #334; border-radius: 8px; padding: 12px 14px; }
+        .ess-card strong { display: block; font-size: 1.25em; color: #9df; margin-top: 4px; }
+        .ess-card span { font-size: 0.78em; color: #778; text-transform: uppercase; letter-spacing: 0.04em; }
+        .ess-card.ok strong { color: #8f8; }
+        .ess-card.warn strong { color: #fc8; }
+        .ess-card.crit strong { color: #f88; }
+        .demo-btn { margin-left: 10px; padding: 6px 14px; border-radius: 6px; border: 1px solid #3a6; background: #102818; color: #8f8; cursor: pointer; font-size: 0.88em; }
+        .demo-btn:hover { background: #1a3828; }
+        .teleop-test-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+        .teleop-test-btn { padding: 8px 14px; border-radius: 6px; border: 1px solid #456; background: #102030; color: #9cf; cursor: pointer; font-size: 0.86em; }
+        .teleop-test-btn:hover { background: #1a3050; }
+        .teleop-test-btn.replenish { border-color: #3a6; background: #102818; color: #8f8; }
+        .teleop-test-btn.replenish:hover { background: #1a3828; }
+        .teleop-hint { color: #678; font-size: 0.82em; margin: 6px 0 0; }
+        body.demo-mode #twin-control-panel { border-color: #3a6; box-shadow: 0 0 32px rgba(80, 255, 140, 0.2); animation: demo-pulse 2.5s ease-in-out infinite; }
+        @keyframes demo-pulse { 0%, 100% { box-shadow: 0 0 20px rgba(80, 255, 140, 0.15); } 50% { box-shadow: 0 0 40px rgba(80, 255, 140, 0.35); } }
+        .task-align-hint { display: none; margin: 8px 0; padding: 8px 12px; border-radius: 6px; background: #1a1820; border: 1px solid #556; color: #aab; font-size: 0.85em; }
+        .task-align-hint.visible { display: block; }
+        .agent-action-entry.stale-phase { opacity: 0.42; }
+        .agent-action-entry.stale-phase .agent-action-detail { color: #778; }
+        .agent-action-entry.current-phase { border-left: 2px solid #48f; }
     </style>
 </head>
-<body>
+<body class="operator-view">
     <h1>🤖 {{ robot_name }} Live Monitor <span class="live-dot" id="live-dot"></span></h1>
     <div class="live-controls">
         <button type="button" id="pause-resume-btn" class="pause-btn live">⏸ Pause Live Updates</button>
-        <span class="pause-hint" id="pause-hint">Freeze the dashboard to inspect allocation, LRU, and forecasts</span>
+        <button type="button" id="view-mode-btn" class="view-mode-btn">Show Engineering Details</button>
+        <button type="button" id="demo-btn" class="demo-btn">▶ Launch Demo</button>
+        <span class="pause-hint" id="pause-hint">Operator view — essentials only. Toggle for full PMS/LRU/forecast panels.</span>
     </div>
     <div id="pause-banner" class="pause-banner" style="display:none">
         ⏸ LIVE UPDATES PAUSED — frozen snapshot at <strong id="pause-frozen-at">—</strong>
@@ -260,6 +294,13 @@ HTML_TEMPLATE = '''
     
     <div id="warning" class="warning"></div>
 
+    <div id="operator-essentials" class="operator-essentials">
+        <div class="ess-card ok" id="ess-battery"><span>Battery</span><strong id="ess-battery-val">—</strong></div>
+        <div class="ess-card ok" id="ess-draw"><span>System Draw</span><strong id="ess-draw-val">—</strong></div>
+        <div class="ess-card ok" id="ess-loop"><span>Loop Margin</span><strong id="ess-loop-val">—</strong></div>
+        <div class="ess-card ok" id="ess-energy"><span>Energy Diet (loop)</span><strong id="ess-energy-val">—</strong></div>
+    </div>
+
     <div id="twin-control-panel" class="twin-control-panel inactive">
         <div class="twin-control-header">
             <strong style="font-size:1.05em">PMS + Agent → Webots Twin</strong>
@@ -269,6 +310,7 @@ HTML_TEMPLATE = '''
         <div id="twin-phase-banner" class="twin-phase-banner">
             <div class="phase-name" id="twin-sim-phase-label">—</div>
             <div class="phase-meta" id="twin-sim-phase-meta">Connect Webots ButlerBot to see live simulation phase</div>
+            <div id="task-align-hint" class="task-align-hint"></div>
         </div>
         <div id="twin-phase-timeline" class="twin-phase-timeline"></div>
         <div class="twin-control-grid">
@@ -276,19 +318,31 @@ HTML_TEMPLATE = '''
             <div class="twin-control-stat"><span>Agent Posture</span><strong id="twin-agent-posture">—</strong></div>
             <div class="twin-control-stat"><span>Allocation</span><strong id="twin-alloc-status">—</strong></div>
             <div class="twin-control-stat"><span>Speed / Position</span><strong id="twin-loco-meta">—</strong></div>
+            <div class="twin-control-stat"><span>Loop Forecast</span><strong id="twin-loop-forecast">—</strong></div>
+            <div class="twin-control-stat"><span>Hardware Profile</span><strong id="twin-hw-profile">—</strong></div>
         </div>
+        <div id="twin-loop-detail" class="twin-influence-bar" style="margin-top:8px;display:none"></div>
         <div id="agent-intervention-banner" class="agent-intervention-banner">
             <span id="agent-intervention-text">⚡ Agent intervening</span>
             <span class="applied" id="agent-intervention-applied"></span>
         </div>
         <div id="twin-influence-bar" class="twin-influence-bar">Power &amp; mission influence will appear when the agent or PMS acts on twin telemetry.</div>
+        <div class="teleop-test-bar">
+            <button type="button" id="battery-replenish-btn" class="teleop-test-btn replenish">🔋 Replenish Battery (100%)</button>
+            <button type="button" id="teleop-forward-btn" class="teleop-test-btn">▲ Forward</button>
+            <button type="button" id="teleop-back-btn" class="teleop-test-btn">▼ Back</button>
+            <button type="button" id="teleop-left-btn" class="teleop-test-btn">◀ Turn Left</button>
+            <button type="button" id="teleop-right-btn" class="teleop-test-btn">Turn Right ▶</button>
+            <button type="button" id="teleop-stop-btn" class="teleop-test-btn">■ Stop</button>
+        </div>
+        <p class="teleop-hint">Webots steals WASD for the camera — use <strong>Arrow keys</strong> or <strong>I/J/K/L</strong> in the 3D view, or drive from here via the twin API.</p>
         <div class="agent-action-log">
             <div class="agent-action-log-title">Agent Action Log <span style="font-weight:normal;color:#678;font-size:0.85em">— real-time decisions tied to simulation</span></div>
             <div id="agent-action-log"></div>
         </div>
     </div>
 
-    <div id="safety-panel" class="safety-panel ok">
+    <div id="safety-panel" class="safety-panel ok panel-engineering">
         <h2>Safety &amp; Thermal Status <span id="degrade-badge" class="degrade-badge">NORMAL</span></h2>
         <div class="safety-indicators">
             <span id="safety-status-badge" class="safety-badge ok">SYSTEM OK</span>
@@ -309,8 +363,10 @@ HTML_TEMPLATE = '''
     <div id="lru-panel" class="lru-panel">
         <strong>LRU Hierarchy &amp; Requirements</strong>
         <span id="req-compliant-badge" class="lru-status-pill ok" style="margin-left:8px">REQUIREMENTS OK</span>
-        <div id="lru-summary" class="lru-summary"></div>
-        <div id="lru-grid" class="lru-grid"></div>
+        <div id="lru-condensed" class="lru-condensed">LRU status follows twin mission phase — expand engineering view for full hierarchy.</div>
+        <div id="lru-mission-context" class="mission-context-line"></div>
+        <div id="lru-summary" class="lru-summary panel-engineering"></div>
+        <div id="lru-grid" class="lru-grid panel-engineering"></div>
     </div>
 
     <div id="agent-panel" class="agent-panel normal">
@@ -322,14 +378,14 @@ HTML_TEMPLATE = '''
         <div id="agent-meta" class="agent-meta"></div>
     </div>
 
-    <div id="sim-panel" class="sim-panel">
+    <div id="sim-panel" class="sim-panel panel-engineering">
         <strong>ButlerBot Simulation</strong>
         <span id="sim-badge" class="sim-badge off">OFF</span>
         <div class="sim-controls" style="margin-top:8px">
             <button type="button" id="sim-start-btn">Start Loop</button>
             <button type="button" id="sim-stop-btn">Stop Loop</button>
         </div>
-        <div id="sim-meta" class="sim-meta">Idle → Transit → Patrol → High Load → Idle</div>
+        <div id="sim-meta" class="sim-meta">Standby → Wheeled Transit → Patrol → Manipulate → Idle</div>
         <div id="sim-timeline" class="sim-timeline"></div>
     </div>
 
@@ -344,7 +400,7 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <div id="prediction-panel" class="prediction-panel">
+    <div id="prediction-panel" class="prediction-panel panel-engineering">
         <strong>Energy Forecast</strong>
         <span id="pred-risk-badge" class="risk-badge risk-low">RISK: LOW</span>
         <p>
@@ -386,12 +442,12 @@ HTML_TEMPLATE = '''
         <div id="alloc-warnings" class="alloc-warnings"></div>
     </div>
     
-    <div id="twin-panel" class="twin-panel">
+    <div id="twin-panel" class="twin-panel panel-engineering">
         <strong>Digital Twin Bridge</strong>
         <span id="twin-badge" class="twin-badge">—</span>
         <span id="twin-source-badge" class="twin-badge" style="margin-left:4px">—</span>
         <div id="twin-meta" style="color:#8ab;margin-top:6px;font-size:0.85em">—</div>
-        <div id="twin-flow" style="color:#678;font-size:0.8em;margin-top:4px">ButlerBot: stand → walk → patrol → manipulate → idle</div>
+        <div id="twin-flow" style="color:#678;font-size:0.8em;margin-top:4px">ButlerBot (wheeled): standby → drive → patrol → manipulate → idle</div>
         <div class="twin-endpoints">
             <code>POST /api/twin/telemetry</code> — ingest from Webots/PyBullet/custom script<br>
             <code>GET /api/twin/state</code> — export PMS state &nbsp;|&nbsp;
@@ -402,7 +458,7 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <div id="analytics-panel" class="analytics-panel">
+    <div id="analytics-panel" class="analytics-panel panel-engineering">
         <strong>Historical Analytics</strong>
         <span style="color:#666;font-size:0.85em;margin-left:8px">(last <span id="analytics-hours">1</span>h)</span>
         <span style="margin-left:12px">
@@ -490,7 +546,9 @@ HTML_TEMPLATE = '''
     let lastInfluenceSig = '';
     let lastRecSig = '';
 
-    function renderAgentActionLog(log) {
+    let currentTwinPhase = '';
+
+    function renderAgentActionLog(log, currentPhase) {
         const el = document.getElementById('agent-action-log');
         if (!log || !log.length) {
             el.innerHTML = '<div class="agent-action-entry"><span class="agent-action-detail" style="color:#666">Waiting for agent decisions…</span></div>';
@@ -501,14 +559,20 @@ HTML_TEMPLATE = '''
         ).join(';;');
         const isNew = sig !== lastActionLogSig;
         lastActionLogSig = sig;
+        const normCurrent = (currentPhase || '').toLowerCase();
         el.innerHTML = log.slice(0, 12).map((e, i) => {
             const tagCls = (e.influence || 'agent').toLowerCase();
             const actionCls = (e.action || '').toLowerCase();
             const priCls = (e.priority || '').toLowerCase();
             const phase = e.sim_phase ? e.sim_phase.replace(/_/g, ' ') : '';
+            const entryPhase = (e.sim_phase || '').toLowerCase();
+            let phaseCls = '';
+            if (entryPhase && normCurrent) {
+                phaseCls = entryPhase === normCurrent ? ' current-phase' : ' stale-phase';
+            }
             const newCls = (isNew && i === 0) ? ' new' : '';
             const applied = e.applied ? ' ✓' : '';
-            return `<div class="agent-action-entry ${actionCls} ${priCls}${newCls}">
+            return `<div class="agent-action-entry ${actionCls} ${priCls}${newCls}${phaseCls}">
                 <span class="agent-action-time">${e.time || '—'}</span>
                 <span class="agent-action-tag ${tagCls}">${(e.influence || 'agent').toUpperCase()}</span>
                 <span class="agent-action-detail">${e.detail || e.action || ''}${applied}${phase ? ` <span style="color:#68a">[${phase}]</span>` : ''}</span>
@@ -559,9 +623,22 @@ HTML_TEMPLATE = '''
         const gait = tc && tc.gait ? tc.gait : '—';
         const speed = tc && tc.speed_m_s != null ? tc.speed_m_s + ' m/s' : '—';
         const pose = tc && tc.pose ? `(${tc.pose.x_m ?? '?' }, ${tc.pose.y_m ?? '?'})` : '—';
+        const mctx = (tc && tc.mission_context) || {};
+        const ctxLine = mctx.summary ? mctx.summary + ' · ' : '';
         document.getElementById('twin-sim-phase-meta').innerText = active
-            ? `Gait: ${gait} · Speed: ${speed} · Pose: ${pose}`
+            ? ctxLine + `Gait: ${gait} · Speed: ${speed} · Pose: ${pose}`
             : 'Launch Webots ButlerBot — telemetry drives this panel';
+
+        currentTwinPhase = (tc && tc.sim_phase) || '';
+        const align = (tc && tc.task_alignment) || {};
+        const hintEl = document.getElementById('task-align-hint');
+        if (active && align.note) {
+            hintEl.className = 'task-align-hint visible';
+            hintEl.innerText = 'ℹ️ ' + align.note;
+        } else {
+            hintEl.className = 'task-align-hint';
+            hintEl.innerText = '';
+        }
 
         const flow = (tc && tc.phase_flow) || [];
         const activeIdx = tc ? (tc.active_phase_index ?? -1) : -1;
@@ -583,6 +660,26 @@ HTML_TEMPLATE = '''
             + (throttled ? ' · ' + throttled : '');
         document.getElementById('twin-loco-meta').innerText = active ? `${speed} · ${pose}` : '—';
 
+        const loopFc = (tc && tc.loop_forecast) || {};
+        const loopEl = document.getElementById('twin-loop-forecast');
+        const loopDetail = document.getElementById('twin-loop-detail');
+        if (active && loopFc.ok) {
+            const status = (loopFc.feasibility_status || 'unknown').toUpperCase();
+            const finish = loopFc.finish_battery_pct != null ? `${loopFc.finish_battery_pct}%` : '—';
+            loopEl.innerText = `${status} · finish ${finish}`;
+            loopEl.style.color = loopFc.can_complete_loop ? '#8f8' : '#f88';
+            const wh = loopFc.loop_wh_remaining != null ? loopFc.loop_wh_remaining.toFixed(2) : '?';
+            const margin = loopFc.margin_pct != null ? loopFc.margin_pct : '?';
+            loopDetail.style.display = 'block';
+            loopDetail.innerText = `Loop needs ${wh} Wh from here · margin ${margin}% · profile ${tc.hardware_profile || '—'}`;
+        } else {
+            loopEl.innerText = '—';
+            loopEl.style.color = '';
+            loopDetail.style.display = 'none';
+        }
+        document.getElementById('twin-hw-profile').innerText =
+            (tc && tc.hardware_profile) || 'butlerbot_wheeled';
+
         const infBar = document.getElementById('twin-influence-bar');
         const influence = (tc && tc.power_influence) || '—';
         const infSig = influence + (tc && tc.allocation_status || '');
@@ -594,7 +691,37 @@ HTML_TEMPLATE = '''
             + (tc && tc.allocation_status === 'throttled' ? ' critical' : '');
 
         const log = (agent && (agent.action_log || agent.recent_log)) || [];
-        renderAgentActionLog(log);
+        renderAgentActionLog(log, currentTwinPhase);
+    }
+
+    const ENGINEERING_PANEL_IDS = [
+        'safety-panel', 'sim-panel', 'prediction-panel', 'twin-panel', 'analytics-panel'
+    ];
+
+    function setPanelStatusClass(panel, baseClass, status, hideInOperatorView = false) {
+        const states = ['ok', 'warning', 'throttled', 'fault', 'inactive'];
+        panel.classList.remove(...states);
+        panel.classList.add(status || 'ok');
+        if (!panel.classList.contains(baseClass)) {
+            panel.classList.add(baseClass);
+        }
+        if (hideInOperatorView) {
+            if (document.body.classList.contains('operator-view')) {
+                panel.classList.add('panel-engineering');
+            } else {
+                panel.classList.remove('panel-engineering');
+            }
+        }
+    }
+
+    function syncEngineeringPanelVisibility() {
+        const operator = document.body.classList.contains('operator-view');
+        ENGINEERING_PANEL_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (operator) el.classList.add('panel-engineering');
+            else el.classList.remove('panel-engineering');
+        });
     }
 
     function fillTable(tableId, headers, rows, rowHtml) {
@@ -788,6 +915,68 @@ HTML_TEMPLATE = '''
         setLivePaused(!livePaused);
     });
 
+    document.getElementById('view-mode-btn').addEventListener('click', () => {
+        const body = document.body;
+        const btn = document.getElementById('view-mode-btn');
+        const engineering = body.classList.toggle('engineering-view');
+        body.classList.toggle('operator-view', !engineering);
+        btn.innerText = engineering ? 'Show Operator View' : 'Show Engineering Details';
+        syncEngineeringPanelVisibility();
+    });
+
+    function postTwinCommand(body) {
+        return fetch('/api/twin/command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(r => r.json());
+    }
+
+    document.getElementById('battery-replenish-btn').addEventListener('click', () => {
+        postTwinCommand({ battery_reset: true, battery_pct: 100, source: 'dashboard' })
+            .then(data => {
+                const hint = document.getElementById('pause-hint');
+                if (data.ok) hint.innerText = 'Battery replenish sent → Webots + dashboard should jump to 100%';
+                else hint.innerText = 'Replenish failed: ' + (data.errors || []).join(', ');
+            })
+            .catch(() => { document.getElementById('pause-hint').innerText = 'Replenish request failed'; });
+    });
+
+    document.getElementById('teleop-forward-btn').addEventListener('click', () => {
+        postTwinCommand({ drive: { left: 5.5, right: 5.5, duration_s: 3 }, source: 'dashboard' });
+    });
+    document.getElementById('teleop-back-btn').addEventListener('click', () => {
+        postTwinCommand({ drive: { left: -5.5, right: -5.5, duration_s: 3 }, source: 'dashboard' });
+    });
+    document.getElementById('teleop-left-btn').addEventListener('click', () => {
+        postTwinCommand({ drive: { left: -4.5, right: 4.5, duration_s: 3 }, source: 'dashboard' });
+    });
+    document.getElementById('teleop-right-btn').addEventListener('click', () => {
+        postTwinCommand({ drive: { left: 4.5, right: -4.5, duration_s: 3 }, source: 'dashboard' });
+    });
+    document.getElementById('teleop-stop-btn').addEventListener('click', () => {
+        postTwinCommand({ drive_stop: true, source: 'dashboard' });
+    });
+
+    document.getElementById('demo-btn').addEventListener('click', () => {
+        const btn = document.getElementById('demo-btn');
+        btn.disabled = true;
+        btn.innerText = 'Starting demo…';
+        fetch('/api/demo/activate', { method: 'POST' })
+            .then(() => fetch('/api/demo/launch-webots', { method: 'POST' }))
+            .then(r => r.json())
+            .then(data => {
+                document.body.classList.add('demo-mode');
+                document.getElementById('twin-control-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                if (data.launch_message) {
+                    document.getElementById('pause-hint').innerText = data.launch_message;
+                }
+                btn.innerText = data.launched ? 'Demo Running' : 'Demo Mode ON';
+            })
+            .catch(() => { btn.innerText = 'Demo failed — see console'; })
+            .finally(() => { btn.disabled = false; });
+    });
+
     socket.on('connect', () => {
         console.log('%c[WebSocket] Connected successfully!', 'color: lime');
         loadAnalytics();
@@ -846,7 +1035,7 @@ HTML_TEMPLATE = '''
             const s = data.safety;
             const panel = document.getElementById('safety-panel');
             const status = s.status || 'ok';
-            panel.className = 'safety-panel ' + status;
+            setPanelStatusClass(panel, 'safety-panel', status, true);
 
             const statusBadge = document.getElementById('safety-status-badge');
             statusBadge.className = 'safety-badge ' + status;
@@ -919,6 +1108,27 @@ HTML_TEMPLATE = '''
                 reqBadge.innerText = 'REQUIREMENTS VIOLATION';
             }
 
+            const mctx = s.mission_context || req.mission_context || {};
+            const ctxEl = document.getElementById('lru-mission-context');
+            if (mctx.summary) {
+                ctxEl.innerText = '📍 ' + mctx.summary;
+            } else {
+                ctxEl.innerText = '';
+            }
+
+            const lruData = (s.lru && s.lru.lrus) || [];
+            const condensed = document.getElementById('lru-condensed');
+            const active = lruData.filter(l => l.mission_role !== 'standby' && l.status !== 'standby');
+            const standby = lruData.filter(l => l.mission_role === 'standby' || l.status === 'standby');
+            if (lruData.length) {
+                const actLine = active.map(l => `${l.label}: ${l.status.toUpperCase()}`).join(' · ') || '—';
+                const idleLine = standby.length
+                    ? `Idle (expected): ${standby.map(l => l.label).join(', ')}`
+                    : '';
+                condensed.innerHTML = `<strong>Active LRUs:</strong> ${actLine}`
+                    + (idleLine ? `<br><span style="color:#678">${idleLine}</span>` : '');
+            }
+
             const summary = document.getElementById('lru-summary');
             if (req.task) {
                 summary.innerHTML =
@@ -932,18 +1142,19 @@ HTML_TEMPLATE = '''
             (req.lru_requirements || []).forEach(r => { reqMap[r.id] = r; });
             if (req.eps) reqMap.eps = req.eps;
 
-            const lruData = (s.lru && s.lru.lrus) || [];
             const grid = document.getElementById('lru-grid');
             grid.innerHTML = lruData.map(lru => {
-                const st = lru.status || 'ok';
-                const barColor = st === 'fault' ? '#f44' : st === 'warning' ? '#fa0' : '#0f0';
+                const isIdle = lru.mission_role === 'standby' || lru.status === 'standby';
+                const st = isIdle ? 'standby' : (lru.status || 'ok');
+                const stLabel = isIdle ? 'IDLE' : st.toUpperCase();
+                const barColor = st === 'fault' ? '#f44' : st === 'warning' ? '#fa0' : st === 'standby' ? '#556' : '#0f0';
                 const util = lru.utilization_pct || 0;
                 const r = reqMap[lru.id] || {};
-                const reqSt = r.status || (r.compliant === false ? 'warning' : 'ok');
-                const reqCls = reqSt === 'fault' ? 'req-fault' : reqSt === 'warning' ? 'req-warn' : 'req-ok';
+                const reqSt = isIdle ? 'standby' : (r.status || (r.compliant === false ? 'warning' : 'ok'));
+                const reqCls = reqSt === 'fault' ? 'req-fault' : reqSt === 'warning' ? 'req-warn' : reqSt === 'standby' ? 'req-ok' : 'req-ok';
                 const tierCls = lru.tier === 1 ? ' eps tier1' : '';
                 const reqLine = r.budget_w != null
-                    ? `<div class="req-row ${reqCls}">Req: ${r.min_draw_w ?? '—'}–${r.budget_w}–${r.max_draw_w ?? '—'} W</div>`
+                    ? `<div class="req-row ${reqCls}">${isIdle ? 'Standby — min draw waived' : `Req: ${r.min_draw_w ?? '—'}–${r.budget_w}–${r.max_draw_w ?? '—'} W`}</div>`
                     : '';
                 const voltLine = lru.id !== 'eps'
                     ? `Est. ${lru.estimated_voltage}V (${lru.voltage_pct}% nominal)`
@@ -951,7 +1162,7 @@ HTML_TEMPLATE = '''
                 return `<div class="lru-card ${st}${tierCls}">
                     <div class="lru-card-title">
                         ${lru.label}${lru.tier === 1 ? ' <span style="font-size:0.7em;color:#68f">TIER 1</span>' : ''}
-                        <span class="lru-status-pill ${st}">${st.toUpperCase()}</span>
+                        <span class="lru-status-pill ${st}">${stLabel}</span>
                     </div>
                     <div class="lru-bar"><div class="lru-bar-fill" style="width:${Math.min(util,100)}%;background:${barColor}"></div></div>
                     <div class="lru-meta">
@@ -963,11 +1174,43 @@ HTML_TEMPLATE = '''
             }).join('');
         }
 
+        // Operator essentials (human-readable snapshot)
+        const alloc = data.allocation || {};
+        const tcEarly = data.twin_control || {};
+        const loopFc = tcEarly.loop_forecast || (data.mission && data.mission.loop_forecast) || {};
+        const batPct = data.main_battery ?? 0;
+        const batCard = document.getElementById('ess-battery');
+        batCard.className = 'ess-card ' + (batPct <= 10 ? 'crit' : batPct <= 20 ? 'warn' : 'ok');
+        document.getElementById('ess-battery-val').innerText = batPct + '%';
+        const drawW = alloc.total_allocated_w ?? alloc.total_draw_w ?? 0;
+        const drawCard = document.getElementById('ess-draw');
+        drawCard.className = 'ess-card ' + ((alloc.utilization_pct || 0) >= 90 ? 'warn' : 'ok');
+        document.getElementById('ess-draw-val').innerText = drawW + 'W';
+        const loopCard = document.getElementById('ess-loop');
+        if (loopFc.ok) {
+            const margin = loopFc.margin_pct != null ? loopFc.margin_pct : '—';
+            loopCard.className = 'ess-card ' + (!loopFc.can_complete_loop ? 'crit' : margin < 18 ? 'warn' : 'ok');
+            document.getElementById('ess-loop-val').innerText = margin + '%';
+            const wh = loopFc.loop_wh_remaining != null ? loopFc.loop_wh_remaining.toFixed(2) + ' Wh' : '—';
+            document.getElementById('ess-energy-val').innerText = wh;
+            document.getElementById('ess-energy').className = loopCard.className;
+        } else {
+            loopCard.className = 'ess-card ok';
+            document.getElementById('ess-loop-val').innerText = '—';
+            document.getElementById('ess-energy-val').innerText = '—';
+            document.getElementById('ess-energy').className = 'ess-card ok';
+        }
+
         // Twin control + onboard agent
         const agent = data.agent || (data.allocation && data.allocation.agent) || {};
         const twin = data.twin || {};
         const tc = data.twin_control || {};
         updateTwinControl(tc, agent, twin);
+
+        const demo = data.demo || {};
+        if (demo.active) {
+            document.body.classList.add('demo-mode');
+        }
 
         const agentPanel = document.getElementById('agent-panel');
         const agentBadge = document.getElementById('agent-badge');
@@ -1046,7 +1289,10 @@ HTML_TEMPLATE = '''
         const sim = data.simulation || (data.mission && data.mission.simulation) || {};
         if (sim.enabled !== false) {
             const simBadge = document.getElementById('sim-badge');
-            if (sim.running) {
+            if (sim.external_twin && sim.running) {
+                simBadge.className = 'sim-badge running';
+                simBadge.innerText = 'WEBOTS LIVE';
+            } else if (sim.running) {
                 simBadge.className = 'sim-badge running';
                 simBadge.innerText = 'SCRIPT RUNNING';
             } else if (sim.enabled) {
@@ -1060,10 +1306,16 @@ HTML_TEMPLATE = '''
             const loops = sim.loops_completed ? ` · ${sim.loops_completed} loop(s)` : '';
             const robot = sim.robot_name || 'ButlerBot';
             const draw = sim.expected_draw_w != null ? ` · ~${sim.expected_draw_w}W` : '';
+            const twinNote = sim.external_twin
+                ? ` · ${sim.webots_gait || '—'} gait`
+                  + (sim.webots_phase ? ` · phase ${sim.webots_phase.replace(/_/g, ' ')}` : '')
+                : ` · ${sim.segment_remaining_s ?? '—'}s left · ${loopTxt}${loops}`;
             document.getElementById('sim-meta').innerText =
-                `${robot} — phase ${sim.segment_index || 0}/${sim.segment_total || 0}: `
+                (sim.external_twin ? 'Webots twin — ' : `${robot} — `)
+                + `phase ${sim.segment_index || 0}/${sim.segment_total || 0}: `
                 + `${sim.segment_label || '—'}${draw}`
-                + ` · ${sim.segment_remaining_s ?? '—'}s left · ${loopTxt}${loops}`;
+                + twinNote
+                + (sim.note && sim.external_twin ? ` · ${sim.note}` : '');
 
             const timeline = document.getElementById('sim-timeline');
             const script = sim.script || [];
@@ -1161,7 +1413,7 @@ HTML_TEMPLATE = '''
         if (data.allocation) {
             const a = data.allocation;
             const panel = document.getElementById('allocation-panel');
-            panel.className = 'allocation-panel ' + (a.status || 'ok');
+            setPanelStatusClass(panel, 'allocation-panel', a.status || 'ok', false);
             document.getElementById('alloc-task').innerText = (a.task_label || a.task || '—');
             document.getElementById('alloc-used').innerText = a.total_allocated_w ?? '—';
             document.getElementById('alloc-budget').innerText = a.budget_w ?? '—';
@@ -1238,6 +1490,31 @@ def dashboard():
                                   main_battery=main_battery,
                                   channels=channels,
                                   now=now)
+
+
+@app.route('/api/demo/activate', methods=['POST'])
+def api_demo_activate():
+    from src.demo_mode import activate_demo
+    return jsonify(activate_demo())
+
+
+@app.route('/api/demo/deactivate', methods=['POST'])
+def api_demo_deactivate():
+    from src.demo_mode import deactivate_demo
+    return jsonify(deactivate_demo())
+
+
+@app.route('/api/demo/status')
+def api_demo_status():
+    from src.demo_mode import status as demo_status
+    return jsonify(demo_status())
+
+
+@app.route('/api/demo/launch-webots', methods=['POST'])
+def api_demo_launch_webots():
+    from src.demo_mode import activate_demo, launch_webots_on_host
+    activate_demo()
+    return jsonify(launch_webots_on_host())
 
 
 @app.route('/api/simulation/<action>', methods=['POST'])
@@ -1460,6 +1737,11 @@ def _build_battery_payload():
             agent = getattr(hardware, "agent_status", {}) or allocation.get("agent", {})
             twin_status = getattr(hardware, "twin_status", {}) or {}
             twin_control = getattr(hardware, "twin_control_status", {}) or {}
+            try:
+                from src.demo_mode import status as demo_status
+                demo = demo_status()
+            except Exception:
+                demo = {}
 
             return {
                 "main_battery": main_battery,
@@ -1470,6 +1752,7 @@ def _build_battery_payload():
                 "agent": agent,
                 "twin": twin_status,
                 "twin_control": twin_control,
+                "demo": demo,
                 "channels": channels,
                 "mission": mission,
                 "prediction": prediction,

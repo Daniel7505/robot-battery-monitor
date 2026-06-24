@@ -29,9 +29,14 @@ lru:
   groups:
     - id: eps
       label: EPS (Power System)
-      channels: ["Legs", "Arms", "Torso", "Compute"]
+      channels: ["Legs", "Arms", "Torso", "Compute", "Cooling"]
       degrade_priority: 5
       tier: 1
+    - id: cooling
+      label: Cooling (Dry Ice Loop)
+      channels: ["Cooling"]
+      degrade_priority: 2
+      tier: 2
     - id: locomotion
       label: Locomotion (LRUA)
       channels: ["Legs"]
@@ -66,30 +71,46 @@ requirements:
   startup_cost_wh: 6.0
   eps_reserve_pct: 12
   system_min_draw_w: 18
-  system_max_draw_w: 55
+  system_max_draw_w: 62
   lru_budgets:
+    idle:
+      locomotion: {min_draw_w: 2, max_draw_w: 12, budget_w: 6}
+      arms: {min_draw_w: 4, max_draw_w: 18, budget_w: 8}
+      torso: {min_draw_w: 3, max_draw_w: 14, budget_w: 6}
+      compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
+      cooling: {min_draw_w: 1, max_draw_w: 10, budget_w: 3}
     moving:
       locomotion: {min_draw_w: 14, max_draw_w: 28, budget_w: 22}
       arms: {min_draw_w: 5, max_draw_w: 18, budget_w: 10}
       torso: {min_draw_w: 7, max_draw_w: 14, budget_w: 11}
       compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
+      cooling: {min_draw_w: 2, max_draw_w: 10, budget_w: 5}
     balanced:
       locomotion: {min_draw_w: 8, max_draw_w: 28, budget_w: 14}
       arms: {min_draw_w: 6, max_draw_w: 18, budget_w: 10}
       torso: {min_draw_w: 5, max_draw_w: 14, budget_w: 8}
       compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
+      cooling: {min_draw_w: 2, max_draw_w: 10, budget_w: 4}
     high_load:
       locomotion: {min_draw_w: 18, max_draw_w: 28, budget_w: 26}
       arms: {min_draw_w: 12, max_draw_w: 18, budget_w: 17}
       torso: {min_draw_w: 8, max_draw_w: 14, budget_w: 12}
       compute: {min_draw_w: 7, max_draw_w: 12, budget_w: 10}
+      cooling: {min_draw_w: 4, max_draw_w: 10, budget_w: 8}
 
 robot:
   name: "ButlerBot"
   main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
+  hardware_profile: butlerbot_wheeled
+
+hardware_profile: butlerbot_wheeled
 
 power:
-  system_budget_w: 55   # Total allocatable watts (small/medium servo scale)
+  system_budget_w: 62   # Total allocatable watts (includes active cooling)
+
+cooling:
+  max_draw_w: 10
+  label: "Dry-ice / active cooling loop"
 
 database:
   host: "localhost"
@@ -115,6 +136,10 @@ power_channels:
     name: "Main Computer & Sensors"
     max_draw_w: 12
     nominal_voltage: 24
+  - id: "Cooling"
+    name: "Dry-Ice / Active Cooling Loop"
+    max_draw_w: 10
+    nominal_voltage: 24
 
 digital_twin:
   enabled: true
@@ -126,7 +151,7 @@ digital_twin:
   accept_external_telemetry: true
   prefer_external: true
   stale_after_s: 12
-  apply_battery_override: false
+  apply_battery_override: true
   sync_interval_s: 3
 
 agent:
@@ -140,6 +165,8 @@ agent:
   high_utilization_pct: 72
   twin_stress_utilization_pct: 62
   task_override_hold_s: 14
+  loop_margin_warn_pct: 18
+  loop_margin_critical_pct: 8
 
 simulation:
   enabled: true
@@ -154,7 +181,7 @@ simulation:
       label: "Idle / Standby"
     - task: moving
       duration_s: 28
-      label: "Walking / Transit"
+      label: "Wheeled Transit"
     - task: balanced
       duration_s: 22
       label: "Balanced / Patrol"
@@ -165,10 +192,10 @@ simulation:
       duration_s: 14
       label: "Return to Idle"
   draw_profiles:
-    idle:       {Legs: 3.5, Arms: 5.0, Torso: 3.5, Compute: 7.5}
-    moving:     {Legs: 20.0, Arms: 8.0, Torso: 10.5, Compute: 9.0}
-    balanced:   {Legs: 12.0, Arms: 9.0, Torso: 7.5, Compute: 8.5}
-    high_load:  {Legs: 24.0, Arms: 16.0, Torso: 12.0, Compute: 10.0}
+    idle:       {Legs: 3.5, Arms: 5.0, Torso: 3.5, Compute: 7.5, Cooling: 1.5}
+    moving:     {Legs: 20.0, Arms: 8.0, Torso: 10.5, Compute: 9.0, Cooling: 4.0}
+    balanced:   {Legs: 12.0, Arms: 9.0, Torso: 7.5, Compute: 8.5, Cooling: 3.5}
+    high_load:  {Legs: 24.0, Arms: 16.0, Torso: 12.0, Compute: 10.0, Cooling: 7.5}
 
 hardware:
   mode: "real"

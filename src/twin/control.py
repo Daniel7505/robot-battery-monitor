@@ -4,10 +4,14 @@ Twin control view — PMS + agent status tied to Webots simulation phases.
 
 from __future__ import annotations
 
+from src.hardware_profile import get_active_profile_id
+from src.mission_context import context_summary, task_phase_alignment
 from src.mission_tasks import TASK_PROFILES
-from src.twin.butlerbot import BUTLERBOT_WALKING_FLOW
+from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
 
-TWIN_STRESS_PHASES = frozenset({"walk_transit", "patrol", "manipulate"})
+TWIN_STRESS_PHASES = frozenset({
+    "drive_transit", "walk_transit", "patrol", "manipulate"
+})
 
 
 def is_twin_stress_phase(phase: str | None) -> bool:
@@ -16,7 +20,8 @@ def is_twin_stress_phase(phase: str | None) -> bool:
 
 PHASE_LABELS: dict[str, str] = {
     "standby": "Standby",
-    "walk_transit": "Walk / Transit",
+    "drive_transit": "Drive / Transit",
+    "walk_transit": "Drive / Transit",
     "patrol": "Patrol",
     "manipulate": "Manipulate",
     "return_idle": "Return to Idle",
@@ -26,11 +31,11 @@ PHASE_LABELS: dict[str, str] = {
 def webots_phase_flow() -> list[dict]:
     """ButlerBot Webots phase timeline for dashboard UI."""
     flow = []
-    for step in BUTLERBOT_WALKING_FLOW:
+    for step in BUTLERBOT_MISSION_FLOW:
         phase = step["phase"]
         flow.append({
             "phase": phase,
-            "label": PHASE_LABELS.get(phase, phase.replace("_", " ").title()),
+            "label": PHASE_LABELS.get(phase, step.get("label", phase.replace("_", " ").title())),
             "task": step["task"],
             "gait": (step.get("locomotion") or {}).get("gait", "stand"),
             "duration_s": step["duration_s"],
@@ -41,8 +46,11 @@ def webots_phase_flow() -> list[dict]:
 def _phase_index(phase: str | None, flow: list[dict]) -> int:
     if not phase:
         return -1
+    norm = phase.lower()
     for i, step in enumerate(flow):
-        if step["phase"] == phase:
+        if step["phase"] == phase or step["phase"] == norm:
+            return i
+        if step["phase"] == "drive_transit" and norm == "walk_transit":
             return i
     return -1
 
@@ -102,10 +110,13 @@ def build_twin_control_status(bridge, hardware) -> dict:
     allocation = getattr(hardware, "allocation_status", {}) or {}
     mission = getattr(hardware, "mission_info", {}) or {}
     agent = getattr(hardware, "agent_status", {}) or {}
+    loop_forecast = mission.get("loop_forecast") or {}
 
     pms_task = mission.get("task") or allocation.get("task") or "idle"
     profile = TASK_PROFILES.get(pms_task)
     phase_label = PHASE_LABELS.get(str(phase or ""), (phase or "—").replace("_", " ").title())
+    mission_context = context_summary(phase, pms_task) if phase else {}
+    task_align = task_phase_alignment(phase, pms_task) if external and phase else {}
 
     intervening = bool(agent.get("intervening") or agent.get("applied_actions"))
     stress = is_twin_stress_phase(phase)
@@ -115,8 +126,11 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "source": twin_status.get("active_source", "internal"),
         "sim_phase": phase,
         "sim_phase_label": phase_label if phase else "—",
+        "mission_context": mission_context,
+        "task_alignment": task_align,
         "stress_phase": stress,
         "gait": gait,
+        "locomotion_mode": locomotion.get("mode", "wheeled"),
         "speed_m_s": speed,
         "pose": pose,
         "pms_task": pms_task,
@@ -135,4 +149,6 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "active_phase_index": _phase_index(phase, flow),
         "telemetry_count": twin_status.get("telemetry_count", 0),
         "last_telemetry_at": twin_status.get("last_telemetry_at"),
+        "hardware_profile": get_active_profile_id(),
+        "loop_forecast": loop_forecast,
     }

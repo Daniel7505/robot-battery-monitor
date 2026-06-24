@@ -57,7 +57,7 @@ def test_ros2_source_simulation_status():
     time.sleep(4)
     assert source.simulation_status.get("enabled") is True
     assert source.simulation_status.get("script")
-    assert len(source.last_readings) == 4
+    assert len(source.last_readings) == 5
     source.stop_simulation()
     assert source.simulation_status.get("running") is False
     source.start_simulation()

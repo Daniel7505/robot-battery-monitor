@@ -6,12 +6,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from src.config import config
 from src.mission_tasks import TASK_PROFILES
 
 TWIN_SCHEMA_VERSION = "1.1"
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
 _VALID_SOURCES = frozenset({"internal", "external", "webots", "pybullet", "custom", "hardware"})
-_CHANNEL_IDS = frozenset({"Legs", "Arms", "Torso", "Compute"})
+_DEFAULT_CHANNEL_IDS = frozenset({"Legs", "Arms", "Torso", "Compute", "Cooling"})
+
+
+def _channel_ids() -> frozenset[str]:
+    channels = config.get("power_channels") or []
+    ids = {ch.get("id") for ch in channels if ch.get("id")}
+    return frozenset(ids) if ids else _DEFAULT_CHANNEL_IDS
 
 
 @dataclass
@@ -86,7 +93,7 @@ class TwinTelemetry:
         if self.throttle is not None and not 0.0 < self.throttle <= 1.0:
             errors.append("Throttle must be in (0, 1]")
         for ch_id in self.channel_draws:
-            if ch_id not in _CHANNEL_IDS:
+            if ch_id not in _channel_ids():
                 errors.append(f"Unknown channel: {ch_id}")
         return errors
 

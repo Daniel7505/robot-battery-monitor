@@ -52,8 +52,9 @@ def test_webots_adapter_normalizes_motors():
         "phase": "walk_transit",
         "robot": {"name": "ButlerBot"},
     })
-    assert tel.channel_draws["Legs"] >= 28.0
-    assert tel.channel_draws["Arms"] > 8.0
+    # walk_transit stress is damped when speed/joints show no motion (~0.15 scale)
+    assert tel.channel_draws["Legs"] >= 19.0
+    assert tel.channel_draws["Arms"] >= 4.0
     assert tel.task == "moving"
 
 

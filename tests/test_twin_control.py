@@ -34,6 +34,7 @@ def test_build_twin_control_status_with_external_feed():
             "phase": "patrol",
             "gait": "patrol",
             "locomotion": {"gait": "patrol", "phase": "patrol", "speed_m_s": 0.2},
+            "pose": {"x_m": 1.25, "y_m": -0.5, "z_m": 0.08},
             "mission": {"task": "balanced"},
             "channel_draws": {"Legs": 12, "Arms": 8, "Torso": 7, "Compute": 9},
         },
@@ -45,6 +46,8 @@ def test_build_twin_control_status_with_external_feed():
     assert status["sim_phase"] == "patrol"
     assert status["active_phase_index"] == 2
     assert status["agent_controlling"] is True
+    assert status["pose"]["x_m"] == 1.25
+    assert status["pose"]["y_m"] == -0.5
     assert "PMS throttling" in status["power_influence"]
 
 

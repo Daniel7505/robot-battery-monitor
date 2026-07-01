@@ -1,7 +1,5 @@
 #VRML_SIM R2025a utf8
 
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
 
@@ -14,12 +12,12 @@ WorldInfo {
         4
       ]
       bounce 0
-      softCFM 0.0001
+      softCFM 0.00001
     }
   ]
   info [
     "ButlerBot Neo — upright wheeled humanoid (abstract Unitree Neo proportions)"
-    "Vertical wheels on hips; torso + head + arms on compact pelvis"
+    "Driven hip wheels + 4 passive corner casters for pitch/roll stability (gyro later)"
   ]
 }
 
@@ -31,20 +29,20 @@ Viewpoint {
   fieldOfView 0.9
 }
 
-TexturedBackground {
-  texture "noon_cloudy_countryside"
-  luminosity 1.2
+Background {
+  skyColor 0.72 0.76 0.82
 }
 
-TexturedBackgroundLight {
-  texture "noon_cloudy_countryside"
+DirectionalLight {
+  direction 0.35 -0.55 -1
+  intensity 1.15
   castShadows TRUE
 }
 
 Floor {
   name "ground"
-  size 16 16
-  tileSize 0.5 0.5
+  size 200 200
+  tileSize 1 1
   appearance Parquetry {
     type "chequered"
     colorOverride 0.55 0.56 0.58
@@ -80,7 +78,7 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 0.17 0.08
-        dampingConstant 0.1
+        dampingConstant 2.8
       }
       device [
         RotationalMotor {
@@ -111,14 +109,9 @@ Robot {
             ]
           }
         ]
-        boundingObject Pose {
-          rotation 1 0 0 1.5708
-          children [
-            Cylinder {
-              height 0.03
-              radius 0.08
-            }
-          ]
+        boundingObject Cylinder {
+          height 0.03
+          radius 0.08
         }
         physics Physics {
           density -1
@@ -137,7 +130,7 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 -0.17 0.08
-        dampingConstant 0.1
+        dampingConstant 2.8
       }
       device [
         RotationalMotor {
@@ -168,14 +161,9 @@ Robot {
             ]
           }
         ]
-        boundingObject Pose {
-          rotation 1 0 0 1.5708
-          children [
-            Cylinder {
-              height 0.03
-              radius 0.08
-            }
-          ]
+        boundingObject Cylinder {
+          height 0.03
+          radius 0.08
         }
         physics Physics {
           density -1
@@ -190,12 +178,128 @@ Robot {
         }
       }
     }
+    DEF FRONT_LEFT_CASTER BallJoint {
+      jointParameters BallJointParameters {
+        anchor 0.11 0.13 0.04
+      }
+      endPoint Solid {
+        name "front_left_caster"
+        translation 0.11 0.13 0.04
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.22 0.22 0.25
+              roughness 0.55
+            }
+            geometry Sphere {
+              radius 0.04
+              subdivision 2
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.04
+          subdivision 2
+        }
+        physics Physics {
+          density -1
+          mass 0.06
+        }
+      }
+    }
+    DEF FRONT_RIGHT_CASTER BallJoint {
+      jointParameters BallJointParameters {
+        anchor 0.11 -0.13 0.04
+      }
+      endPoint Solid {
+        name "front_right_caster"
+        translation 0.11 -0.13 0.04
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.22 0.22 0.25
+              roughness 0.55
+            }
+            geometry Sphere {
+              radius 0.04
+              subdivision 2
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.04
+          subdivision 2
+        }
+        physics Physics {
+          density -1
+          mass 0.06
+        }
+      }
+    }
+    DEF REAR_LEFT_CASTER BallJoint {
+      jointParameters BallJointParameters {
+        anchor -0.11 0.13 0.04
+      }
+      endPoint Solid {
+        name "rear_left_caster"
+        translation -0.11 0.13 0.04
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.22 0.22 0.25
+              roughness 0.55
+            }
+            geometry Sphere {
+              radius 0.04
+              subdivision 2
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.04
+          subdivision 2
+        }
+        physics Physics {
+          density -1
+          mass 0.06
+        }
+      }
+    }
+    DEF REAR_RIGHT_CASTER BallJoint {
+      jointParameters BallJointParameters {
+        anchor -0.11 -0.13 0.04
+      }
+      endPoint Solid {
+        name "rear_right_caster"
+        translation -0.11 -0.13 0.04
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.22 0.22 0.25
+              roughness 0.55
+            }
+            geometry Sphere {
+              radius 0.04
+              subdivision 2
+            }
+          }
+        ]
+        boundingObject Sphere {
+          radius 0.04
+          subdivision 2
+        }
+        physics Physics {
+          density -1
+          mass 0.06
+        }
+      }
+    }
 
     DEF TORSO_JOINT HingeJoint {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 0 0.24
-        dampingConstant 14.0
+        dampingConstant 18.0
       }
       device [
         RotationalMotor {
@@ -403,7 +507,7 @@ Robot {
           }
         ]
         boundingObject Box {
-          size 0.20 0.18 0.50
+          size 0.17 0.14 0.34
         }
         physics Physics {
           density -1

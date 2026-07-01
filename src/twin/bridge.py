@@ -50,6 +50,7 @@ class DigitalTwinBridge:
             "battery_pct": None,
             "reset_thermal": False,
         }
+        self._webots_stop_seq = 0
 
     @property
     def enabled(self) -> bool:
@@ -234,6 +235,9 @@ class DigitalTwinBridge:
             "source": self._webots_teleop.get("source") or "",
             "drive_until": until if until > now else None,
         }
+        stop_epoch = self._webots_teleop.get("stop_epoch")
+        if stop_epoch:
+            out["stop_epoch"] = float(stop_epoch)
         pending_batt = self._webots_teleop.get("battery_pct")
         if pending_batt is not None:
             out["battery_pct"] = float(pending_batt)
@@ -325,11 +329,13 @@ class DigitalTwinBridge:
                 applied.append(f"drive L={left:.1f} R={right:.1f} ({duration:.1f}s)")
 
         if command.get("drive_stop"):
+            self._webots_stop_seq += 1
             self._webots_teleop.update({
                 "left_v": 0.0,
                 "right_v": 0.0,
                 "drive_until": 0.0,
                 "source": "stop",
+                "stop_epoch": float(self._webots_stop_seq),
             })
             applied.append("drive_stop")
 

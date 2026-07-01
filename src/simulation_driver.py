@@ -198,6 +198,7 @@ def status_for_external_twin(
     gait: str | None = None,
     *,
     source: str = "webots",
+    live_draw_w: float | None = None,
 ) -> dict:
     """Dashboard simulation panel when Webots (not internal script) drives the loop."""
     from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
@@ -231,7 +232,9 @@ def status_for_external_twin(
         "segment_remaining_s": None,
         "webots_phase": phase,
         "webots_gait": gait,
-        "expected_draw_w": round(sum(float(v) for v in draws.values()), 1) if draws else None,
+        "expected_draw_w": live_draw_w if live_draw_w is not None else (
+            round(sum(float(v) for v in draws.values()), 1) if draws else None
+        ),
         "current_task": mission.task_id if mission else None,
         "note": "Internal script paused — Webots twin drives the mission loop",
         "script": [

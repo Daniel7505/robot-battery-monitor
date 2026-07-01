@@ -109,9 +109,13 @@ class ROS2BatterySource(RealHardwareSource):
         requested = self._blend_sensor_draw(ch_id, round(requested, 1))
         return requested
 
-    def _apply_allocated_draw(self, ch_id: str, allocated_w: float) -> float:
+    def _apply_allocated_draw(self, ch_id: str, allocated_w: float, *, twin_active: bool = False) -> float:
         if self._ros2_throttle_pulse is not None and self._ros2_throttle_pulse < 1.0:
             allocated_w = round(allocated_w * self._ros2_throttle_pulse, 1)
+
+        if twin_active:
+            self._channel_draw[ch_id] = round(allocated_w, 1)
+            return self._channel_draw[ch_id]
 
         if ch_id not in self._channel_draw:
             self._channel_draw[ch_id] = allocated_w
@@ -234,21 +238,43 @@ class ROS2BatterySource(RealHardwareSource):
             twin_ctx.get("phase") if twin_active else None,
         )
 
+        twin_draws: dict[str, float] = {}
+        if twin_active and tel and tel.channel_draws:
+            twin_draws = {str(k): float(v) for k, v in tel.channel_draws.items()}
+
         for ch in self._power_channels:
             ch_id = ch.get("id")
             max_w = ch.get("max_draw_w", 30)
             current = self._channel_draw.get(ch_id)
-            if ch_id == "Cooling":
-                mission_target = self._mission.target_draw(ch_id, max_w, current)
-                target = max(mission_target, cooling_target)
+            if twin_active and twin_draws:
+                if ch_id in twin_draws:
+                    requested[ch_id] = round(twin_draws[ch_id], 1)
+                elif ch_id == "Cooling":
+                    requested[ch_id] = round(cooling_target, 1)
+                else:
+                    requested[ch_id] = round(float(current or 0.0), 1)
             else:
-                target = self._mission.target_draw(ch_id, max_w, current)
-            requested[ch_id] = self._request_draw(ch_id, target)
+                if ch_id == "Cooling":
+                    mission_target = self._mission.target_draw(ch_id, max_w, current)
+                    target = max(mission_target, cooling_target)
+                else:
+                    target = self._mission.target_draw(ch_id, max_w, current)
+                requested[ch_id] = self._request_draw(ch_id, target)
             channel_meta[ch_id] = {"max_w": max_w, "voltage": ch.get("nominal_voltage", 48)}
 
         allocation = self._allocator.allocate(
             self._mission.task_id, requested, prediction=pre_prediction
         )
+        if twin_active and twin_draws:
+            allocation["requested"] = dict(requested)
+            for ch_id, watts in twin_draws.items():
+                if ch_id in allocation.get("allocated", {}):
+                    allocation["allocated"][ch_id] = round(watts, 1)
+            if "Cooling" in requested and "Cooling" in allocation.get("allocated", {}):
+                allocation["allocated"]["Cooling"] = requested["Cooling"]
+            allocation["total_allocated_w"] = round(
+                sum(allocation.get("allocated", {}).values()), 1
+            )
         total_draw = allocation["total_allocated_w"]
 
         self._predictor.update(total_draw)
@@ -287,11 +313,17 @@ class ROS2BatterySource(RealHardwareSource):
             self.prediction_status["loop_forecast"] = loop_forecast
             self.mission_info["loop_forecast"] = loop_forecast
         if twin_active and twin_ctx.get("phase"):
+            live_draw = (
+                round(sum(twin_draws.values()), 1)
+                if twin_draws
+                else None
+            )
             self.simulation_status = status_for_external_twin(
                 self._mission,
                 twin_ctx.get("phase"),
                 twin_ctx.get("gait"),
                 source=twin_ctx.get("source", "webots"),
+                live_draw_w=live_draw,
             )
         else:
             self.simulation_status = self._simulator.status(self._mission)
@@ -439,7 +471,7 @@ class ROS2BatterySource(RealHardwareSource):
             max_w = meta["max_w"]
             voltage = meta["voltage"]
             allocated_w = allocation["allocated"].get(ch_id, 0.0)
-            draw_w = self._apply_allocated_draw(ch_id, allocated_w)
+            draw_w = self._apply_allocated_draw(ch_id, allocated_w, twin_active=twin_active)
             amps = round(draw_w / voltage, 2) if voltage > 0 else 0.0
             req_w = allocation["requested"].get(ch_id, draw_w)
             throttled = ch_id in throttled_set or allocated_w < req_w - 0.05

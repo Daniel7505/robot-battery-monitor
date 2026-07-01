@@ -1,7 +1,7 @@
 """
 ButlerBot Webots controller — WASD teleop + onboard power agent HUD.
 
-WASD drive (click the 3D view first). Space = stop. R = toggle auto mission loop.
+I/J/K/L drive (click the 3D view first). Space = ABS stop. R = toggle auto mission loop.
 Posts joint states + power estimates to the twin bridge; agent throttles when
 battery or heat limits are exceeded.
 """
@@ -69,6 +69,12 @@ SENSOR_NAMES = [
 MAX_WHEEL_V = 10.0
 MAX_JOINT_V = 1.8
 WHEEL_RADIUS_M = 0.08
+MAX_BRAKE_WHEEL_V = 12.0
+MIN_BRAKE_WHEEL_V = 1.5
+STOP_SPEED_M_S = 0.02
+STOP_WHEEL_RAD_S = 0.08
+BRAKE_COAST_PHASE_S = 0.15
+MAX_BRAKE_DURATION_S = 12.0
 
 KEY_W = ord("W")
 KEY_A = ord("A")
@@ -98,19 +104,188 @@ class SpeedEstimator:
     def __init__(self) -> None:
         self._prev_pos: list[float] | None = None
 
-    def estimate(self, gps: GPS, dt: float) -> float:
+    def estimate_motion(self, gps: GPS, dt: float) -> tuple[float, float]:
+        """Return (scalar speed m/s, signed forward speed along +X)."""
         try:
             pos = list(gps.getValues())
         except Exception:
-            return 0.0
+            return 0.0, 0.0
         if self._prev_pos is not None and dt > 0:
             dx = pos[0] - self._prev_pos[0]
             dy = pos[1] - self._prev_pos[1]
-            speed = math.sqrt(dx * dx + dy * dy) / max(dt, 0.001)
+            inv_dt = 1.0 / max(dt, 0.001)
+            forward = dx * inv_dt
+            speed = math.sqrt(dx * dx + dy * dy) * inv_dt
             self._prev_pos = pos
-            return round(speed, 3)
+            if _teleop is not None:
+                return _teleop.sanitize_motion(speed, forward)
+            speed = min(speed, 0.85)
+            forward = max(-0.85, min(0.85, forward))
+            return round(speed, 3), round(forward, 3)
         self._prev_pos = pos
+        return 0.0, 0.0
+
+    def estimate(self, gps: GPS, dt: float) -> float:
+        speed, _ = self.estimate_motion(gps, dt)
+        return speed
+
+
+def _wheel_rad_s(
+    sensors: dict[str, PositionSensor],
+    sensor_name: str,
+    prev_pos: dict[str, float],
+    dt: float,
+) -> float:
+    sensor = sensors[sensor_name]
+    pos = float(sensor.getValue())
+    prev = prev_pos.get(sensor_name, pos)
+    prev_pos[sensor_name] = pos
+    if dt <= 0:
         return 0.0
+    return (pos - prev) / dt
+
+
+def _symmetric_brake_cmd(motion_sign: float, speed_m_s: float) -> float:
+    """Latched-direction gentle brake — same cmd on both wheels."""
+    if _teleop is not None:
+        return _teleop.abs_brake_wheel_velocity_latched(motion_sign, speed_m_s)
+    if motion_sign == 0.0 or speed_m_s < STOP_SPEED_M_S:
+        return 0.0
+    equiv = speed_m_s / WHEEL_RADIUS_M
+    cap = MAX_BRAKE_WHEEL_V if speed_m_s >= 0.45 else 9.0
+    mag = max(MIN_BRAKE_WHEEL_V, min(cap, equiv * 1.05))
+    return -motion_sign * mag
+
+
+class AbsBrakeController:
+    """Coast-first braking — latch direction so GPS jitter can't reverse motors."""
+
+    def __init__(self) -> None:
+        self.active = False
+        self._prev_wheel_pos: dict[str, float] = {}
+        self._elapsed_s = 0.0
+        self._motion_sign = 0.0
+        self._spin_mode = False
+
+    def request(
+        self,
+        forward_m_s: float = 0.0,
+        speed_m_s: float = 0.0,
+        *,
+        last_left_v: float = 0.0,
+        last_right_v: float = 0.0,
+        left_wv: float = 0.0,
+        right_wv: float = 0.0,
+    ) -> None:
+        self.active = True
+        self._elapsed_s = 0.0
+        if _teleop is not None:
+            self._spin_mode = _teleop.is_spin_brake(
+                last_left_v=last_left_v,
+                last_right_v=last_right_v,
+                left_wheel_rad_s=left_wv,
+                right_wheel_rad_s=right_wv,
+                speed_m_s=speed_m_s,
+            )
+            self._motion_sign = _teleop.latch_brake_motion_sign(
+                forward_m_s,
+                speed_m_s,
+                last_left_v=last_left_v,
+                last_right_v=last_right_v,
+            )
+        elif abs(forward_m_s) >= STOP_SPEED_M_S:
+            self._spin_mode = False
+            self._motion_sign = math.copysign(1.0, forward_m_s)
+        elif speed_m_s >= STOP_SPEED_M_S:
+            self._spin_mode = False
+            self._motion_sign = 1.0
+        else:
+            self._spin_mode = abs(left_wv) > 0.12 and abs(right_wv) > 0.12 and left_wv * right_wv < 0
+            self._motion_sign = 0.0
+
+    def clear(self) -> None:
+        self.active = False
+        self._elapsed_s = 0.0
+        self._motion_sign = 0.0
+        self._spin_mode = False
+
+    def wheel_rad_s(self, sensors: dict[str, PositionSensor], sensor_name: str, dt: float) -> float:
+        return _wheel_rad_s(sensors, sensor_name, self._prev_wheel_pos, dt)
+
+    def apply(
+        self,
+        motors: dict[str, Motor],
+        *,
+        speed_m_s: float,
+        forward_m_s: float,
+        left_wv: float,
+        right_wv: float,
+        dt: float,
+    ) -> bool:
+        """Apply ABS braking. Returns True when fully stopped."""
+        if not self.active:
+            return False
+
+        self._elapsed_s += dt
+        if self._spin_mode:
+            stopped = (
+                _teleop.motion_settled(speed_m_s, left_wv, right_wv)
+                if _teleop is not None
+                else (
+                    speed_m_s < STOP_SPEED_M_S
+                    and abs(left_wv) < STOP_WHEEL_RAD_S
+                    and abs(right_wv) < STOP_WHEEL_RAD_S
+                )
+            )
+        else:
+            stopped = (
+                _teleop.abs_brake_complete(forward_m_s, speed_m_s)
+                if _teleop is not None
+                else speed_m_s < STOP_SPEED_M_S and abs(forward_m_s) < STOP_SPEED_M_S
+            )
+        if stopped:
+            self.active = False
+            _halt_wheels(motors)
+            print(f"ABS brake complete @ speed={speed_m_s:.3f} m/s")
+            return True
+
+        coast_phase = (
+            _teleop.BRAKE_COAST_PHASE_S if _teleop is not None else BRAKE_COAST_PHASE_S
+        )
+        coast_only = (
+            _teleop.should_coast_before_brake(speed_m_s)
+            if _teleop is not None
+            else speed_m_s < 0.12
+        )
+        if coast_only and self._elapsed_s < coast_phase:
+            _halt_wheels(motors)
+            return False
+
+        if self._elapsed_s >= MAX_BRAKE_DURATION_S:
+            _halt_wheels(motors)
+            if speed_m_s < STOP_SPEED_M_S:
+                self.active = False
+                print(f"ABS brake complete @ speed={speed_m_s:.3f} m/s")
+                return True
+            return False
+
+        if self._spin_mode:
+            _halt_wheels(motors)
+            return False
+
+        cmd = _symmetric_brake_cmd(self._motion_sign, speed_m_s)
+        for wheel in ("left_wheel", "right_wheel"):
+            motor = motors[wheel]
+            motor.setPosition(float("inf"))
+            motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
+        return False
+
+
+_DRIVE_KEY_CODES = frozenset({
+    KEY_W, KEY_A, KEY_S, KEY_D,
+    KEY_I, KEY_J, KEY_K, KEY_L,
+    KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+})
 
 
 class KeyTracker:
@@ -131,6 +306,13 @@ class KeyTracker:
             key = keyboard.getKey()
         return set(self._active), pressed
 
+    def active_keys(self) -> set[int]:
+        return set(self._active)
+
+    def cancel_drive_keys(self) -> None:
+        """Drop held drive keys — Space stop should not fight still-held I/J/K/L."""
+        self._active -= _DRIVE_KEY_CODES
+
 
 def _clamp(value: float, limit: float) -> float:
     return max(-limit, min(limit, value))
@@ -145,12 +327,36 @@ def _safe_imu_roll(imu: InertialUnit | None) -> float:
         return 0.0
 
 
+def _halt_wheels(motors: dict[str, Motor]) -> None:
+    """Zero wheel torque — avoid position-hold snap-back to old encoder angles."""
+    for wheel in ("left_wheel", "right_wheel"):
+        motor = motors[wheel]
+        motor.setPosition(float("inf"))
+        motor.setVelocity(0.0)
+
+
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
     scale = max(0.0, min(1.0, throttle))
     for side, cmd in (("left_wheel", left_v * scale), ("right_wheel", right_v * scale)):
         motor = motors[side]
         motor.setPosition(float("inf"))
         motor.setVelocity(_clamp(cmd, MAX_WHEEL_V))
+
+
+def _apply_wheel_command(
+    motors: dict[str, Motor],
+    sensors: dict[str, PositionSensor],
+    left_v: float,
+    right_v: float,
+    throttle: float,
+) -> None:
+    scale = max(0.0, min(1.0, throttle))
+    left_cmd = _clamp(left_v * scale, MAX_WHEEL_V)
+    right_cmd = _clamp(right_v * scale, MAX_WHEEL_V)
+    if abs(left_cmd) < 0.01 and abs(right_cmd) < 0.01:
+        _halt_wheels(motors)
+    else:
+        _set_drive(motors, left_v, right_v, throttle)
 
 
 def _hold_neutral_upper_body(motors: dict[str, Motor]) -> None:
@@ -302,6 +508,8 @@ def _draw_hud(
     teleop_active: bool,
     auto_loop: bool,
     api_source: str = "",
+    speed_m_s: float = 0.0,
+    braking: bool = False,
 ) -> None:
     display.setAlpha(0.92)
     display.setColor(0x080C12)
@@ -328,7 +536,18 @@ def _draw_hud(
         mode = "TELEOP" if teleop_active else ("AUTO LOOP" if auto_loop else "STANDBY")
     display.drawText(mode, 12, 88)
     display.drawText(f"Agent cap {throttle * 100:.0f}%", 12, 106)
-    display.drawText("Arrows/IJKL drive (not WASD)", 12, 124)
+    speed_kmh = speed_m_s * 3.6
+    speed_mph = speed_m_s * 2.237
+    display.setColor(0x66EEFF if not braking else 0xFFAA44)
+    display.drawText(f"{speed_m_s:.2f} m/s", 168, 22)
+    display.setColor(0xAABBCC)
+    display.drawText(f"{speed_kmh:.1f} km/h", 168, 42)
+    display.drawText(f"{speed_mph:.1f} mph", 168, 58)
+    if braking:
+        display.setColor(0xFF8844)
+        display.drawText("BRAKING", 168, 78)
+    display.setColor(0x8899AA)
+    display.drawText("I/J/K/L drive · Space stop", 12, 124)
 
     if message:
         display.setColor(0x3A1808)
@@ -397,10 +616,12 @@ def _format_pose(gps: GPS) -> str:
 def _run_loop(robot: Robot, opts: dict) -> None:
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
-    state_poll_every = max(publish_every * 2, int(1.0 * 1000 / timestep))
+    # Poll teleop/stop often — 1s latency made dashboard Stop feel like a slow fade.
+    state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
     motors, sensors, gps, imu, keyboard, hud = _init_devices(robot, timestep)
     speed_estimator = SpeedEstimator()
     key_tracker = KeyTracker()
+    abs_brake = AbsBrakeController()
 
     phase_idx = 0
     phase_elapsed = 0.0
@@ -419,11 +640,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     cached_api_right = 0.0
     cached_api_source = ""
     last_api_sig = ""
+    last_stop_epoch = 0.0
     drive_log_elapsed = 0.0
+    last_teleop_left = 0.0
+    last_teleop_right = 0.0
 
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
-    print("Teleop: Arrow keys or I/J/K/L — click the FLOOR (not the robot), Escape deselects gizmos")
+    print("Teleop: Arrow keys or I/J/K/L — Space = stop. Click the FLOOR (not the robot)")
     print("Or use Dashboard: Drive Forward (API) under the twin panel")
 
     while robot.step(timestep) != -1:
@@ -439,14 +663,52 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 auto_loop = not auto_loop
                 print(f"Auto mission loop: {'ON' if auto_loop else 'OFF'}")
 
-            teleop_keys = keys - {KEY_R}
-            if KEY_SPACE in teleop_keys:
-                teleop_keys.discard(KEY_SPACE)
-            user_driving = bool(teleop_keys)
+            speed_m_s, forward_m_s = speed_estimator.estimate_motion(gps, dt)
+            left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
+            right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
+
+            settled = (
+                _teleop.motion_settled(speed_m_s, left_wv_early, right_wv_early)
+                if _teleop is not None
+                else speed_m_s < 0.08
+            )
+
+            if KEY_SPACE in pressed:
+                abs_brake.request(
+                    forward_m_s,
+                    speed_m_s,
+                    last_left_v=last_teleop_left,
+                    last_right_v=last_teleop_right,
+                    left_wv=left_wv_early,
+                    right_wv=right_wv_early,
+                )
+                last_teleop_left = 0.0
+                last_teleop_right = 0.0
+                key_tracker.cancel_drive_keys()
+                keys = key_tracker.active_keys()
+            if abs_brake.active:
+                key_tracker.cancel_drive_keys()
+                keys = key_tracker.active_keys()
+            teleop_keys = keys - {KEY_R, KEY_SPACE}
+            stop_pressed = KEY_SPACE in pressed
+            if teleop_keys and not settled and not abs_brake.active:
+                abs_brake.request(
+                    forward_m_s,
+                    speed_m_s,
+                    last_left_v=last_teleop_left,
+                    last_right_v=last_teleop_right,
+                    left_wv=left_wv_early,
+                    right_wv=right_wv_early,
+                )
+                last_teleop_left = 0.0
+                last_teleop_right = 0.0
+                key_tracker.cancel_drive_keys()
+                teleop_keys = set()
+            user_driving = bool(teleop_keys) and not abs_brake.active
 
             phase = PHASES[phase_idx]
-            phase_name = "teleop" if user_driving else phase["name"]
-            gait = "drive" if user_driving else phase["gait"]
+            phase_name = phase["name"]
+            gait = phase["gait"]
 
             if not user_driving and auto_loop:
                 phase_elapsed += dt
@@ -474,6 +736,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         thermal_c = 22.0
                     print(f"Battery replenished → {battery_pct:.0f}% (dashboard command)")
                 if api_cmd.get("active"):
+                    abs_brake.clear()
                     cached_api_left = float(api_cmd.get("left_v") or 0.0)
                     cached_api_right = float(api_cmd.get("right_v") or 0.0)
                     cached_api_source = str(api_cmd.get("source") or "api")
@@ -485,19 +748,70 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"L={cached_api_left} R={cached_api_right}"
                         )
                 else:
+                    api_source = str(api_cmd.get("source") or "")
+                    stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
+                    if stop_epoch > last_stop_epoch:
+                        last_stop_epoch = stop_epoch
+                        print("External drive stop — ABS braking")
+                        abs_brake.request(
+                            forward_m_s,
+                            speed_m_s,
+                            last_left_v=last_teleop_left,
+                            last_right_v=last_teleop_right,
+                            left_wv=left_wv_early,
+                            right_wv=right_wv_early,
+                        )
+                    elif api_source == "stop" and cached_api_source != "stop":
+                        print("External drive stop — ABS braking")
+                        abs_brake.request(
+                            forward_m_s,
+                            speed_m_s,
+                            last_left_v=last_teleop_left,
+                            last_right_v=last_teleop_right,
+                            left_wv=left_wv_early,
+                            right_wv=right_wv_early,
+                        )
                     cached_api_left = 0.0
                     cached_api_right = 0.0
-                    cached_api_source = ""
-                    last_api_sig = ""
+                    cached_api_source = api_source
+                    if api_source != "stop":
+                        last_api_sig = ""
+
+            if stop_pressed:
+                print("Keyboard stop — ABS braking")
+
+            if user_driving:
+                abs_brake.clear()
+
+            left_wv = left_wv_early
+            right_wv = right_wv_early
+            wheel_vels = {"left_wheel": left_wv, "right_wheel": right_wv}
 
             api_driving = abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
             if api_driving:
+                abs_brake.clear()
+            if abs_brake.active:
+                abs_brake.apply(
+                    motors,
+                    speed_m_s=speed_m_s,
+                    forward_m_s=forward_m_s,
+                    left_wv=left_wv,
+                    right_wv=right_wv,
+                    dt=dt,
+                )
+                left_v = right_v = 0.0
+                user_driving = False
+                gait = "stand"
+                phase_name = "standby"
+                _hold_neutral_upper_body(motors)
+            elif api_driving:
                 user_driving = True
                 left_v, right_v = cached_api_left, cached_api_right
                 _set_drive(motors, left_v, right_v, 1.0)
                 _hold_neutral_upper_body(motors)
             elif user_driving:
                 left_v, right_v = _teleop_drive(teleop_keys)
+                last_teleop_left, last_teleop_right = left_v, right_v
                 _set_drive(motors, left_v, right_v, 1.0)
                 _hold_neutral_upper_body(motors)
             elif auto_loop:
@@ -506,37 +820,72 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 )
             else:
                 left_v = right_v = 0.0
-                _set_drive(motors, 0.0, 0.0, 1.0)
+                _halt_wheels(motors)
                 _hold_neutral_upper_body(motors)
 
-            joints = _read_joints(motors, sensors)
+            joints = _read_joints(motors, sensors, wheel_vels=wheel_vels)
             total_draw = sum(j.get("power_w", 0) for j in joints)
-            speed_m_s = speed_estimator.estimate(gps, dt)
             wheel_motion = max(
                 abs(j.get("velocity", 0.0))
                 for j in joints
                 if "wheel" in j.get("name", "")
             )
-            moving = user_driving or speed_m_s > 0.04 or wheel_motion > 0.25
+            moving = (
+                speed_m_s > 0.04
+                or wheel_motion > 0.25
+                or abs_brake.active
+            )
+            if user_driving and moving and not abs_brake.active:
+                gait = "drive"
+                phase_name = "teleop"
+            elif user_driving or api_driving:
+                gait = "stand"
+                phase_name = "standby"
             motion_factor = 1.0 if moving else 0.0
-            drain_scale = (1.0 if user_driving else 0.25) if moving else 0.05
-            battery_pct = max(5.0, battery_pct - total_draw * dt / 480.0 * 100.0 * 0.004 * drain_scale)
+            if abs_brake.active:
+                drain_scale = 0.1
+            elif moving:
+                drain_scale = 1.0 if user_driving else 0.2
+            else:
+                drain_scale = 0.05
+            if _teleop is not None:
+                battery_pct = max(
+                    5.0,
+                    battery_pct
+                    - _teleop.battery_drain_pct(total_draw, dt, drain_scale=drain_scale),
+                )
+            else:
+                battery_pct = max(
+                    5.0,
+                    battery_pct - (total_draw * dt) / (480.0 * 3600.0) * 100.0 * 50.0 * drain_scale,
+                )
             thermal_c = _update_thermal(thermal_c, total_draw, dt, motion_factor=motion_factor)
 
             local_throttle, local_msg = _local_throttle(battery_pct, thermal_c)
-            throttle_factor = _merge_throttle(local_throttle, remote_throttle)
+            remote_for_teleop = (
+                None if (user_driving and not api_driving) else remote_throttle
+            )
+            throttle_factor = _merge_throttle(local_throttle, remote_for_teleop)
             agent_message = local_msg if throttle_factor < 1.0 else None
 
-            if user_driving:
-                _set_drive(motors, left_v, right_v, throttle_factor)
+            if user_driving and not abs_brake.active:
+                if api_driving:
+                    _set_drive(motors, left_v, right_v, 1.0)
+                else:
+                    _apply_wheel_command(motors, sensors, left_v, right_v, throttle_factor)
 
             if user_driving:
                 drive_log_elapsed += dt
                 if drive_log_elapsed >= 2.0:
                     drive_log_elapsed = 0.0
+                    throttle_note = (
+                        f" agent={throttle_factor:.0%}"
+                        if throttle_factor < 0.995
+                        else ""
+                    )
                     print(
                         f"Driving L={left_v:.1f} R={right_v:.1f} "
-                        f"@ {_format_pose(gps)} throttle={throttle_factor:.0%}"
+                        f"@ {_format_pose(gps)} {speed_m_s:.2f} m/s{throttle_note}"
                     )
             else:
                 drive_log_elapsed = 0.0
@@ -551,6 +900,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     teleop_active=user_driving,
                     api_source=cached_api_source if api_driving else "",
                     auto_loop=auto_loop and not user_driving,
+                    speed_m_s=speed_m_s,
+                    braking=abs_brake.active,
                 )
 
             if tick % publish_every == 0:
@@ -566,6 +917,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "thermal_c": round(thermal_c, 2),
                         "teleop_active": user_driving,
                         "agent_throttle": throttle_factor,
+                        "braking": abs_brake.active,
                     },
                 )
                 result = publish_telemetry(payload, dashboard)
@@ -605,7 +957,12 @@ def _estimate_joint_power(motor_name: str, velocity: float, torque: float) -> fl
     return round(idle + abs(torque * velocity) * scale, 2)
 
 
-def _read_joints(motors: dict[str, Motor], sensors: dict[str, PositionSensor]) -> list[dict]:
+def _read_joints(
+    motors: dict[str, Motor],
+    sensors: dict[str, PositionSensor],
+    *,
+    wheel_vels: dict[str, float] | None = None,
+) -> list[dict]:
     mapping = {
         "left_wheel": "left_wheel_sensor",
         "right_wheel": "right_wheel_sensor",
@@ -618,11 +975,16 @@ def _read_joints(motors: dict[str, Motor], sensors: dict[str, PositionSensor]) -
         motor = motors[motor_name]
         sensor = sensors[sensor_name]
         try:
-            velocity = motor.getVelocity()
             position = sensor.getValue()
         except Exception:
-            velocity = 0.0
             position = 0.0
+        if "wheel" in motor_name and wheel_vels is not None:
+            velocity = float(wheel_vels.get(motor_name, 0.0))
+        else:
+            try:
+                velocity = motor.getVelocity()
+            except Exception:
+                velocity = 0.0
         torque = abs(velocity) * 0.45
         if hasattr(motor, "getTorqueFeedback"):
             try:
@@ -641,17 +1003,20 @@ def _read_joints(motors: dict[str, Motor], sensors: dict[str, PositionSensor]) -
 
 
 def _read_pose(gps: GPS, imu: InertialUnit) -> dict:
+    pose: dict = {}
     try:
         pos = gps.getValues()
-        rpy = imu.getRollPitchYaw()
-        return {
-            "x_m": round(pos[0], 3),
-            "y_m": round(pos[1], 3),
-            "z_m": round(pos[2], 3),
-            "heading_rad": round(rpy[2], 4),
-        }
+        pose["x_m"] = round(pos[0], 3)
+        pose["y_m"] = round(pos[1], 3)
+        pose["z_m"] = round(pos[2], 3)
     except Exception:
-        return {}
+        return pose
+    try:
+        rpy = imu.getRollPitchYaw()
+        pose["heading_rad"] = round(rpy[2], 4)
+    except Exception:
+        pass
+    return pose
 
 
 if __name__ == "__main__":

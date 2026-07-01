@@ -3,6 +3,7 @@ from src.twin.webots_power import (
     build_webots_telemetry,
     estimate_motor_power_w,
     gait_to_task,
+    motion_scale,
     motor_powers_from_joints,
     stress_multiplier,
 )
@@ -72,9 +73,44 @@ def test_stress_multiplier_increases_drive_transit_draw():
         {"left_wheel": 10.0},
         gait="drive",
         phase="drive_transit",
+        speed_m_s=0.45,
+        joints=[{"name": "left_wheel", "velocity": 5.0}],
     )
     assert stress_multiplier(gait="drive", phase="drive_transit") > 2.0
     assert stressed["Legs"] > 20.0
+
+
+def test_idle_teleop_draw_lower_than_moving_drive():
+    idle_joints = [
+        {"name": "left_wheel", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_wheel", "velocity": 0.0, "torque": 0.0},
+        {"name": "torso_joint", "velocity": 0.0, "torque": 0.0},
+        {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
+    ]
+    moving_joints = [
+        {"name": "left_wheel", "velocity": 4.5, "torque": 1.2},
+        {"name": "right_wheel", "velocity": 4.5, "torque": 1.2},
+        {"name": "torso_joint", "velocity": 0.0, "torque": 0.0},
+        {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
+    ]
+    idle_payload = build_webots_telemetry(
+        joints=idle_joints, gait="stand", phase="standby", speed_m_s=0.0, battery_pct=90.0
+    )
+    moving_payload = build_webots_telemetry(
+        joints=moving_joints,
+        gait="drive",
+        phase="teleop",
+        speed_m_s=0.42,
+        battery_pct=90.0,
+    )
+    assert moving_payload["power"]["total_draw_w"] > idle_payload["power"]["total_draw_w"] + 4.0
+
+
+def test_motion_scale_zero_when_stationary():
+    assert motion_scale(speed_m_s=0.0, joints=[{"name": "left_wheel", "velocity": 0.0}]) <= 0.2
+    assert motion_scale(speed_m_s=0.5, joints=[{"name": "left_wheel", "velocity": 5.0}]) >= 0.9
 
 
 def test_webots_adapter_accepts_controller_payload():

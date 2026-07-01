@@ -43,6 +43,14 @@ def test_thermal_rises_under_load():
     assert t1 > t0
 
 
+def test_thermal_stays_low_during_short_teleop():
+    """Short drive sessions should not hit agent throttle thresholds."""
+    t = 22.0
+    for _ in range(200):
+        t = update_thermal_c(t, draw_w=35.0, dt_s=0.032, motion_factor=1.0)
+    assert t < THERMAL_WARN_C
+
+
 def test_thermal_idle_stays_near_ambient():
     t = 22.0
     for _ in range(80):

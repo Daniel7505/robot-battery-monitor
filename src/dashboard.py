@@ -210,6 +210,10 @@ HTML_TEMPLATE = '''
         .twin-control-stat { background: #0d1117; border: 1px solid #2a3a4a; border-radius: 6px; padding: 8px 12px; }
         .twin-control-stat strong { color: #cde; display: block; margin-top: 2px; }
         .twin-control-stat span { color: #678; font-size: 0.82em; }
+        .speedometer-card { grid-column: 1 / -1; text-align: center; padding: 14px 12px !important; background: #0a121c !important; border-color: #3a5a7a !important; }
+        .speedometer-card .speed-value { font-size: 2.1em; font-weight: bold; color: #6ef; letter-spacing: 0.03em; line-height: 1.1; }
+        .speedometer-card .speed-sub { font-size: 0.9em; color: #8ab; margin-top: 4px; }
+        .speedometer-card.braking .speed-value { color: #fa6; }
         .twin-influence-bar { padding: 10px 14px; margin: 10px 0; border-radius: 6px; font-size: 0.88em; background: #111; border: 1px solid #333; color: #bbb; }
         .twin-influence-bar.highlight { background: #1a1408; border-color: #a80; color: #fc8; animation: flash-entry 1.5s ease-out; }
         .twin-influence-bar.critical { background: #1a0808; border-color: #a33; color: #f88; }
@@ -317,7 +321,12 @@ HTML_TEMPLATE = '''
             <div class="twin-control-stat"><span>PMS Task</span><strong id="twin-pms-task">—</strong></div>
             <div class="twin-control-stat"><span>Agent Posture</span><strong id="twin-agent-posture">—</strong></div>
             <div class="twin-control-stat"><span>Allocation</span><strong id="twin-alloc-status">—</strong></div>
-            <div class="twin-control-stat"><span>Speed / Position</span><strong id="twin-loco-meta">—</strong></div>
+            <div class="speedometer-card" id="twin-speedometer-card">
+                <span>Speedometer (twin GPS)</span>
+                <div class="speed-value" id="twin-speedometer">0.00 m/s</div>
+                <div class="speed-sub" id="twin-speedometer-sub">0.0 mph · 0.0 km/h · pose —</div>
+            </div>
+            <div class="twin-control-stat"><span>Position</span><strong id="twin-loco-meta">—</strong></div>
             <div class="twin-control-stat"><span>Loop Forecast</span><strong id="twin-loop-forecast">—</strong></div>
             <div class="twin-control-stat"><span>Hardware Profile</span><strong id="twin-hw-profile">—</strong></div>
         </div>
@@ -658,7 +667,22 @@ HTML_TEMPLATE = '''
         const throttled = (tc && tc.throttled_channels || []).join(', ');
         document.getElementById('twin-alloc-status').innerText = allocSt + util
             + (throttled ? ' · ' + throttled : '');
-        document.getElementById('twin-loco-meta').innerText = active ? `${speed} · ${pose}` : '—';
+        const speedNum = tc && tc.speed_m_s != null ? Number(tc.speed_m_s) : 0;
+        const speedo = document.getElementById('twin-speedometer');
+        const speedoSub = document.getElementById('twin-speedometer-sub');
+        const speedoCard = document.getElementById('twin-speedometer-card');
+        if (active && !Number.isNaN(speedNum)) {
+            const mph = (speedNum * 2.237).toFixed(1);
+            const kmh = (speedNum * 3.6).toFixed(1);
+            speedo.innerText = speedNum.toFixed(2) + ' m/s';
+            speedoSub.innerText = `${mph} mph · ${kmh} km/h · pose ${pose}`;
+            speedoCard.classList.toggle('braking', !!(tc && tc.braking));
+        } else {
+            speedo.innerText = '0.00 m/s';
+            speedoSub.innerText = '—';
+            speedoCard.classList.remove('braking');
+        }
+        document.getElementById('twin-loco-meta').innerText = active ? pose : '—';
 
         const loopFc = (tc && tc.loop_forecast) || {};
         const loopEl = document.getElementById('twin-loop-forecast');
@@ -955,7 +979,13 @@ HTML_TEMPLATE = '''
         postTwinCommand({ drive: { left: 4.5, right: -4.5, duration_s: 3 }, source: 'dashboard' });
     });
     document.getElementById('teleop-stop-btn').addEventListener('click', () => {
-        postTwinCommand({ drive_stop: true, source: 'dashboard' });
+        postTwinCommand({ drive_stop: true, source: 'dashboard' })
+            .then(data => {
+                const hint = document.getElementById('pause-hint');
+                if (data.ok) hint.innerText = 'Stop sent — drive motors braking now';
+                else hint.innerText = 'Stop failed: ' + (data.errors || []).join(', ');
+            })
+            .catch(() => { document.getElementById('pause-hint').innerText = 'Stop request failed'; });
     });
 
     document.getElementById('demo-btn').addEventListener('click', () => {
@@ -1794,16 +1824,19 @@ def _build_battery_payload():
     }
 
 def broadcast_updates():
-    """Stable broadcaster with strong debug"""
-    print("[DEBUG] WebSocket broadcaster ACTIVE - sending every 4 seconds")
+    """Push dashboard updates — faster when Webots twin is live (display only, not robot control)."""
+    print("[DEBUG] WebSocket broadcaster ACTIVE")
     while True:
+        interval_s = 2.0
         try:
             payload = _build_battery_payload()
             socketio.emit('battery_update', payload)
-            print(f"[DEBUG] Emitted update → Main: {payload.get('main_battery')}%")  # Remove later
+            twin = payload.get("twin") or {}
+            if twin.get("external_active"):
+                interval_s = 0.5
         except Exception as e:
             print(f"[DEBUG] Broadcast error: {e}")
-        
-        time.sleep(4)
+
+        time.sleep(interval_s)
 if __name__ == "__main__":
     run_dashboard()

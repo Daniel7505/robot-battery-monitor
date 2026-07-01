@@ -120,6 +120,7 @@ def build_twin_control_status(bridge, hardware) -> dict:
 
     intervening = bool(agent.get("intervening") or agent.get("applied_actions"))
     stress = is_twin_stress_phase(phase)
+    sensors = (tel.raw.get("sensors") if tel and tel.raw else {}) or {}
 
     return {
         "active": external,
@@ -132,6 +133,7 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "gait": gait,
         "locomotion_mode": locomotion.get("mode", "wheeled"),
         "speed_m_s": speed,
+        "braking": bool(sensors.get("braking")),
         "pose": pose,
         "pms_task": pms_task,
         "pms_task_label": mission.get("task_label") or (profile.label if profile else pms_task),

@@ -129,6 +129,20 @@ def motor_powers_from_joints(
     return powers
 
 
+def motion_scale(*, speed_m_s: float = 0.0, joints: list[dict] | None = None) -> float:
+    """0–1 factor from measured motion — idle teleop should not use full drive stress."""
+    wheel_peak = 0.0
+    if joints:
+        for joint in joints:
+            name = str(joint.get("name", "")).lower()
+            if "wheel" not in name:
+                continue
+            wheel_peak = max(wheel_peak, abs(float(joint.get("velocity", 0.0))))
+    wheel_factor = min(1.0, wheel_peak / 2.5)
+    speed_factor = min(1.0, max(0.0, speed_m_s) / 0.28)
+    return max(0.15, max(wheel_factor, speed_factor))
+
+
 def stress_multiplier(*, gait: str = "stand", phase: str = "") -> float:
     """Combined gait/phase stress factor for Webots twin telemetry."""
     g = str(gait).lower()
@@ -140,13 +154,14 @@ def stress_multiplier(*, gait: str = "stand", phase: str = "") -> float:
     return _GAIT_STRESS.get(g, 1.0)
 
 
-def _compute_draw_w(gait: str, profile: dict) -> float:
+def _compute_draw_w(gait: str, profile: dict, *, speed_m_s: float = 0.0) -> float:
     compute = profile.get("compute") or {}
     idle_w = float(compute.get("idle_w", COMPUTE_IDLE_W))
     active_w = float(compute.get("active_w", COMPUTE_ACTIVE_W))
-    if gait in ("stand", "idle", "standby"):
+    if gait in ("stand", "idle", "standby") and speed_m_s < 0.06:
         return idle_w
-    return active_w
+    motion = min(1.0, max(0.0, speed_m_s) / 0.35)
+    return round(idle_w + (active_w - idle_w) * max(motion, 0.2), 2)
 
 
 def aggregate_channel_draws(
@@ -155,6 +170,8 @@ def aggregate_channel_draws(
     compute_w: float | None = None,
     gait: str = "stand",
     phase: str = "",
+    speed_m_s: float = 0.0,
+    joints: list[dict] | None = None,
     profile: dict | None = None,
 ) -> dict[str, float]:
     """Sum motor draws into Legs / Arms / Torso / Compute channels."""
@@ -168,16 +185,18 @@ def aggregate_channel_draws(
             channels[ch] = round(channels.get(ch, 0.0) + float(watts), 2)
 
     if compute_w is None:
-        compute_w = _compute_draw_w(gait, prof)
+        compute_w = _compute_draw_w(gait, prof, speed_m_s=speed_m_s)
     channels["Compute"] = round(compute_w, 2)
 
     mult = stress_multiplier(gait=gait, phase=phase)
     if mult > 1.0:
+        motion = motion_scale(speed_m_s=speed_m_s, joints=joints)
+        effective = 1.0 + (mult - 1.0) * motion
         for ch_id in list(channels.keys()):
             if ch_id == "Compute":
-                channels[ch_id] = round(channels[ch_id] * min(mult, 1.3), 2)
+                channels[ch_id] = round(channels[ch_id] * min(effective, 1.3), 2)
             else:
-                channels[ch_id] = round(channels[ch_id] * mult, 2)
+                channels[ch_id] = round(channels[ch_id] * effective, 2)
 
     for ch_id, total in list(channels.items()):
         cap = channel_caps.get(ch_id, {})
@@ -212,7 +231,12 @@ def build_webots_telemetry(
 
     motor_power_w = motor_power_w or motor_powers_from_joints(joints, prof)
     channel_draws = aggregate_channel_draws(
-        motor_power_w, gait=gait, phase=phase, profile=prof
+        motor_power_w,
+        gait=gait,
+        phase=phase,
+        speed_m_s=speed_m_s,
+        joints=joints,
+        profile=prof,
     )
     task = gait_to_task(gait)
     norm_phase = normalize_phase_name(phase) if phase else phase

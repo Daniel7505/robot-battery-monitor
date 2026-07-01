@@ -83,18 +83,13 @@ def fetch_twin_state(base_url: str | None = None) -> dict:
 
 
 def remote_throttle_factor(state: dict) -> float | None:
-    """Extract agent/PMS throttle only when the dashboard agent is actively intervening."""
+    """Dashboard agent throttle — not PMS allocation warnings (those caused 70% teleop cap)."""
     safety = state.get("safety") or {}
-    power = state.get("power") or {}
     agent = state.get("agent") or {}
-    intervening = bool(
-        safety.get("throttle_required")
-        or agent.get("intervening")
-        or power.get("status") == "throttled"
-    )
+    intervening = bool(safety.get("throttle_required") or agent.get("intervening"))
     if not intervening:
         return None
-    for source in (safety, agent, power):
+    for source in (safety, agent):
         raw = source.get("throttle_factor")
         if raw is None:
             continue
@@ -104,8 +99,6 @@ def remote_throttle_factor(state: dict) -> float | None:
             continue
         if 0.0 < factor < 1.0:
             return factor
-    if power.get("status") == "throttled":
-        return 0.7
     return None
 
 
@@ -117,6 +110,7 @@ def teleop_from_twin_state(state: dict) -> dict:
         "right_v": float(teleop.get("right_v") or 0.0),
         "active": bool(teleop.get("active")),
         "source": teleop.get("source") or "",
+        "stop_epoch": float(teleop.get("stop_epoch") or 0.0),
         "battery_pct": teleop.get("battery_pct"),
         "reset_thermal": bool(teleop.get("reset_thermal")),
     }

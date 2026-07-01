@@ -42,3 +42,16 @@ def test_drive_stop_clears_teleop():
     teleop = bridge.export_state(hw)["teleop"]
     assert teleop["active"] is False
     assert teleop["left_v"] == 0.0
+    assert teleop["source"] == "stop"
+    assert teleop.get("stop_epoch", 0) > 0
+
+
+def test_each_drive_stop_gets_new_stop_epoch():
+    reset_twin_bridge()
+    bridge = DigitalTwinBridge()
+    hw = ROS2BatterySource()
+    bridge.apply_command(hw, {"drive_stop": True})
+    first = bridge.export_state(hw)["teleop"]["stop_epoch"]
+    bridge.apply_command(hw, {"drive_stop": True})
+    second = bridge.export_state(hw)["teleop"]["stop_epoch"]
+    assert second > first

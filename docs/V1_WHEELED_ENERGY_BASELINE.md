@@ -54,8 +54,11 @@ Observed on live twin (profile-grounded model; short API / agent-script drive):
 
 **Manual / command teleop baseline (earlier same day):** idle Legs 5→4 W (after profile), drive peak 28 W, mission idle→moving→idle.
 
-**Agent/command script:** `python scripts/agent_short_drive.py`  
-Same twin command API as dashboard Drive buttons (not Webots keyboard). Expected: Legs rise, mission → moving, stop settles.
+**Agent/command scripts (same twin API as dashboard Drive buttons):**
+- Short (~2 ft): `python scripts/agent_short_drive.py`
+- Extended (forward → pause → optional turn → reverse → stop):  
+  `python scripts/agent_extended_drive.py`  
+  Use `--no-turn` to skip the in-place spin segment.
 
 ---
 

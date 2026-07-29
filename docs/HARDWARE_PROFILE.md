@@ -61,6 +61,7 @@ Idle should stay near **~5 W Legs / ~18 W total**. Drive should still show a **c
 
 # Same baseline: idle → short forward → stop
 # Expect: idle calm; drive Legs up; mission moving; stop returns toward idle
+# Longer mission: python scripts/agent_extended_drive.py
 ```
 
 Also: twin telemetry / export includes `robot.hardware_profile` and `battery_capacity_wh`.

@@ -2,7 +2,7 @@
 
 Snapshot of the **robot-battery-monitor** power stack after PowerFeed, throttle-loop fixes, mission-from-motion, and the grounded `butlerbot_wheeled` hardware profile.
 
-*Last verified: 2026-07-29 (live Webots + dashboard).*
+*Last verified: 2026-07-29 (live Webots + dashboard). Residual spin fixed at `9350d44`; human visual confirm stationary.*
 
 ---
 
@@ -76,11 +76,35 @@ Observed on live twin (profile-grounded model; short API / agent-script drive):
 
 | Topic | Note |
 |-------|------|
-| **Turn cost** | Pure rotation uses wheel rates (not GPS speed). Mission phase `teleop_turn` / gait `turn`. Residual spin after Forward→Turn→Stop fixed (spin-halt + wheel settle). |
-| **Mid-band** | P2: partial-load ^1.25 + soft over-cruise headroom + lighter gait stress; cruise ~21 W Legs, full ~26 W (under 28 W cap). |
-| **Stop settle** | ABS requires body *and* wheels settled; spin path always halts (no symmetric reverse on yaw). |
+| **Turn cost** | Pure rotation uses wheel rates (not GPS speed). Mission phase `teleop_turn` / gait `turn`. |
+| **Mid-band** | Offline cruise ~21 W Legs, full ~26 W under 28 W cap; live full teleop may still approach channel max (28 W). |
+| **Stop settle** | ABS: both hubs + yaw quiet; hard-zero both wheels; never `setPosition(NaN)`. See residual-spin note below. |
 | **Agent during drive** | Can go cautious and briefly throttle; clears when idle — not the old latch loop. |
 | **Not a vendor BOM** | Specs are public-class averages for interpretability, not a purchase list. |
+
+---
+
+## Residual left-wheel spin (fixed 2026-07-29, `9350d44`)
+
+**Symptom (invalidated earlier PASS):** robot visibly spinning on the **left wheel** while dashboard reported **speed ≈ 0**, **standby/idle**, **Legs ~4 W**.
+
+**Root cause:**
+1. **GPS-only “settled”** — GPS measures body *translation*; pure yaw / freewheeling hub can leave speed ~0 while the robot still rotates on camera.
+2. **`setPosition(NaN)`** — wheel encoders return NaN before the first valid sim steps; locking hubs with NaN made Webots reject the command (`wb_motor_set_position … NaN`), so a hub could freewheel while telemetry looked idle.
+
+**Fix summary (controller + twin):**
+- Never call `setPosition` unless the encoder value is **finite**.
+- **Hard-zero both hubs** every idle/stop tick: full available torque, velocity 0; position-hold only when slow + finite encoder (do not chase freewheel).
+- ABS completes only when **both wheel rates quiet and IMU yaw rate quiet** (not GPS alone).
+- Residual hub/yaw re-arms stop; oppose residual body yaw when needed.
+- `TwinTelemetry.to_dict()` preserves `sensors` (wheel rates / yaw) for honest live checks.
+
+**Live checks that pass (API + human visual confirm stationary):**
+- Forward → Stop  
+- Forward → Turn left/right → Stop (no continued circle)  
+- In-place turn → Stop  
+
+**Energy baseline above still holds** at idle (~4 W Legs) after stop.
 
 ---
 
@@ -90,13 +114,14 @@ Observed on live twin (profile-grounded model; short API / agent-script drive):
 .\scripts\start.ps1
 .\scripts\launch_webots_twin.ps1
 python scripts/agent_short_drive.py
+# optional longer: python scripts/agent_extended_drive.py
 ```
 
 Idle → drive → stop should match the table above.  
-See also: `docs/HARDWARE_PROFILE.md`, `docs/TWIN_POWER_BRIDGE.md`.
+See also: `docs/HARDWARE_PROFILE.md`, `docs/TWIN_POWER_BRIDGE.md`, `docs/STABILITY.md`.
 
 ---
 
 ## Internship / talk track (one paragraph)
 
-We built a **power-aware wheeled robot digital twin**: Webots posts battery and per-channel watts through a stable **PowerFeed** into the same dashboard path used for live hardware. Numbers are grounded in a small **hardware profile** (hub motors, stabilizers, compute, 480 Wh pack). The v1 energy signature is clear—about **4 W** drive channel at idle and a strong rise under forward motion with mission state tracking drive vs standby—without a runaway safety/agent throttle loop. Next steps are turn-cost characterization and tighter mid-band motor curves.
+We built a **power-aware wheeled robot digital twin**: Webots posts battery and per-channel watts through a stable **PowerFeed** into the same dashboard path used for live hardware. Numbers are grounded in a small **hardware profile** (hub motors, stabilizers, compute, 480 Wh pack). The v1 energy signature is clear—about **4 W** drive channel at idle and a strong rise under forward motion with mission state tracking drive vs standby—without a runaway safety/agent throttle loop. Turn/stop residual spin was closed by dual-hub hard-zero and finite encoder locks so Stop matches what you see on camera.

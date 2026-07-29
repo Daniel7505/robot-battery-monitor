@@ -11,6 +11,7 @@ from src.mission_context import (
     context_summary,
     filter_lru_result,
     filter_requirements,
+    is_drive_like_phase,
     throttle_exempt_channels,
 )
 from src.power_requirements import PowerRequirements
@@ -181,8 +182,16 @@ class SafetyMonitor:
                         f"{ch_id} power spike: {prev:.1f}W → {draw_w:.1f}W (+{delta_pct * 100:.0f}%)"
                     )
 
-        if total_draw > budget + 0.1:
-            faults.append(f"System over-draw: {total_draw:.1f}W > {budget:.1f}W budget")
+        # Hard system fault only vs absolute pack budget. Task budget overshoots
+        # (e.g. twin drive watts while PMS task still idle) are warnings.
+        if total_draw > self.system_budget_w + 0.1:
+            faults.append(
+                f"System over-draw: {total_draw:.1f}W > {self.system_budget_w:.1f}W system budget"
+            )
+        elif total_draw > budget + 0.1:
+            warnings.append(
+                f"Over task budget: {total_draw:.1f}W > {budget:.1f}W (task envelope)"
+            )
         elif utilization >= self._cfg["system_over_budget_pct"]:
             warnings.append(f"System budget nearly saturated ({utilization}%)")
 
@@ -228,26 +237,40 @@ class SafetyMonitor:
             throttle_required = True
             throttle_factor = self._cfg["safety_throttle_factor"]
             throttle_reason = "thermal critical"
-        elif thermal_status == "warning" or spike_channels:
+        elif thermal_status == "warning":
             throttle_required = True
             throttle_factor = self._cfg["safety_throttle_factor"]
-            throttle_reason = "thermal warning" if thermal_status == "warning" else "power spike"
+            throttle_reason = "thermal warning"
+        elif spike_channels and not twin_phase:
+            # Internal sim spikes can throttle; Webots teleop 5→20W+ steps are
+            # expected when drive starts — warn only while twin is live.
+            throttle_required = True
+            throttle_factor = self._cfg["safety_throttle_factor"]
+            throttle_reason = "power spike"
+        elif spike_channels and twin_phase:
+            warnings.append(
+                f"Twin power step on {', '.join(spike_channels)} (no throttle — expected teleop)"
+            )
         elif degradation == "caution":
             # Soft LRU warnings alone should not force continuous throttle in
-            # internal/no-twin idle — only when an active-role LRU is warning/fault
-            # (twin mission context) or thermal/spike already handled above.
-            active_lrus = [
-                l for l in lru_result.get("lrus", [])
-                if l.get("mission_role") == "active" and l.get("status") in ("warning", "fault")
-            ]
-            fault_lrus = [
-                l for l in lru_result.get("lrus", [])
-                if l.get("status") == "fault"
-            ]
-            if active_lrus or fault_lrus:
-                throttle_required = True
-                throttle_factor = self._lru._cfg.get("degrade_throttle_caution", 0.92)
-                throttle_reason = "LRU caution"
+            # internal/no-twin idle — only when an active-role LRU is warning/fault.
+            # Drive-like twin phases: high Legs util is intentional, skip caution throttle.
+            if is_drive_like_phase(twin_phase):
+                pass
+            else:
+                active_lrus = [
+                    l for l in lru_result.get("lrus", [])
+                    if l.get("mission_role") == "active"
+                    and l.get("status") in ("warning", "fault")
+                ]
+                fault_lrus = [
+                    l for l in lru_result.get("lrus", [])
+                    if l.get("status") == "fault"
+                ]
+                if active_lrus or fault_lrus:
+                    throttle_required = True
+                    throttle_factor = self._lru._cfg.get("degrade_throttle_caution", 0.92)
+                    throttle_reason = "LRU caution"
 
         if battery_pct <= self._cfg["low_battery_critical_pct"]:
             throttle_required = True

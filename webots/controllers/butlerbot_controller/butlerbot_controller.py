@@ -823,7 +823,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 _halt_wheels(motors)
                 _hold_neutral_upper_body(motors)
 
-            joints = _read_joints(motors, sensors, wheel_vels=wheel_vels)
+            joints = _read_joints(
+                motors,
+                sensors,
+                wheel_vels=wheel_vels,
+                cmd_wheel_v={"left_wheel": left_v, "right_wheel": right_v},
+                speed_m_s=speed_m_s,
+            )
             total_draw = sum(j.get("power_w", 0) for j in joints)
             wheel_motion = max(
                 abs(j.get("velocity", 0.0))
@@ -962,6 +968,8 @@ def _read_joints(
     sensors: dict[str, PositionSensor],
     *,
     wheel_vels: dict[str, float] | None = None,
+    cmd_wheel_v: dict[str, float] | None = None,
+    speed_m_s: float = 0.0,
 ) -> list[dict]:
     mapping = {
         "left_wheel": "left_wheel_sensor",
@@ -985,10 +993,24 @@ def _read_joints(
                 velocity = motor.getVelocity()
             except Exception:
                 velocity = 0.0
-        torque = abs(velocity) * 0.45
+        # Encoder can lag a step behind command; use cmd vel as floor while driving
+        if "wheel" in motor_name and cmd_wheel_v:
+            cmd_v = abs(float(cmd_wheel_v.get(motor_name, 0.0)))
+            if cmd_v > abs(velocity):
+                velocity = math.copysign(cmd_v, velocity if abs(velocity) > 1e-6 else cmd_v)
+        # If still near-zero but body is moving, derive wheel ω from GPS speed
+        if "wheel" in motor_name and abs(velocity) < 0.15 and speed_m_s > 0.06:
+            velocity = speed_m_s / max(WHEEL_RADIUS_M, 0.02)
+
+        # Velocity-based torque model (Nm ≈ k·|ω|). Torque feedback is often 0
+        # when not enabled in the world — never overwrite a useful estimate with 0.
+        torque_est = abs(velocity) * 0.45
+        torque = torque_est
         if hasattr(motor, "getTorqueFeedback"):
             try:
-                torque = abs(motor.getTorqueFeedback())
+                tf = abs(float(motor.getTorqueFeedback()))
+                if tf > 1e-4:
+                    torque = tf
             except Exception:
                 pass
         power_w = _estimate_joint_power(motor_name, velocity, torque)

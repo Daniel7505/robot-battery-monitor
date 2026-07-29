@@ -131,15 +131,25 @@ class PowerRequirements:
             max_w = limits["max_draw_w"]
             budget_w = limits["budget_w"]
 
-            # Soft task budget: preferred draw envelope. Hard fault only when over
-            # channel max_draw — soft overruns are warnings so idle/standby does not
-            # permanently latch a safety-fault + agent-throttle loop.
+            # Soft task envelope (budget_w / task max_draw). Hard fault only when
+            # over the physical channel max_draw_w sum — so Webots drive (high Legs)
+            # while PMS task still says "idle" does not latch a safety fault.
+            channels = self._lru_map.get(lru["id"], [])
+            hw_max = sum(
+                float(self._channels.get(ch, {}).get("max_draw_w", 0) or 0)
+                for ch in channels
+            ) or float(max_w)
             compliant = min_w <= draw <= max_w and draw <= budget_w + 0.1
             status = "ok"
-            if draw > max_w + 0.05:
+            if draw > hw_max + 0.05:
                 status = "fault"
                 violations.append(
-                    f"{lru['label']}: {draw:.1f}W exceeds hard max ({max_w:.1f}W)"
+                    f"{lru['label']}: {draw:.1f}W exceeds hard max ({hw_max:.1f}W)"
+                )
+            elif draw > max_w + 0.05:
+                status = "warning"
+                violations.append(
+                    f"{lru['label']}: {draw:.1f}W over task max ({max_w:.1f}W)"
                 )
             elif draw > budget_w + 0.1:
                 status = "warning"

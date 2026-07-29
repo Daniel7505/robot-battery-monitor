@@ -51,6 +51,7 @@ _PHASE_STRESS: dict[str, float] = {
     "standby": 1.0,
     "drive_transit": 2.1,
     "walk_transit": 2.1,
+    "teleop": 2.0,  # keyboard / API drive — same ballpark as transit
     "patrol": 1.55,
     "manipulate": 2.5,
     "return_idle": 1.1,
@@ -99,7 +100,13 @@ def estimate_motor_power_w(
         scale = scale if scale is not None else motor_scale
     motor_idle_w = motor_idle_w if motor_idle_w is not None else 1.4
     scale = scale if scale is not None else 4.2
-    mechanical = abs(float(torque) * float(velocity))
+    vel = abs(float(velocity))
+    tau = abs(float(torque))
+    # Missing torque feedback (common in Webots) → synthesize load from |ω|
+    if tau < 1e-4 and vel > 0.05:
+        # ~Nm proxy so mid-speed teleop lands mid-band (not always peak clamp)
+        tau = vel * (0.38 if "wheel" in str(motor_name).lower() else 0.30)
+    mechanical = tau * vel
     raw = motor_idle_w + mechanical * scale
     if motor_name:
         return clamp_motor_power_w(motor_name, raw, prof)

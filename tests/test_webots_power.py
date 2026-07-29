@@ -106,6 +106,27 @@ def test_idle_teleop_draw_lower_than_moving_drive():
         battery_pct=90.0,
     )
     assert moving_payload["power"]["total_draw_w"] > idle_payload["power"]["total_draw_w"] + 4.0
+    assert moving_payload["channel_draws"]["Legs"] > idle_payload["channel_draws"]["Legs"] + 3.0
+
+
+def test_zero_torque_feedback_still_scales_with_wheel_speed():
+    """Webots often reports torque feedback = 0; Legs must still rise with |ω|."""
+    idle = estimate_motor_power_w(0.0, 0.0, motor_name="left_wheel")
+    moving = estimate_motor_power_w(4.0, 0.0, motor_name="left_wheel")
+    assert moving > idle + 2.0
+
+    joints = [
+        {"name": "left_wheel", "velocity": 4.0, "torque": 0.0},
+        {"name": "right_wheel", "velocity": 4.0, "torque": 0.0},
+    ]
+    payload = build_webots_telemetry(
+        joints=joints,
+        gait="drive",
+        phase="teleop",
+        speed_m_s=0.45,
+        battery_pct=90.0,
+    )
+    assert payload["channel_draws"]["Legs"] >= 12.0
 
 
 def test_motion_scale_zero_when_stationary():

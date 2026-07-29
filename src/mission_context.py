@@ -23,6 +23,7 @@ _PHASE_STANDBY_LRUS: dict[str, frozenset[str]] = {
     "standby": frozenset({"locomotion", "arms", "torso", "cooling"}),
     "drive_transit": frozenset({"arms", "torso"}),
     "walk_transit": frozenset({"arms", "torso"}),
+    "teleop": frozenset({"arms", "torso"}),  # keyboard / API drive
     "patrol": frozenset({"arms"}),
     "manipulate": frozenset({"locomotion"}),
     "return_idle": frozenset({"arms", "torso", "cooling"}),
@@ -32,6 +33,7 @@ _PHASE_PRIMARY_LRUS: dict[str, frozenset[str]] = {
     "standby": frozenset({"compute", "eps"}),
     "drive_transit": frozenset({"locomotion", "compute", "cooling"}),
     "walk_transit": frozenset({"locomotion", "compute", "cooling"}),
+    "teleop": frozenset({"locomotion", "compute", "cooling"}),
     "patrol": frozenset({"locomotion", "compute", "cooling"}),
     "manipulate": frozenset({"arms", "torso", "compute", "cooling"}),
     "return_idle": frozenset({"locomotion", "compute"}),
@@ -41,10 +43,16 @@ _PHASE_LABELS: dict[str, str] = {
     "standby": "Standby — compute + sensors active",
     "drive_transit": "Wheeled transit — locomotion primary, arms/torso tucked",
     "walk_transit": "Wheeled transit — locomotion primary, arms/torso tucked",
+    "teleop": "Teleop drive — locomotion primary",
     "patrol": "Patrol — locomotion primary, arms low",
     "manipulate": "Manipulation — arms/torso + cooling primary, base idle",
     "return_idle": "Return — locomotion only, arms/torso idle",
 }
+
+# Twin phases where high Legs draw is intentional (do not caution-throttle)
+_DRIVE_LIKE_PHASES = frozenset({
+    "drive_transit", "walk_transit", "teleop", "patrol",
+})
 
 
 def expected_task_for_phase(phase: str | None) -> str | None:
@@ -198,3 +206,7 @@ def throttle_exempt_channels(phase: str | None) -> frozenset[str]:
         "cooling": "Cooling",
     }
     return frozenset(mapping[lid] for lid in standby if lid in mapping)
+
+
+def is_drive_like_phase(phase: str | None) -> bool:
+    return phase_key(phase) in _DRIVE_LIKE_PHASES

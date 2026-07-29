@@ -124,11 +124,26 @@ class SafetyMonitor:
             req_result = filter_requirements(req_result, twin_phase)
         if req_result["violations"]:
             warnings.extend(req_result["violations"][:3])
-        if not req_result["overall_compliant"] and req_result["violations"]:
-            for v in req_result["violations"]:
-                if "exceeds" in v.lower() or "over" in v.lower():
-                    if v not in faults:
-                        faults.append(v)
+        # Only hard requirement faults escalate (channel max). Soft task-budget
+        # overruns stay as warnings — otherwise idle profiles permanently fault.
+        if not req_result["overall_compliant"]:
+            for entry in req_result.get("lru_requirements") or []:
+                if entry.get("status") != "fault":
+                    continue
+                label = entry.get("label") or entry.get("id") or "LRU"
+                draw = entry.get("draw_w", 0)
+                max_w = entry.get("max_draw_w", 0)
+                msg = f"{label}: {draw:.1f}W exceeds hard max ({max_w:.1f}W)"
+                if msg not in faults:
+                    faults.append(msg)
+            eps = req_result.get("eps") or {}
+            if eps.get("status") == "fault":
+                msg = (
+                    f"EPS exceeds max: {eps.get('draw_w', 0):.1f}W > "
+                    f"{eps.get('max_draw_w', 0):.1f}W"
+                )
+                if msg not in faults:
+                    faults.append(msg)
 
         # Low battery
         if battery_pct <= self._cfg["low_battery_critical_pct"]:
@@ -218,11 +233,18 @@ class SafetyMonitor:
             throttle_factor = self._cfg["safety_throttle_factor"]
             throttle_reason = "thermal warning" if thermal_status == "warning" else "power spike"
         elif degradation == "caution":
+            # Soft LRU warnings alone should not force continuous throttle in
+            # internal/no-twin idle — only when an active-role LRU is warning/fault
+            # (twin mission context) or thermal/spike already handled above.
             active_lrus = [
                 l for l in lru_result.get("lrus", [])
                 if l.get("mission_role") == "active" and l.get("status") in ("warning", "fault")
             ]
-            if active_lrus or not twin_phase:
+            fault_lrus = [
+                l for l in lru_result.get("lrus", [])
+                if l.get("status") == "fault"
+            ]
+            if active_lrus or fault_lrus:
                 throttle_required = True
                 throttle_factor = self._lru._cfg.get("degrade_throttle_caution", 0.92)
                 throttle_reason = "LRU caution"

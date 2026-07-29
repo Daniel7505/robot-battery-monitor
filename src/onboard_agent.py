@@ -384,7 +384,10 @@ class OnboardAgent:
 
     def _log_decisions(self, result: AgentResult, ctx: AgentContext) -> None:
         new_sigs = {r.signature() for r in result.recommendations}
-        if new_sigs == self._last_signatures and result.posture == "normal":
+        # Suppress identical recommendation spam every 3s tick (idle fault loops).
+        if new_sigs and new_sigs == self._last_signatures:
+            return
+        if not new_sigs and result.posture == "normal" and not self._last_signatures:
             return
         self._last_signatures = new_sigs
 
@@ -446,9 +449,19 @@ class OnboardAgent:
         return result.to_status(self.enabled, list(self._recent_log))
 
     def apply_throttle(
-        self, allocated: dict[str, float], result: AgentResult
+        self,
+        allocated: dict[str, float],
+        result: AgentResult,
+        *,
+        safety_already_throttled: bool = False,
     ) -> tuple[dict[str, float], list[str]]:
         if not self.auto_apply_throttle:
+            return allocated, []
+
+        # SafetyMonitor already cut draw this tick — stacking another 70–80%
+        # system factor causes permanent THROTTLED spam in idle/no-twin mode.
+        if safety_already_throttled:
+            result.applied_actions = []
             return allocated, []
 
         applied: list[str] = []
@@ -485,7 +498,9 @@ class OnboardAgent:
         for rec in result.recommendations:
             if rec.action != "suggest_task" or not rec.task:
                 continue
-            if rec.priority not in ("critical", "high", "medium"):
+            # High/critical only — medium forecast suggestions were thrashing
+            # idle ↔ balanced every hold window with no twin present.
+            if rec.priority not in ("critical", "high"):
                 continue
             if hasattr(mission, "force_task") and mission.force_task(rec.task):
                 rec.applied = True
@@ -918,7 +933,13 @@ class OnboardAgent:
                     message=alert,
                 )
             )
-        if ctx.safety.get("throttle_required") and ctx.allocation_status != "throttled":
+        # Safety already applied throttle when status is throttled OR fault
+        # (fault overwrites status after apply). Do not re-stack 70% every tick.
+        already_throttled = ctx.allocation_status in ("throttled", "fault")
+        if (
+            ctx.safety.get("throttle_required")
+            and not already_throttled
+        ):
             recs.append(
                 AgentRecommendation(
                     action="throttle_system",

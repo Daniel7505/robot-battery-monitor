@@ -131,11 +131,21 @@ class PowerRequirements:
             max_w = limits["max_draw_w"]
             budget_w = limits["budget_w"]
 
+            # Soft task budget: preferred draw envelope. Hard fault only when over
+            # channel max_draw — soft overruns are warnings so idle/standby does not
+            # permanently latch a safety-fault + agent-throttle loop.
             compliant = min_w <= draw <= max_w and draw <= budget_w + 0.1
             status = "ok"
-            if draw > max_w or draw > budget_w + 0.1:
+            if draw > max_w + 0.05:
                 status = "fault"
-                violations.append(f"{lru['label']}: {draw:.1f}W exceeds limit ({budget_w:.1f}W budget)")
+                violations.append(
+                    f"{lru['label']}: {draw:.1f}W exceeds hard max ({max_w:.1f}W)"
+                )
+            elif draw > budget_w + 0.1:
+                status = "warning"
+                violations.append(
+                    f"{lru['label']}: {draw:.1f}W over soft budget ({budget_w:.1f}W)"
+                )
             elif draw < min_w * 0.85 and task_id not in ("idle",):
                 status = "warning"
                 violations.append(f"{lru['label']}: {draw:.1f}W below min ({min_w:.1f}W)")

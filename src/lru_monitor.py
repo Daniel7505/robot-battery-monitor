@@ -153,8 +153,16 @@ class LRUMonitor:
             over = draw_w > max_w + 0.05
             spike = prev > 1.0 and (draw_w - prev) / prev >= spike_pct
             util_floor = 0.70 if lru_id == "compute" else 0.5
-            low_v = lru_id != "eps" and voltage_pct <= v_warn * 100 and draw_w > max_w * util_floor
-            crit_v = lru_id != "eps" and voltage_pct <= v_crit * 100
+            low_v = (
+                lru_id != "eps"
+                and voltage_pct <= v_warn * 100
+                and draw_w > max_w * util_floor
+            )
+            # Estimated sag alone must not hard-fault at normal idle loads
+            # (Compute @ ~87% of max was permanently "critical low voltage").
+            # Critical voltage requires actual over-draw plus severe sag.
+            severe_sag = lru_id != "eps" and voltage_pct <= v_crit * 100
+            crit_v = severe_sag and over
 
             if over:
                 faults.append(f"LRU {lru['label']} over-draw: {draw_w:.1f}W > {max_w}W")
@@ -168,16 +176,18 @@ class LRUMonitor:
 
             if crit_v:
                 faults.append(
-                    f"LRU {lru['label']} low voltage: {estimated_v:.1f}V ({voltage_pct:.0f}% nominal)"
+                    f"LRU {lru['label']} low voltage: {estimated_v:.1f}V "
+                    f"({voltage_pct:.0f}% nominal) with over-draw"
                 )
                 low_voltage_lrus.append(lru_id)
-            elif low_v:
+            elif low_v or severe_sag:
                 warnings.append(
                     f"LRU {lru['label']} voltage sag: {estimated_v:.1f}V ({voltage_pct:.0f}% nominal)"
                 )
                 low_voltage_lrus.append(lru_id)
 
-            status = self._lru_status(over, spike, low_v or crit_v, crit_v, util_pct)
+            # Status: estimated sag → warning; fault only on over-draw / crit_v
+            status = self._lru_status(over, spike, low_v or severe_sag, crit_v, util_pct)
             lru_states.append({
                 "id": lru_id,
                 "label": lru["label"],

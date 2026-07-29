@@ -502,9 +502,12 @@ class ROS2BatterySource(RealHardwareSource):
             readings={},
             twin_context=twin_ctx,
         )
+        safety_already_throttled = bool(safety.get("throttle_required"))
         if self._agent.should_auto_apply(twin_active) and agent_result.recommendations:
             allocation["allocated"], throttle_applied = self._agent.apply_throttle(
-                allocation["allocated"], agent_result
+                allocation["allocated"],
+                agent_result,
+                safety_already_throttled=safety_already_throttled,
             )
             if throttle_applied:
                 allocation["total_allocated_w"] = round(

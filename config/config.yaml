@@ -60,9 +60,10 @@ lru:
   thresholds:
     over_draw_warning_pct: 90
     spike_threshold_pct: 30
-    voltage_sag_factor: 0.18
-    low_voltage_warning_pct: 0.92
-    low_voltage_critical_pct: 0.85
+    # Milder sag model — 0.18 permanently faulted Compute at normal idle load
+    voltage_sag_factor: 0.12
+    low_voltage_warning_pct: 0.90
+    low_voltage_critical_pct: 0.82
     degrade_throttle_caution: 0.92
     degrade_throttle_degraded: 0.80
     degrade_throttle_critical: 0.65
@@ -73,12 +74,14 @@ requirements:
   system_min_draw_w: 18
   system_max_draw_w: 62
   lru_budgets:
+    # Soft budgets must sit at/above TASK_PROFILES draw_targets so idle does not
+    # permanently trip "exceeds budget" → safety fault → agent throttle loops.
     idle:
-      locomotion: {min_draw_w: 2, max_draw_w: 12, budget_w: 6}
-      arms: {min_draw_w: 4, max_draw_w: 18, budget_w: 8}
-      torso: {min_draw_w: 3, max_draw_w: 14, budget_w: 6}
-      compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 9}
-      cooling: {min_draw_w: 1, max_draw_w: 10, budget_w: 3}
+      locomotion: {min_draw_w: 2, max_draw_w: 12, budget_w: 8}
+      arms: {min_draw_w: 4, max_draw_w: 18, budget_w: 10}
+      torso: {min_draw_w: 3, max_draw_w: 14, budget_w: 8}
+      compute: {min_draw_w: 6, max_draw_w: 12, budget_w: 12}
+      cooling: {min_draw_w: 1, max_draw_w: 10, budget_w: 4}
     moving:
       locomotion: {min_draw_w: 14, max_draw_w: 28, budget_w: 22}
       arms: {min_draw_w: 5, max_draw_w: 18, budget_w: 10}
@@ -162,7 +165,7 @@ agent:
   history_limit: 32
   low_battery_suggest_pct: 22
   critical_battery_pct: 12
-  high_utilization_pct: 72
+  high_utilization_pct: 88
   twin_stress_utilization_pct: 62
   task_override_hold_s: 14
   loop_margin_warn_pct: 18

@@ -27,7 +27,9 @@ battery:
 # --- Drive motors (two wheels) ------------------------------------------------
 # Class: 48V hub / hoverboard-style BLDC, ~100–150W continuous each.
 # Electrical model (velocity-only when torque feedback missing):
-#   P ≈ idle_w + k · ω²   with k chosen so cruise_speed ≈ cruise_w.
+#   partial: idle → cruise_w along |ω|/ω_cruise ^ 1.25
+#   over-cruise: soft headroom to ~1.25× cruise (curve_top_w), not channel peg
+#   real torque: blend idle + (τ·ω)/efficiency
 motors:
   left_wheel:
     label: "Left BLDC hub (48V, ~120W cont class)"
@@ -37,12 +39,13 @@ motors:
     rated_power_w: 120
     peak_power_w: 250
     rated_speed_rpm: 150
-    efficiency: 0.75
+    efficiency: 0.75          # used when torque feedback present
     idle_w: 2.0               # controller + no-load losses at rest
     cruise_w: 9.5             # target electrical at cruise_speed_m_s (mid-band)
     cruise_speed_m_s: 0.40
-    cont_w: 35                # sustained electrical budget for clamps
-    peak_w: 40                # per-motor estimate clamp (channel also caps)
+    curve_top_w: 13.5         # soft per-motor ceiling for continuous curve
+    cont_w: 22                # sustained electrical budget (sim twin scale)
+    peak_w: 28                # per-motor hard clamp (channel also caps Legs)
     torque_proxy_coeff: 0.38  # τ ≈ coeff · |ω| when feedback is 0
   right_wheel:
     label: "Right BLDC hub (48V, ~120W cont class)"
@@ -56,8 +59,9 @@ motors:
     idle_w: 2.0
     cruise_w: 9.5
     cruise_speed_m_s: 0.40
-    cont_w: 35
-    peak_w: 40
+    curve_top_w: 13.5
+    cont_w: 22
+    peak_w: 28
     torque_proxy_coeff: 0.38
 
   # Upper body (kept for Webots joints; light loads at rest)

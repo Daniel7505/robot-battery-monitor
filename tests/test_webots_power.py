@@ -120,6 +120,41 @@ def test_idle_teleop_draw_lower_than_moving_drive():
     assert moving_payload["channel_draws"]["Legs"] > idle_payload["channel_draws"]["Legs"] + 3.0
 
 
+def test_partial_load_curve_midband_not_channel_peg():
+    """Cruise sits mid-band; full teleop should not always peg Legs at channel max."""
+    idle_j = [
+        {"name": "left_wheel", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_wheel", "velocity": 0.0, "torque": 0.0},
+        {"name": "torso_joint", "velocity": 0.0, "torque": 0.0},
+        {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
+    ]
+    cruise_j = [
+        {"name": "left_wheel", "velocity": 5.0, "torque": 0.0},
+        {"name": "right_wheel", "velocity": 5.0, "torque": 0.0},
+        {"name": "torso_joint", "velocity": 0.0, "torque": 0.0},
+        {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
+    ]
+    full_j = [
+        {"name": "left_wheel", "velocity": 8.0, "torque": 0.0},
+        {"name": "right_wheel", "velocity": 8.0, "torque": 0.0},
+        {"name": "torso_joint", "velocity": 0.0, "torque": 0.0},
+        {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
+        {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
+    ]
+    idle = build_webots_telemetry(joints=idle_j, gait="stand", phase="standby", speed_m_s=0.0)
+    cruise = build_webots_telemetry(joints=cruise_j, gait="drive", phase="teleop", speed_m_s=0.40)
+    full = build_webots_telemetry(joints=full_j, gait="drive", phase="teleop", speed_m_s=0.64)
+    legs_idle = idle["channel_draws"]["Legs"]
+    legs_cruise = cruise["channel_draws"]["Legs"]
+    legs_full = full["channel_draws"]["Legs"]
+    assert legs_idle <= 6.0
+    assert 12.0 <= legs_cruise <= 26.0  # mid-band, not pegged
+    assert legs_full > legs_cruise
+    assert legs_full < 28.0  # room under channel max under full teleop
+
+
 def test_zero_torque_feedback_still_scales_with_wheel_speed():
     """Webots often reports torque feedback = 0; Legs must still rise with |ω|."""
     idle = estimate_motor_power_w(0.0, 0.0, motor_name="left_wheel")

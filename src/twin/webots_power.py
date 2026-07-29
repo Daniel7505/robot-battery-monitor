@@ -95,8 +95,11 @@ def estimate_motor_power_w(
 ) -> float:
     """Estimate electrical draw from joint velocity (rad/s) and torque (Nm).
 
-    Wheel motors prefer a cruise curve so partial speeds land mid-band instead of
-    always pegging the channel max under full teleop command.
+    Wheel motors use a profile-grounded cruise curve:
+    - Partial load (frac < 1): slightly superlinear rise toward cruise_w
+    - Over-cruise: soft headroom (~25% of cruise), not a hard jump toward peak
+    - Real torque (when present): blend in P ≈ idle + (τ·ω)/η
+    Goal: mid-band at cruise, avoid always pegging the Legs channel max.
     """
     prof = _resolve_profile(profile)
     name = str(motor_name or "")
@@ -114,6 +117,7 @@ def estimate_motor_power_w(
 
     spec = motor_spec(prof, name) if name else {}
     is_wheel = "wheel" in name.lower()
+    eff = float(spec.get("efficiency") or 0.0)
 
     # Profile cruise curve for wheels: smooth |ω| (or body speed) → watts
     cruise_w = spec.get("cruise_w")
@@ -124,17 +128,35 @@ def estimate_motor_power_w(
         # Prefer body speed when provided (smoother than noisy encoder)
         if speed_m_s is not None and float(speed_m_s) > 0.02:
             omega_equiv = float(speed_m_s) / max(radius, 1e-4)
-            frac = min(1.35, max(0.0, omega_equiv / omega_cruise))
+            frac = max(0.0, omega_equiv / omega_cruise)
         else:
-            frac = min(1.35, vel / omega_cruise)
-        # Gentle power curve: ~linear near cruise, not squared (avoids early peak)
+            frac = max(0.0, vel / omega_cruise)
+        # Cap load fraction so full teleop does not explode past soft headroom
+        frac = min(1.25, frac)
         cruise = float(cruise_w)
-        raw = idle_w + (cruise - idle_w) * (frac ** 1.15)
-        # Light torque boost only when feedback present and high
-        if abs(float(torque)) > 1e-3:
-            raw += min(4.0, abs(float(torque)) * vel * 0.15)
+        if frac <= 1.0:
+            # Partial load: slightly superlinear (iron/copper grow with speed)
+            shape = frac ** 1.25
+            raw = idle_w + (cruise - idle_w) * shape
+        else:
+            # Over-cruise: soft approach to ~1.25× cruise (not channel peak)
+            over = min(1.0, (frac - 1.0) / 0.25)
+            headroom = cruise * 0.25
+            raw = cruise + headroom * (over ** 0.85)
+        # Efficiency-aware blend when torque path is meaningful
+        if abs(float(torque)) > 1e-3 and eff > 0.05:
+            mech = abs(float(torque)) * vel
+            elec_from_mech = idle_w + mech / eff
+            # Weight real-torque path more as mechanical load rises
+            blend = min(0.4, mech / max(cruise, 1.0) * 0.25)
+            raw = raw * (1.0 - blend) + elec_from_mech * blend
+        # Soft per-motor ceiling below peak clamp (prefers cont/curve_top)
+        curve_top = float(
+            spec.get("curve_top_w")
+            or min(float(spec.get("cont_w") or cruise * 1.6), cruise * 1.45)
+        )
+        raw = min(raw, curve_top)
     else:
-        eff = float(spec.get("efficiency") or 0.0)
         mechanical = tau * vel
         if eff > 0.05 and mechanical > 0:
             raw = idle_w + mechanical / eff
@@ -172,7 +194,11 @@ def motor_powers_from_joints(
 
 
 def motion_scale(*, speed_m_s: float = 0.0, joints: list[dict] | None = None) -> float:
-    """0–1 factor from measured motion — idle teleop should not use full drive stress."""
+    """0–1 factor from measured motion — idle teleop should not use full drive stress.
+
+    Normalized near profile cruise (~0.4 m/s, ~5 rad/s hub) so partial crawl
+    does not already saturate the stress multiplier.
+    """
     wheel_peak = 0.0
     if joints:
         for joint in joints:
@@ -180,9 +206,12 @@ def motion_scale(*, speed_m_s: float = 0.0, joints: list[dict] | None = None) ->
             if "wheel" not in name:
                 continue
             wheel_peak = max(wheel_peak, abs(float(joint.get("velocity", 0.0))))
-    wheel_factor = min(1.0, wheel_peak / 2.5)
-    speed_factor = min(1.0, max(0.0, speed_m_s) / 0.28)
-    return max(0.15, max(wheel_factor, speed_factor))
+    wheel_factor = min(1.0, wheel_peak / 5.0)
+    speed_factor = min(1.0, max(0.0, speed_m_s) / 0.40)
+    # Near-idle floor stays low so stress barely applies when barely rolling
+    if wheel_peak < 0.2 and speed_m_s < 0.04:
+        return 0.0
+    return max(0.08, max(wheel_factor, speed_factor))
 
 
 def stress_multiplier(*, gait: str = "stand", phase: str = "") -> float:
@@ -266,19 +295,20 @@ def aggregate_channel_draws(
         compute_w = _compute_draw_w(gait, prof, speed_m_s=speed_m_s)
     channels["Compute"] = round(compute_w, 2)
 
-    # Mild stress from gait/phase (profile cruise already sets base drive level)
-    # Keep stress mild — cruise curve already sets drive level (avoids always 28W cap)
+    # Mild stress from gait/phase (profile cruise already sets base drive level).
+    # Keep stress light so Legs land mid-band instead of hard-pegging channel max.
     mult = stress_multiplier(gait=gait, phase=phase)
-    if mult > 1.0 and speed_m_s > 0.05:
+    if mult > 1.0 and (speed_m_s > 0.05 or motion_scale(speed_m_s=speed_m_s, joints=joints) > 0.2):
         motion = motion_scale(speed_m_s=speed_m_s, joints=joints)
-        effective = 1.0 + (mult - 1.0) * motion * 0.55
-        for ch_id in list(channels.keys()):
-            if ch_id == "Compute":
-                channels[ch_id] = round(channels[ch_id] * min(effective, 1.1), 2)
-            elif ch_id == "Legs":
-                channels[ch_id] = round(channels[ch_id] * min(effective, 1.2), 2)
-            else:
-                channels[ch_id] = round(channels[ch_id] * min(effective, 1.15), 2)
+        if motion > 0.0:
+            effective = 1.0 + (mult - 1.0) * motion * 0.32
+            for ch_id in list(channels.keys()):
+                if ch_id == "Compute":
+                    channels[ch_id] = round(channels[ch_id] * min(effective, 1.08), 2)
+                elif ch_id == "Legs":
+                    channels[ch_id] = round(channels[ch_id] * min(effective, 1.12), 2)
+                else:
+                    channels[ch_id] = round(channels[ch_id] * min(effective, 1.10), 2)
 
     for ch_id, total in list(channels.items()):
         cap = channel_caps.get(ch_id, {})

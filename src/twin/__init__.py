@@ -3,6 +3,7 @@
 from src.twin.bridge import DigitalTwinBridge, get_twin_bridge, reset_twin_bridge
 from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
 from src.twin.butlerbot import BUTLERBOT_WALKING_FLOW, butlerbot_telemetry_step
+from src.twin.power_feed import POWER_FEED_SCHEMA_VERSION, PowerFeed, power_feed_from_telemetry
 
 __all__ = [
     "DigitalTwinBridge",
@@ -12,4 +13,7 @@ __all__ = [
     "reset_twin_bridge",
     "BUTLERBOT_WALKING_FLOW",
     "butlerbot_telemetry_step",
+    "PowerFeed",
+    "POWER_FEED_SCHEMA_VERSION",
+    "power_feed_from_telemetry",
 ]

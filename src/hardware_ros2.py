@@ -23,6 +23,7 @@ from src.twin import get_twin_bridge
 from src.cooling_channel import estimate_cooling_draw_w
 from src.mission_forecast import forecast_twin_loop
 from src.twin.control import build_twin_control_status, is_twin_stress_phase
+from src.twin.power_feed import PowerFeed
 from src.database import log_power_snapshot
 
 _START_BATTERY_PCT = 100.0
@@ -61,6 +62,9 @@ class ROS2BatterySource(RealHardwareSource):
         self.twin_status: dict = {}
         self.twin_control_status: dict = {}
         self._agent_task_hold_remaining: float = 0.0
+        # "internal" | "webots" | "custom" — drives last_readings power numbers
+        self.power_source: str = "internal"
+        self._readings_lock = threading.Lock()
 
     def _apply_ros2_commands(self) -> None:
         twin_active = self._twin._is_external_active()
@@ -172,17 +176,89 @@ class ROS2BatterySource(RealHardwareSource):
             self.health_status = "DEGRADED"
             return self.last_readings if self.last_readings else {}
 
+    def apply_power_feed(self, feed: PowerFeed) -> bool:
+        """
+        Write external PowerFeed into last_readings immediately.
+
+        Used by DigitalTwinBridge on each Webots POST so the dashboard does not
+        wait for the 3s telemetry tick. Does not advance mission/sim clocks.
+        """
+        if feed is None or not feed.usable():
+            return False
+
+        if feed.battery_pct is not None and self._twin._apply_battery:
+            self._main_battery = round(float(feed.battery_pct), 2)
+
+        battery_pct = round(self._main_battery, 1)
+        self.power_source = feed.source or "external"
+
+        with self._readings_lock:
+            if not self.last_readings:
+                # Seed minimal channel entries so the broadcaster has something to show.
+                seeded: dict = {}
+                for ch in self._power_channels:
+                    ch_id = ch.get("id")
+                    if not ch_id:
+                        continue
+                    max_w = ch.get("max_draw_w", 30)
+                    voltage = ch.get("nominal_voltage", 48)
+                    draw = float(feed.channel_draws.get(ch_id, 0.0))
+                    seeded[ch_id] = {
+                        "battery": battery_pct,
+                        "draw": round(draw, 1),
+                        "amps": round(draw / voltage, 2) if voltage else 0.0,
+                        "max_draw_w": max_w,
+                        "voltage": voltage,
+                        "requested_w": round(draw, 1),
+                        "allocated_w": round(draw, 1),
+                        "allocation_pct": round((draw / max_w) * 100, 1) if max_w else 0,
+                        "throttled": False,
+                        "status": "normal",
+                        "task": feed.task or self._mission.task_id,
+                        "power_source": self.power_source,
+                        "timestamp": datetime.now(),
+                    }
+                    if ch_id in feed.channel_draws:
+                        self._channel_draw[ch_id] = round(draw, 1)
+                self.last_readings = seeded
+            else:
+                for ch_id, data in self.last_readings.items():
+                    if ch_id in feed.channel_draws:
+                        draw = round(float(feed.channel_draws[ch_id]), 1)
+                        voltage = data.get("voltage") or 48
+                        max_w = data.get("max_draw_w") or 30
+                        data["draw"] = draw
+                        data["requested_w"] = draw
+                        data["allocated_w"] = draw
+                        data["amps"] = round(draw / voltage, 2) if voltage else 0.0
+                        data["allocation_pct"] = (
+                            round((draw / max_w) * 100, 1) if max_w else 0
+                        )
+                        self._channel_draw[ch_id] = draw
+                    data["battery"] = battery_pct
+                    data["power_source"] = self.power_source
+                    data["timestamp"] = datetime.now()
+
+            self.last_successful_read = datetime.now()
+            self.health_status = "RUNNING"
+        return True
+
     def _sync_twin_feed(self, twin_active: bool) -> None:
         if not twin_active:
+            self.power_source = "internal"
             self._twin.sync_to_hardware(self)
             return
+        # Agent task hold: keep twin power numbers, do not re-apply mission override.
         if self._agent_task_hold_remaining > 0:
             self._agent_task_hold_remaining = max(
                 0.0, self._agent_task_hold_remaining - TICK_SECONDS
             )
-            tel = self._twin._last_telemetry
-            if tel and tel.channel_draws:
-                self._ros2.inject_command(sensor_draws=tel.channel_draws)
+            self._twin.sync_to_hardware(
+                self,
+                include_mission=False,
+                include_sensors=True,
+                include_battery=True,
+            )
             return
         self._twin.sync_to_hardware(self)
 
@@ -466,6 +542,10 @@ class ROS2BatterySource(RealHardwareSource):
 
         readings = {}
         throttled_set = set(allocation["throttled_channels"])
+        if twin_active and tel:
+            self.power_source = tel.source or "external"
+        else:
+            self.power_source = "internal"
 
         for ch_id, meta in channel_meta.items():
             max_w = meta["max_w"]
@@ -490,6 +570,7 @@ class ROS2BatterySource(RealHardwareSource):
                     draw_w, max_w, battery_pct, throttled, ch_id, safety
                 ),
                 "task": self._mission.task_id,
+                "power_source": self.power_source,
                 "timestamp": datetime.now(),
             }
 
@@ -559,9 +640,10 @@ class ROS2BatterySource(RealHardwareSource):
     def _telemetry_loop(self):
         while self.running:
             try:
-                self.last_readings = self._build_readings()
-                self.last_successful_read = datetime.now()
-                self.ros2_status = self._ros2.status
+                with self._readings_lock:
+                    self.last_readings = self._build_readings()
+                    self.last_successful_read = datetime.now()
+                    self.ros2_status = self._ros2.status
             except Exception as e:
                 logger.error(f"Telemetry loop error: {e}", exc_info=True)
                 self.health_status = "DEGRADED"

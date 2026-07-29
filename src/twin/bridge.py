@@ -16,6 +16,7 @@ from src.mission_tasks import TASK_PROFILES
 from src.twin.adapters import get_adapter, registered_adapters
 from src.twin.butlerbot import butlerbot_flow_description
 from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
+from src.twin.power_feed import PowerFeed, power_feed_from_telemetry
 
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
 
@@ -105,7 +106,20 @@ class DigitalTwinBridge:
             "timestamp": telemetry.timestamp.isoformat(),
         }
 
-    def sync_to_hardware(self, hardware) -> bool:
+    def get_power_feed(self) -> PowerFeed | None:
+        """Return the live external power contract, or None if twin feed is inactive."""
+        if not self._is_external_active() or not self._prefer_external:
+            return None
+        return power_feed_from_telemetry(self._last_telemetry)
+
+    def sync_to_hardware(
+        self,
+        hardware,
+        *,
+        include_mission: bool = True,
+        include_sensors: bool = True,
+        include_battery: bool = True,
+    ) -> bool:
         """Apply fresh external telemetry into the live PMS layer (non-blocking)."""
         if not self._is_external_active() or not self._prefer_external:
             return False
@@ -114,19 +128,30 @@ class DigitalTwinBridge:
         if not tel:
             return False
 
-        if hasattr(hardware, "_ros2"):
+        feed = power_feed_from_telemetry(tel)
+        if feed is None:
+            return False
+
+        if hasattr(hardware, "_ros2") and (include_mission or include_sensors):
             hardware._ros2.inject_command(
-                mission=tel.task,
-                throttle=tel.throttle,
-                sensor_draws=tel.channel_draws or None,
+                mission=tel.task if include_mission else None,
+                throttle=tel.throttle if include_mission else None,
+                sensor_draws=(tel.channel_draws or None) if include_sensors else None,
             )
 
         if (
-            self._apply_battery
-            and tel.battery_pct is not None
+            include_battery
+            and self._apply_battery
+            and feed.battery_pct is not None
             and hasattr(hardware, "_main_battery")
         ):
-            hardware._main_battery = round(float(tel.battery_pct), 2)
+            hardware._main_battery = round(float(feed.battery_pct), 2)
+
+        # Immediate last_readings patch so dashboard does not wait for the 3s tick.
+        if hasattr(hardware, "apply_power_feed"):
+            hardware.apply_power_feed(feed)
+        elif hasattr(hardware, "power_source"):
+            hardware.power_source = feed.source
 
         return True
 
@@ -353,6 +378,7 @@ class DigitalTwinBridge:
 
     def status(self) -> dict:
         tel = self._last_telemetry
+        feed = self.get_power_feed()
         return {
             "enabled": self._enabled,
             "adapter": self._adapter_name,
@@ -362,10 +388,12 @@ class DigitalTwinBridge:
             "accept_commands": self._accept_commands,
             "accept_telemetry": self._accept_telemetry,
             "prefer_external": self._prefer_external,
+            "apply_battery_override": self._apply_battery,
             "sync_interval_s": self._sync_interval_s,
             "stale_after_s": self._stale_after_s,
             "robot_name": self._robot_name,
             "telemetry_count": self._telemetry_count,
+            "power_feed": feed.to_dict() if feed else None,
             "command_count": self._command_count,
             "last_telemetry_at": tel.timestamp.isoformat() if tel else None,
             "last_export_at": (
@@ -395,8 +423,27 @@ class DigitalTwinBridge:
                 "adapter": "generic | webots | pybullet | butlerbot",
                 "robot": {"name": "string", "main_battery_pct": "number"},
                 "mission": {"task": "idle | moving | balanced | high_load"},
-                "channel_draws": {"Legs": "watts", "Arms": "watts", "Torso": "watts", "Compute": "watts"},
+                "channel_draws": {
+                    "Legs": "watts",
+                    "Arms": "watts",
+                    "Torso": "watts",
+                    "Compute": "watts",
+                    "Cooling": "watts (optional)",
+                },
                 "locomotion": "optional gait/speed metadata",
+            },
+            "power_feed": {
+                "schema_version": "1.0",
+                "description": (
+                    "Minimal contract that becomes hardware.last_readings: "
+                    "main battery % + per-channel watts. See src/twin/power_feed.py."
+                ),
+                "fields": {
+                    "source": "webots | custom | pybullet | hardware | external",
+                    "battery_pct": "0–100 (from robot.main_battery_pct)",
+                    "channel_draws": "dict channel_id → watts",
+                    "task": "optional mission task",
+                },
             },
             "command": {
                 "task": "optional mission task",
@@ -406,10 +453,21 @@ class DigitalTwinBridge:
             },
             "butlerbot_example": butlerbot_flow_description(),
             "integration_notes": {
-                "webots": "POST motor_power_w map via WebotsAdapter; poll GET /api/twin/state.",
+                "webots": (
+                    "Controller POSTs build_webots_telemetry() to /api/twin/telemetry?adapter=webots. "
+                    "Bridge get_power_feed() → ROS2BatterySource.apply_power_feed → last_readings."
+                ),
                 "pybullet": "POST joint torques via PyBulletAdapter; map to channel draws.",
                 "custom": "Use examples/butlerbot_twin_feed.py as a reference loop.",
                 "backward_compat": "With no external feed, internal ButlerBot simulation runs unchanged.",
+                "enable": (
+                    "config digital_twin.enabled=true, prefer_external=true, "
+                    "apply_battery_override=true; hardware.mode=real type=ros2."
+                ),
+                "verify": (
+                    "POST sample telemetry → GET /api/battery (or WebSocket) shows matching "
+                    "main_battery + channel draws; twin.external_active true; power_source=webots."
+                ),
             },
         }
 

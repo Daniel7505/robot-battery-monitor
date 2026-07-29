@@ -1601,12 +1601,27 @@ def api_twin_state():
 @app.route('/api/twin/telemetry', methods=['POST'])
 def api_twin_telemetry():
     from flask import request
+    from src.hardware import get_hardware_source
     from src.twin import get_twin_bridge
 
     bridge = get_twin_bridge()
     payload = request.get_json(silent=True) or {}
     adapter = request.args.get('adapter')
     result = bridge.ingest_telemetry(payload, adapter=adapter)
+    # Push battery % + channel watts into hardware.last_readings immediately
+    # so the dashboard broadcaster shows Webots numbers without waiting for the 3s tick.
+    if result.get("ok"):
+        try:
+            hardware = get_hardware_source()
+            applied = bridge.sync_to_hardware(hardware)
+            result["applied_to_hardware"] = bool(applied)
+            feed = bridge.get_power_feed()
+            if feed is not None:
+                result["power_source"] = feed.source
+                result["battery_pct"] = feed.battery_pct
+        except Exception as exc:
+            result["applied_to_hardware"] = False
+            result["apply_error"] = str(exc)
     status = 200 if result.get("ok") else 400
     return jsonify(result), status
 
@@ -1733,9 +1748,19 @@ def _build_battery_payload():
         if hasattr(hardware, 'last_readings') and hardware.last_readings:
             latest = hardware.last_readings
             
-            # Calculate main battery
+            # Calculate main battery (keep one decimal so Webots drain is visible)
             batteries = [d.get('battery', 85) for d in latest.values()]
-            main_battery = int(sum(batteries) / len(batteries)) if batteries else 85
+            main_battery = (
+                round(sum(batteries) / len(batteries), 1) if batteries else 85
+            )
+            power_source = getattr(hardware, "power_source", None)
+            if not power_source:
+                # Infer from any channel stamp
+                for data in latest.values():
+                    if data.get("power_source"):
+                        power_source = data["power_source"]
+                        break
+            power_source = power_source or "internal"
 
             channels = []
             for ch in config.get('power_channels') or []:
@@ -1754,7 +1779,8 @@ def _build_battery_payload():
                     "allocated_w": data.get("allocated_w", data.get("draw", 0)),
                     "allocation_pct": data.get("allocation_pct", 0),
                     "throttled": data.get("throttled", False),
-                    "status": data.get("status", "normal")
+                    "status": data.get("status", "normal"),
+                    "power_source": data.get("power_source", power_source),
                 })
 
             allocation = getattr(hardware, "allocation_status", {}) or {}
@@ -1775,6 +1801,7 @@ def _build_battery_payload():
 
             return {
                 "main_battery": main_battery,
+                "power_source": power_source,
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "hardware_mode": get_hardware_mode(),
                 "ros2": ros2,

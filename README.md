@@ -164,6 +164,23 @@ Press Ctrl+C in the terminal to stop the app.
 
 ---
 
+## Webots twin power bridge
+
+When the Webots ButlerBot twin is running, battery % and channel watts on the dashboard can come **from Webots** instead of the internal simulator.
+
+- **Contract + enable + verify:** [docs/TWIN_POWER_BRIDGE.md](docs/TWIN_POWER_BRIDGE.md)
+- **Config:** `digital_twin.prefer_external` + `apply_battery_override` (see `config/config.yaml`)
+- **API:** `POST /api/twin/telemetry` → updates `hardware.last_readings` immediately
+- **Fallback:** no live twin feed → internal mission simulation continues as before
+
+```powershell
+.\scripts\start.ps1
+.\scripts\launch_webots_twin.ps1
+# Dashboard: power_source should show "webots" while the twin is posting
+```
+
+---
+
 ## Basic usage — what am I looking at?
 
 Once the dashboard is open, here is what each section means.

@@ -30,7 +30,8 @@ def test_active_profile_wheel_has_cruise_and_efficiency():
     prof = get_active_profile()
     spec = motor_spec(prof, "left_wheel")
     assert spec["efficiency"] == 0.75
-    assert spec["cruise_w"] == 11.0
+    # Mid-band cruise target (butlerbot_wheeled) — partial load without channel peg
+    assert spec["cruise_w"] == 9.5
     assert spec["rated_power_w"] == 120
     assert battery_capacity_wh(prof) == 480
     assert wheel_radius_m(prof) == 0.08

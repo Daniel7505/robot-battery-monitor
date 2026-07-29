@@ -158,7 +158,10 @@ def _symmetric_brake_cmd(motion_sign: float, speed_m_s: float) -> float:
 
 
 class AbsBrakeController:
-    """Coast-first braking — latch direction so GPS jitter can't reverse motors."""
+    """Coast-first braking — latch direction so GPS jitter can't reverse motors.
+
+    Spin/turn stops use wheel settle (not GPS alone) so residual circling ends.
+    """
 
     def __init__(self) -> None:
         self.active = False
@@ -202,6 +205,14 @@ class AbsBrakeController:
         else:
             self._spin_mode = abs(left_wv) > 0.12 and abs(right_wv) > 0.12 and left_wv * right_wv < 0
             self._motion_sign = 0.0
+        # If wheels disagree strongly, always use spin halt (kills residual yaw)
+        if abs(left_wv - right_wv) > 0.5 and left_wv * right_wv < 0:
+            self._spin_mode = True
+        mode = "spin-halt" if self._spin_mode else f"linear sign={self._motion_sign}"
+        print(
+            f"ABS brake request ({mode}) last_cmd L={last_left_v:.1f} R={last_right_v:.1f} "
+            f"wv L={left_wv:.2f} R={right_wv:.2f} speed={speed_m_s:.3f}"
+        )
 
     def clear(self) -> None:
         self.active = False
@@ -211,6 +222,30 @@ class AbsBrakeController:
 
     def wheel_rad_s(self, sensors: dict[str, PositionSensor], sensor_name: str, dt: float) -> float:
         return _wheel_rad_s(sensors, sensor_name, self._prev_wheel_pos, dt)
+
+    def _fully_stopped(
+        self,
+        speed_m_s: float,
+        forward_m_s: float,
+        left_wv: float,
+        right_wv: float,
+    ) -> bool:
+        """Linear GPS calm AND wheels settled — never complete on GPS alone."""
+        if _teleop is not None:
+            return _teleop.abs_brake_complete(
+                forward_m_s,
+                speed_m_s,
+                left_wheel_rad_s=left_wv,
+                right_wheel_rad_s=right_wv,
+                require_wheels=True,
+            )
+        return (
+            speed_m_s < STOP_SPEED_M_S
+            and abs(forward_m_s) < STOP_SPEED_M_S
+            and abs(left_wv) < STOP_WHEEL_RAD_S
+            and abs(right_wv) < STOP_WHEEL_RAD_S
+            and abs(left_wv - right_wv) < 0.2
+        )
 
     def apply(
         self,
@@ -227,27 +262,38 @@ class AbsBrakeController:
             return False
 
         self._elapsed_s += dt
-        if self._spin_mode:
-            stopped = (
-                _teleop.motion_settled(speed_m_s, left_wv, right_wv)
-                if _teleop is not None
-                else (
-                    speed_m_s < STOP_SPEED_M_S
-                    and abs(left_wv) < STOP_WHEEL_RAD_S
-                    and abs(right_wv) < STOP_WHEEL_RAD_S
-                )
-            )
-        else:
-            stopped = (
-                _teleop.abs_brake_complete(forward_m_s, speed_m_s)
-                if _teleop is not None
-                else speed_m_s < STOP_SPEED_M_S and abs(forward_m_s) < STOP_SPEED_M_S
-            )
+        # Promote to spin mode if wheels start opposing during a linear brake
+        if not self._spin_mode and left_wv * right_wv < 0 and abs(left_wv - right_wv) > 0.45:
+            self._spin_mode = True
+            print("ABS → spin-halt (detected opposing wheels)")
+
+        stopped = self._fully_stopped(speed_m_s, forward_m_s, left_wv, right_wv)
         if stopped:
             self.active = False
             _halt_wheels(motors)
-            print(f"ABS brake complete @ speed={speed_m_s:.3f} m/s")
+            print(
+                f"ABS brake complete @ speed={speed_m_s:.3f} "
+                f"wv L={left_wv:.2f} R={right_wv:.2f}"
+            )
             return True
+
+        # Always command zero while spinning; never symmetric reverse on yaw
+        # (symmetric reverse on residual yaw was the residual-circle root cause).
+        if self._spin_mode:
+            _halt_wheels(motors)
+            if self._elapsed_s >= MAX_BRAKE_DURATION_S:
+                _halt_wheels(motors)
+                # Prefer wheel settle; force-complete after long halt so we never
+                # stick in ABS forever if sensors chatter.
+                if abs(left_wv) < 0.2 and abs(right_wv) < 0.2:
+                    self.active = False
+                    print("ABS spin-halt timeout complete")
+                    return True
+                if self._elapsed_s >= MAX_BRAKE_DURATION_S * 1.5:
+                    self.active = False
+                    print("ABS spin-halt force complete (extended timeout)")
+                    return True
+            return False
 
         coast_phase = (
             _teleop.BRAKE_COAST_PHASE_S if _teleop is not None else BRAKE_COAST_PHASE_S
@@ -263,13 +309,14 @@ class AbsBrakeController:
 
         if self._elapsed_s >= MAX_BRAKE_DURATION_S:
             _halt_wheels(motors)
-            if speed_m_s < STOP_SPEED_M_S:
+            if self._fully_stopped(speed_m_s, forward_m_s, left_wv, right_wv):
                 self.active = False
-                print(f"ABS brake complete @ speed={speed_m_s:.3f} m/s")
+                print(f"ABS brake timeout complete @ speed={speed_m_s:.3f} m/s")
                 return True
             return False
 
-        if self._spin_mode:
+        # Linear ABS only when wheels roughly agree (no residual yaw)
+        if abs(left_wv - right_wv) > 0.5:
             _halt_wheels(motors)
             return False
 
@@ -682,8 +729,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     left_wv=left_wv_early,
                     right_wv=right_wv_early,
                 )
-                last_teleop_left = 0.0
-                last_teleop_right = 0.0
+                # Keep last_teleop_* until brake completes so spin mode stays correct
                 key_tracker.cancel_drive_keys()
                 keys = key_tracker.active_keys()
             if abs_brake.active:
@@ -692,6 +738,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             teleop_keys = keys - {KEY_R, KEY_SPACE}
             stop_pressed = KEY_SPACE in pressed
             if teleop_keys and not settled and not abs_brake.active:
+                # New drive while still moving — re-latch ABS using prior cmd
                 abs_brake.request(
                     forward_m_s,
                     speed_m_s,
@@ -700,8 +747,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     left_wv=left_wv_early,
                     right_wv=right_wv_early,
                 )
-                last_teleop_left = 0.0
-                last_teleop_right = 0.0
                 key_tracker.cancel_drive_keys()
                 teleop_keys = set()
             user_driving = bool(teleop_keys) and not abs_brake.active
@@ -736,10 +781,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         thermal_c = 22.0
                     print(f"Battery replenished → {battery_pct:.0f}% (dashboard command)")
                 if api_cmd.get("active"):
-                    abs_brake.clear()
+                    # New external drive cancels any incomplete stop
+                    if abs_brake.active:
+                        abs_brake.clear()
                     cached_api_left = float(api_cmd.get("left_v") or 0.0)
                     cached_api_right = float(api_cmd.get("right_v") or 0.0)
                     cached_api_source = str(api_cmd.get("source") or "api")
+                    # Track last command for stop/spin detection (API used to skip this)
+                    last_teleop_left = cached_api_left
+                    last_teleop_right = cached_api_right
                     sig = f"{cached_api_left}:{cached_api_right}:{cached_api_source}"
                     if sig != last_api_sig:
                         last_api_sig = sig
@@ -780,18 +830,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             if stop_pressed:
                 print("Keyboard stop — ABS braking")
 
-            if user_driving:
-                abs_brake.clear()
+            # Do not clear ABS while a stop is in progress
 
             left_wv = left_wv_early
             right_wv = right_wv_early
             wheel_vels = {"left_wheel": left_wv, "right_wheel": right_wv}
 
             api_driving = abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
-            if api_driving:
-                abs_brake.clear()
+            # Never clear ABS just because api_driving was true last frame
+            if api_driving and not abs_brake.active:
+                pass  # will drive below
             if abs_brake.active:
-                abs_brake.apply(
+                done = abs_brake.apply(
                     motors,
                     speed_m_s=speed_m_s,
                     forward_m_s=forward_m_s,
@@ -804,9 +854,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 gait = "stand"
                 phase_name = "standby"
                 _hold_neutral_upper_body(motors)
+                if done:
+                    last_teleop_left = 0.0
+                    last_teleop_right = 0.0
+                    cached_api_left = 0.0
+                    cached_api_right = 0.0
             elif api_driving:
                 user_driving = True
                 left_v, right_v = cached_api_left, cached_api_right
+                last_teleop_left, last_teleop_right = left_v, right_v
                 _set_drive(motors, left_v, right_v, 1.0)
                 _hold_neutral_upper_body(motors)
             elif user_driving:
@@ -823,12 +879,34 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 _halt_wheels(motors)
                 _hold_neutral_upper_body(motors)
 
+            # Detect turn/spin before power + mission (GPS may be ~0 while wheels yaw)
+            if _teleop is not None:
+                turning = _teleop.is_turning_motion(
+                    left_cmd=left_v,
+                    right_cmd=right_v,
+                    left_wheel_rad_s=left_wv,
+                    right_wheel_rad_s=right_wv,
+                    speed_m_s=speed_m_s,
+                )
+            else:
+                turning = (
+                    abs(left_v - right_v) > 1.0 and abs(left_v + right_v) < 1.5
+                ) or (left_wv * right_wv < 0 and abs(left_wv - right_wv) > 0.4)
+
+            # Pure spin: body GPS ~0 — proxy speed from wheel |ω| / cmd for power curve
+            power_speed = speed_m_s
+            if turning and speed_m_s < 0.12:
+                power_speed = max(
+                    speed_m_s,
+                    0.5 * (abs(left_wv) + abs(right_wv)) * WHEEL_RADIUS_M,
+                    0.5 * (abs(left_v) + abs(right_v)) * WHEEL_RADIUS_M,
+                )
             joints = _read_joints(
                 motors,
                 sensors,
                 wheel_vels=wheel_vels,
                 cmd_wheel_v={"left_wheel": left_v, "right_wheel": right_v},
-                speed_m_s=speed_m_s,
+                speed_m_s=power_speed,
             )
             total_draw = sum(j.get("power_w", 0) for j in joints)
             wheel_motion = max(
@@ -842,12 +920,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 or abs_brake.active
             )
             cmd_drive = abs(left_v) > 0.05 or abs(right_v) > 0.05
-            # Keep mission/phase on drive while operator commands motion OR body
-            # is still rolling — previously required both user_driving AND moving,
-            # so short teleop / coast often stayed "standby" on the dashboard.
+            # Keep mission/phase on drive/turn while commanding or still moving
             if abs_brake.active:
                 gait = "stand"
                 phase_name = "standby"
+            elif turning and not abs_brake.active:
+                gait = "turn"
+                phase_name = "teleop_turn"
             elif (user_driving or api_driving or cmd_drive) and not abs_brake.active:
                 if moving or cmd_drive:
                     gait = "drive"
@@ -859,11 +938,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 # Coast / residual motion after teleop ends
                 gait = "drive"
                 phase_name = "teleop"
-            motion_factor = 1.0 if moving else 0.0
+            motion_factor = 1.0 if (moving or turning) else 0.0
             if abs_brake.active:
                 drain_scale = 0.1
-            elif moving:
-                drain_scale = 1.0 if user_driving else 0.2
+            elif moving or turning:
+                drain_scale = 1.0 if (user_driving or turning) else 0.2
             else:
                 drain_scale = 0.05
             if _teleop is not None:
@@ -964,10 +1043,21 @@ def main() -> None:
         sys.exit(0)
 
 
-def _estimate_joint_power(motor_name: str, velocity: float, torque: float) -> float:
+def _estimate_joint_power(
+    motor_name: str,
+    velocity: float,
+    torque: float,
+    *,
+    speed_m_s: float = 0.0,
+) -> float:
     if estimate_motor_power_w is not None:
         try:
-            return estimate_motor_power_w(velocity, torque, motor_name=motor_name)
+            return estimate_motor_power_w(
+                velocity,
+                torque,
+                motor_name=motor_name,
+                speed_m_s=speed_m_s if speed_m_s > 0.02 else None,
+            )
         except Exception:
             pass
     idle = 2.5 if "wheel" in motor_name else 1.6
@@ -1010,7 +1100,7 @@ def _read_joints(
             cmd_v = abs(float(cmd_wheel_v.get(motor_name, 0.0)))
             if cmd_v > abs(velocity):
                 velocity = math.copysign(cmd_v, velocity if abs(velocity) > 1e-6 else cmd_v)
-        # If still near-zero but body is moving, derive wheel ω from GPS speed
+        # If still near-zero but body is moving (or spin proxy speed), derive ω
         if "wheel" in motor_name and abs(velocity) < 0.15 and speed_m_s > 0.06:
             velocity = speed_m_s / max(WHEEL_RADIUS_M, 0.02)
 
@@ -1025,7 +1115,11 @@ def _read_joints(
                     torque = tf
             except Exception:
                 pass
-        power_w = _estimate_joint_power(motor_name, velocity, torque)
+        # Prefer per-wheel |ω| for power; body speed only when wheel vel is weak
+        joint_speed = speed_m_s if abs(velocity) < 0.2 else 0.0
+        power_w = _estimate_joint_power(
+            motor_name, velocity, torque, speed_m_s=joint_speed
+        )
         joints.append({
             "name": motor_name,
             "position": round(position, 4),

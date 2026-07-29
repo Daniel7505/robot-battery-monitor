@@ -24,6 +24,7 @@ _PHASE_STANDBY_LRUS: dict[str, frozenset[str]] = {
     "drive_transit": frozenset({"arms", "torso"}),
     "walk_transit": frozenset({"arms", "torso"}),
     "teleop": frozenset({"arms", "torso"}),  # keyboard / API drive
+    "teleop_turn": frozenset({"arms", "torso"}),
     "patrol": frozenset({"arms"}),
     "manipulate": frozenset({"locomotion"}),
     "return_idle": frozenset({"arms", "torso", "cooling"}),
@@ -34,6 +35,7 @@ _PHASE_PRIMARY_LRUS: dict[str, frozenset[str]] = {
     "drive_transit": frozenset({"locomotion", "compute", "cooling"}),
     "walk_transit": frozenset({"locomotion", "compute", "cooling"}),
     "teleop": frozenset({"locomotion", "compute", "cooling"}),
+    "teleop_turn": frozenset({"locomotion", "compute", "cooling"}),
     "patrol": frozenset({"locomotion", "compute", "cooling"}),
     "manipulate": frozenset({"arms", "torso", "compute", "cooling"}),
     "return_idle": frozenset({"locomotion", "compute"}),
@@ -44,6 +46,7 @@ _PHASE_LABELS: dict[str, str] = {
     "drive_transit": "Wheeled transit — locomotion primary, arms/torso tucked",
     "walk_transit": "Wheeled transit — locomotion primary, arms/torso tucked",
     "teleop": "Teleop drive — locomotion primary",
+    "teleop_turn": "Teleop turn / spin — differential drive",
     "patrol": "Patrol — locomotion primary, arms low",
     "manipulate": "Manipulation — arms/torso + cooling primary, base idle",
     "return_idle": "Return — locomotion only, arms/torso idle",
@@ -51,7 +54,7 @@ _PHASE_LABELS: dict[str, str] = {
 
 # Twin phases where high Legs draw is intentional (do not caution-throttle)
 _DRIVE_LIKE_PHASES = frozenset({
-    "drive_transit", "walk_transit", "teleop", "patrol",
+    "drive_transit", "walk_transit", "teleop", "teleop_turn", "patrol",
 })
 
 

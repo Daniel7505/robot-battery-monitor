@@ -49,7 +49,8 @@ Observed on live twin (profile-grounded model; short API / agent-script drive):
 |------|------|----------------|-----------------|----------------|
 | **Idle** | **~4 W** | **~18 W** | idle / standby | normal; thr usually false |
 | **Forward roll** | **~13–28 W** (scales with speed; often mid-20s near cruise) | **~35–50 W** | moving / teleop | may go cautious; no permanent spiral |
-| **After stop** | **back toward ~4–5 W** when speed ~0 | **~18 W** | idle / standby | settles |
+| **In-place turn** | **above idle** (from wheel \|ω\| / cmd; GPS speed may be ~0) | **elevated** | moving / **teleop_turn** | same as drive |
+| **After stop** | **back toward ~4–5 W** when speed ~0 | **~18 W** | idle / standby | settles (incl. after turn) |
 
 **Manual / command teleop baseline (earlier same day):** idle Legs 5→4 W (after profile), drive peak 28 W, mission idle→moving→idle.
 
@@ -72,9 +73,9 @@ Same twin command API as dashboard Drive buttons (not Webots keyboard). Expected
 
 | Topic | Note |
 |-------|------|
-| **Turn cost** | In-place spin not yet a solid energy sample (short turn test showed no Legs rise). |
+| **Turn cost** | Pure rotation uses wheel rates (not GPS speed). Mission phase `teleop_turn` / gait `turn`. Residual spin after Forward→Turn→Stop fixed (spin-halt + wheel settle). |
 | **Mid-band** | Improved with cruise curve (partial speeds ~13–23 W); full teleop may still approach channel max (28 W). |
-| **Stop settle** | Occasional coast / ABS timing; may need a second stop or wait for Legs to drop. |
+| **Stop settle** | ABS requires body *and* wheels settled; spin path always halts (no symmetric reverse on yaw). |
 | **Agent during drive** | Can go cautious and briefly throttle; clears when idle — not the old latch loop. |
 | **Not a vendor BOM** | Specs are public-class averages for interpretability, not a purchase list. |
 

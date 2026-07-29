@@ -266,8 +266,8 @@ class ROS2BatterySource(RealHardwareSource):
         phase = str(loc.get("phase") or "").lower()
         # Motion / teleop always wins over a stale idle task from the feed
         if (
-            gait in ("drive", "transit", "walk")
-            or phase in ("teleop", "drive_transit", "walk_transit")
+            gait in ("drive", "transit", "walk", "turn")
+            or phase in ("teleop", "teleop_turn", "drive_transit", "walk_transit")
             or speed >= 0.08
         ):
             return "moving"

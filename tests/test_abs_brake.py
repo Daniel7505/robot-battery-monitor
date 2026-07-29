@@ -7,6 +7,7 @@ from src.teleop_agent import (
     battery_drain_pct,
     brake_wheel_cap_rad_s,
     is_spin_brake,
+    is_turning_motion,
     latch_brake_motion_sign,
     motion_settled,
     sanitize_motion,
@@ -77,6 +78,27 @@ def test_spin_brake_detects_turn_in_place():
     )
 
 
+def test_spin_brake_after_forward_then_turn_even_with_speed():
+    """Forward then turn left must still use spin-halt (not linear ABS)."""
+    assert is_spin_brake(
+        last_left_v=-4.0,
+        last_right_v=4.0,
+        left_wheel_rad_s=-2.0,
+        right_wheel_rad_s=2.0,
+        speed_m_s=0.45,  # residual GPS after forward
+    )
+
+
+def test_brake_complete_requires_wheels_settled():
+    # GPS calm but wheels still spinning → not complete
+    assert abs_brake_complete(
+        0.01, 0.01, left_wheel_rad_s=1.5, right_wheel_rad_s=-1.4
+    ) is False
+    assert abs_brake_complete(
+        0.01, 0.01, left_wheel_rad_s=0.0, right_wheel_rad_s=0.0
+    ) is True
+
+
 def test_sanitize_motion_clamps_gps_spikes():
     speed, forward = sanitize_motion(4.5, 3.0)
     assert speed == CONTROL_SPEED_CAP_M_S
@@ -89,6 +111,16 @@ def test_motion_not_settled_during_turn():
 
 def test_motion_settled_when_idle():
     assert motion_settled(0.01, 0.0, 0.0) is True
+
+
+def test_is_turning_motion_detects_spin_with_zero_gps():
+    assert is_turning_motion(
+        left_cmd=-4.0,
+        right_cmd=4.0,
+        left_wheel_rad_s=-2.0,
+        right_wheel_rad_s=2.0,
+        speed_m_s=0.0,
+    )
 
 
 def test_battery_drain_scales_with_draw():

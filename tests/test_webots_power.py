@@ -1,3 +1,5 @@
+import pytest
+
 from src.twin.webots_power import (
     aggregate_channel_draws,
     build_webots_telemetry,
@@ -36,13 +38,15 @@ def test_aggregate_channel_draws_butlerbot_motors():
     }
     channels = aggregate_channel_draws(motor_power, gait="stand")
     assert channels["Legs"] == 8.2
-    assert channels["Torso"] == 2.5
+    # Torso joint + stabilizer idle_w (profile)
+    assert channels["Torso"] == pytest.approx(3.3, abs=0.05)
     assert channels["Arms"] == 3.4
     assert channels["Compute"] >= 7.5
 
 
 def test_gait_to_task_mapping():
     assert gait_to_task("drive") == "moving"
+    assert gait_to_task("turn") == "moving"
     assert gait_to_task("walk") == "moving"
     assert gait_to_task("patrol") == "balanced"
     assert gait_to_task("manipulate") == "high_load"

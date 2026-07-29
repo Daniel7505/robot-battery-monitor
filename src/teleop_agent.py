@@ -214,13 +214,51 @@ def is_spin_brake(
     right_wheel_rad_s: float,
     speed_m_s: float,
 ) -> bool:
-    """Turn-in-place — halt wheels only (per-wheel oppose caused runaway)."""
-    turn_cmd = (
-        abs(last_left_v - last_right_v) > 1.0
-        and abs(last_left_v + last_right_v) < 1.5
+    """True when stop should kill yaw/spin rather than use linear ABS.
+
+    Differential last command or opposite wheel rates take priority even when
+    residual GPS speed is still high (forward-then-turn used to miss spin mode
+    and keep applying symmetric reverse, which leaves residual circling).
+    """
+    net = last_left_v + last_right_v
+    diff_cmd = abs(last_left_v - last_right_v)
+    turn_cmd = diff_cmd > 1.0 and abs(net) < max(1.5, 0.65 * diff_cmd)
+    wheel_diff = abs(left_wheel_rad_s - right_wheel_rad_s)
+    wheel_turn = wheel_diff > 0.35 and (
+        left_wheel_rad_s * right_wheel_rad_s < 0 or wheel_diff > abs(left_wheel_rad_s + right_wheel_rad_s)
     )
-    wheel_turn = abs(left_wheel_rad_s - right_wheel_rad_s) > 0.25
-    return (turn_cmd or wheel_turn) and speed_m_s < 0.35
+    # Dominant yaw at any linear speed → spin halt path
+    if turn_cmd or wheel_turn:
+        return True
+    return False
+
+
+def is_turning_motion(
+    *,
+    left_cmd: float = 0.0,
+    right_cmd: float = 0.0,
+    left_wheel_rad_s: float = 0.0,
+    right_wheel_rad_s: float = 0.0,
+    speed_m_s: float = 0.0,
+) -> bool:
+    """In-place or strong differential turn (GPS speed may be ~0)."""
+    net = left_cmd + right_cmd
+    diff = abs(left_cmd - right_cmd)
+    if diff > 1.0 and abs(net) < max(1.2, 0.7 * diff):
+        return True
+    wdiff = abs(left_wheel_rad_s - right_wheel_rad_s)
+    if wdiff > 0.45 and (
+        left_wheel_rad_s * right_wheel_rad_s < 0 or wdiff > abs(net) * 0.5 + 0.3
+    ):
+        return True
+    # Pure rotation: wheels moving but little body translation
+    if (
+        speed_m_s < 0.12
+        and (abs(left_wheel_rad_s) > 0.4 or abs(right_wheel_rad_s) > 0.4)
+        and wdiff > 0.3
+    ):
+        return True
+    return False
 
 
 def brake_wheel_cap_rad_s(speed_m_s: float) -> float:
@@ -282,5 +320,19 @@ def abs_brake_complete(
     speed_m_s: float,
     *,
     stop_speed_m_s: float = STOP_SPEED_M_S,
+    left_wheel_rad_s: float = 0.0,
+    right_wheel_rad_s: float = 0.0,
+    require_wheels: bool = True,
 ) -> bool:
-    return speed_m_s < stop_speed_m_s and abs(forward_m_s) < stop_speed_m_s
+    """Linear GPS calm + (optional) wheel settle — never complete on GPS alone while spinning."""
+    linear_ok = speed_m_s < stop_speed_m_s and abs(forward_m_s) < stop_speed_m_s
+    if not require_wheels:
+        return linear_ok
+    # Stricter than motion_settled alone: keep STOP thresholds for body speed
+    # and require wheels calm so residual yaw cannot complete as "stopped".
+    return (
+        linear_ok
+        and abs(left_wheel_rad_s) < MOTION_SETTLED_WHEEL_RAD_S
+        and abs(right_wheel_rad_s) < MOTION_SETTLED_WHEEL_RAD_S
+        and abs(left_wheel_rad_s - right_wheel_rad_s) < 0.35
+    )

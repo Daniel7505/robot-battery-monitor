@@ -1615,6 +1615,13 @@ def api_twin_telemetry():
             hardware = get_hardware_source()
             applied = bridge.sync_to_hardware(hardware)
             result["applied_to_hardware"] = bool(applied)
+            # Update PMS mission from twin motion on every POST (~0.5s), not only
+            # the 3s telemetry tick — so the dashboard leaves Idle while driving.
+            if hasattr(hardware, "_apply_twin_mission_task") and bridge._last_telemetry:
+                if hardware._apply_twin_mission_task(bridge._last_telemetry):
+                    result["mission_task"] = getattr(
+                        getattr(hardware, "_mission", None), "task_id", None
+                    )
             feed = bridge.get_power_feed()
             if feed is not None:
                 result["power_source"] = feed.source

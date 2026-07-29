@@ -244,6 +244,53 @@ class ROS2BatterySource(RealHardwareSource):
             self.health_status = "RUNNING"
         return True
 
+    @staticmethod
+    def _task_from_twin_telemetry(tel) -> str | None:
+        """Map live Webots gait/phase/speed to a PMS mission task."""
+        if tel is None:
+            return None
+        loc = tel.locomotion or {}
+        try:
+            speed = float(loc.get("speed_m_s") or 0.0)
+        except (TypeError, ValueError):
+            speed = 0.0
+        gait = str(loc.get("gait") or "").lower()
+        phase = str(loc.get("phase") or "").lower()
+        # Motion / teleop always wins over a stale idle task from the feed
+        if (
+            gait in ("drive", "transit", "walk")
+            or phase in ("teleop", "drive_transit", "walk_transit")
+            or speed >= 0.08
+        ):
+            return "moving"
+        if gait == "patrol" or phase == "patrol":
+            return "balanced"
+        if gait in ("manipulate", "high_load", "grasp") or phase == "manipulate":
+            return "high_load"
+        if tel.task in ("idle", "moving", "balanced", "high_load"):
+            return tel.task
+        if gait in ("stand", "idle", "standby") or phase in ("standby", "return_idle"):
+            return "idle"
+        return tel.task
+
+    def _apply_twin_mission_task(self, tel) -> bool:
+        """Force PMS task from twin motion so dashboard leaves Idle while driving."""
+        desired = self._task_from_twin_telemetry(tel)
+        if not desired or desired == self._mission.task_id:
+            return False
+        # Real teleop/transit motion clears agent task hold so we don't stay locked
+        # on Idle/balanced for 14s while the robot is clearly driving.
+        if desired == "moving" and self._agent_task_hold_remaining > 0:
+            self._agent_task_hold_remaining = 0.0
+        elif self._agent_task_hold_remaining > 0 and desired != "moving":
+            return False
+        if self._mission.force_task(desired):
+            for ch_id, draw in self._channel_draw.items():
+                self._mission._blend[ch_id] = draw
+            logger.info(f"{self.hardware_name} twin mission → {desired}")
+            return True
+        return False
+
     def _sync_twin_feed(self, twin_active: bool) -> None:
         # apply_readings=False: we are already inside _build_readings which owns
         # last_readings; only inject ROS2/battery, do not re-enter apply_power_feed.
@@ -251,8 +298,10 @@ class ROS2BatterySource(RealHardwareSource):
             self.power_source = "internal"
             self._twin.sync_to_hardware(self, apply_readings=False)
             return
-        # Agent task hold: keep twin power numbers, do not re-apply mission override.
-        if self._agent_task_hold_remaining > 0:
+        tel = self._twin._last_telemetry
+        motion_task = self._task_from_twin_telemetry(tel)
+        # Agent task hold: keep twin power numbers; still allow moving override.
+        if self._agent_task_hold_remaining > 0 and motion_task != "moving":
             self._agent_task_hold_remaining = max(
                 0.0, self._agent_task_hold_remaining - TICK_SECONDS
             )
@@ -264,6 +313,8 @@ class ROS2BatterySource(RealHardwareSource):
                 apply_readings=False,
             )
             return
+        if self._agent_task_hold_remaining > 0 and motion_task == "moving":
+            self._agent_task_hold_remaining = 0.0
         self._twin.sync_to_hardware(self, apply_readings=False)
 
     def _build_readings_inner(self) -> dict:
@@ -284,8 +335,12 @@ class ROS2BatterySource(RealHardwareSource):
                 "source": tel.source,
             }
         self._apply_ros2_commands()
+        # Prefer explicit twin motion → PMS task (not only ROS2 inject path)
+        twin_task_changed = False
+        if twin_active and tel:
+            twin_task_changed = self._apply_twin_mission_task(tel)
         if twin_active:
-            task_changed = False
+            task_changed = twin_task_changed
         else:
             task_changed = self._simulator.advance(self._mission)
         if task_changed:

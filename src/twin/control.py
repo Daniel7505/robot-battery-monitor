@@ -22,6 +22,7 @@ PHASE_LABELS: dict[str, str] = {
     "standby": "Standby",
     "drive_transit": "Drive / Transit",
     "walk_transit": "Drive / Transit",
+    "teleop": "Teleop Drive",
     "patrol": "Patrol",
     "manipulate": "Manipulate",
     "return_idle": "Return to Idle",
@@ -47,10 +48,13 @@ def _phase_index(phase: str | None, flow: list[dict]) -> int:
     if not phase:
         return -1
     norm = phase.lower()
+    # Teleop maps onto the transit step in the ButlerBot timeline
+    if norm == "teleop":
+        norm = "drive_transit"
     for i, step in enumerate(flow):
         if step["phase"] == phase or step["phase"] == norm:
             return i
-        if step["phase"] == "drive_transit" and norm == "walk_transit":
+        if step["phase"] == "drive_transit" and norm in ("walk_transit", "teleop"):
             return i
     return -1
 
@@ -113,14 +117,39 @@ def build_twin_control_status(bridge, hardware) -> dict:
     loop_forecast = mission.get("loop_forecast") or {}
 
     pms_task = mission.get("task") or allocation.get("task") or "idle"
+    pms_task_from_hardware = pms_task
+    # If twin is clearly driving but PMS lag still says idle, label from gait/speed
+    try:
+        speed_f = float(speed) if speed is not None else 0.0
+    except (TypeError, ValueError):
+        speed_f = 0.0
+    gait_l = str(gait or "").lower()
+    phase_l = str(phase or "").lower()
+    if external and pms_task == "idle" and (
+        gait_l in ("drive", "transit", "walk")
+        or phase_l in ("teleop", "drive_transit", "walk_transit")
+        or speed_f >= 0.08
+    ):
+        pms_task = "moving"
     profile = TASK_PROFILES.get(pms_task)
     phase_label = PHASE_LABELS.get(str(phase or ""), (phase or "—").replace("_", " ").title())
+    # Prefer teleop label when speed is up even if phase string lagged
+    if external and phase_l in ("", "standby") and (
+        gait_l in ("drive", "transit") or speed_f >= 0.08
+    ):
+        phase = "teleop"
+        phase_label = PHASE_LABELS.get("teleop", "Teleop Drive")
     mission_context = context_summary(phase, pms_task) if phase else {}
     task_align = task_phase_alignment(phase, pms_task) if external and phase else {}
 
     intervening = bool(agent.get("intervening") or agent.get("applied_actions"))
     stress = is_twin_stress_phase(phase)
     sensors = (tel.raw.get("sensors") if tel and tel.raw else {}) or {}
+    # Don't keep stale "Idle / Standby" label when we overrode the task for motion
+    if pms_task != pms_task_from_hardware and profile:
+        pms_task_label = profile.label
+    else:
+        pms_task_label = mission.get("task_label") or (profile.label if profile else pms_task)
 
     return {
         "active": external,
@@ -136,7 +165,7 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "braking": bool(sensors.get("braking")),
         "pose": pose,
         "pms_task": pms_task,
-        "pms_task_label": mission.get("task_label") or (profile.label if profile else pms_task),
+        "pms_task_label": pms_task_label,
         "allocation_status": allocation.get("status", "ok"),
         "utilization_pct": allocation.get("utilization_pct"),
         "throttled_channels": allocation.get("throttled_channels") or [],

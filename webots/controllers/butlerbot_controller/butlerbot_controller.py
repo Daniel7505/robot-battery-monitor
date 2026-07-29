@@ -841,12 +841,24 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 or wheel_motion > 0.25
                 or abs_brake.active
             )
-            if user_driving and moving and not abs_brake.active:
-                gait = "drive"
-                phase_name = "teleop"
-            elif user_driving or api_driving:
+            cmd_drive = abs(left_v) > 0.05 or abs(right_v) > 0.05
+            # Keep mission/phase on drive while operator commands motion OR body
+            # is still rolling — previously required both user_driving AND moving,
+            # so short teleop / coast often stayed "standby" on the dashboard.
+            if abs_brake.active:
                 gait = "stand"
                 phase_name = "standby"
+            elif (user_driving or api_driving or cmd_drive) and not abs_brake.active:
+                if moving or cmd_drive:
+                    gait = "drive"
+                    phase_name = "teleop"
+                else:
+                    gait = "stand"
+                    phase_name = "standby"
+            elif moving and speed_m_s > 0.08:
+                # Coast / residual motion after teleop ends
+                gait = "drive"
+                phase_name = "teleop"
             motion_factor = 1.0 if moving else 0.0
             if abs_brake.active:
                 drain_scale = 0.1

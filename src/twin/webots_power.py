@@ -88,8 +88,13 @@ def estimate_motor_power_w(
     motor_idle_w: float | None = None,
     scale: float | None = None,
     profile: dict | None = None,
+    speed_m_s: float | None = None,
 ) -> float:
-    """Estimate electrical draw from joint velocity (rad/s) and torque (Nm)."""
+    """Estimate electrical draw from joint velocity (rad/s) and torque (Nm).
+
+    Wheel motors prefer a cruise curve so partial speeds land mid-band instead of
+    always pegging the channel max under full teleop command.
+    """
     prof = _resolve_profile(profile)
     name = str(motor_name or "")
     idle_w, motor_scale, tau_proxy = motor_idle_and_scale(name or "joint", prof)
@@ -105,13 +110,33 @@ def estimate_motor_power_w(
         tau = vel * tau_proxy
 
     spec = motor_spec(prof, name) if name else {}
-    eff = float(spec.get("efficiency") or 0.0)
-    mechanical = tau * vel
-    if eff > 0.05 and mechanical > 0:
-        # Prefer efficiency-grounded conversion when we have real/synthesized τ·ω
-        raw = idle_w + mechanical / eff
+    is_wheel = "wheel" in name.lower()
+
+    # Profile cruise curve for wheels: smooth |ω| (or body speed) → watts
+    cruise_w = spec.get("cruise_w")
+    if is_wheel and cruise_w is not None and vel > 0.02:
+        radius = wheel_radius_m(prof)
+        v_cruise = float(spec.get("cruise_speed_m_s") or 0.40)
+        omega_cruise = max(v_cruise / max(radius, 1e-4), 0.5)
+        # Prefer body speed when provided (smoother than noisy encoder)
+        if speed_m_s is not None and float(speed_m_s) > 0.02:
+            omega_equiv = float(speed_m_s) / max(radius, 1e-4)
+            frac = min(1.35, max(0.0, omega_equiv / omega_cruise))
+        else:
+            frac = min(1.35, vel / omega_cruise)
+        # Gentle power curve: ~linear near cruise, not squared (avoids early peak)
+        cruise = float(cruise_w)
+        raw = idle_w + (cruise - idle_w) * (frac ** 1.15)
+        # Light torque boost only when feedback present and high
+        if abs(float(torque)) > 1e-3:
+            raw += min(4.0, abs(float(torque)) * vel * 0.15)
     else:
-        raw = idle_w + mechanical * motor_scale
+        eff = float(spec.get("efficiency") or 0.0)
+        mechanical = tau * vel
+        if eff > 0.05 and mechanical > 0:
+            raw = idle_w + mechanical / eff
+        else:
+            raw = idle_w + mechanical * motor_scale
 
     if name:
         return clamp_motor_power_w(name, raw, prof)
@@ -121,6 +146,8 @@ def estimate_motor_power_w(
 def motor_powers_from_joints(
     joints: list[dict],
     profile: dict | None = None,
+    *,
+    speed_m_s: float = 0.0,
 ) -> dict[str, float]:
     """Build per-motor watt map from joint state samples."""
     prof = _resolve_profile(profile)
@@ -136,6 +163,7 @@ def motor_powers_from_joints(
             joint.get("torque", 0.0),
             motor_name=name,
             profile=prof,
+            speed_m_s=speed_m_s,
         )
     return powers
 
@@ -236,15 +264,18 @@ def aggregate_channel_draws(
     channels["Compute"] = round(compute_w, 2)
 
     # Mild stress from gait/phase (profile cruise already sets base drive level)
+    # Keep stress mild — cruise curve already sets drive level (avoids always 28W cap)
     mult = stress_multiplier(gait=gait, phase=phase)
-    if mult > 1.0:
+    if mult > 1.0 and speed_m_s > 0.05:
         motion = motion_scale(speed_m_s=speed_m_s, joints=joints)
-        effective = 1.0 + (mult - 1.0) * motion
+        effective = 1.0 + (mult - 1.0) * motion * 0.55
         for ch_id in list(channels.keys()):
             if ch_id == "Compute":
-                channels[ch_id] = round(channels[ch_id] * min(effective, 1.15), 2)
+                channels[ch_id] = round(channels[ch_id] * min(effective, 1.1), 2)
+            elif ch_id == "Legs":
+                channels[ch_id] = round(channels[ch_id] * min(effective, 1.2), 2)
             else:
-                channels[ch_id] = round(channels[ch_id] * effective, 2)
+                channels[ch_id] = round(channels[ch_id] * min(effective, 1.15), 2)
 
     for ch_id, total in list(channels.items()):
         cap = channel_caps.get(ch_id, {})
@@ -277,7 +308,9 @@ def build_webots_telemetry(
     capacity_wh = battery_capacity_wh(prof)
     batt = prof.get("battery") or {}
 
-    motor_power_w = motor_power_w or motor_powers_from_joints(joints, prof)
+    motor_power_w = motor_power_w or motor_powers_from_joints(
+        joints, prof, speed_m_s=speed_m_s
+    )
     channel_draws = aggregate_channel_draws(
         motor_power_w,
         gait=gait,

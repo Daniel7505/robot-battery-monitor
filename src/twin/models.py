@@ -30,6 +30,8 @@ class TwinTelemetry:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     robot_name: str = "ButlerBot"
     battery_pct: float | None = None
+    battery_capacity_wh: float | None = None
+    hardware_profile: str | None = None
     task: str | None = None
     channel_draws: dict[str, float] = field(default_factory=dict)
     throttle: float | None = None
@@ -76,6 +78,14 @@ class TwinTelemetry:
             timestamp=ts,
             robot_name=robot.get("name") or payload.get("robot_name", "ButlerBot"),
             battery_pct=_optional_float(robot.get("main_battery_pct") or robot.get("battery_pct")),
+            battery_capacity_wh=_optional_float(
+                robot.get("battery_capacity_wh") or robot.get("capacity_wh")
+            ),
+            hardware_profile=(
+                robot.get("hardware_profile")
+                or power.get("hardware_profile")
+                or payload.get("hardware_profile")
+            ),
             task=task,
             channel_draws=cleaned_draws,
             throttle=_optional_float(payload.get("throttle") or power.get("throttle_factor")),
@@ -104,6 +114,14 @@ class TwinTelemetry:
             "timestamp": self.timestamp.isoformat(),
             "robot_name": self.robot_name,
             "battery_pct": self.battery_pct,
+            "battery_capacity_wh": self.battery_capacity_wh,
+            "hardware_profile": self.hardware_profile,
+            "robot": {
+                "name": self.robot_name,
+                "main_battery_pct": self.battery_pct,
+                "battery_capacity_wh": self.battery_capacity_wh,
+                "hardware_profile": self.hardware_profile,
+            },
             "task": self.task,
             "channel_draws": self.channel_draws,
             "throttle": self.throttle,

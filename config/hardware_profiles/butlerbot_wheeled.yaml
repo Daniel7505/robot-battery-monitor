@@ -39,10 +39,10 @@ motors:
     rated_speed_rpm: 150
     efficiency: 0.75
     idle_w: 2.0               # controller + no-load losses at rest
-    cruise_w: 11.0            # target electrical at cruise_speed_m_s
+    cruise_w: 9.5             # target electrical at cruise_speed_m_s (mid-band)
     cruise_speed_m_s: 0.40
     cont_w: 35                # sustained electrical budget for clamps
-    peak_w: 45                # per-motor estimate clamp (channel also caps)
+    peak_w: 40                # per-motor estimate clamp (channel also caps)
     torque_proxy_coeff: 0.38  # τ ≈ coeff · |ω| when feedback is 0
   right_wheel:
     label: "Right BLDC hub (48V, ~120W cont class)"
@@ -54,10 +54,10 @@ motors:
     rated_speed_rpm: 150
     efficiency: 0.75
     idle_w: 2.0
-    cruise_w: 11.0
+    cruise_w: 9.5
     cruise_speed_m_s: 0.40
     cont_w: 35
-    peak_w: 45
+    peak_w: 40
     torque_proxy_coeff: 0.38
 
   # Upper body (kept for Webots joints; light loads at rest)

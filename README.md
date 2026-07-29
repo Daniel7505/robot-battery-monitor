@@ -164,6 +164,18 @@ Press Ctrl+C in the terminal to stop the app.
 
 ---
 
+## Hardware profile (wheeled)
+
+Power estimates for the Webots twin are grounded in:
+
+```
+config/hardware_profiles/butlerbot_wheeled.yaml
+```
+
+Drive motors, stabilizers, compute/sensors, and battery Wh are defined there. See [docs/HARDWARE_PROFILE.md](docs/HARDWARE_PROFILE.md).
+
+---
+
 ## Webots twin power bridge
 
 When the Webots ButlerBot twin is running, battery % and channel watts on the dashboard can come **from Webots** instead of the internal simulator.

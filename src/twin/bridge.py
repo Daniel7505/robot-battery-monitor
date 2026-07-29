@@ -35,7 +35,12 @@ class DigitalTwinBridge:
         self._prefer_external = bool(twin_cfg.get("prefer_external", True))
         self._apply_battery = bool(twin_cfg.get("apply_battery_override", False))
         self._robot_name = config.get("robot", "name", "ButlerBot")
-        self._battery_wh = config.get("robot", "main_battery_capacity_wh", 480)
+        try:
+            from src.hardware_profile import battery_capacity_wh
+
+            self._battery_wh = battery_capacity_wh()
+        except Exception:
+            self._battery_wh = config.get("robot", "main_battery_capacity_wh", 480)
 
         self._last_telemetry: TwinTelemetry | None = None
         self._telemetry_count = 0

@@ -1,10 +1,12 @@
 """
 Load reference hardware profiles for grounded power estimation.
+
+Profiles live in config/hardware_profiles/<id>.yaml and feed Webots channel
+draws (src/twin/webots_power.py), battery capacity helpers, and forecast tools.
 """
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -20,6 +22,10 @@ _FALLBACK_PROFILE = {
     "label": "Default (config.yaml channels)",
     "battery": {"capacity_wh": 480, "nominal_voltage_v": 48},
     "compute": {"idle_w": 7.5, "active_w": 10.5, "peak_w": 22.0},
+    "sensors": {"idle_w": 0.0, "active_w": 0.0},
+    "stabilizers": {"idle_w": 0.0, "active_w": 0.0, "channel": "Torso"},
+    "modes": {},
+    "geometry": {"wheel_radius_m": 0.08},
     "motors": {},
     "channels": {},
     "phase_draw_w": {},
@@ -57,17 +63,79 @@ def get_active_profile() -> dict:
     return load_hardware_profile(get_active_profile_id())
 
 
+def clear_profile_cache() -> None:
+    """Drop cached YAML (tests / hot-reload)."""
+    load_hardware_profile.cache_clear()
+
+
 def motor_spec(profile: dict, motor_name: str) -> dict:
     motors = profile.get("motors") or {}
     return dict(motors.get(motor_name) or motors.get(motor_name.lower()) or {})
+
+
+def battery_capacity_wh(profile: dict | None = None) -> float:
+    """Pack energy (Wh) — profile first, then config robot/simulation."""
+    prof = profile or get_active_profile()
+    batt = prof.get("battery") or {}
+    if batt.get("capacity_wh") is not None:
+        return float(batt["capacity_wh"])
+    sim = config.get("simulation") or {}
+    if sim.get("battery_capacity_wh") is not None:
+        return float(sim["battery_capacity_wh"])
+    return float(config.get("robot", "main_battery_capacity_wh", 480) or 480)
+
+
+def battery_nominal_voltage_v(profile: dict | None = None) -> float:
+    prof = profile or get_active_profile()
+    batt = prof.get("battery") or {}
+    return float(batt.get("nominal_voltage_v", 48))
+
+
+def wheel_radius_m(profile: dict | None = None) -> float:
+    prof = profile or get_active_profile()
+    geom = prof.get("geometry") or {}
+    return float(geom.get("wheel_radius_m", 0.08) or 0.08)
 
 
 def clamp_motor_power_w(motor_name: str, watts: float, profile: dict | None = None) -> float:
     """Clamp estimated draw to reference motor peak."""
     prof = profile or get_active_profile()
     spec = motor_spec(prof, motor_name)
-    peak = float(spec.get("peak_w", 120))
+    peak = float(spec.get("peak_w") or spec.get("peak_power_w") or 120)
     return round(min(max(0.0, watts), peak), 2)
+
+
+def motor_idle_and_scale(
+    motor_name: str, profile: dict | None = None
+) -> tuple[float, float, float]:
+    """
+    Return (idle_w, scale, torque_proxy_coeff) for velocity/torque power model.
+
+    Prefer cruise_w + cruise_speed_m_s to derive scale so watts match the profile
+    at a known speed instead of opaque hard-coded constants.
+    """
+    prof = profile or get_active_profile()
+    spec = motor_spec(prof, motor_name)
+    is_wheel = "wheel" in motor_name.lower()
+    idle_w = float(spec.get("idle_w", 2.0 if is_wheel else 1.4))
+    tau_proxy = float(spec.get("torque_proxy_coeff", 0.38 if is_wheel else 0.30))
+    if "scale" in spec and spec.get("cruise_w") is None:
+        return idle_w, float(spec["scale"]), tau_proxy
+
+    cruise_w = spec.get("cruise_w")
+    cruise_speed = spec.get("cruise_speed_m_s")
+    if cruise_w is not None and is_wheel:
+        radius = wheel_radius_m(prof)
+        v_cruise = float(cruise_speed if cruise_speed is not None else 0.40)
+        omega = max(v_cruise / max(radius, 1e-4), 0.5)
+        # P = idle + tau_proxy * scale * ω²  (with τ = tau_proxy · ω)
+        target = max(float(cruise_w) - idle_w, 0.5)
+        scale = target / (tau_proxy * omega * omega + 1e-6)
+        return idle_w, float(scale), tau_proxy
+
+    if "scale" in spec:
+        return idle_w, float(spec["scale"]), tau_proxy
+    return idle_w, (3.6 if is_wheel else 4.0), tau_proxy
 
 
 def phase_reference_draw_w(phase: str, profile: dict | None = None) -> float:
@@ -87,6 +155,7 @@ def phase_reference_duration_s(phase: str, profile: dict | None = None) -> float
 _PHASE_ALIASES = {
     "walk_transit": "drive_transit",
     "walk": "drive_transit",
+    "teleop": "teleop",
 }
 
 

@@ -131,13 +131,21 @@ class ROS2BatterySource(RealHardwareSource):
         self._channel_draw[ch_id] = smoothed
         return smoothed
 
+    def _battery_capacity_wh(self) -> float:
+        try:
+            from src.hardware_profile import battery_capacity_wh
+
+            return float(battery_capacity_wh())
+        except Exception:
+            sim_cfg = config.get("simulation") or {}
+            return float(
+                sim_cfg.get("battery_capacity_wh")
+                or config.get("robot", "main_battery_capacity_wh", 480)
+                or 480
+            )
+
     def _drain_battery(self, total_draw_w: float) -> None:
-        sim_cfg = config.get("simulation") or {}
-        capacity_wh = (
-            sim_cfg.get("battery_capacity_wh")
-            or config.get("robot", "main_battery_capacity_wh", 480)
-            or 480
-        )
+        capacity_wh = self._battery_capacity_wh()
         energy_wh = total_draw_w * (TICK_SECONDS / 3600)
         drain_pct = (energy_wh / capacity_wh) * 100
         self._main_battery = max(5.0, round(self._main_battery - drain_pct, 3))
@@ -347,12 +355,7 @@ class ROS2BatterySource(RealHardwareSource):
             for ch_id, draw in self._channel_draw.items():
                 self._mission._blend[ch_id] = draw
 
-        sim_cfg = config.get("simulation") or {}
-        capacity_wh = (
-            sim_cfg.get("battery_capacity_wh")
-            or config.get("robot", "main_battery_capacity_wh", 480)
-            or 480
-        )
+        capacity_wh = self._battery_capacity_wh()
 
         recent_draw = sum(self._channel_draw.values()) if self._channel_draw else 0
         pre_prediction = self._predictor.forecast(
@@ -674,12 +677,7 @@ class ROS2BatterySource(RealHardwareSource):
         self._ros2.start()
         if self._simulator.auto_start:
             self._simulator.start(self._mission)
-        sim_cfg = config.get("simulation") or {}
-        capacity_wh = (
-            sim_cfg.get("battery_capacity_wh")
-            or config.get("robot", "main_battery_capacity_wh", 480)
-            or 480
-        )
+        capacity_wh = self._battery_capacity_wh()
         info = self._mission.mission_info(_START_BATTERY_PCT, capacity_wh, 0)
         ros_mode = self._ros2.status.get("mode", "mock")
         logger.info(

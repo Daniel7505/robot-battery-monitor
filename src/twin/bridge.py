@@ -119,6 +119,7 @@ class DigitalTwinBridge:
         include_mission: bool = True,
         include_sensors: bool = True,
         include_battery: bool = True,
+        apply_readings: bool = True,
     ) -> bool:
         """Apply fresh external telemetry into the live PMS layer (non-blocking)."""
         if not self._is_external_active() or not self._prefer_external:
@@ -148,7 +149,9 @@ class DigitalTwinBridge:
             hardware._main_battery = round(float(feed.battery_pct), 2)
 
         # Immediate last_readings patch so dashboard does not wait for the 3s tick.
-        if hasattr(hardware, "apply_power_feed"):
+        # Skip when called from inside _build_readings (apply_readings=False) — that
+        # path already rebuilds last_readings and would only risk lock re-entry.
+        if apply_readings and hasattr(hardware, "apply_power_feed"):
             hardware.apply_power_feed(feed)
         elif hasattr(hardware, "power_source"):
             hardware.power_source = feed.source

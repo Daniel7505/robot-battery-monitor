@@ -64,7 +64,8 @@ class ROS2BatterySource(RealHardwareSource):
         self._agent_task_hold_remaining: float = 0.0
         # "internal" | "webots" | "custom" — drives last_readings power numbers
         self.power_source: str = "internal"
-        self._readings_lock = threading.Lock()
+        # RLock: _build_readings → sync_to_hardware → apply_power_feed may re-enter
+        self._readings_lock = threading.RLock()
 
     def _apply_ros2_commands(self) -> None:
         twin_active = self._twin._is_external_active()
@@ -244,9 +245,11 @@ class ROS2BatterySource(RealHardwareSource):
         return True
 
     def _sync_twin_feed(self, twin_active: bool) -> None:
+        # apply_readings=False: we are already inside _build_readings which owns
+        # last_readings; only inject ROS2/battery, do not re-enter apply_power_feed.
         if not twin_active:
             self.power_source = "internal"
-            self._twin.sync_to_hardware(self)
+            self._twin.sync_to_hardware(self, apply_readings=False)
             return
         # Agent task hold: keep twin power numbers, do not re-apply mission override.
         if self._agent_task_hold_remaining > 0:
@@ -258,9 +261,10 @@ class ROS2BatterySource(RealHardwareSource):
                 include_mission=False,
                 include_sensors=True,
                 include_battery=True,
+                apply_readings=False,
             )
             return
-        self._twin.sync_to_hardware(self)
+        self._twin.sync_to_hardware(self, apply_readings=False)
 
     def _build_readings_inner(self) -> dict:
         self.twin_status = self._twin.status()

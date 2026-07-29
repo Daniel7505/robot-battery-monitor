@@ -108,6 +108,11 @@ class TwinTelemetry:
         return errors
 
     def to_dict(self) -> dict:
+        # Preserve controller sensors (wheel rates, yaw_rate, residual_spin) so
+        # dashboard/live checks can see hub spin even when GPS speed is ~0.
+        sensors = {}
+        if isinstance(self.raw, dict):
+            sensors = dict(self.raw.get("sensors") or {})
         return {
             "source": self.source,
             "adapter": self.adapter,
@@ -127,6 +132,7 @@ class TwinTelemetry:
             "throttle": self.throttle,
             "locomotion": self.locomotion,
             "pose": self.pose,
+            "sensors": sensors,
         }
 
 

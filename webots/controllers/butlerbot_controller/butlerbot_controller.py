@@ -75,6 +75,10 @@ STOP_SPEED_M_S = 0.02
 STOP_WHEEL_RAD_S = 0.08
 BRAKE_COAST_PHASE_S = 0.15
 MAX_BRAKE_DURATION_S = 12.0
+# Residual body yaw (rad/s) that must die before we report idle — pure spin
+# has GPS≈0 while the robot still rotates on camera.
+STOP_YAW_RATE_RAD_S = 0.12
+WHEEL_HOLD_VEL = 12.0  # position-mode approach rate for hub lock (not MAX_JOINT_V)
 
 KEY_W = ord("W")
 KEY_A = ord("A")
@@ -184,8 +188,7 @@ class AbsBrakeController:
         self.active = True
         self._elapsed_s = 0.0
         self._calm_hold_s = 0.0
-        # Capture lock targets at brake request (not while freewheeling later)
-        _clear_wheel_locks()
+        # Keep existing lock targets if any; do not clear mid-spin (that chases).
         if _teleop is not None:
             self._spin_mode = _teleop.is_spin_brake(
                 last_left_v=last_left_v,
@@ -236,29 +239,6 @@ class AbsBrakeController:
             and abs(left_wv - right_wv) < 0.12
         )
 
-    def _fully_stopped(
-        self,
-        speed_m_s: float,
-        forward_m_s: float,
-        left_wv: float,
-        right_wv: float,
-    ) -> bool:
-        """Body calm AND both wheels locked — never complete on GPS alone."""
-        if not self._wheels_locked(left_wv, right_wv):
-            return False
-        if _teleop is not None:
-            return _teleop.abs_brake_complete(
-                forward_m_s,
-                speed_m_s,
-                left_wheel_rad_s=left_wv,
-                right_wheel_rad_s=right_wv,
-                require_wheels=True,
-            )
-        return (
-            speed_m_s < STOP_SPEED_M_S
-            and abs(forward_m_s) < STOP_SPEED_M_S
-        )
-
     def apply(
         self,
         motors: dict[str, Motor],
@@ -269,17 +249,12 @@ class AbsBrakeController:
         left_wv: float,
         right_wv: float,
         dt: float,
+        yaw_rate: float = 0.0,
     ) -> bool:
         """Apply ABS braking. Returns True when fully stopped.
 
-        Live lessons:
-        - Symmetric reverse on yaw re-energizes residual circles.
-        - Per-wheel high-gain damping can also re-energize (speed → cap).
-        - Completing only when GPS is low leaves Stop stuck while hubs are still
-          freewheeling / GPS chatters at ~0.15 m/s.
-        Strategy: brief soft linear oppose only for agreed forward motion; then
-        fixed position-lock both hubs; complete when BOTH wheels quiet for a hold
-        (GPS ignored for complete). Force-complete after a few seconds.
+        Must kill BOTH hub rates and residual body yaw. GPS speed is NOT sufficient
+        (pure in-place spin reads ~0 on GPS while the left wheel still turns on camera).
         """
         if not self.active:
             return False
@@ -290,44 +265,56 @@ class AbsBrakeController:
             self._calm_hold_s = 0.0
             print("ABS → spin-halt (detected opposing wheels)")
 
-        locked = self._wheels_locked(left_wv, right_wv)
-        if locked:
+        wheels_ok = self._wheels_locked(left_wv, right_wv)
+        yaw_ok = abs(yaw_rate) < STOP_YAW_RATE_RAD_S
+        if wheels_ok and yaw_ok:
             self._calm_hold_s += dt
         else:
             self._calm_hold_s = 0.0
 
-        # Complete on wheel hold — do NOT wait for GPS (ghost ~0.15 after spin)
-        if self._calm_hold_s >= 0.40:
+        # Complete only when BOTH hubs quiet AND body yaw quiet for a hold
+        if self._calm_hold_s >= 0.45:
             self.active = False
-            _halt_wheels(motors, sensors, lock=True)
+            _hard_zero_wheels(
+                motors, sensors, left_wv=left_wv, right_wv=right_wv
+            )
             print(
                 f"ABS complete @ speed={speed_m_s:.3f} "
-                f"wv L={left_wv:.2f} R={right_wv:.2f} hold={self._calm_hold_s:.2f}s"
+                f"wv L={left_wv:.2f} R={right_wv:.2f} yaw_rate={yaw_rate:.2f} "
+                f"hold={self._calm_hold_s:.2f}s"
             )
             return True
 
-        # Force-complete: keep commanding lock but end ABS so idle path holds locks
-        if self._elapsed_s >= 3.0:
+        # Never force-complete while a hub or body yaw is still moving
+        if self._elapsed_s >= MAX_BRAKE_DURATION_S and wheels_ok and yaw_ok:
             self.active = False
-            _halt_wheels(motors, sensors, lock=True)
-            print(
-                f"ABS force complete @ {self._elapsed_s:.1f}s "
-                f"speed={speed_m_s:.3f} wv L={left_wv:.2f} R={right_wv:.2f}"
+            _hard_zero_wheels(
+                motors, sensors, left_wv=left_wv, right_wv=right_wv
             )
+            print("ABS timeout complete (wheels+yaw quiet)")
             return True
 
-        use_lock = (
-            self._spin_mode
-            or speed_m_s < 0.22
-            or abs(left_wv - right_wv) > 0.45
-            or self._elapsed_s >= 0.45
-        )
-        if use_lock:
-            # Fixed encoder lock (targets captured at request / first lock)
-            _halt_wheels(motors, sensors, lock=True)
+        # Residual body yaw with quiet encoders: oppose yaw (left freewheel case)
+        if abs(yaw_rate) >= STOP_YAW_RATE_RAD_S and abs(left_wv) < 0.5 and abs(right_wv) < 0.5:
+            _oppose_body_yaw(motors, yaw_rate)
             return False
 
-        # Short linear soft-oppose only when both hubs agree and still fast
+        # Spin / low speed / unequal hubs: hard-zero BOTH wheels every tick
+        use_hard = (
+            self._spin_mode
+            or speed_m_s < 0.25
+            or abs(left_wv - right_wv) > 0.35
+            or abs(left_wv) > 0.5
+            or abs(right_wv) > 0.5
+            or self._elapsed_s >= 0.35
+        )
+        if use_hard:
+            _hard_zero_wheels(
+                motors, sensors, left_wv=left_wv, right_wv=right_wv
+            )
+            return False
+
+        # Short linear soft-oppose only for agreed forward cruise
         if abs(forward_m_s) >= STOP_SPEED_M_S:
             self._motion_sign = math.copysign(1.0, forward_m_s)
         elif self._motion_sign == 0.0:
@@ -335,6 +322,7 @@ class AbsBrakeController:
         cmd = _symmetric_brake_cmd(self._motion_sign, speed_m_s) * 0.7
         for wheel in ("left_wheel", "right_wheel"):
             motor = motors[wheel]
+            _enable_full_wheel_torque(motor)
             motor.setPosition(float("inf"))
             motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
         return False
@@ -394,41 +382,134 @@ def _clear_wheel_locks() -> None:
     _WHEEL_LOCK_POS.clear()
 
 
+def _enable_full_wheel_torque(motor: Motor) -> None:
+    """Ensure Stop can actually fight residual hub spin (both sides)."""
+    for attr, value in (
+        ("setAvailableTorque", 50.0),
+        ("setAvailableForce", 50.0),
+    ):
+        if hasattr(motor, attr):
+            try:
+                getattr(motor, attr)(value)
+            except Exception:
+                pass
+
+
+def _hard_zero_wheels(
+    motors: dict[str, Motor],
+    sensors: dict[str, PositionSensor] | None = None,
+    *,
+    left_wv: float | None = None,
+    right_wv: float | None = None,
+) -> None:
+    """Zero BOTH hubs every tick — no freewheel, no single-wheel residual.
+
+    Live bug: GPS speed≈0 + phase standby while left wheel still spins on camera.
+    GPS only sees translation; pure yaw / one freewheeling hub is invisible to it.
+
+    CRITICAL: never call setPosition(NaN). Sensor values are NaN before the first
+    valid step — that invalid position leaves a hub freewheeling (user left spin).
+
+    While a hub is still spinning fast: velocity-0 + full torque only.
+    Once slow + finite encoder: hold fixed encoder angle.
+    """
+    rates = {"left_wheel": left_wv, "right_wheel": right_wv}
+    for wheel in ("left_wheel", "right_wheel"):
+        motor = motors[wheel]
+        _enable_full_wheel_torque(motor)
+        wv = rates.get(wheel)
+        spinning = wv is not None and abs(wv) >= 0.25
+        # Always assert velocity zero in velocity mode first (safe even if sensors NaN)
+        motor.setPosition(float("inf"))
+        motor.setVelocity(0.0)
+        if spinning or sensors is None:
+            continue
+        sensor = sensors.get(f"{wheel}_sensor")
+        if sensor is None:
+            continue
+        try:
+            if wheel not in _WHEEL_LOCK_POS:
+                pos = float(sensor.getValue())
+                if not math.isfinite(pos):
+                    continue  # keep velocity-0 only until encoder is valid
+                _WHEEL_LOCK_POS[wheel] = pos
+            hold = _WHEEL_LOCK_POS.get(wheel)
+            if hold is None or not math.isfinite(hold):
+                continue
+            motor.setPosition(hold)
+            motor.setVelocity(WHEEL_HOLD_VEL)
+        except Exception:
+            pass
+
+
 def _halt_wheels(
     motors: dict[str, Motor],
     sensors: dict[str, PositionSensor] | None = None,
     *,
     lock: bool = False,
+    left_wv: float | None = None,
+    right_wv: float | None = None,
 ) -> None:
-    """Stop drive wheels.
-
-    Velocity-zero with position=inf freewheels in Webots (live residual spin after
-    turn→Stop). When lock=True, hold each hub at a *fixed* encoder angle captured
-    on the first lock call — re-reading position every tick would chase the spin
-    and never stop the wheel.
-    """
+    """Stop drive wheels — both always. lock=True uses hard dual-hub freeze."""
+    if lock:
+        _hard_zero_wheels(motors, sensors, left_wv=left_wv, right_wv=right_wv)
+        return
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
-        if lock and sensors is not None:
-            sname = f"{wheel}_sensor"
-            sensor = sensors.get(sname)
-            if sensor is not None:
-                try:
-                    if wheel not in _WHEEL_LOCK_POS:
-                        _WHEEL_LOCK_POS[wheel] = float(sensor.getValue())
-                    motor.setPosition(_WHEEL_LOCK_POS[wheel])
-                    motor.setVelocity(MAX_JOINT_V)
-                    continue
-                except Exception:
-                    pass
+        _enable_full_wheel_torque(motor)
         motor.setPosition(float("inf"))
         motor.setVelocity(0.0)
+
+
+def _imu_yaw(imu: InertialUnit | None) -> float:
+    if imu is None:
+        return 0.0
+    try:
+        return float(imu.getRollPitchYaw()[2])
+    except Exception:
+        return 0.0
+
+
+def _yaw_rate(imu: InertialUnit | None, prev_yaw: float, dt: float) -> tuple[float, float]:
+    """Return (yaw_rate_rad_s, yaw_now)."""
+    yaw = _imu_yaw(imu)
+    if dt <= 1e-6:
+        return 0.0, yaw
+    dy = yaw - prev_yaw
+    # wrap to [-pi, pi]
+    while dy > math.pi:
+        dy -= 2.0 * math.pi
+    while dy < -math.pi:
+        dy += 2.0 * math.pi
+    return dy / dt, yaw
+
+
+def _oppose_body_yaw(
+    motors: dict[str, Motor],
+    yaw_rate: float,
+    *,
+    gain: float = 2.5,
+) -> None:
+    """Brief differential command opposing residual body spin (GPS may be ~0)."""
+    if abs(yaw_rate) < STOP_YAW_RATE_RAD_S:
+        return
+    # Positive yaw_rate ≈ CCW: oppose with left+, right- (and reverse for CW)
+    mag = min(5.0, abs(yaw_rate) * gain)
+    sign = 1.0 if yaw_rate > 0.0 else -1.0
+    left_cmd = sign * mag
+    right_cmd = -sign * mag
+    for wheel, cmd in (("left_wheel", left_cmd), ("right_wheel", right_cmd)):
+        motor = motors[wheel]
+        _enable_full_wheel_torque(motor)
+        motor.setPosition(float("inf"))
+        motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
 
 
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
     scale = max(0.0, min(1.0, throttle))
     for side, cmd in (("left_wheel", left_v * scale), ("right_wheel", right_v * scale)):
         motor = motors[side]
+        _enable_full_wheel_torque(motor)
         motor.setPosition(float("inf"))
         motor.setVelocity(_clamp(cmd, MAX_WHEEL_V))
 
@@ -734,11 +815,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     drive_log_elapsed = 0.0
     last_teleop_left = 0.0
     last_teleop_right = 0.0
+    prev_yaw = _imu_yaw(imu)
+    yaw_rate = 0.0
 
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
     print("Teleop: Arrow keys or I/J/K/L — Space = stop. Click the FLOOR (not the robot)")
     print("Or use Dashboard: Drive Forward (API) under the twin panel")
+    # Velocity-zero only at init — sensors are NaN until after the first steps
+    for _w in ("left_wheel", "right_wheel"):
+        _enable_full_wheel_torque(motors[_w])
+        motors[_w].setPosition(float("inf"))
+        motors[_w].setVelocity(0.0)
 
     while robot.step(timestep) != -1:
         try:
@@ -756,28 +844,34 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             speed_m_s, forward_m_s = speed_estimator.estimate_motion(gps, dt)
             left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
-            # Locked hubs + no drive cmd: zero GPS for control/mission/power.
-            # Live: ABS can finish with wv≈0 while GPS still ~0.15–0.4; without this
-            # damp, mission stays teleop and Legs stay high (ω synthesized from GPS).
+            yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
+
             hubs_locked = (
-                abs(left_wv_early) < 0.15
-                and abs(right_wv_early) < 0.15
-                and abs(left_wv_early - right_wv_early) < 0.2
+                abs(left_wv_early) < STOP_WHEEL_RAD_S
+                and abs(right_wv_early) < STOP_WHEEL_RAD_S
+                and abs(left_wv_early - right_wv_early) < 0.12
             )
+            yaw_quiet = abs(yaw_rate) < STOP_YAW_RATE_RAD_S
             no_drive_cmd = (
                 abs(last_teleop_left) < 0.05
                 and abs(last_teleop_right) < 0.05
                 and abs(cached_api_left) < 0.05
                 and abs(cached_api_right) < 0.05
             )
-            if hubs_locked and no_drive_cmd and not abs_brake.active:
+            # ONLY zero GPS for mission/power when hubs AND body yaw are quiet.
+            # Never mask a left-wheel / in-place spin as "idle" (camera can still spin).
+            if hubs_locked and yaw_quiet and no_drive_cmd and not abs_brake.active:
                 speed_m_s = 0.0
                 forward_m_s = 0.0
 
             settled = (
-                _teleop.motion_settled(speed_m_s, left_wv_early, right_wv_early)
-                if _teleop is not None
-                else speed_m_s < 0.08
+                hubs_locked
+                and yaw_quiet
+                and (
+                    _teleop.motion_settled(speed_m_s, left_wv_early, right_wv_early)
+                    if _teleop is not None
+                    else speed_m_s < 0.08
+                )
             )
 
             if KEY_SPACE in pressed:
@@ -914,6 +1008,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     left_wv=left_wv,
                     right_wv=right_wv,
                     dt=dt,
+                    yaw_rate=yaw_rate,
                 )
                 left_v = right_v = 0.0
                 user_driving = False
@@ -925,8 +1020,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     last_teleop_right = 0.0
                     cached_api_left = 0.0
                     cached_api_right = 0.0
-                    # Freeze hubs at current angles after complete
-                    _halt_wheels(motors, sensors, lock=True)
+                    _hard_zero_wheels(
+                        motors, sensors, left_wv=left_wv, right_wv=right_wv
+                    )
             elif api_driving:
                 user_driving = True
                 left_v, right_v = cached_api_left, cached_api_right
@@ -946,22 +1042,34 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 )
             else:
                 left_v = right_v = 0.0
-                # Idle: position-lock so freewheel residual cannot keep spinning
-                _halt_wheels(motors, sensors, lock=True)
+                residual_hub = abs(left_wv) > 0.10 or abs(right_wv) > 0.10
+                residual_yaw = abs(yaw_rate) >= STOP_YAW_RATE_RAD_S
+                if residual_hub or residual_yaw:
+                    # Still spinning on camera while GPS≈0 — kill it, do not report idle
+                    if residual_yaw and not residual_hub:
+                        _oppose_body_yaw(motors, yaw_rate)
+                    else:
+                        _hard_zero_wheels(
+                            motors, sensors, left_wv=left_wv, right_wv=right_wv
+                        )
+                    if not abs_brake.active:
+                        print(
+                            f"Residual spin — re-ABS L={left_wv:.2f} R={right_wv:.2f} "
+                            f"yaw_rate={yaw_rate:.2f}"
+                        )
+                        abs_brake.request(
+                            forward_m_s,
+                            speed_m_s,
+                            last_left_v=last_teleop_left,
+                            last_right_v=last_teleop_right,
+                            left_wv=left_wv,
+                            right_wv=right_wv,
+                        )
+                else:
+                    _hard_zero_wheels(
+                        motors, sensors, left_wv=left_wv, right_wv=right_wv
+                    )
                 _hold_neutral_upper_body(motors)
-                # Re-arm ABS if a hub is still rotating after we thought we stopped
-                if abs(left_wv) > 0.35 or abs(right_wv) > 0.35:
-                    print(
-                        f"Residual wheel spin — re-ABS L={left_wv:.2f} R={right_wv:.2f}"
-                    )
-                    abs_brake.request(
-                        forward_m_s,
-                        speed_m_s,
-                        last_left_v=last_teleop_left,
-                        last_right_v=last_teleop_right,
-                        left_wv=left_wv,
-                        right_wv=right_wv,
-                    )
 
             # Detect turn/spin before power + mission (GPS may be ~0 while wheels yaw)
             if _teleop is not None:
@@ -998,16 +1106,26 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 for j in joints
                 if "wheel" in j.get("name", "")
             )
+            residual_spin = (
+                abs(left_wv) > 0.10
+                or abs(right_wv) > 0.10
+                or abs(yaw_rate) >= STOP_YAW_RATE_RAD_S
+            )
             moving = (
                 speed_m_s > 0.04
-                or wheel_motion > 0.25
+                or wheel_motion > 0.15
+                or residual_spin
                 or abs_brake.active
             )
             cmd_drive = abs(left_v) > 0.05 or abs(right_v) > 0.05
-            # Keep mission/phase on drive/turn while commanding or still moving
+            # Keep mission/phase on drive/turn while commanding or still moving.
+            # Residual hub/yaw spin must NOT look like standby idle on the dashboard.
             if abs_brake.active:
                 gait = "stand"
                 phase_name = "standby"
+            elif residual_spin and not (user_driving or api_driving or cmd_drive):
+                gait = "turn"
+                phase_name = "teleop_turn"
             elif turning and not abs_brake.active:
                 gait = "turn"
                 phase_name = "teleop_turn"
@@ -1095,10 +1213,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     pose=_read_pose(gps, imu),
                     sensors={
                         "imu_roll": _safe_imu_roll(imu),
+                        "yaw_rate": round(yaw_rate, 3),
+                        "left_wheel_rad_s": round(left_wv, 3),
+                        "right_wheel_rad_s": round(right_wv, 3),
                         "thermal_c": round(thermal_c, 2),
                         "teleop_active": user_driving,
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
+                        "residual_spin": residual_spin,
                     },
                 )
                 result = publish_telemetry(payload, dashboard)

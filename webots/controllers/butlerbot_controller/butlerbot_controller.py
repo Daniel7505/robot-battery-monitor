@@ -277,34 +277,63 @@ class AbsBrakeController:
             )
             return True
 
-        # Always command zero while spinning; never symmetric reverse on yaw
-        # (symmetric reverse on residual yaw was the residual-circle root cause).
+        # Spin/yaw: always command zero — never symmetric reverse (that re-energizes
+        # residual circling). Hold until body+wheels settle; if wheels stay calm but
+        # GPS chatters, accept stop after a short hold (GPS ghost after pure spin).
         if self._spin_mode:
             _halt_wheels(motors)
+            wheels_calm = (
+                abs(left_wv) < 0.15
+                and abs(right_wv) < 0.15
+                and abs(left_wv - right_wv) < 0.2
+            )
+            # Wheels dead + low GPS → done
+            if wheels_calm and speed_m_s < 0.06 and abs(forward_m_s) < 0.06:
+                self.active = False
+                print(
+                    f"ABS spin-halt complete @ speed={speed_m_s:.3f} "
+                    f"wv L={left_wv:.2f} R={right_wv:.2f}"
+                )
+                return True
+            # Wheels dead for a while but GPS still nonzero → treat as settled
+            # (live: pure spin often leaves GPS ~0.1–0.15 with locked hubs)
+            if wheels_calm and self._elapsed_s >= 0.8:
+                self.active = False
+                print(
+                    f"ABS spin-halt complete (wheels locked, gps={speed_m_s:.3f})"
+                )
+                return True
             if self._elapsed_s >= MAX_BRAKE_DURATION_S:
                 _halt_wheels(motors)
-                # Prefer wheel settle; force-complete after long halt so we never
-                # stick in ABS forever if sensors chatter.
-                if abs(left_wv) < 0.2 and abs(right_wv) < 0.2:
+                if wheels_calm or self._elapsed_s >= MAX_BRAKE_DURATION_S * 1.25:
                     self.active = False
-                    print("ABS spin-halt timeout complete")
-                    return True
-                if self._elapsed_s >= MAX_BRAKE_DURATION_S * 1.5:
-                    self.active = False
-                    print("ABS spin-halt force complete (extended timeout)")
+                    print("ABS spin-halt force complete (timeout)")
                     return True
             return False
 
-        coast_phase = (
-            _teleop.BRAKE_COAST_PHASE_S if _teleop is not None else BRAKE_COAST_PHASE_S
-        )
-        coast_only = (
-            _teleop.should_coast_before_brake(speed_m_s)
-            if _teleop is not None
-            else speed_m_s < 0.12
-        )
-        if coast_only and self._elapsed_s < coast_phase:
+        # Low speed: pure halt only — reverse thrash overshoots into runaway
+        # (live: reverse-leg stop latched sign and accelerated to speed cap).
+        if speed_m_s < 0.18:
             _halt_wheels(motors)
+            wheels_calm = (
+                abs(left_wv) < 0.15
+                and abs(right_wv) < 0.15
+                and abs(left_wv - right_wv) < 0.2
+            )
+            # Accept settle in the GPS-chatter band once hubs are locked
+            if wheels_calm and speed_m_s < 0.12:
+                self.active = False
+                print(
+                    f"ABS linear halt complete @ speed={speed_m_s:.3f} "
+                    f"wv L={left_wv:.2f} R={right_wv:.2f}"
+                )
+                return True
+            if wheels_calm and self._elapsed_s >= 1.2:
+                self.active = False
+                print(
+                    f"ABS linear halt complete (wheels locked, gps={speed_m_s:.3f})"
+                )
+                return True
             return False
 
         if self._elapsed_s >= MAX_BRAKE_DURATION_S:
@@ -320,7 +349,15 @@ class AbsBrakeController:
             _halt_wheels(motors)
             return False
 
+        # Re-latch from live GPS each tick so overshoot reverses brake direction
+        if abs(forward_m_s) >= STOP_SPEED_M_S:
+            self._motion_sign = math.copysign(1.0, forward_m_s)
+        elif self._motion_sign == 0.0 and speed_m_s >= STOP_SPEED_M_S:
+            self._motion_sign = 1.0
+
         cmd = _symmetric_brake_cmd(self._motion_sign, speed_m_s)
+        # Soften oppose so reverse stop does not sling past zero into a new sprint
+        cmd = cmd * 0.85
         for wheel in ("left_wheel", "right_wheel"):
             motor = motors[wheel]
             motor.setPosition(float("inf"))
@@ -713,6 +750,21 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             speed_m_s, forward_m_s = speed_estimator.estimate_motion(gps, dt)
             left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
+            # Locked hubs + no drive cmd: GPS often chatters ~0.1–0.15 after spin.
+            # Damp for control/mission so residual circle is not "kept alive" in state.
+            if (
+                abs(left_wv_early) < 0.12
+                and abs(right_wv_early) < 0.12
+                and abs(left_wv_early - right_wv_early) < 0.15
+                and not abs_brake.active
+                and abs(last_teleop_left) < 0.05
+                and abs(last_teleop_right) < 0.05
+                and abs(cached_api_left) < 0.05
+                and abs(cached_api_right) < 0.05
+                and speed_m_s < 0.22
+            ):
+                speed_m_s = 0.0
+                forward_m_s = 0.0
 
             settled = (
                 _teleop.motion_settled(speed_m_s, left_wv_early, right_wv_early)
@@ -800,19 +852,23 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 else:
                     api_source = str(api_cmd.get("source") or "")
                     stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
+                    was_api_driving = (
+                        abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
+                    )
+                    need_abs = False
                     if stop_epoch > last_stop_epoch:
                         last_stop_epoch = stop_epoch
+                        need_abs = True
                         print("External drive stop — ABS braking")
-                        abs_brake.request(
-                            forward_m_s,
-                            speed_m_s,
-                            last_left_v=last_teleop_left,
-                            last_right_v=last_teleop_right,
-                            left_wv=left_wv_early,
-                            right_wv=right_wv_early,
-                        )
                     elif api_source == "stop" and cached_api_source != "stop":
+                        need_abs = True
                         print("External drive stop — ABS braking")
+                    elif was_api_driving and not abs_brake.active:
+                        # duration_s expired: bridge zeros cmd without stop_epoch —
+                        # still ABS so residual yaw/coast is killed.
+                        need_abs = True
+                        print("External drive expired — ABS braking")
+                    if need_abs and not abs_brake.active:
                         abs_brake.request(
                             forward_m_s,
                             speed_m_s,

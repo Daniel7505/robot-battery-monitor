@@ -149,6 +149,7 @@ def main() -> int:
 
     print("CONTINUOUS free roll toward finish (re-assert drive)...")
     print("  Watch Webots: green → red, one continuous push, then stop.")
+    print("  Wheel sensors: ω time-series + ABS park engagements logged.")
     t0 = time.time()
     last_assert = 0.0
     samples: list[dict] = []
@@ -156,11 +157,12 @@ def main() -> int:
     path_odo = 0.0
     finished = False
     t_finish = None
+    park_events: list[dict] = []
+    prev_abs = False
 
     while time.time() - t0 < args.timeout:
         t = time.time() - t0
         if t - last_assert >= 0.4:
-            # Keep drive alive until past finish; long duration each reassert
             cmd(
                 base,
                 {
@@ -179,29 +181,55 @@ def main() -> int:
         wl = abs(float(d.get("hub_left_rad_s") or 0))
         wr = abs(float(d.get("hub_right_rad_s") or 0))
         v_odo = 0.5 * (wl + wr) * r
+        abs_on = bool(d.get("abs_active"))
+        wheels = d.get("wheels") or {}
+        wL = wheels.get("left") or {}
+        wR = wheels.get("right") or {}
         if samples:
             px, py = samples[-1]["x"], samples[-1]["y"]
             path_gps += math.hypot(x - px, y - py)
             path_odo += v_odo * dt
+        # Rising edge: park engaged while we intended free roll
+        if abs_on and not prev_abs and t > 0.5:
+            park_events.append(
+                {
+                    "t": round(t, 3),
+                    "x": round(x, 4),
+                    "omega_l": round(wl, 4),
+                    "omega_r": round(wr, 4),
+                    "src": d.get("cmd_source"),
+                }
+            )
+            print(
+                f"  PARK ENGAGE t={t:.2f}s x={x:.3f} "
+                f"ωL={wl:.2f} ωR={wr:.2f} src={d.get('cmd_source')} "
+                f"(wheel sensors should show ω drop after this)"
+            )
+        prev_abs = abs_on
+
         samples.append(
             {
                 "t": round(t, 3),
                 "x": x,
                 "y": y,
-                "v_odo": v_odo,
-                "omega": 0.5 * (wl + wr),
-                "abs": d.get("abs_active"),
+                "v_odo": round(v_odo, 4),
+                "omega": round(0.5 * (wl + wr), 4),
+                "omega_l": round(wl, 4),
+                "omega_r": round(wr, 4),
+                "abs": abs_on,
                 "src": d.get("cmd_source"),
+                "locked_l": wL.get("locked"),
+                "locked_r": wR.get("locked"),
+                "rot_stop_l_deg": wL.get("rot_since_stop_deg"),
+                "rot_stop_r_deg": wR.get("rot_since_stop_deg"),
             }
         )
         if int(t) != int(samples[-2]["t"] if len(samples) > 1 else -1):
             print(
                 f"  t={t:5.2f}s  GPS=({x:.3f},{y:.3f})  "
                 f"dist_to_finish={finish_x - x:.3f}m  "
-                f"ω={0.5*(wl+wr):.2f}  src={d.get('cmd_source')} abs={d.get('abs_active')}"
+                f"ωL={wl:.2f} ωR={wr:.2f}  src={d.get('cmd_source')} abs={abs_on}"
             )
-            if d.get("abs_active") and t > 0.8:
-                print("  !! ABS active mid-track (free-roll interrupted)")
 
         if x >= finish_x - args.finish_tol:
             finished = True
@@ -219,6 +247,48 @@ def main() -> int:
     run_t = t_finish if t_finish is not None else (time.time() - t0)
     chord = math.hypot(x1 - x0, y1 - y0)
 
+    # --- Wheel rotational speed graph (ASCII over time) ---
+    def sparkline(values: list[float], width: int = 60) -> str:
+        if not values:
+            return ""
+        chars = " _.-~=+*#"
+        mx = max(values) if max(values) > 1e-6 else 1.0
+        step = max(1, len(values) // width)
+        out = []
+        for i in range(0, len(values), step):
+            chunk = values[i : i + step]
+            v = sum(chunk) / len(chunk)
+            idx = min(len(chars) - 1, int(round((v / mx) * (len(chars) - 1))))
+            out.append(chars[idx])
+        return "".join(out[:width])
+
+    omegas = [float(s["omega"]) for s in samples]
+    abs_flags = [1.0 if s["abs"] else 0.0 for s in samples]
+    print()
+    print("=" * 62)
+    print(" WHEEL ROTATION TIME SERIES (encoder omega)")
+    print("=" * 62)
+    print(f"  omega avg: [{sparkline(omegas)}]")
+    print(f"  abs park:  [{sparkline(abs_flags)}]  (high = ABS engaged)")
+    print(f"  scale: omega max during run = {max(omegas) if omegas else 0:.2f} rad/s")
+    print(f"  park engage count mid-run   = {len(park_events)}")
+    if park_events:
+        for ev in park_events[:12]:
+            print(
+                f"    @ t={ev['t']:.2f}s x={ev['x']:.3f} "
+                f"ωL={ev['omega_l']:.2f} ωR={ev['omega_r']:.2f}"
+            )
+    else:
+        print("    (none — free roll without ABS interrupt)")
+
+    # Fraction of samples where ABS was on after t>1s
+    late = [s for s in samples if s["t"] > 1.0]
+    abs_frac = (
+        sum(1 for s in late if s["abs"]) / len(late) if late else 0.0
+    )
+    # Fraction where omega collapsed while we still wanted drive
+    low_omega = sum(1 for s in late if s["omega"] < 0.5) / len(late) if late else 0.0
+
     print()
     print("=" * 62)
     print(" TRACK RESULTS")
@@ -234,13 +304,16 @@ def main() -> int:
     print(f"  wheel odo ∫ωr      {path_odo:.4f} m")
     print(f"  run time           {run_t:.2f} s  (min free-roll target 5.0 s)")
     print(f"  finished           {finished}")
+    print(f"  ABS on fraction    {100*abs_frac:.1f}% of samples after t>1s")
+    print(f"  low-ω fraction     {100*low_omega:.1f}% (ω<0.5 while should cruise)")
 
     ok_start = err_start < 0.5
     ok_finish = finished and err_finish < args.finish_tol + 0.15
     ok_time = run_t >= 5.0
     ok_dist = abs(chord - track_len) < 1.0 or abs(path_gps - track_len) < 1.0
-    # Wheel odo vs track: if slip, will fail — report honestly
     ok_odo = abs(path_odo - track_len) < 1.5
+    # Free-roll continuity: few/no mid-run park engages
+    ok_free_roll = len(park_events) == 0 and abs_frac < 0.05
 
     print()
     print("  CHECKS:")
@@ -250,6 +323,7 @@ def main() -> int:
     print(f"    run time ≥ 5 s               : {'PASS' if ok_time else 'FAIL'}")
     print(f"    body distance ≈ 5 m          : {'PASS' if ok_dist else 'FAIL'}")
     print(f"    wheel odo ≈ 5 m              : {'PASS' if ok_odo else 'FAIL'} (slip-sensitive)")
+    print(f"    free-roll (no mid ABS park)  : {'PASS' if ok_free_roll else 'FAIL'}  << hop test")
 
     row = {
         "label": args.label,
@@ -278,9 +352,21 @@ def main() -> int:
             "chord_m": chord,
             "v_cmd": args.wheel_v * r,
             "finished": finished,
+            "park_engage_count": len(park_events),
+            "park_events": park_events,
+            "abs_fraction_after_1s": abs_frac,
+            "low_omega_fraction": low_omega,
+            "free_roll_ok": ok_free_roll,
+            "omega_sparkline": sparkline(omegas),
+            "abs_sparkline": sparkline(abs_flags),
             "samples_n": len(samples),
-            "samples_head": samples[:6],
-            "samples_tail": samples[-4:],
+            "samples_head": samples[:8],
+            "samples_tail": samples[-6:],
+            # Downsampled series for DB graphing later
+            "omega_series": [
+                {"t": s["t"], "omega": s["omega"], "abs": s["abs"], "x": s["x"]}
+                for s in samples[:: max(1, len(samples) // 40)]
+            ],
         },
     }
     try:
@@ -290,7 +376,8 @@ def main() -> int:
         print(f"  DB write failed: {e}")
 
     print("=" * 62)
-    return 0 if (ok_start and finished and ok_time) else 2
+    # Free-roll continuity is required for a meaningful track test
+    return 0 if (ok_start and ok_time and ok_free_roll) else 2
 
 
 if __name__ == "__main__":

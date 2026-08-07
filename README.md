@@ -76,28 +76,100 @@ If you are opening this repo cold (code review, portfolio, or family showcase), 
 
 ---
 
-## What you need
+## What you need (prerequisites)
 
-**To run with Docker (easiest way):**
-- Docker Desktop installed and running
-- A web browser (Chrome, Firefox, Edge, etc.)
+Visitors often assume “clone and go.” In practice, what you install depends on **how deep** you want to go. Use the table first, then the notes.
 
-**To run without Docker:**
-- Python 3.12 (or close to that)
-- pip (comes with Python)
-- PostgreSQL (the app can start just the database in Docker for you)
+### Quick matrix
+
+| Tool | Dashboard only (Docker) | Full digital twin (recommended demo) | Dev / no Docker | Notes |
+|------|-------------------------|--------------------------------------|-----------------|-------|
+| **Git** | Required | Required | Required | Clone this repo |
+| **Web browser** | Required | Required | Required | Chrome, Firefox, Edge, etc. |
+| **Docker Desktop** | Required | Required | Optional | Runs dashboard + Postgres for you |
+| **Webots** | Not needed | **Required** | Optional | Physics twin; runs **on the host**, not in Docker |
+| **Python 3.12+** | Not needed* | Not needed* | Required | \*Bundled inside the dashboard image |
+| **pip** | Not needed* | Not needed* | Required | Installs `requirements.txt` on host |
+| **PostgreSQL** | Not needed* | Not needed* | Required (or Docker just for DB) | \*Compose starts `postgres:16` for you |
+| **ROS 2** | Not needed | Not needed | Optional | Default path uses **ROS2_MOCK=true** — no `rclpy` install |
+| **Real robot / BMS** | Not needed | Not needed | Not needed | Hardware is simulated or mocked |
+
+\* “Not needed on your machine” because Docker already provides it inside containers.
+
+### Minimum path — live dashboard in a browser
+
+Good for “does this project run?” at someone else’s house.
+
+1. **Git** — [https://git-scm.com/downloads](https://git-scm.com/downloads)  
+2. **Docker Desktop** — [https://www.docker.com/products/docker-desktop/](https://www.docker.com/products/docker-desktop/)  
+   - Install, reboot if asked, **start Docker Desktop** and wait until it says running  
+   - Windows: WSL2 backend is normal; first engine start can take a few minutes  
+3. **A browser**  
+4. Clone + start (see [How to run with Docker](#how-to-run-with-docker-recommended))  
+5. Open `http://127.0.0.1:5000`
+
+You do **not** need a separate Postgres installer, a host Python install, or ROS 2 for this path.
+
+### Full path — dashboard + ButlerBot in Webots
+
+Everything in the minimum path, **plus**:
+
+5. **Webots** (Cyberbotics) — [https://cyberbotics.com/](https://cyberbotics.com/)  
+   - Install on Windows/macOS/Linux  
+   - Open the world file: `webots/worlds/butlerbot.wbt`  
+   - Or use `.\scripts\launch_webots_twin.ps1` / `./scripts/launch_webots_twin.sh` after the dashboard is up  
+6. **Dashboard must already be running** on port **5000** so the controller can POST/GET twin APIs  
+7. On Webots exit: **do not save the world** (avoids polluting `butlerbot.wbt` with sim pose)
+
+Webots is the piece people forget when they only install Docker.
+
+### Optional / advanced
+
+| Want… | Also install / enable |
+|-------|------------------------|
+| Edit Python on the host, run tests | **Python 3.12+**, `pip install -r requirements.txt`, often **pytest** |
+| Host Postgres without Docker | **PostgreSQL 16** (or close) and set `DATABASE_URL` / `.env` |
+| Real ROS 2 topics (not mock) | A **ROS 2** distro on Linux (or the compose `full` profile with `ros2-sim`); set `ROS2_MOCK=false` only if you know what you are doing |
+| Compose “full” profile | Still Docker; adds the optional ROS2 sim container — **not** a substitute for Webots |
+
+### Disk / ports / OS reality check
+
+- **Ports used:** `5000` (dashboard), `5432` (Postgres). Free them or change values in `.env`.  
+- **Disk:** Docker images + Webots are the large downloads (multi‑GB combined is normal).  
+- **OS:** Developed and demoed on **Windows 10/11** with Docker Desktop; Linux/macOS work for Docker scripts; Webots is cross‑platform.  
+- **GitHub account:** only needed if you fork/push — **cloning a public repo does not require login**.
+
+### What this project is *not* asking you to buy
+
+- No real humanoid / wheeled hardware  
+- No paid cloud GPU  
+- No separate “ROS for Windows” install for the default mock demo  
+
+If you only remember three words for a laptop bag visit: **Git, Docker, Webots** (Webots only if you want the moving robot).
 
 ---
 
 ## How to run with Docker (recommended)
 
-This is the best option for beginners. Docker starts the database and the app for you.
+This is the best option for beginners. Docker starts the database and the app for you.  
+Prerequisites: see **[What you need](#what-you-need-prerequisites)** (at least **Git + Docker Desktop + browser**).
+
+### Step 0 — Get the code
+
+```
+git clone https://github.com/Daniel7505/robot-battery-monitor.git
+cd robot-battery-monitor
+```
+
+(If you already have a local copy, just `cd` into that folder.)
 
 ### Step 1 — Open a terminal in the project folder
 
 On Windows, open PowerShell in the project folder.
 
 On Mac or Linux, open Terminal in the project folder.
+
+Confirm **Docker Desktop is running** before the next step (whale icon / engine ready).
 
 ### Step 2 — Run the start script
 
@@ -123,7 +195,20 @@ http://127.0.0.1:5000
 
 You should see a page titled something like "Optimus Unit 1 Live Monitor" with numbers updating on their own.
 
-### Step 4 — Stop everything when you are done
+### Step 4 (optional) — Webots digital twin
+
+Install Webots if you have not already, start it after the dashboard is healthy, and open:
+
+```
+webots/worlds/butlerbot.wbt
+```
+
+Or from the project folder:
+
+Windows: `.\scripts\launch_webots_twin.ps1`  
+Mac/Linux: `./scripts/launch_webots_twin.sh`
+
+### Step 5 — Stop everything when you are done
 
 Windows:
 ```
@@ -134,6 +219,8 @@ Mac or Linux:
 ```
 ./scripts/stop.sh
 ```
+
+Close the Webots window separately (do **not** save the world on exit).
 
 ### Optional: run with a ROS2 simulator container too
 

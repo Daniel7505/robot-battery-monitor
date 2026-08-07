@@ -493,19 +493,39 @@ def _hard_zero_wheels(
     right_wv: float | None = None,
     track: bool = False,
 ) -> None:
-    """Freeze BOTH hubs every tick at a *fixed* encoder target.
+    """Stop BOTH hubs: encoder-rate oppose while spinning, then fixed position lock.
 
-    Critical lesson (horizon chase):
-      If we re-latch the lock to the live encoder every step while freewheeling,
-      position error is ~0 and the motor applies ~0 torque → robot never stops.
-      Latch ONCE (or only when ``track=True`` explicitly), then hold that angle.
+    Lessons:
+      - Tracking live encoder every step → zero error → freewheel coast (horizon chase).
+      - Position-lock alone can be weak while |ω| is high; first oppose measured hub rate
+        (symmetric if both freewheel forward; differential if spinning in place).
+      - When |ω| is small, latch a finite encoder angle and hold (never NaN).
 
-    CRITICAL: never call setPosition(NaN). WHEEL_HOLD_VEL ≤ world maxVelocity (15).
+    WHEEL_HOLD_VEL / oppose cmds must stay ≤ world maxVelocity (15).
     """
     hold_vel = min(WHEEL_HOLD_VEL, MOTOR_MAX_VELOCITY)
+    rates = {"left_wheel": left_wv, "right_wheel": right_wv}
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
+        wv = rates.get(wheel)
+        spinning = wv is not None and abs(float(wv)) > STOP_WHEEL_RAD_S * 2.5
+
+        # Phase 1 — active brake from measured hub rate (not GPS)
+        if spinning:
+            try:
+                motor.setPosition(float("inf"))
+                # Oppose this hub's rotation; floor magnitude so creep still dies
+                mag = min(
+                    MOTOR_MAX_VELOCITY,
+                    max(4.0, abs(float(wv)) * 1.15),
+                )
+                motor.setVelocity(_clamp_motor_vel(-math.copysign(mag, float(wv))))
+            except Exception:
+                pass
+            continue
+
+        # Phase 2 — position lock at fixed target
         if sensors is None:
             motor.setPosition(float("inf"))
             motor.setVelocity(0.0)
@@ -521,7 +541,6 @@ def _hard_zero_wheels(
                 motor.setPosition(float("inf"))
                 motor.setVelocity(0.0)
                 continue
-            # Latch once unless caller forces track (rare). Never chase freewheel.
             if wheel not in _WHEEL_LOCK_POS or track:
                 _WHEEL_LOCK_POS[wheel] = pos
             hold = _WHEEL_LOCK_POS[wheel]

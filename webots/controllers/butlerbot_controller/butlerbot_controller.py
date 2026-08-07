@@ -119,12 +119,16 @@ STOP_YAW_RATE_RAD_S = 0.025
 STOP_WHEEL_DIFF_RAD_S = 0.05
 # ABS must stay calm this long before complete (was 0.45s — finished early).
 ABS_CALM_HOLD_S = 0.80
+# After a turn/spin stop, demand a longer calm window (pure circle residual).
+ABS_SPIN_CALM_HOLD_S = 1.35
 # Re-ABS if GPS still reports translation while we think we are idle.
 RESIDUAL_SPEED_M_S = 0.018
 # Pose window residual (m / rad over ~0.6 s) — catches ultra-slow drift GPS rate misses.
 POSE_RESIDUAL_TRANS_M = 0.025
 POSE_RESIDUAL_YAW_RAD = 0.04
 POSE_RESIDUAL_WINDOW_S = 0.65
+# Pure-spin oppose only when NOT translating (avoids Tokyo drift on coast).
+PURE_SPIN_OPPOSE_SPEED_M_S = 0.04
 # Position-mode approach rate when holding encoder angle — MUST be ≤ MOTOR_MAX_VELOCITY
 # or Webots warns every step and the hold is weaker than we think.
 WHEEL_HOLD_VEL = 15.0
@@ -350,10 +354,7 @@ class AbsBrakeController:
         else:
             self._calm_hold_s = 0.0
 
-        # Every ABS tick: park both hubs. Never differential / soft-oppose here.
-        # Track ONLY while hubs still spin. If hubs are locked but body still yaws
-        # (post-turn residual), freeze encoder targets — re-tracking on yaw alone
-        # left pure circle spin after S2/S3.
+        # Track ONLY while hubs still spin. Freeze when hubs quiet.
         hubs_still_spinning = (
             abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
             or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
@@ -366,16 +367,28 @@ class AbsBrakeController:
             track=hubs_still_spinning,
         )
 
-        if self._calm_hold_s >= ABS_CALM_HOLD_S:
+        # Pure residual circle (S2/S3): hubs mostly quiet, body still yaws, little
+        # GPS translation — safe to apply brief differential oppose without Tokyo drift.
+        pure_spin = (
+            self._spin_mode
+            and not hubs_still_spinning
+            and abs(yaw_rate) >= STOP_YAW_RATE_RAD_S
+            and speed_m_s < PURE_SPIN_OPPOSE_SPEED_M_S
+        )
+        if pure_spin:
+            _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
+            # Next tick will re-park both hubs so oppose is a pulse, not a cruise.
+
+        calm_need = ABS_SPIN_CALM_HOLD_S if self._spin_mode else ABS_CALM_HOLD_S
+        if self._calm_hold_s >= calm_need:
             self.active = False
-            # Freeze final latched angles (no clear — clearing re-opens freewheel).
             _hard_zero_wheels(
                 motors, sensors, left_wv=left_wv, right_wv=right_wv, track=False
             )
             print(
                 f"ABS park complete @ speed={speed_m_s:.3f} "
                 f"wv L={left_wv:.2f} R={right_wv:.2f} yaw_rate={yaw_rate:.3f} "
-                f"hold={self._calm_hold_s:.2f}s"
+                f"hold={self._calm_hold_s:.2f}s spin={self._spin_mode}"
             )
             return True
 
@@ -1101,7 +1114,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     cached_api_right = 0.0
                     cached_api_source = "stop"
                     last_api_sig = ""
-                    park_holdoff_s = 2.0  # ignore stale active drive for 2s
+                    park_holdoff_s = 3.0  # ignore stale active drive after Stop
                     print("External drive stop — park brake")
                     if not abs_brake.active:
                         abs_brake.request(
@@ -1251,8 +1264,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_age_s = 0.0
 
                 if residual_hub or residual_yaw or residual_coast or pose_residual:
-                    # Still moving — park both hubs only (no yaw-oppose → no Tokyo drift).
-                    # Track only if hubs spinning; freeze hard on pure residual yaw.
                     hubs_spin = (
                         abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
                         or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
@@ -1264,6 +1275,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         right_wv=right_wv,
                         track=hubs_spin,
                     )
+                    # Pure circle residual (not coasting): pulse yaw oppose, then re-park
+                    if (
+                        residual_yaw
+                        and not residual_coast
+                        and not hubs_spin
+                        and raw_speed_m_s < PURE_SPIN_OPPOSE_SPEED_M_S
+                    ):
+                        _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
                     if not abs_brake.active:
                         why = []
                         if residual_hub:

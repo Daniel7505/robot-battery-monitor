@@ -987,6 +987,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     # After Stop, ignore stale "active" drive polls for this long (seconds).
     # Prevents a race from re-arming cruise mid-park (horizon chase / Tokyo drift).
     park_holdoff_s = 0.0
+    # After intentional API drive, ignore residual "re-park on motion" for a while.
+    # Without this: brief teleop gap → residual_hub/coast sees motion → ABS stop
+    # → next re-assert drive → hop-stop-hop (user visual + 40s for ~3 m track).
+    drive_grace_s = 0.0
     # Wheel rotation sensors (encoder-based): absolute angle + lock detection
     # These answer "are the wheels actually locking?" for park diagnosis.
     wheel_enc_prev: dict[str, float] = {}
@@ -1011,6 +1015,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             dt = timestep / 1000.0
             if park_holdoff_s > 0.0:
                 park_holdoff_s = max(0.0, park_holdoff_s - dt)
+            if drive_grace_s > 0.0:
+                drive_grace_s = max(0.0, drive_grace_s - dt)
             # --- Input: keyboard + R (auto loop) / Space (ABS) ---
             if keyboard is not None:
                 keys, pressed = key_tracker.poll(keyboard)
@@ -1172,6 +1178,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         cached_api_source = api_source or "api"
                         last_teleop_left = cached_api_left
                         last_teleop_right = cached_api_right
+                        # Intentional cruise: suppress residual "stop on motion"
+                        drive_grace_s = max(drive_grace_s, 2.5)
                         sig = f"{cached_api_left}:{cached_api_right}:{cached_api_source}"
                         if sig != last_api_sig:
                             last_api_sig = sig
@@ -1309,9 +1317,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_yaw = prev_yaw
                         pose_anchor_age_s = 0.0
 
-                if residual_hub or residual_yaw or residual_coast or pose_residual:
-                    # Re-request park (clears locks + latches new targets). Do not
-                    # track freewheel here.
+                # Only residual-park when we are truly idle — NOT during/after a
+                # recent intentional drive (drive_grace). Movement detection used
+                # to re-ABS immediately → hop-stop-hop on the track.
+                allow_residual_park = drive_grace_s <= 0.0
+                if (
+                    allow_residual_park
+                    and (residual_hub or residual_yaw or residual_coast or pose_residual)
+                ):
                     if not abs_brake.active:
                         why = []
                         if residual_hub:
@@ -1347,6 +1360,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             track=False,
                         )
                 else:
+                    # Idle hold OR grace window after drive (do not ABS on motion)
                     _hard_zero_wheels(
                         motors,
                         sensors,
@@ -1356,12 +1370,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     )
                 _hold_neutral_upper_body(motors)
 
-            # While actively driving, keep pose anchor fresh so residual window
-            # only measures post-stop creep (not the drive itself).
-            if user_driving or abs_brake.active or auto_loop:
+            # While actively driving (keyboard OR API), keep pose residual fresh
+            if user_driving or api_driving or abs_brake.active or auto_loop:
                 pose_anchor_xy = gps_xy
                 pose_anchor_yaw = prev_yaw
                 pose_anchor_age_s = 0.0
+                if api_driving or user_driving:
+                    drive_grace_s = max(drive_grace_s, 2.5)
 
             # --- Power / mission labeling / battery + thermal models ---
             # Detect turn/spin before power + mission (GPS may be ~0 while wheels yaw)

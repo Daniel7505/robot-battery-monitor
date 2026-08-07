@@ -161,18 +161,19 @@ def main() -> int:
     batt0 = float((st0.get("robot") or {}).get("main_battery_pct") or 0)
     print(f"  start pose x={x0:.4f} y={y0:.4f} batt={batt0:.2f}%")
 
-    print(f"Drive ω={omega_cmd} for {duration}s...")
-    cmd(
-        base,
-        {
-            "drive": {
-                "left": omega_cmd,
-                "right": omega_cmd,
-                "duration_s": duration + 0.8,
-            }
-        },
-    )
-    time.sleep(0.3)
+    # One long continuous cruise: re-assert drive every ~0.4s so duration never
+    # "expires" mid-run and a blip cannot leave wheels uncommanded.
+    print(f"CONTINUOUS drive ω={omega_cmd} for {duration}s (re-asserting cmd)...")
+    print("  (watch Webots: should be ONE free roll, not hop-stop-hop)")
+    drive_body = {
+        "drive": {
+            "left": omega_cmd,
+            "right": omega_cmd,
+            "duration_s": max(2.0, duration + 2.0),
+        }
+    }
+    cmd(base, drive_body)
+    time.sleep(0.35)
     tel = twin(base).get("teleop") or {}
     print(f"  teleop active={tel.get('active')} L={tel.get('left_v')} R={tel.get('right_v')}")
 
@@ -180,10 +181,28 @@ def main() -> int:
     samples: list[dict] = []
     energy_j = 0.0
     peak_legs = 0.0
+    last_reassert = t0
+    reassert_every = 0.45
 
     while time.time() - t0 < duration:
+        now = time.time()
+        if now - last_reassert >= reassert_every:
+            # Keep drive_until fresh for the remainder of the run
+            remaining = duration - (now - t0) + 1.5
+            cmd(
+                base,
+                {
+                    "drive": {
+                        "left": omega_cmd,
+                        "right": omega_cmd,
+                        "duration_s": max(1.2, remaining),
+                    }
+                },
+            )
+            last_reassert = now
+
         st = twin(base)
-        t = time.time() - t0
+        t = now - t0
         x, y, h = pose(st)
         d = diag(st)
         wl = abs(float(d.get("hub_left_rad_s") or 0.0))
@@ -193,9 +212,10 @@ def main() -> int:
         gps = float(d.get("gps_speed_m_s") or 0.0)
         lg = legs_w(st)
         peak_legs = max(peak_legs, lg)
-        # total draw for energy (optional)
         tw = float((st.get("power") or {}).get("total_draw_w") or 0.0)
         energy_j += tw * dt_s
+        cmd_src = d.get("cmd_source")
+        abs_on = d.get("abs_active")
         samples.append(
             {
                 "t": round(t, 4),
@@ -207,16 +227,23 @@ def main() -> int:
                 "v_odo": v_odo,
                 "v_gps": gps,
                 "legs_w": lg,
+                "cmd_source": cmd_src,
+                "abs_active": abs_on,
             }
         )
-        if len(samples) % 5 == 1:
+        # Print ~1 Hz so free-roll continuity is obvious in the log
+        if len(samples) == 1 or int(t) != int(samples[-2]["t"] if len(samples) > 1 else -1):
             print(
-                f"  t={t:5.2f}s  v_odo={v_odo:.3f}  v_gps={gps:.3f}  "
-                f"ω={w_avg:.2f}  legs={lg:.1f}W  pose=({x:.3f},{y:.3f})"
+                f"  DRIVING t={t:5.2f}s  v_odo={v_odo:.3f}  v_gps={gps:.3f}  "
+                f"ω={w_avg:.2f}  legs={lg:.1f}W  src={cmd_src} abs={abs_on}  "
+                f"pose=({x:.3f},{y:.3f})"
             )
+        # Flag mid-run park (should never happen during free roll)
+        if abs_on and t > 0.5:
+            print(f"  !! INTERRUPT at t={t:.2f}s abs_active while free-roll expected")
         time.sleep(dt_s)
 
-    print("Stop + park...")
+    print(f"End continuous drive at t={time.time()-t0:.2f}s — now Stop + park...")
     st1 = wait_park(base)
     x1, y1, h1 = pose(st1)
     batt1 = float((st1.get("robot") or {}).get("main_battery_pct") or 0)

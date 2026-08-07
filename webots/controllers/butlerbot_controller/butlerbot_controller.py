@@ -1124,80 +1124,94 @@ def _run_loop(robot: Robot, opts: dict) -> None:
 
             # --- Poll dashboard: throttle, API drive, stop_epoch, battery_reset ---
             # ORDER MATTERS: stop_epoch always wins over a stale "active" drive.
-            # Clearing ABS on active mid-stop left residual Tokyo-drift coast.
+            # Empty/failed GET must NOT mean "drive expired" — that caused mid-cruise
+            # ABS park → clear → drive → jerk (user: three short hops, not 6s free roll).
             if tick % state_poll_every == 0:
                 twin_state = fetch_twin_state(dashboard)
-                remote_throttle = remote_throttle_factor(twin_state)
-                api_cmd = teleop_from_twin_state(twin_state)
-                if api_cmd.get("battery_pct") is not None:
-                    battery_pct = float(api_cmd["battery_pct"])
-                    if api_cmd.get("reset_thermal"):
-                        thermal_c = 22.0
-                    print(f"Battery replenished → {battery_pct:.0f}% (dashboard command)")
-
-                stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
-                got_new_stop = stop_epoch > last_stop_epoch
-                api_source = str(api_cmd.get("source") or "")
-                api_active = bool(api_cmd.get("active"))
-
-                if got_new_stop:
-                    last_stop_epoch = stop_epoch
-                    cached_api_left = 0.0
-                    cached_api_right = 0.0
-                    cached_api_source = "stop"
-                    last_api_sig = ""
-                    park_holdoff_s = 3.0  # ignore stale active drive after Stop
-                    print("External drive stop — park brake")
-                    if not abs_brake.active:
-                        abs_brake.request(
-                            forward_m_s,
-                            speed_m_s,
-                            last_left_v=last_teleop_left,
-                            last_right_v=last_teleop_right,
-                            left_wv=left_wv_early,
-                            right_wv=right_wv_early,
-                        )
-                elif api_active and park_holdoff_s <= 0.0:
-                    # Intentional drive (holdoff expired). May supersede finished park.
-                    if abs_brake.active:
-                        abs_brake.clear()
-                    _clear_wheel_locks()
-                    cached_api_left = float(api_cmd.get("left_v") or 0.0)
-                    cached_api_right = float(api_cmd.get("right_v") or 0.0)
-                    cached_api_source = api_source or "api"
-                    last_teleop_left = cached_api_left
-                    last_teleop_right = cached_api_right
-                    sig = f"{cached_api_left}:{cached_api_right}:{cached_api_source}"
-                    if sig != last_api_sig:
-                        last_api_sig = sig
-                        print(
-                            f"External drive from {cached_api_source}: "
-                            f"L={cached_api_left} R={cached_api_right}"
-                        )
-                elif api_active and park_holdoff_s > 0.0:
-                    # Stale active during post-stop holdoff — ignore
-                    cached_api_left = 0.0
-                    cached_api_right = 0.0
+                poll_ok = isinstance(twin_state, dict) and bool(twin_state)
+                if not poll_ok:
+                    # Keep last cached_api_* / abs state; do not park on network blip
+                    pass
                 else:
-                    was_api_driving = (
-                        abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
-                    )
-                    if was_api_driving and not abs_brake.active:
-                        # duration_s expired without stop_epoch — still park
-                        print("External drive expired — park brake")
-                        abs_brake.request(
-                            forward_m_s,
-                            speed_m_s,
-                            last_left_v=last_teleop_left,
-                            last_right_v=last_teleop_right,
-                            left_wv=left_wv_early,
-                            right_wv=right_wv_early,
-                        )
-                    cached_api_left = 0.0
-                    cached_api_right = 0.0
-                    cached_api_source = api_source
-                    if api_source != "stop":
+                    remote_throttle = remote_throttle_factor(twin_state)
+                    api_cmd = teleop_from_twin_state(twin_state)
+                    if api_cmd.get("battery_pct") is not None:
+                        battery_pct = float(api_cmd["battery_pct"])
+                        if api_cmd.get("reset_thermal"):
+                            thermal_c = 22.0
+                        print(f"Battery replenished → {battery_pct:.0f}% (dashboard command)")
+
+                    stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
+                    got_new_stop = stop_epoch > last_stop_epoch
+                    api_source = str(api_cmd.get("source") or "")
+                    api_active = bool(api_cmd.get("active"))
+
+                    if got_new_stop:
+                        last_stop_epoch = stop_epoch
+                        cached_api_left = 0.0
+                        cached_api_right = 0.0
+                        cached_api_source = "stop"
                         last_api_sig = ""
+                        park_holdoff_s = 3.0
+                        print("External drive stop — park brake")
+                        if not abs_brake.active:
+                            abs_brake.request(
+                                forward_m_s,
+                                speed_m_s,
+                                last_left_v=last_teleop_left,
+                                last_right_v=last_teleop_right,
+                                left_wv=left_wv_early,
+                                right_wv=right_wv_early,
+                            )
+                    elif api_active and park_holdoff_s <= 0.0:
+                        if abs_brake.active:
+                            abs_brake.clear()
+                        _clear_wheel_locks()
+                        cached_api_left = float(api_cmd.get("left_v") or 0.0)
+                        cached_api_right = float(api_cmd.get("right_v") or 0.0)
+                        cached_api_source = api_source or "api"
+                        last_teleop_left = cached_api_left
+                        last_teleop_right = cached_api_right
+                        sig = f"{cached_api_left}:{cached_api_right}:{cached_api_source}"
+                        if sig != last_api_sig:
+                            last_api_sig = sig
+                            print(
+                                f"External drive from {cached_api_source}: "
+                                f"L={cached_api_left} R={cached_api_right}"
+                            )
+                    elif api_active and park_holdoff_s > 0.0:
+                        cached_api_left = 0.0
+                        cached_api_right = 0.0
+                    else:
+                        # Confirmed inactive from a good poll only
+                        was_api_driving = (
+                            abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
+                        )
+                        # Explicit stop source or clean expiry (source still api/empty)
+                        confirmed_end = (
+                            api_source in ("", "stop", "api")
+                            and not api_active
+                        )
+                        if (
+                            was_api_driving
+                            and not abs_brake.active
+                            and confirmed_end
+                        ):
+                            print("External drive expired — park brake")
+                            abs_brake.request(
+                                forward_m_s,
+                                speed_m_s,
+                                last_left_v=last_teleop_left,
+                                last_right_v=last_teleop_right,
+                                left_wv=left_wv_early,
+                                right_wv=right_wv_early,
+                            )
+                        if confirmed_end:
+                            cached_api_left = 0.0
+                            cached_api_right = 0.0
+                            cached_api_source = api_source
+                            if api_source != "stop":
+                                last_api_sig = ""
 
             if stop_pressed:
                 print("Keyboard stop — ABS braking")

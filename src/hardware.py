@@ -1,6 +1,27 @@
 # src/hardware.py
 """
-Hardware Abstraction Layer - Production Ready
+Hardware Abstraction Layer (HAL) — factory + base sources for battery telemetry.
+
+Role in the system
+------------------
+Decouples the dashboard from *how* power data is produced:
+
+  mode=simulator  → SimulatorSource (random channel draws, simple DB logs)
+  mode=real
+    type=ros2     → ROS2BatterySource (full PMS: mission, allocator, safety, twin)
+    type=generic  → RealHardwareSource (stub base for future sensor drivers)
+
+Public API
+----------
+get_hardware_source()   Process-wide singleton; reloads if config mode/type changes
+reset_hardware_source() Stop and clear singleton (tests / mode switch)
+get_hardware_mode()     Current resolved {mode, type}
+
+Invariants
+----------
+- Only one active HardwareSource per process.
+- ``is_healthy`` requires a successful read within the last 30 seconds.
+- ``validate_reading`` rejects battery outside [0,100] and draw outside [0,500] W.
 """
 
 from abc import ABC, abstractmethod
@@ -14,7 +35,7 @@ from src.database import log_channel_reading
 from src.config import config
 from src.logger import logger
 
-# Global singleton instance
+# Process-wide singleton; None until first get_hardware_source() call.
 _hardware_instance = None
 _resolved_mode: str | None = None
 
@@ -22,6 +43,13 @@ _resolved_mode: str | None = None
 # BASE CLASS
 # ============================================================
 class HardwareSource(ABC):
+    """
+    Abstract telemetry source.
+
+    Subclasses own a background update path and populate ``last_readings``:
+      {channel_id: {battery, draw, …, timestamp}}
+    """
+
     def __init__(self):
         self.running = False
         self.last_readings = {}
@@ -30,6 +58,7 @@ class HardwareSource(ABC):
 
     @abstractmethod
     def start(self):
+        """Begin producing readings (usually starts a daemon thread)."""
         pass
 
     def stop(self):
@@ -37,13 +66,16 @@ class HardwareSource(ABC):
         logger.info(f"{self.__class__.__name__} stopping...")
 
     def is_healthy(self) -> bool:
+        """True if a valid read occurred within the last 30s."""
         if not self.last_successful_read:
             return False
         return (datetime.now() - self.last_successful_read) < timedelta(seconds=30)
 
     def validate_reading(self, channel: str, battery: float, draw: float) -> bool:
+        """Sanity-check before accepting hardware samples into the DB / UI."""
         if battery < 0 or battery > 100:
             return False
+        # 500 W is far above ButlerBot peak; rejects unit/scale bugs.
         if draw < 0 or draw > 500:
             return False
         return True
@@ -60,6 +92,13 @@ _DEFAULT_POWER_CHANNELS = [
 
 
 class SimulatorSource(HardwareSource):
+    """
+    Lightweight random telemetry for demos without ROS2 or a twin.
+
+    Not physics-accurate — for the scripted ButlerBot mission loop use
+    ROS2BatterySource + SimulationDriver instead.
+    """
+
     def __init__(self):
         super().__init__()
         self.power_channels = config.get("power_channels") or _DEFAULT_POWER_CHANNELS
@@ -71,7 +110,9 @@ class SimulatorSource(HardwareSource):
             max_w = ch.get("max_draw_w", 30)
             voltage = ch.get("nominal_voltage", 48)
 
+            # Draw in mid-high band of channel capability for a "busy robot" feel.
             draw_w = round(random.uniform(max_w * 0.4, max_w * 0.95), 1)
+            # Floor at 22% so the simple sim never shows a fully dead pack.
             battery_pct = max(22, 88 + random.randint(-9, 5))
             amps = round(draw_w / voltage, 2) if voltage > 0 else 0.0
             status = (
@@ -112,6 +153,13 @@ class SimulatorSource(HardwareSource):
 # REAL HARDWARE BASE
 # ============================================================
 class RealHardwareSource(HardwareSource):
+    """
+    Base for live hardware integrations.
+
+    Subclasses parse sensor/ROS data and call ``_process_parsed_data`` to
+    validate, log, and update ``last_readings``.
+    """
+
     def __init__(self):
         super().__init__()
         self.hardware_name = "Generic Real Hardware"
@@ -122,9 +170,10 @@ class RealHardwareSource(HardwareSource):
         self.running = True
         self.health_status = "RUNNING"
         logger.info(f"🔌 {self.hardware_name} started")
-        # The child class will start its own thread
+        # Child classes start their own acquisition threads after super().start().
 
     def _process_parsed_data(self, parsed_data: dict):
+        """Validate + persist + store each channel from a parsed sensor frame."""
         for channel, values in parsed_data.items():
             battery = values.get("battery", 0)
             draw = values.get("draw", 0)
@@ -141,6 +190,7 @@ class RealHardwareSource(HardwareSource):
 # FACTORY (Singleton)
 # ============================================================
 def _resolve_mode() -> tuple[str, str]:
+    """Read hardware.mode and hardware.type from config (normalized lowercase)."""
     mode = config.get("hardware", "mode", "simulator")
     if isinstance(mode, str):
         mode = mode.lower()
@@ -157,6 +207,7 @@ def _resolve_mode() -> tuple[str, str]:
 def _create_hardware_source(mode: str, hw_type: str) -> HardwareSource:
     if mode == "real":
         if hw_type == "ros2":
+            # Lazy import: ROS2BatterySource pulls allocator, twin, agent, etc.
             from src.hardware_ros2 import ROS2BatterySource
             logger.info("Using ROS2 hardware mode")
             return ROS2BatterySource()
@@ -167,7 +218,7 @@ def _create_hardware_source(mode: str, hw_type: str) -> HardwareSource:
 
 
 def reset_hardware_source() -> None:
-    """Stop and clear the singleton — enables mode switching."""
+    """Stop and clear the singleton — enables mode switching and clean tests."""
     global _hardware_instance, _resolved_mode
     if _hardware_instance is not None:
         try:
@@ -179,12 +230,18 @@ def reset_hardware_source() -> None:
 
 
 def get_hardware_mode() -> dict:
+    """Return the currently configured {mode, type} without creating a source."""
     mode, hw_type = _resolve_mode()
     return {"mode": mode, "type": hw_type}
 
 
 def get_hardware_source(force_reload: bool = False):
-    """Return singleton hardware source; reload if mode changed or forced."""
+    """
+    Return the process singleton hardware source.
+
+    Recreates the instance when ``force_reload`` is set or when config mode:type
+    differs from the instance that is already running.
+    """
     global _hardware_instance, _resolved_mode
     mode, hw_type = _resolve_mode()
     mode_key = f"{mode}:{hw_type}"

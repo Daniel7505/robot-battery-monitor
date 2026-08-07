@@ -1,8 +1,25 @@
 """
 Twin phase context — align LRU, requirements, and throttles with ButlerBot mission.
 
-When Webots reports drive_transit, arms/torso are intentionally idle; safety
-should not flag them or throttle them like a walking biped.
+Role in the system
+------------------
+When Webots (or another twin) reports a locomotion phase, some LRUs are
+*intentionally* idle:
+
+  drive_transit / teleop  → arms & torso tucked (not a fault)
+  manipulate              → base/locomotion mostly idle
+  standby                 → only compute (+EPS) active
+
+SafetyMonitor calls:
+  filter_lru_result      suppress voltage-sag noise on standby LRUs
+  filter_requirements    do not penalize below-min draw on standby LRUs
+  throttle_exempt_channels  do not cut power on channels that should stay low
+  is_drive_like_phase    skip caution-throttle when high Legs is expected
+
+PMS task vs twin phase may legitimately disagree (agent hold, lag); allocation
+follows PMS while LRU health follows twin phase.
+
+Without a twin_phase, these filters are no-ops.
 """
 
 from __future__ import annotations
@@ -10,15 +27,15 @@ from __future__ import annotations
 from src.hardware_profile import normalize_phase_name
 from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
 
-# PMS task the twin phase normally runs (intentional mismatch is OK)
+# PMS task the twin phase normally runs (intentional mismatch is OK).
 _PHASE_EXPECTED_TASK: dict[str, str] = {
     step["phase"]: step["task"]
     for step in BUTLERBOT_MISSION_FLOW
 }
-# walk_transit alias
+# walk_transit alias (biped naming → wheeled drive task).
 _PHASE_EXPECTED_TASK["walk_transit"] = _PHASE_EXPECTED_TASK.get("drive_transit", "moving")
 
-# LRU ids in standby for each twin phase (low draw is expected)
+# LRU ids in standby for each twin phase (low draw is expected).
 _PHASE_STANDBY_LRUS: dict[str, frozenset[str]] = {
     "standby": frozenset({"locomotion", "arms", "torso", "cooling"}),
     "drive_transit": frozenset({"arms", "torso"}),

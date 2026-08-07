@@ -1,11 +1,28 @@
-"""PyBullet adapter — map joint torques and velocities to PMS channel draws."""
+"""
+PyBullet adapter — map joint torques and velocities to PMS channel draws.
+
+Role
+----
+Optional integration path for physics work in PyBullet instead of Webots.
+When the payload already includes ``channel_draws``, they are trusted; otherwise
+joint samples are converted with a simple servo-scale model:
+
+    P ≈ τ·ω·k_mech + τ·k_static
+
+Joint names are substring-matched onto Legs / Arms / Torso. Compute gets a
+baseline floor when any mechanical channel is active so the dashboard does not
+show a robot with motors but zero compute.
+
+This estimate is intentionally coarse — profile-grounded cruise curves live
+in the Webots path; PyBullet is a secondary demo/integration surface.
+"""
 
 from __future__ import annotations
 
 from src.twin.adapters.base import TwinAdapter
 from src.twin.models import TwinTelemetry
 
-# ButlerBot joint groups → power channels (servo-scale watts estimate)
+# ButlerBot joint groups → power channels (servo-scale watts estimate).
 _PYBULLET_JOINT_MAP = {
     "hip": "Legs",
     "knee": "Legs",
@@ -57,7 +74,11 @@ class PyBulletAdapter(TwinAdapter):
 
 
 def _torques_to_draws(joints: list) -> dict[str, float]:
-    """Convert joint torque/velocity samples to channel watt estimates."""
+    """Convert joint torque/velocity samples to channel watt estimates.
+
+    Coefficients are demo-scale (not motor datasheet); they produce mid-band
+    draws suitable for allocator/dashboard demos without a full motor model.
+    """
     channel_torque: dict[str, float] = {}
     for joint in joints:
         if isinstance(joint, dict):
@@ -80,6 +101,7 @@ def _torques_to_draws(joints: list) -> dict[str, float]:
 
 
 def _mode_to_task(mode: str) -> str:
+    """Map coarse locomotion mode strings onto PMS task ids."""
     m = str(mode).lower()
     if m in ("stand", "idle"):
         return "idle"

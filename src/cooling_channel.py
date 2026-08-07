@@ -1,5 +1,21 @@
 """
-Active cooling channel — dry-ice / fan loop tied to thermal stress and twin phase.
+Active cooling channel — thermal- and phase-aware draw estimate.
+
+Role
+----
+ButlerBot can include a ``Cooling`` power channel (fans / dry-ice loop). This
+module estimates the watts that channel should request based on:
+
+  - Estimated system temperature (from SafetyMonitor thermal model)
+  - Optional twin mission phase (transit / manipulate heat differently)
+  - Config limits (``cooling.max_draw_w``, safety thermal thresholds)
+
+ROS2BatterySource takes ``max(mission Cooling target, this estimate)`` so
+cooling never under-responds during hot high-load phases.
+
+Output
+------
+A single float watts value, clamped to [0.5, max_draw_w].
 """
 
 from __future__ import annotations
@@ -13,7 +29,12 @@ def estimate_cooling_draw_w(
     *,
     ambient_c: float | None = None,
 ) -> float:
-    """Estimate Cooling channel draw from temperature and mission phase."""
+    """
+    Estimate Cooling channel draw from temperature and mission phase.
+
+    Base load is always on (electronics fans); phase and thermal bands add
+    stepwise boosts rather than a continuous PID (sufficient for the sim pack).
+    """
     safety = config.get("safety") or {}
     ambient = float(ambient_c if ambient_c is not None else safety.get("thermal_ambient_c", 22.0))
     warn = float(safety.get("thermal_warning_c", 55.0))
@@ -22,6 +43,7 @@ def estimate_cooling_draw_w(
 
     base = 1.5
     key = (phase or "").lower()
+    # Locomotion and manipulation dump more heat into the chassis.
     if key in ("drive_transit", "walk_transit", "patrol"):
         base += 1.5
     elif key == "manipulate":
@@ -34,6 +56,7 @@ def estimate_cooling_draw_w(
     elif thermal_c >= warn:
         base += 3.0
     elif thermal_c > ambient + 12:
+        # Elevated but not yet at warning band — mild boost.
         base += 1.5
 
     return round(min(max_w, max(0.5, base)), 1)

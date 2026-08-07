@@ -1,7 +1,19 @@
 # robot_battery_monitor.py
 """
-CLI Tool - Analyze battery history from the database.
-Production-ready version using our new logger + DB layer.
+CLI tool for offline analysis of battery / power telemetry.
+
+Reads from the same PostgreSQL store the dashboard writes to. Does not start
+hardware or the web UI — use this after a run, or alongside a live system, to:
+  - Print a quick latest-status summary
+  - Dump per-channel history
+  - Generate a multi-section analytics report
+  - Manually prune (archive) old readings past a retention window
+
+Typical usage:
+  python robot_battery_monitor.py --summary
+  python robot_battery_monitor.py --history Legs --limit 50
+  python robot_battery_monitor.py --report --hours 12
+  python robot_battery_monitor.py --archive --archive-days 30
 """
 
 import argparse
@@ -13,12 +25,13 @@ from src.analytics import build_report, format_report_text
 
 
 def print_summary():
-    """Show overall system status"""
+    """Print latest main battery and per-channel draw from recent DB rows."""
     entries = get_all_readings(limit=100)
     if not entries:
         logger.info("No readings yet. Start the dashboard first!")
         return
 
+    # Rows are newest-first; first row is the freshest main-battery sample.
     main_battery = entries[0]["battery"]
     total_readings = len(entries)
 
@@ -29,7 +42,7 @@ def print_summary():
     print(f"🕒 Last Update         : {entries[0]['time']}")
     print("-" * 60)
 
-    # Per-channel latest
+    # First occurrence of each channel in newest-first order = latest sample.
     latest = {}
     for e in entries:
         if e["channel"] not in latest:
@@ -41,7 +54,7 @@ def print_summary():
 
 
 def show_channel_history(channel: str, limit: int = 20):
-    """Show detailed history for one channel"""
+    """Print a chronological (newest-first) slice of one channel's history."""
     history = get_channel_history(channel, limit=limit)
     if not history:
         print(f"No history for channel '{channel}'")
@@ -66,6 +79,7 @@ def main():
     args = parser.parse_args()
     logger.info("CLI started")
 
+    # Mutating ops short-circuit so they never mix with read-only display paths.
     if args.archive:
         archive_old_data(days=args.archive_days)
         return
@@ -78,6 +92,7 @@ def main():
     if args.history:
         show_channel_history(args.history, args.limit)
     else:
+        # Default action when no flags are given.
         print_summary()
 
     logger.info("CLI finished")

@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Launch ButlerBot Webots digital twin alongside the dashboard.
+# =============================================================================
+# launch_webots_twin.sh — open ButlerBot world + twin bridge to the dashboard
+# =============================================================================
+# Prerequisites: dashboard (./scripts/start.sh) and Webots installed.
+# Exports TWIN_DASHBOARD_URL for the controller's twin_publisher HTTP client.
+#
 # Usage: ./scripts/launch_webots_twin.sh [dashboard_url]
+# In Webots: click the floor (not the robot), then I/J/K/L or dashboard Drive.
+# =============================================================================
 
 set -euo pipefail
 DASHBOARD_URL="${1:-http://127.0.0.1:5000}"
@@ -34,6 +41,7 @@ else
   exit 1
 fi
 
+# Avoid two Webots instances fighting over the same world/controller
 if pgrep -x webots >/dev/null 2>&1; then
   echo "Closing existing Webots process(es)..."
   pkill -x webots || true

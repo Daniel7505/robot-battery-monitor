@@ -1,5 +1,26 @@
 """
 Predictive energy estimation with short-horizon forecasting and mission awareness.
+
+Role in the system
+------------------
+Maintains a short rolling window of total system draw (≈12 ticks). Each
+``forecast()`` call returns:
+
+  - predicted_draw_w / runtime bands
+  - mission_energy_ok and SOC at end of current task
+  - 30s/60s horizon points with low/high uncertainty bands
+  - confidence_pct and risk_level
+  - locomotion_outlook (likely next phase when near a transition)
+
+Used twice per ROS2BatterySource tick:
+  1. Pre-allocation (tighten PowerAllocator budget)
+  2. Post-allocation (UI / DB snapshot with actual total_draw)
+
+Method
+------
+EMA of recent draw blended with task-average profile; linear trend for horizon
+projection; transition uncertainty rises when task_remaining_s is inside the
+horizon (mixes anticipated_phases probabilities).
 """
 
 from statistics import mean, pstdev
@@ -24,11 +45,13 @@ class EnergyPredictor:
         self._window = window
 
     def update(self, draw_w: float) -> None:
+        """Append a post-allocation total draw sample (call once per tick)."""
         self._draw_history.append(draw_w)
         if len(self._draw_history) > self._window:
             self._draw_history.pop(0)
 
     def _ema_draw(self) -> float | None:
+        """Exponential moving average of draw history (alpha=0.35, recent-weighted)."""
         if not self._draw_history:
             return None
         alpha = 0.35
@@ -38,7 +61,7 @@ class EnergyPredictor:
         return round(ema, 1)
 
     def _trend_w_per_s(self) -> float:
-        """Linear draw trend in W/s from recent samples."""
+        """Linear draw trend in W/s across the history window."""
         n = len(self._draw_history)
         if n < 3:
             return 0.0
@@ -47,6 +70,7 @@ class EnergyPredictor:
         return round(delta / max(span_s, TICK_SECONDS), 3)
 
     def _spread(self) -> float:
+        """Uncertainty scale for horizon bands (floor 1.5 W)."""
         if len(self._draw_history) < 2:
             return 2.5
         return max(pstdev(self._draw_history), 1.5)
@@ -58,6 +82,12 @@ class EnergyPredictor:
         blend_progress: float,
         transition_uncertainty: float = 0.0,
     ) -> float:
+        """
+        Heuristic confidence 35–96%.
+
+        Rises with sample count; falls with draw variance, drift from task avg,
+        incomplete task blend, and upcoming transition uncertainty.
+        """
         n = len(self._draw_history)
         base = 42.0 + min(n, 10) * 4.5
 
@@ -69,6 +99,7 @@ class EnergyPredictor:
 
         drift = abs(predicted_draw - task_avg_draw) / max(task_avg_draw, 1)
         base -= min(drift * 12, 10)
+        # Mid-transition power is least predictable.
         base -= (1.0 - blend_progress) * 15
         base -= transition_uncertainty * 20
 
@@ -82,7 +113,11 @@ class EnergyPredictor:
         current_draw_w: float,
         horizon_s: int,
     ) -> tuple[float, float]:
-        """Blend current task draw with anticipated transitions within horizon."""
+        """
+        Blend current-task draw with anticipated next phases within horizon_s.
+
+        Returns (blended_draw_w, transition_uncertainty in [0,1]).
+        """
         profile = TASK_PROFILES.get(task_id)
         task_avg = profile.avg_draw_w if profile else current_draw_w or 30.0
         ema = self._ema_draw()
@@ -244,6 +279,12 @@ class EnergyPredictor:
         blend_progress: float = 1.0,
         current_draw_w: float = 0.0,
     ) -> dict:
+        """
+        Full forecast payload for allocator, dashboard, and DB.
+
+        Does not mutate history — call ``update(total_draw)`` separately after
+        allocation when this sample should enter the EMA window.
+        """
         profile = TASK_PROFILES.get(task_id)
         task_avg = profile.avg_draw_w if profile else current_draw_w or 30.0
 
@@ -268,6 +309,7 @@ class EnergyPredictor:
 
         energy_wh = runtime["energy_wh_remaining"]
         mission_energy_wh = round(task_avg * (task_remaining_s / 3600.0), 2)
+        # 8% contingency margin so "ok" is not knife-edge on the last Wh.
         mission_energy_ok = energy_wh >= mission_energy_wh * 1.08
 
         horizon_energy_wh = round(

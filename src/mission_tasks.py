@@ -1,16 +1,40 @@
 # src/mission_tasks.py
 """
-Mission / task awareness with draw profiles and simple energy prediction.
+Mission / task awareness — profiles, transitions, and MissionTaskManager.
+
+Role in the system
+------------------
+Defines the four PMS tasks used throughout ButlerBot:
+
+  idle | moving | balanced | high_load
+
+Each ``TaskProfile`` supplies:
+  draw_targets     nominal watts per channel
+  budget_factor    fraction of system budget for PowerAllocator
+  throttle_order   who to cut first when over budget
+  max_draw_delta / variation_band / smooth_factor
+                   request-smoothing knobs used by ROS2BatterySource
+
+``MissionTaskManager`` holds the live task, remaining ticks, and blend state
+used to ease channel targets across transitions. When a SimulationDriver is
+attached and running, draw targets come from the sim profiles instead of
+``TASK_PROFILES`` defaults.
+
+``TICK_SECONDS`` (3) is the global PMS telemetry period — shared by battery
+drain, sim advance, and predictor sampling.
 """
 
 import random
 from dataclasses import dataclass
 
+# Telemetry / mission clock period (seconds). Keep in sync with hardware_ros2 loop.
 TICK_SECONDS = 3
 
 
 @dataclass(frozen=True)
 class TaskProfile:
+    """Immutable description of one PMS mission task's power behavior."""
+
     id: str
     label: str
     description: str
@@ -23,6 +47,7 @@ class TaskProfile:
 
     @property
     def avg_draw_w(self) -> float:
+        """Sum of nominal channel targets — used as task-average draw."""
         return round(sum(self.draw_targets.values()), 1)
 
 
@@ -138,9 +163,17 @@ def predict_runtime(
 
 
 class MissionTaskManager:
+    """
+    Live mission state machine for the PMS.
+
+    Without SimulationDriver: random Markov transitions via TASK_TRANSITIONS.
+    With SimulationDriver running: advance() is driven by the script instead.
+    """
+
     def __init__(self, start_task: str = "idle"):
         self._task = start_task
         self._ticks_remaining = random.randint(12, 22)
+        # Per-channel start points for ease-in blending after a task change.
         self._blend: dict[str, float] = {}
         self._blend_progress = 1.0
         self._sim_driver = None
@@ -166,7 +199,7 @@ class MissionTaskManager:
         return self._blend_progress
 
     def _ease_blend(self, t: float) -> float:
-        """Smooth ease-in-out for task transitions."""
+        """Smoothstep ease-in-out for task power transitions (Hermite)."""
         return t * t * (3 - 2 * t)
 
     def _resolve_draw_targets(self) -> dict[str, float]:
@@ -181,9 +214,16 @@ class MissionTaskManager:
         return self.profile.draw_targets
 
     def attach_simulation_driver(self, driver) -> None:
+        """Wire SimulationDriver so target_draw uses sim draw profiles."""
         self._sim_driver = driver
 
     def target_draw(self, channel_id: str, max_draw_w: float, current_draw: float | None = None) -> float:
+        """
+        Blended target watts for a channel under the current task.
+
+        Interpolates from last blend anchor toward the task/sim target using
+        smoothstep(blend_progress). Caps at 92% of channel max.
+        """
         new_target = self._resolve_draw_targets().get(channel_id, max_draw_w * 0.35)
         new_target = min(new_target, max_draw_w * 0.92)
 
@@ -196,7 +236,11 @@ class MissionTaskManager:
         return round(blended, 1)
 
     def force_task(self, task_id: str, duration_s: int | None = None) -> bool:
-        """Apply an external mission command (e.g. from ROS2)."""
+        """
+        Apply an external mission command (ROS2, twin, agent, sim segment).
+
+        Resets blend_progress so power eases into the new task.
+        """
         if task_id not in TASK_PROFILES:
             return False
         self._task = task_id
@@ -208,6 +252,11 @@ class MissionTaskManager:
         return True
 
     def advance(self) -> bool:
+        """
+        One tick without a SimulationDriver (random transition table).
+
+        Returns True when the task changed.
+        """
         self._ticks_remaining -= 1
         if self._ticks_remaining > 0:
             self._blend_progress = min(1.0, self._blend_progress + 0.10)
@@ -235,6 +284,7 @@ class MissionTaskManager:
         capacity_wh: float = 1000.0,
         current_draw_w: float = 0.0,
     ) -> dict:
+        """Dashboard/DB snapshot of current task + simple runtime prediction."""
         p = self.profile
         prediction = predict_runtime(battery_pct, capacity_wh, current_draw_w, p.avg_draw_w)
         return {

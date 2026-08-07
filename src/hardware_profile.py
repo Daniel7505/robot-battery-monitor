@@ -1,8 +1,25 @@
 """
-Load reference hardware profiles for grounded power estimation.
+Reference hardware profiles for grounded power estimation.
 
-Profiles live in config/hardware_profiles/<id>.yaml and feed Webots channel
-draws (src/twin/webots_power.py), battery capacity helpers, and forecast tools.
+Role in the system
+------------------
+YAML profiles under ``config/hardware_profiles/<id>.yaml`` describe ButlerBot
+variants (e.g. wheeled vs biped): pack capacity, motor specs, phase reference
+draws/durations, geometry. Consumers include:
+
+  - src/twin/webots_power.py  (physics-based channel draws)
+  - battery_capacity_wh()    (SOC integration / forecasts)
+  - mission_forecast         (loop energy using phase_draw_w / phase_duration_s)
+
+Selection
+---------
+``hardware_profile`` top-level config, or ``robot.hardware_profile``, default
+``butlerbot_wheeled``.
+
+Invariants
+----------
+- Missing/invalid YAML → ``_FALLBACK_PROFILE`` (never raises to callers).
+- ``load_hardware_profile`` is LRU-cached; call ``clear_profile_cache()`` in tests.
 """
 
 from __future__ import annotations
@@ -35,7 +52,7 @@ _FALLBACK_PROFILE = {
 
 @lru_cache(maxsize=8)
 def load_hardware_profile(profile_id: str) -> dict:
-    """Load a hardware profile YAML by id."""
+    """Load a hardware profile YAML by id (cached)."""
     path = _PROFILES_DIR / f"{profile_id}.yaml"
     if not path.is_file():
         logger.warning(f"Hardware profile not found: {path}")
@@ -52,6 +69,7 @@ def load_hardware_profile(profile_id: str) -> dict:
 
 
 def get_active_profile_id() -> str:
+    """Resolved profile id from config (wheeled ButlerBot by default)."""
     return (
         config.get("hardware_profile")
         or config.get("robot", "hardware_profile")
@@ -69,6 +87,7 @@ def clear_profile_cache() -> None:
 
 
 def motor_spec(profile: dict, motor_name: str) -> dict:
+    """Lookup motor block; tries exact then lowercased key."""
     motors = profile.get("motors") or {}
     return dict(motors.get(motor_name) or motors.get(motor_name.lower()) or {})
 
@@ -98,7 +117,7 @@ def wheel_radius_m(profile: dict | None = None) -> float:
 
 
 def clamp_motor_power_w(motor_name: str, watts: float, profile: dict | None = None) -> float:
-    """Clamp estimated draw to reference motor peak."""
+    """Clamp estimated draw to reference motor peak power."""
     prof = profile or get_active_profile()
     spec = motor_spec(prof, motor_name)
     peak = float(spec.get("peak_w") or spec.get("peak_power_w") or 120)
@@ -109,10 +128,12 @@ def motor_idle_and_scale(
     motor_name: str, profile: dict | None = None
 ) -> tuple[float, float, float]:
     """
-    Return (idle_w, scale, torque_proxy_coeff) for velocity/torque power model.
+    Return (idle_w, scale, torque_proxy_coeff) for the velocity/torque power model.
 
     Prefer cruise_w + cruise_speed_m_s to derive scale so watts match the profile
     at a known speed instead of opaque hard-coded constants.
+
+    Model (wheels): P ≈ idle + tau_proxy · scale · ω²  with τ ≈ tau_proxy · ω.
     """
     prof = profile or get_active_profile()
     spec = motor_spec(prof, motor_name)
@@ -128,7 +149,7 @@ def motor_idle_and_scale(
         radius = wheel_radius_m(prof)
         v_cruise = float(cruise_speed if cruise_speed is not None else 0.40)
         omega = max(v_cruise / max(radius, 1e-4), 0.5)
-        # P = idle + tau_proxy * scale * ω²  (with τ = tau_proxy · ω)
+        # Solve scale so P(ω_cruise) ≈ cruise_w.
         target = max(float(cruise_w) - idle_w, 0.5)
         scale = target / (tau_proxy * omega * omega + 1e-6)
         return idle_w, float(scale), tau_proxy
@@ -139,6 +160,7 @@ def motor_idle_and_scale(
 
 
 def phase_reference_draw_w(phase: str, profile: dict | None = None) -> float:
+    """Nominal total system draw for a twin mission phase (forecast fallback)."""
     prof = profile or get_active_profile()
     draws = prof.get("phase_draw_w") or {}
     key = normalize_phase_name(phase)
@@ -146,12 +168,14 @@ def phase_reference_draw_w(phase: str, profile: dict | None = None) -> float:
 
 
 def phase_reference_duration_s(phase: str, profile: dict | None = None) -> float:
+    """Nominal duration for a twin mission phase (forecast fallback)."""
     prof = profile or get_active_profile()
     durations = prof.get("phase_duration_s") or {}
     key = normalize_phase_name(phase)
     return float(durations.get(key) or durations.get(phase) or 10.0)
 
 
+# Biped walk_* names collapse to wheeled drive_transit for power models.
 _PHASE_ALIASES = {
     "walk_transit": "drive_transit",
     "walk": "drive_transit",
@@ -160,5 +184,6 @@ _PHASE_ALIASES = {
 
 
 def normalize_phase_name(phase: str) -> str:
+    """Canonical twin phase key (aliases → wheeled naming)."""
     p = str(phase or "").lower()
     return _PHASE_ALIASES.get(p, p)

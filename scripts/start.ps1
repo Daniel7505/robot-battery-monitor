@@ -1,4 +1,16 @@
-# Start the Robot Battery Monitor Docker stack (Windows)
+# =============================================================================
+# start.ps1 — bring up the Robot Battery Monitor Docker stack (Windows)
+# =============================================================================
+# Core profile (default): Postgres + PMS dashboard on :5000
+# Full profile:           + ROS2 sim container (docker compose --profile full)
+#
+# Usage:
+#   .\scripts\start.ps1
+#   .\scripts\start.ps1 -Profile full
+#
+# After success, open http://127.0.0.1:5000. For Webots twin, also run
+# launch_webots_twin.ps1 once the dashboard is healthy.
+# =============================================================================
 param(
     [ValidateSet("core", "full")]
     [string]$Profile = "core"
@@ -7,6 +19,7 @@ param(
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
+# First-run convenience: seed env from example so compose has DB credentials
 if (-not (Test-Path ".env") -and (Test-Path ".env.example")) {
     Write-Host "No .env found — copying .env.example"
     Copy-Item ".env.example" ".env"
@@ -20,6 +33,7 @@ if ($Profile -eq "full") {
     docker compose up --build -d
 }
 
+# Health wait: entrypoint may still be creating tables / starting Flask
 Write-Host ""
 Write-Host "Waiting for dashboard..."
 $ready = $false

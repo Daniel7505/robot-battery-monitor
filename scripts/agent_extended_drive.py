@@ -2,14 +2,18 @@
 """
 Longer agent/command-path mission (beyond ~2 ft short-drive baseline).
 
+Stresses the same twin command API as the dashboard Drive buttons and the
+short-drive smoke test, but exercises multi-leg energy exposure and the
+in-place turn → ABS spin-halt path.
+
 Sequence (default):
   1. Forward leg (~3.2 s ≈ 4+ ft at cruise)
   2. Brief pause / settle
-  3. In-place turn (optional; uses P1 spin-halt stop path)
+  3. In-place turn (optional; uses spin-halt stop path)
   4. Return leg (reverse)
   5. Final stop and settle
 
-Uses the twin command API (same path as dashboard Drive buttons).
+Requires dashboard + Webots external twin feed (same as agent_short_drive).
 
 Usage:
   python scripts/agent_extended_drive.py
@@ -27,6 +31,7 @@ import urllib.request
 
 
 def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 5.0) -> dict:
+    """Minimal JSON HTTP helper (stdlib only)."""
     data = None
     headers = {}
     if body is not None:
@@ -38,6 +43,7 @@ def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float
 
 
 def snap(base: str) -> dict:
+    """Flatten twin state into a compact metrics row for sampling logs."""
     st = _req(f"{base}/api/twin/state")
     feed = st.get("external_feed") or {}
     loc = feed.get("locomotion") or {}
@@ -65,6 +71,7 @@ def snap(base: str) -> dict:
 
 
 def sample_window(base: str, duration_s: float, label: str) -> list[dict]:
+    """Poll twin state for ``duration_s`` while a drive segment is active."""
     rows: list[dict] = []
     t_end = time.time() + duration_s
     while time.time() < t_end:
@@ -79,6 +86,7 @@ def sample_window(base: str, duration_s: float, label: str) -> list[dict]:
 
 
 def drive_cmd(base: str, left: float, right: float, duration_s: float, source: str) -> dict:
+    """POST timed differential-drive command to the twin bridge."""
     return _req(
         f"{base}/api/twin/command",
         "POST",
@@ -90,6 +98,7 @@ def drive_cmd(base: str, left: float, right: float, duration_s: float, source: s
 
 
 def stop_and_settle(base: str, source: str, wait_s: float = 8.0) -> list[dict]:
+    """Issue drive_stop and wait until speed/Legs look idle (or timeout)."""
     _req(f"{base}/api/twin/command", "POST", {"drive_stop": True, "source": source})
     rows: list[dict] = []
     t_end = time.time() + wait_s

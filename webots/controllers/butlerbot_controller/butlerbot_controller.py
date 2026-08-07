@@ -1,9 +1,35 @@
 """
-ButlerBot Webots controller — WASD teleop + onboard power agent HUD.
+ButlerBot Webots controller — digital twin loop for the Robot Battery Monitor.
 
-I/J/K/L drive (click the 3D view first). Space = ABS stop. R = toggle auto mission loop.
-Posts joint states + power estimates to the twin bridge; agent throttles when
-battery or heat limits are exceeded.
+Runs inside the Webots process (``butlerbot.wbt``). Each simulation step:
+
+1. Read sensors (GPS, IMU, wheel encoders) and keyboard / dashboard teleop.
+2. Drive wheels (manual, API, or auto mission phases) with local + remote throttle.
+3. Apply ABS-style stop when Space is pressed or the dashboard issues ``drive_stop``.
+4. Estimate joint power, drain a virtual battery, and POST telemetry to the PMS
+   via ``twin_publisher`` (``POST /api/twin/telemetry``).
+5. Poll ``GET /api/twin/state`` for agent throttle, API drive cmds, ``stop_epoch``,
+   and one-shot battery replenish.
+
+Teleop keys (focus the 3D view first — see note below):
+
+* **I / J / K / L** (or W/A/S/D, arrows) — drive / turn
+* **Space** — ABS stop sequence (coast / hard-zero / yaw oppose)
+* **R** — toggle auto mission phase loop (standby → transit → patrol → …)
+
+Why click the **floor**, not the robot:
+  Webots routes keyboard focus to the selected node. Selecting the robot body
+  often steals focus from the world view so keys never reach this controller.
+  Click empty floor (or the view background) so Keyboard events fire.
+
+Residual spin / ABS design notes (read before changing brake code):
+
+* GPS reports translation only — pure in-place yaw shows ~0 m/s while a hub
+  still spins on camera. Stops therefore require **finite wheel encoders**,
+  **dual-hub hard-zero**, and **IMU yaw-rate** quiescence — not GPS alone.
+* ``setPosition(NaN)`` freewheels a hub; locks use only finite encoder angles.
+* ``stop_epoch`` from the dashboard ensures a stop is not missed if wheel
+  commands already read as zero on the next poll.
 """
 
 from __future__ import annotations
@@ -31,6 +57,11 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 
 def _load_teleop_agent():
+    """Optionally load ``src/teleop_agent.py`` for shared brake/throttle math.
+
+    Webots controllers are not always started with the repo on ``sys.path``,
+    so we load by file path. Falls back to local helpers if import fails.
+    """
     module_path = os.path.join(_PROJECT_ROOT, "src", "teleop_agent.py")
     if not os.path.isfile(module_path):
         return None
@@ -47,6 +78,9 @@ def _load_teleop_agent():
 
 _teleop = _load_teleop_agent()
 
+# ---------------------------------------------------------------------------
+# Constants — mission phases, motors, stop thresholds, key codes
+# ---------------------------------------------------------------------------
 # Mission phases — optional auto loop (press R to toggle)
 PHASES = [
     {"name": "standby", "gait": "stand", "duration_s": 6, "drive_speed": 0.0, "turn_amp": 0.0, "arm_amp": 0.0, "torso_amp": 0.0},
@@ -104,7 +138,18 @@ HUD_W = 320
 HUD_H = 180
 
 
+# ---------------------------------------------------------------------------
+# Motion estimation & ABS brake helpers
+# ---------------------------------------------------------------------------
+
+
 class SpeedEstimator:
+    """Finite-difference body speed from GPS samples.
+
+    Returns translation speed only — yaw-in-place is invisible here and must
+    be caught via wheel encoders / IMU in the stop path.
+    """
+
     def __init__(self) -> None:
         self._prev_pos: list[float] | None = None
 
@@ -140,6 +185,7 @@ def _wheel_rad_s(
     prev_pos: dict[str, float],
     dt: float,
 ) -> float:
+    """Encoder angular rate (rad/s) via finite difference of position sensor."""
     sensor = sensors[sensor_name]
     pos = float(sensor.getValue())
     prev = prev_pos.get(sensor_name, pos)
@@ -150,7 +196,11 @@ def _wheel_rad_s(
 
 
 def _symmetric_brake_cmd(motion_sign: float, speed_m_s: float) -> float:
-    """Latched-direction gentle brake — same cmd on both wheels."""
+    """Latched-direction gentle brake — same cmd on both wheels.
+
+    Direction is latched at ABS request time so GPS jitter cannot reverse
+    the oppose command mid-stop.
+    """
     if _teleop is not None:
         return _teleop.abs_brake_wheel_velocity_latched(motion_sign, speed_m_s)
     if motion_sign == 0.0 or speed_m_s < STOP_SPEED_M_S:
@@ -162,9 +212,16 @@ def _symmetric_brake_cmd(motion_sign: float, speed_m_s: float) -> float:
 
 
 class AbsBrakeController:
-    """Coast-first braking — latch direction so GPS jitter can't reverse motors.
+    """Coast-first ABS stop sequence for linear cruise and in-place spin.
 
-    Spin/turn stops use wheel settle (not GPS alone) so residual circling ends.
+    Sequence (simplified):
+
+    1. ``request()`` latches motion sign and spin vs linear mode.
+    2. Soft oppose while both hubs agree on forward cruise.
+    3. Hard dual-hub zero once slow, spinning, or unequal.
+    4. Complete only after **both** hubs and body yaw stay quiet for a hold.
+
+    Spin/turn stops deliberately ignore GPS-only settle so residual circling ends.
     """
 
     def __init__(self) -> None:
@@ -185,6 +242,7 @@ class AbsBrakeController:
         left_wv: float = 0.0,
         right_wv: float = 0.0,
     ) -> None:
+        """Arm ABS using last drive cmd + current wheel rates (for spin detect)."""
         self.active = True
         self._elapsed_s = 0.0
         self._calm_hold_s = 0.0
@@ -336,12 +394,13 @@ _DRIVE_KEY_CODES = frozenset({
 
 
 class KeyTracker:
-    """Track held keys from Webots keyboard events."""
+    """Track held keys from Webots keyboard events (press/release stream)."""
 
     def __init__(self) -> None:
         self._active: set[int] = set()
 
     def poll(self, keyboard: Keyboard) -> tuple[set[int], set[int]]:
+        """Return (currently held keys, keys newly pressed this step)."""
         pressed: set[int] = set()
         key = keyboard.getKey()
         while key != -1:
@@ -359,6 +418,11 @@ class KeyTracker:
     def cancel_drive_keys(self) -> None:
         """Drop held drive keys — Space stop should not fight still-held I/J/K/L."""
         self._active -= _DRIVE_KEY_CODES
+
+
+# ---------------------------------------------------------------------------
+# Low-level motor / IMU utilities
+# ---------------------------------------------------------------------------
 
 
 def _clamp(value: float, limit: float) -> float:
@@ -379,11 +443,12 @@ _WHEEL_LOCK_POS: dict[str, float] = {}
 
 
 def _clear_wheel_locks() -> None:
+    """Drop latched encoder holds so the next drive can free-spin the hubs."""
     _WHEEL_LOCK_POS.clear()
 
 
 def _enable_full_wheel_torque(motor: Motor) -> None:
-    """Ensure Stop can actually fight residual hub spin (both sides)."""
+    """Raise torque/force caps so Stop can fight residual hub spin (both sides)."""
     for attr, value in (
         ("setAvailableTorque", 50.0),
         ("setAvailableForce", 50.0),
@@ -471,7 +536,7 @@ def _imu_yaw(imu: InertialUnit | None) -> float:
 
 
 def _yaw_rate(imu: InertialUnit | None, prev_yaw: float, dt: float) -> tuple[float, float]:
-    """Return (yaw_rate_rad_s, yaw_now)."""
+    """Return (yaw_rate_rad_s, yaw_now) with pi wrapping."""
     yaw = _imu_yaw(imu)
     if dt <= 1e-6:
         return 0.0, yaw
@@ -506,6 +571,7 @@ def _oppose_body_yaw(
 
 
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
+    """Velocity-mode wheel command with agent throttle scale (0–1)."""
     scale = max(0.0, min(1.0, throttle))
     for side, cmd in (("left_wheel", left_v * scale), ("right_wheel", right_v * scale)):
         motor = motors[side]
@@ -521,6 +587,7 @@ def _apply_wheel_command(
     right_v: float,
     throttle: float,
 ) -> None:
+    """Drive or hard-stop when the throttled command is essentially zero."""
     scale = max(0.0, min(1.0, throttle))
     left_cmd = _clamp(left_v * scale, MAX_WHEEL_V)
     right_cmd = _clamp(right_v * scale, MAX_WHEEL_V)
@@ -553,6 +620,7 @@ def _apply_phase_motion(
     t: float,
     throttle: float,
 ) -> tuple[float, float]:
+    """Execute one auto-mission phase pose/drive; return wheel cmds (L, R)."""
     drive = phase["drive_speed"]
     turn = phase["turn_amp"]
     arm_amp = phase["arm_amp"]
@@ -589,7 +657,13 @@ def _apply_phase_motion(
     return left_v, right_v
 
 
+# ---------------------------------------------------------------------------
+# Teleop key mapping & local power agent
+# ---------------------------------------------------------------------------
+
+
 def _expand_teleop_keys(keys: set[int]) -> set[int]:
+    """Map IJKL / arrows onto WASD semantics for a single drive helper."""
     expanded = set(keys)
     if _teleop is not None:
         expanded = _teleop.normalize_key_set(keys)
@@ -615,6 +689,7 @@ def _expand_teleop_keys(keys: set[int]) -> set[int]:
 
 
 def _teleop_drive(keys: set[int]) -> tuple[float, float]:
+    """Keyboard → (left_wheel_v, right_wheel_v) in rad/s."""
     expanded = _expand_teleop_keys(keys)
     if _teleop is not None:
         return _teleop.drive_from_key_set(
@@ -637,6 +712,7 @@ def _teleop_drive(keys: set[int]) -> tuple[float, float]:
 
 
 def _local_throttle(battery_pct: float, thermal_c: float) -> tuple[float, str | None]:
+    """Onboard cap from battery/heat (before merging dashboard intervention)."""
     if _teleop is not None:
         return _teleop.local_agent_throttle(battery_pct, thermal_c)
     return 1.0, None
@@ -649,11 +725,17 @@ def _update_thermal(thermal_c: float, draw_w: float, dt: float, motion_factor: f
 
 
 def _merge_throttle(local: float, remote: float | None) -> float:
+    """Take the stricter of local HUD agent and dashboard intervention factor."""
     if _teleop is not None:
         return _teleop.merge_throttle(local, remote)
     if remote is None:
         return local
     return min(local, float(remote))
+
+
+# ---------------------------------------------------------------------------
+# On-screen HUD (Webots Display device)
+# ---------------------------------------------------------------------------
 
 
 def _draw_gauge(display: Display, x: int, y: int, w: int, h: int, ratio: float, color: int, label: str) -> None:
@@ -682,6 +764,7 @@ def _draw_hud(
     speed_m_s: float = 0.0,
     braking: bool = False,
 ) -> None:
+    """Paint battery/heat gauges and teleop mode strip on the robot HUD."""
     display.setAlpha(0.92)
     display.setColor(0x080C12)
     display.fillRectangle(0, 0, HUD_W, HUD_H)
@@ -732,6 +815,7 @@ def _draw_hud(
 def _init_devices(
     robot: Robot, timestep: int
 ) -> tuple[dict[str, Motor], dict[str, PositionSensor], GPS, InertialUnit, Keyboard, Display | None]:
+    """Enable motors, encoders, GPS, IMU, keyboard, and optional HUD display."""
     motors: dict[str, Motor] = {}
     sensors: dict[str, PositionSensor] = {}
     for name in MOTOR_NAMES:
@@ -785,6 +869,13 @@ def _format_pose(gps: GPS) -> str:
 
 
 def _run_loop(robot: Robot, opts: dict) -> None:
+    """Main digital-twin control loop (one Webots step per iteration).
+
+    Priority each step: ABS stop → dashboard API drive → keyboard teleop →
+    auto mission phases → residual spin kill / hard-zero idle.
+
+    Also: thermal + battery models, HUD paint, and throttled twin publish.
+    """
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     # Poll teleop/stop often — 1s latency made dashboard Stop feel like a slow fade.
@@ -811,7 +902,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     cached_api_right = 0.0
     cached_api_source = ""
     last_api_sig = ""
-    last_stop_epoch = 0.0
+    last_stop_epoch = 0.0  # last seen bridge stop_epoch (monotonic stop signal)
     drive_log_elapsed = 0.0
     last_teleop_left = 0.0
     last_teleop_right = 0.0
@@ -832,6 +923,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            # --- Input: keyboard + R (auto loop) / Space (ABS) ---
             if keyboard is not None:
                 keys, pressed = key_tracker.poll(keyboard)
             else:
@@ -841,6 +933,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 auto_loop = not auto_loop
                 print(f"Auto mission loop: {'ON' if auto_loop else 'OFF'}")
 
+            # --- Sense: GPS translation, encoder rates, body yaw rate ---
             speed_m_s, forward_m_s = speed_estimator.estimate_motion(gps, dt)
             left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
@@ -925,6 +1018,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 keys_logged = True
                 print(f"Keyboard active — keys detected (sample code {next(iter(keys))})")
 
+            # --- Poll dashboard: throttle, API drive, stop_epoch, battery_reset ---
             if tick % state_poll_every == 0:
                 twin_state = fetch_twin_state(dashboard)
                 remote_throttle = remote_throttle_factor(twin_state)
@@ -995,6 +1089,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv = right_wv_early
             wheel_vels = {"left_wheel": left_wv, "right_wheel": right_wv}
 
+            # --- Actuate: ABS > API drive > keyboard > auto phases > residual kill ---
             api_driving = abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
             # Never clear ABS just because api_driving was true last frame
             if api_driving and not abs_brake.active:
@@ -1071,6 +1166,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     )
                 _hold_neutral_upper_body(motors)
 
+            # --- Power / mission labeling / battery + thermal models ---
             # Detect turn/spin before power + mission (GPS may be ~0 while wheels yaw)
             if _teleop is not None:
                 turning = _teleop.is_turning_motion(
@@ -1189,6 +1285,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             else:
                 drive_log_elapsed = 0.0
 
+            # --- HUD + twin publish (throttled) ---
             if hud is not None:
                 _draw_hud(
                     hud,
@@ -1239,6 +1336,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
 
 
 def main() -> None:
+    """Webots entry: parse controllerArgs, construct Robot, run the twin loop."""
     opts = parse_controller_args()
     robot = Robot()
     try:
@@ -1247,6 +1345,11 @@ def main() -> None:
         print(f"ButlerBot controller fatal error: {exc}")
         traceback.print_exc()
         sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry helpers (joint power + pose for twin_publisher payload)
+# ---------------------------------------------------------------------------
 
 
 def _estimate_joint_power(

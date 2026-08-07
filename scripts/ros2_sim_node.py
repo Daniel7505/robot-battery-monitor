@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """
-Standalone ROS2 simulation node for Docker deployment.
+Standalone ROS2 simulation node for Docker ``full`` profile deployment.
 
-Publishes mission commands and sensor power draws; subscribes to battery
-telemetry topics for integration testing on the shared ROS2 DDS network.
+Runs inside the ``ros2-sim`` compose service (osrf/ros image) so the PMS can
+be integration-tested on a shared ROS 2 DDS domain without real robot hardware.
+
+Role:
+  * **Publish** cycling mission commands, synthetic sensor power draws, and
+    occasional throttle setpoints on topics configured in ``config.yaml``.
+  * **Subscribe** to battery level / channel draws / status that the dashboard
+    hardware backend publishes when ``hardware.type: ros2``.
+
+Not a digital twin of ButlerBot kinematics — that is Webots. This node only
+exercises the ROS2 power/mission topic contracts.
 """
 
 from __future__ import annotations
@@ -31,9 +40,12 @@ _MISSION_CYCLE = ["idle", "moving", "high_load", "idle"]
 
 
 class ROSSimNode(Node):
+    """Timer-driven fake robot peer on the battery command/telemetry topics."""
+
     def __init__(self):
         super().__init__("robot_battery_ros2_sim")
         ros_cfg = (config.get("hardware") or {}).get("ros2") or {}
+        # Defaults match config.yaml; override via hardware.ros2.topics if needed
         topics = {
             "main_battery": "/robot/battery/main_level",
             "power_draw": "/robot/battery/power_draw",
@@ -76,6 +88,7 @@ class ROSSimNode(Node):
             self.get_logger().info(f"Telemetry: status {msg.data[:80]}")
 
     def _simulate_traffic(self) -> None:
+        """Periodic outbound traffic: mission cycle, sensor power, occasional throttle."""
         self._tick += 1
         if self._tick % 3 == 0:
             mission = _MISSION_CYCLE[self._mission_idx % len(_MISSION_CYCLE)]
@@ -98,6 +111,7 @@ class ROSSimNode(Node):
 
 
 def main() -> None:
+    """Spin the sim node until interrupt (container lifetime)."""
     rclpy.init()
     node = ROSSimNode()
     try:

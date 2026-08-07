@@ -1,8 +1,64 @@
 """
 DigitalTwinBridge — PMS interface layer for external simulators and hardware.
 
-Receives normalized telemetry from Webots, PyBullet, custom scripts, or real
-hardware; routes it into the power monitor without breaking internal simulation.
+Architecture
+------------
+The bridge is the single arbitration point between:
+
+  1. **External twin** (Webots, PyBullet, custom HTTP feed, hardware)
+  2. **Internal simulation** (built-in ButlerBot / SimulationDriver)
+
+Inbound path::
+
+    POST /api/twin/telemetry
+        → get_adapter(name).normalize(payload)   # source-specific → TwinTelemetry
+        → validate
+        → store as _last_telemetry
+        → (later) get_power_feed() / sync_to_hardware()
+
+Outbound path::
+
+    POST /api/twin/command
+        → mission / throttle / channel_draws into PMS
+        → drive left/right + duration for Webots teleop
+        → drive_stop bumps stop_epoch (see below)
+        → battery_reset parks a one-shot override for the controller poll
+
+Webots polls GET /api/twin/state (export_state → teleop block) each sim step
+to pick up drive commands, stop_epoch, and pending battery overrides.
+
+External vs internal
+--------------------
+``_is_external_active()`` is true only when:
+  - bridge enabled
+  - last telemetry exists
+  - source is not "internal"
+  - telemetry is fresher than ``stale_after_s``
+
+When external is active *and* ``prefer_external`` is true, ``get_power_feed()``
+supplies live watts to the hardware layer. Otherwise the PMS continues on its
+internal loop — external twin never hard-fails the stack when Webots is down.
+
+Battery override
+----------------
+``apply_battery_override`` (config) gates whether twin battery_pct overwrites
+``hardware._main_battery``. Separately, API ``battery_reset`` always parks
+``battery_pct`` + ``reset_thermal`` on the teleop export so the *Webots*
+controller can snap its local pack/thermal model; that one-shot is cleared
+after a single export so it is not re-applied forever.
+
+stop_epoch (drive halt handshake)
+---------------------------------
+A simple left_v=right_v=0 is easy to miss if the controller is mid-command or
+the poll races a new drive. ``drive_stop`` increments ``_webots_stop_seq`` and
+stamps ``stop_epoch`` into the teleop export. Controllers treat a *new* epoch
+as a hard halt signal (zero wheels, clear residual spin logic) even if velocity
+fields were already zero — critical for residual spin / ABS stop reliability.
+
+Telemetry POST contract
+-----------------------
+Adapters produce ``TwinTelemetry``; this class does not re-implement source
+math. Integration notes and schema live in ``schema()`` for live discovery.
 """
 
 from __future__ import annotations
@@ -22,7 +78,11 @@ _VALID_TASKS = frozenset(TASK_PROFILES.keys())
 
 
 class DigitalTwinBridge:
-    """Central bridge between external data sources and the PMS hardware layer."""
+    """Central bridge between external data sources and the PMS hardware layer.
+
+    Instantiated once via ``get_twin_bridge()`` so API routes, hardware sync,
+    and Webots teleop share the same telemetry and command state.
+    """
 
     def __init__(self):
         twin_cfg = config.get("digital_twin") or {}
@@ -31,8 +91,10 @@ class DigitalTwinBridge:
         self._accept_commands = bool(twin_cfg.get("accept_external_commands", True))
         self._accept_telemetry = bool(twin_cfg.get("accept_external_telemetry", True))
         self._sync_interval_s = float(twin_cfg.get("sync_interval_s", 3))
+        # Telemetry older than this is treated as "Webots disconnected".
         self._stale_after_s = float(twin_cfg.get("stale_after_s", 12))
         self._prefer_external = bool(twin_cfg.get("prefer_external", True))
+        # When True, twin battery_pct overwrites hardware._main_battery on sync.
         self._apply_battery = bool(twin_cfg.get("apply_battery_override", False))
         self._robot_name = config.get("robot", "name", "ButlerBot")
         try:
@@ -48,6 +110,7 @@ class DigitalTwinBridge:
         self._last_command_at: datetime | None = None
         self._command_count = 0
         self._active_source = "internal"
+        # Shared scratchpad polled by Webots each step (drive + one-shot battery).
         self._webots_teleop: dict = {
             "left_v": 0.0,
             "right_v": 0.0,
@@ -56,6 +119,7 @@ class DigitalTwinBridge:
             "battery_pct": None,
             "reset_thermal": False,
         }
+        # Monotonic stop handshake; bumped on every drive_stop command.
         self._webots_stop_seq = 0
 
     @property
@@ -64,6 +128,7 @@ class DigitalTwinBridge:
 
     @property
     def active_source(self) -> str:
+        """Report external source name while feed is live; else \"internal\"."""
         if self._is_external_active():
             return self._last_telemetry.source if self._last_telemetry else "external"
         return "internal"
@@ -75,6 +140,7 @@ class DigitalTwinBridge:
         return age > self._stale_after_s
 
     def _is_external_active(self) -> bool:
+        """True only for a fresh, non-internal telemetry sample."""
         if not self._enabled or not self._last_telemetry:
             return False
         if self._last_telemetry.source == "internal":
@@ -82,7 +148,12 @@ class DigitalTwinBridge:
         return not self._is_stale()
 
     def ingest_telemetry(self, payload: dict, adapter: str | None = None) -> dict:
-        """Receive telemetry from an external simulator or custom script."""
+        """Receive telemetry from an external simulator or custom script.
+
+        Adapter resolution order: explicit arg → payload.adapter → config default.
+        On success, replaces ``_last_telemetry`` (last writer wins); does not
+        immediately push to hardware — callers/sync path do that on the tick.
+        """
         if not self._enabled:
             return {"ok": False, "error": "Digital twin bridge disabled"}
         if not self._accept_telemetry:
@@ -112,7 +183,12 @@ class DigitalTwinBridge:
         }
 
     def get_power_feed(self) -> PowerFeed | None:
-        """Return the live external power contract, or None if twin feed is inactive."""
+        """Return the live external power contract, or None if twin feed is inactive.
+
+        ``prefer_external`` must be true — otherwise the hardware layer is told
+        to stay on internal simulation even if telemetry is arriving (useful for
+        dry-run dual feeds).
+        """
         if not self._is_external_active() or not self._prefer_external:
             return None
         return power_feed_from_telemetry(self._last_telemetry)
@@ -126,7 +202,17 @@ class DigitalTwinBridge:
         include_battery: bool = True,
         apply_readings: bool = True,
     ) -> bool:
-        """Apply fresh external telemetry into the live PMS layer (non-blocking)."""
+        """Apply fresh external telemetry into the live PMS layer (non-blocking).
+
+        Returns False when external is inactive so the caller can keep its
+        internal tick without special casing. Battery write is gated by
+        ``apply_battery_override``; mission/draws go through ROS2 inject so
+        the allocator sees the same path as mock/hardware commands.
+
+        ``apply_readings=False`` skips ``apply_power_feed`` when the caller is
+        already inside ``_build_readings`` — re-entering that path can deadlock
+        or double-apply under the hardware lock.
+        """
         if not self._is_external_active() or not self._prefer_external:
             return False
 
@@ -164,7 +250,11 @@ class DigitalTwinBridge:
         return True
 
     def export_state(self, hardware) -> dict:
-        """Export PMS state plus twin bridge metadata for external consumers."""
+        """Export PMS state plus twin bridge metadata for external consumers.
+
+        Webots and dashboards use this as a single snapshot: allocation, safety,
+        agent posture, optional external_feed, and the teleop poll block.
+        """
         self._last_export_at = datetime.now(timezone.utc)
         readings = getattr(hardware, "last_readings", {}) or {}
         allocation = getattr(hardware, "allocation_status", {}) or {}
@@ -251,7 +341,18 @@ class DigitalTwinBridge:
         }
 
     def _export_teleop(self) -> dict:
-        """Active external drive / battery commands for Webots to poll."""
+        """Active external drive / battery commands for Webots to poll.
+
+        Auto-expires timed drive commands when ``drive_until`` elapses so a
+        stuck API client cannot leave wheels commanded forever.
+
+        ``stop_epoch`` is included when set so the controller can detect a new
+        hard-stop event even if left/right are already zero.
+
+        Battery override is one-shot: after export, ``battery_pct`` /
+        ``reset_thermal`` are cleared so a single reset does not re-fire every
+        poll.
+        """
         now = time.time()
         left = float(self._webots_teleop.get("left_v", 0.0))
         right = float(self._webots_teleop.get("right_v", 0.0))
@@ -273,6 +374,7 @@ class DigitalTwinBridge:
             out["stop_epoch"] = float(stop_epoch)
         pending_batt = self._webots_teleop.get("battery_pct")
         if pending_batt is not None:
+            # One-shot delivery to Webots local battery / thermal model.
             out["battery_pct"] = float(pending_batt)
             out["reset_thermal"] = bool(self._webots_teleop.get("reset_thermal"))
             self._webots_teleop["battery_pct"] = None
@@ -280,7 +382,16 @@ class DigitalTwinBridge:
         return out
 
     def apply_command(self, hardware, command: dict) -> dict:
-        """Apply outbound commands from twin consumers into the PMS."""
+        """Apply outbound commands from twin consumers into the PMS.
+
+        Supported keys (any subset):
+          mission/task, throttle, sensor_draws/channel_draws,
+          simulation start|stop, battery_reset, drive, drive_stop
+
+        Drive commands only update the teleop scratchpad — Webots must poll
+        export to actuate. ``drive_stop`` zeros velocities *and* advances
+        ``stop_epoch`` for the residual-spin hard-halt handshake.
+        """
         if not self._enabled:
             return {"ok": False, "error": "Digital twin bridge disabled"}
         if not self._accept_commands:
@@ -339,6 +450,7 @@ class DigitalTwinBridge:
                 pct = max(5.0, min(100.0, pct))
                 if hasattr(hardware, "_main_battery"):
                     hardware._main_battery = pct
+                # Park one-shot for Webots poll (cleared in _export_teleop).
                 self._webots_teleop["battery_pct"] = pct
                 self._webots_teleop["reset_thermal"] = True
                 applied.append(f"battery_reset={pct:.0f}%")
@@ -362,6 +474,8 @@ class DigitalTwinBridge:
                 applied.append(f"drive L={left:.1f} R={right:.1f} ({duration:.1f}s)")
 
         if command.get("drive_stop"):
+            # Hard stop handshake: zero cmd + new stop_epoch so the controller
+            # cannot treat "already zero" as a no-op while hubs still coast/spin.
             self._webots_stop_seq += 1
             self._webots_teleop.update({
                 "left_v": 0.0,
@@ -385,6 +499,7 @@ class DigitalTwinBridge:
         }
 
     def status(self) -> dict:
+        """Compact bridge health for dashboard twin panel and export_state."""
         tel = self._last_telemetry
         feed = self.get_power_feed()
         return {
@@ -414,6 +529,7 @@ class DigitalTwinBridge:
         }
 
     def schema(self) -> dict:
+        """Live integration contract for external controllers and docs UIs."""
         return {
             "schema_version": TWIN_SCHEMA_VERSION,
             "description": "DigitalTwinBridge — PMS interface for external simulators",
@@ -484,6 +600,7 @@ _bridge_instance: DigitalTwinBridge | None = None
 
 
 def get_twin_bridge() -> DigitalTwinBridge:
+    """Process-wide singleton — API, hardware, and tests share one bridge."""
     global _bridge_instance
     if _bridge_instance is None:
         _bridge_instance = DigitalTwinBridge()
@@ -491,5 +608,6 @@ def get_twin_bridge() -> DigitalTwinBridge:
 
 
 def reset_twin_bridge() -> None:
+    """Drop the singleton (tests / config reload). Next get rebuilds from config."""
     global _bridge_instance
     _bridge_instance = None

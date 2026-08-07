@@ -1,7 +1,29 @@
 #!/usr/bin/env python3
 """
 Standalone ROS2 publisher — reads live hardware telemetry and publishes to topics.
-Run separately: python -m src.ros2_node
+
+Role
+----
+Optional *separate process* from the dashboard. Useful when operators want a
+dedicated rclpy node that only publishes battery/draw/status, without embedding
+the bridge inside ROS2BatterySource.
+
+  python -m src.ros2_node
+
+Requires
+--------
+- rclpy installed and a sourced ROS2 environment
+- Dashboard (or another process) already running so get_hardware_source() has
+  populated last_readings
+
+Topics (from config hardware.ros2.topics, with defaults)
+-------------------------------------------------------
+/robot/battery/main_level   Float32
+/robot/battery/power_draw   Float32MultiArray [Legs, Arms, Torso, Compute]
+/robot/battery/status       String JSON
+
+Note: the embedded ROS2Bridge in hardware_ros2 is the primary integration path
+for the full PMS; this module is a lightweight publisher-only alternative.
 """
 
 import json
@@ -18,10 +40,13 @@ try:
 except ImportError:
     _RCLPY_AVAILABLE = False
 
+# Fixed MultiArray order — must stay stable for external subscribers.
 _CHANNEL_ORDER = ["Legs", "Arms", "Torso", "Compute"]
 
 
 class BatteryPublisher(Node):
+    """Timer-driven publisher that samples the process hardware singleton."""
+
     def __init__(self):
         super().__init__("robot_battery_publisher")
         from src.config import config
@@ -41,6 +66,7 @@ class BatteryPublisher(Node):
         )
 
     def publish_battery_data(self):
+        """Sample hardware.last_readings and publish main / draws / status."""
         from src.hardware import get_hardware_source
 
         try:
@@ -50,6 +76,7 @@ class BatteryPublisher(Node):
                 self.get_logger().warn("No live readings yet — is the dashboard running?")
                 return
 
+            # Shared pack SOC is stored per-channel; average is a stable proxy.
             batteries = [d.get("battery", 0) for d in readings.values()]
             main_battery = sum(batteries) / len(batteries) if batteries else 0
 

@@ -1,5 +1,6 @@
-# Robot Battery Monitor — full deployment stack
-#
+# =============================================================================
+# Robot Battery Monitor — Docker deployment stack
+# =============================================================================
 # Core (one command):
 #   docker compose up --build -d
 #   ./scripts/start.sh          (Linux/macOS)
@@ -9,8 +10,12 @@
 #   docker compose --profile full up --build -d
 #   ./scripts/start.sh full
 #   .\scripts\start.ps1 -Profile full
+#
+# Webots runs on the host (not in compose) and talks to dashboard:5000.
+# =============================================================================
 
 services:
+  # Persistent store for battery samples, allocations, archives metadata
   postgres:
     image: postgres:16-alpine
     container_name: robot-battery-postgres
@@ -32,6 +37,8 @@ services:
       retries: 8
       start_period: 5s
 
+  # PMS hub: Flask + SocketIO dashboard, twin API, hardware loop
+  # Entrypoint: scripts/docker-entrypoint.sh → run_dashboard.py
   dashboard:
     build:
       context: .
@@ -71,6 +78,8 @@ services:
       retries: 5
       start_period: 25s
 
+  # Optional ROS 2 peer for topic-level integration tests (profile: full)
+  # See scripts/ros2_sim_node.py — not a kinematic twin
   ros2-sim:
     profiles: ["full"]
     image: osrf/ros:rolling-ros-base

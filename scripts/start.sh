@@ -1,9 +1,18 @@
 #!/usr/bin/env sh
+# =============================================================================
+# start.sh — bring up the Robot Battery Monitor Docker stack (Linux/macOS)
+# =============================================================================
+# Core (default): Postgres + PMS dashboard on :5000
+# Full:           ./scripts/start.sh full  → also starts ROS2 sim
+#
+# After success: open http://127.0.0.1:5000 ; optional Webots via launch_webots_twin.sh
+# =============================================================================
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Seed env on first run so compose has DB credentials
 if [ ! -f .env ] && [ -f .env.example ]; then
   echo "No .env found — copying .env.example"
   cp .env.example .env
@@ -18,6 +27,7 @@ else
   docker compose up --build -d
 fi
 
+# Wait until Flask answers (entrypoint may still be initializing Postgres tables)
 echo ""
 echo "Waiting for dashboard..."
 attempt=0

@@ -1,5 +1,21 @@
 """
 Twin control view — PMS + agent status tied to Webots simulation phases.
+
+Why this module exists
+----------------------
+The dashboard "twin control" panel needs one coherent snapshot that answers:
+  - What phase is Webots in right now?
+  - What mission task does the PMS think is active?
+  - Is the onboard agent intervening (throttle / task suggest)?
+  - Do phase and task align?
+
+Telemetry, allocation, and agent status live on different objects and update
+at different rates. ``build_twin_control_status`` merges them and applies a
+few presentation heuristics so the UI does not show "Idle / Standby" while
+the robot is clearly driving (common when PMS lag trails twin locomotion).
+
+Stress phases (transit / patrol / manipulate) flag high-draw segments for
+agent twin_stress rules and UI highlighting — not a separate control path.
 """
 
 from __future__ import annotations
@@ -9,12 +25,14 @@ from src.mission_context import context_summary, task_phase_alignment
 from src.mission_tasks import TASK_PROFILES
 from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
 
+# Phases where draw and utilization routinely stress the power budget.
 TWIN_STRESS_PHASES = frozenset({
     "drive_transit", "walk_transit", "patrol", "manipulate"
 })
 
 
 def is_twin_stress_phase(phase: str | None) -> bool:
+    """True for mission segments that typically elevate Legs/Arms load."""
     return bool(phase and str(phase).lower() in TWIN_STRESS_PHASES)
 
 
@@ -31,7 +49,7 @@ PHASE_LABELS: dict[str, str] = {
 
 
 def webots_phase_flow() -> list[dict]:
-    """ButlerBot Webots phase timeline for dashboard UI."""
+    """ButlerBot Webots phase timeline for dashboard UI (from mission flow)."""
     flow = []
     for step in BUTLERBOT_MISSION_FLOW:
         phase = step["phase"]
@@ -46,6 +64,11 @@ def webots_phase_flow() -> list[dict]:
 
 
 def _phase_index(phase: str | None, flow: list[dict]) -> int:
+    """Map current phase onto the timeline index (-1 if unknown).
+
+    Teleop is not a scripted phase; map it onto drive_transit so the progress
+    highlight lands on the transit step rather than blanking the timeline.
+    """
     if not phase:
         return -1
     norm = phase.lower()
@@ -61,6 +84,7 @@ def _phase_index(phase: str | None, flow: list[dict]) -> int:
 
 
 def _power_influence_summary(allocation: dict, agent: dict) -> str:
+    """One-line human summary of who is shaping power right now (PMS vs agent)."""
     parts: list[str] = []
     status = allocation.get("status", "ok")
     throttled = allocation.get("throttled_channels") or []
@@ -100,7 +124,14 @@ def _power_influence_summary(allocation: dict, agent: dict) -> str:
 
 
 def build_twin_control_status(bridge, hardware) -> dict:
-    """Snapshot for dashboard: Webots phase, PMS task, agent influence."""
+    """Snapshot for dashboard: Webots phase, PMS task, agent influence.
+
+    Heuristics (presentation only — does not write mission state):
+      - If twin is driving but PMS still says idle, label task as moving.
+      - If phase string lagged on standby but gait/speed show motion, relabel
+        as teleop / teleop_turn so the UI matches what the operator sees.
+      - Prefer profile task labels when we overrode the hardware task string.
+    """
     flow = webots_phase_flow()
     twin_status = bridge.status() if bridge else {}
     external = bool(twin_status.get("external_active"))

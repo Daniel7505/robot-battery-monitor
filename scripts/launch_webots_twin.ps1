@@ -1,5 +1,13 @@
-# Launch ButlerBot Webots digital twin alongside the dashboard.
+# =============================================================================
+# launch_webots_twin.ps1 — open ButlerBot world + twin bridge to the dashboard
+# =============================================================================
+# Prerequisites: dashboard running (.\scripts\start.ps1) and Webots installed.
+# Sets TWIN_DASHBOARD_URL so butlerbot_controller / twin_publisher know where
+# to POST telemetry and GET teleop/throttle state.
+#
 # Usage: .\scripts\launch_webots_twin.ps1 [-DashboardUrl "http://127.0.0.1:5000"]
+# In Webots: click the FLOOR (not the robot) then use I/J/K/L or dashboard Drive.
+# =============================================================================
 
 param(
     [string]$DashboardUrl = "http://127.0.0.1:5000"
@@ -15,7 +23,7 @@ Write-Host "Dashboard: $DashboardUrl"
 Write-Host "World:     $WorldFile"
 Write-Host ""
 
-# Check dashboard is reachable
+# Soft check: controller still starts if dashboard is down; twin POSTs will fail until it is up
 try {
     $resp = Invoke-WebRequest -Uri "$DashboardUrl/api/twin/schema" -UseBasicParsing -TimeoutSec 5
     if ($resp.StatusCode -eq 200) {
@@ -27,7 +35,7 @@ try {
     Write-Host ""
 }
 
-# Find Webots executable
+# Resolve webots.exe: WEBOTS_HOME → common install paths → PATH
 $WebotsExe = $null
 if ($env:WEBOTS_HOME) {
     foreach ($rel in @("msys64\mingw64\bin\webots.exe", "msys64\webots.exe", "webots.exe")) {
@@ -59,7 +67,7 @@ if (-not $WebotsExe) {
 
 Write-Host "Webots: $WebotsExe" -ForegroundColor Green
 
-# Avoid duplicate instances (port conflicts / auto-close from stale processes)
+# One instance only — stale Webots processes fight over the world / controller
 $existing = Get-Process -Name "webots" -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Closing $($existing.Count) existing Webots process(es)..." -ForegroundColor Yellow

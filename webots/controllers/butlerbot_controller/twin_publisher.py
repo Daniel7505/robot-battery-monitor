@@ -1,7 +1,34 @@
 """
-POST Webots telemetry to the Robot Battery Monitor DigitalTwinBridge.
+HTTP client from the Webots controller to the PMS DigitalTwinBridge.
 
-Uses only stdlib (urllib) so it runs inside Webots without extra packages.
+Uses only the Python standard library (``urllib``) so it runs inside Webots
+without pip-installing Flask or project extras into the controller env.
+
+Direction of traffic
+--------------------
+* **Outbound** ``publish_telemetry`` → ``POST /api/twin/telemetry?adapter=webots``
+  Sends joint states, locomotion, channel_draws, and battery %.
+* **Inbound** ``fetch_twin_state`` → ``GET /api/twin/state``
+  Pulls agent/safety throttle, dashboard teleop wheel cmds, ``stop_epoch``,
+  and one-shot battery replenish for the controller loop.
+
+Payload shape (see ``build_payload`` / ``src.twin.webots_power``)::
+
+    {
+      "source": "webots", "adapter": "webots",
+      "joints": [{name, velocity, torque, power_w}, ...],
+      "locomotion": {gait, speed_m_s, phase, mode},
+      "robot": {name, main_battery_pct},
+      "channel_draws": {Legs, Arms, Torso, Compute, ...},
+      "mission": {task, phase}, ...
+    }
+
+Throttle pull-back
+------------------
+``remote_throttle_factor`` only returns a factor when the dashboard agent or
+safety layer is *intervening* (``throttle_required`` / ``intervening``).
+Allocation "warning" status alone must not cap teleop (that previously forced
+a ~70% drive limit while still "healthy").
 """
 
 from __future__ import annotations
@@ -69,6 +96,7 @@ DEFAULT_DASHBOARD_URL = "http://127.0.0.1:5000"
 
 
 def dashboard_url() -> str:
+    """Resolve dashboard base URL: env TWIN_DASHBOARD_URL / DASHBOARD_URL, else localhost."""
     return (
         os.environ.get("TWIN_DASHBOARD_URL")
         or os.environ.get("DASHBOARD_URL")
@@ -77,7 +105,7 @@ def dashboard_url() -> str:
 
 
 def parse_controller_args() -> dict:
-    """Read --dashboard-url= and --telemetry-interval= from controllerArgs."""
+    """Read ``--dashboard-url=`` and ``--telemetry-interval=`` from Webots controllerArgs."""
     opts = {"dashboard_url": dashboard_url(), "interval_s": 0.5}
     for arg in sys.argv[1:]:
         if arg.startswith("--dashboard-url="):
@@ -91,7 +119,10 @@ def parse_controller_args() -> dict:
 
 
 def fetch_twin_state(base_url: str | None = None) -> dict:
-    """GET PMS/agent state — used for remote throttle override in teleop."""
+    """GET PMS/agent state — teleop cmds, stop_epoch, remote throttle, battery.
+
+    Returns ``{}`` on network failure so the controller can keep running offline.
+    """
     base = (base_url or dashboard_url()).rstrip("/")
     url = f"{base}/api/twin/state"
     req = urllib.request.Request(url, method="GET")
@@ -103,7 +134,11 @@ def fetch_twin_state(base_url: str | None = None) -> dict:
 
 
 def remote_throttle_factor(state: dict) -> float | None:
-    """Dashboard agent throttle — not PMS allocation warnings (those caused 70% teleop cap)."""
+    """Dashboard intervention throttle only (not soft allocation warnings).
+
+    Returns a factor in (0, 1) when safety/agent is intervening; else None so
+    teleop runs at full local capability.
+    """
     safety = state.get("safety") or {}
     agent = state.get("agent") or {}
     intervening = bool(safety.get("throttle_required") or agent.get("intervening"))
@@ -123,7 +158,10 @@ def remote_throttle_factor(state: dict) -> float | None:
 
 
 def teleop_from_twin_state(state: dict) -> dict:
-    """Read polled dashboard/API drive + battery replenish for Webots."""
+    """Unpack polled dashboard drive + battery replenish fields for Webots.
+
+    Keys: left_v, right_v, active, source, stop_epoch, battery_pct, reset_thermal.
+    """
     teleop = state.get("teleop") or {}
     return {
         "left_v": float(teleop.get("left_v") or 0.0),
@@ -137,6 +175,7 @@ def teleop_from_twin_state(state: dict) -> dict:
 
 
 def battery_from_twin_state(state: dict, default: float = 100.0) -> float:
+    """Startup / sync battery % from bridge robot state (clamped 5–100)."""
     robot = state.get("robot") or {}
     raw = robot.get("main_battery_pct")
     if raw is None:
@@ -148,7 +187,10 @@ def battery_from_twin_state(state: dict, default: float = 100.0) -> float:
 
 
 def publish_telemetry(payload: dict, base_url: str | None = None) -> dict:
-    """POST telemetry JSON to /api/twin/telemetry?adapter=webots."""
+    """POST telemetry JSON to ``/api/twin/telemetry?adapter=webots``.
+
+    Returns parsed JSON, or ``{"ok": False, "error": ...}`` on network failure.
+    """
     base = (base_url or dashboard_url()).rstrip("/")
     url = f"{base}/api/twin/telemetry?adapter=webots"
     data = json.dumps(payload).encode("utf-8")
@@ -166,7 +208,7 @@ def publish_telemetry(payload: dict, base_url: str | None = None) -> dict:
 
 
 def _fallback_channel_draws(joints: list[dict], *, speed_m_s: float, gait: str) -> dict:
-    """Motion-aware draws when webots_power cannot be imported inside Webots."""
+    """Motion-aware channel watts when ``webots_power`` cannot be imported in Webots."""
     by_name = {str(j.get("name", "")).lower(): j for j in (joints or [])}
     def _pw(name: str, idle: float) -> float:
         j = by_name.get(name) or {}
@@ -204,6 +246,7 @@ def build_payload(
     pose: dict | None = None,
     sensors: dict | None = None,
 ) -> dict:
+    """Build the twin telemetry dict (prefer project ``webots_power``, else fallback)."""
     if build_webots_telemetry is not None:
         return build_webots_telemetry(
             joints=joints,

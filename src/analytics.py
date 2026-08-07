@@ -1,5 +1,26 @@
 """
 PostgreSQL analytics — curated views, queries, and report generation.
+
+Role in the system
+------------------
+Created at ``init_db()`` time. Defines SQL views over allocation_snapshots,
+channel_readings, and energy_predictions for:
+
+  - Dashboard analytics API endpoints
+  - CLI ``--report`` via ``build_report`` / ``format_report_text``
+
+View inventory (v_*)
+--------------------
+channel/mission summaries, minute power & battery trends, LRU history,
+anomaly events, mission transitions, forecast history, hourly rollups.
+
+Design notes
+------------
+- Views are dropped and recreated on startup so schema evolves safely.
+- Query helpers catch exceptions and return empty structures so a bad DB
+  never crashes the CLI/dashboard.
+- ``build_report`` uses a shorter window for high-resolution trends when the
+  requested hours window is large (keeps payload manageable).
 """
 
 from __future__ import annotations
@@ -273,6 +294,7 @@ _ANALYTICS_VIEW_NAMES = (
 
 
 def init_analytics_views() -> None:
+    """Drop and recreate all analytics views (idempotent startup)."""
     with db_cursor() as (conn, cur):
         cur.execute(_DROP_VIEWS_SQL)
         cur.execute(_ANALYTICS_VIEWS_SQL)
@@ -280,6 +302,7 @@ def init_analytics_views() -> None:
 
 
 def _since(hours: float) -> datetime:
+    """UTC cutoff timestamp for windowed queries."""
     return datetime.now(timezone.utc) - timedelta(hours=hours)
 
 

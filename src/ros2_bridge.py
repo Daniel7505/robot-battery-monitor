@@ -1,5 +1,31 @@
 """
 ROS2 bridge — publishers, subscribers, and mock fallback when rclpy is unavailable.
+
+Role in the system
+------------------
+Embeds ROS2 I/O inside ROS2BatterySource without requiring a separate node
+process:
+
+  Publish (each PMS tick)
+    main_battery   Float32
+    power_draw     Float32MultiArray (channel order fixed)
+    power_status   String (JSON envelope)
+
+  Subscribe
+    mission_command   String task id → force_task
+    throttle_command  Float32 0–1 → one-shot throttle pulse
+    sensor_power      Float32MultiArray → blend into channel requests
+
+Mock mode
+---------
+When rclpy is missing or ``hardware.ros2.mock`` is true, publishes go to an
+in-memory outbox and an optional mock feed injects synthetic missions/sensors
+so demos work without a DDS graph.
+
+Command consumption
+-------------------
+``consume_commanded_task`` / ``consume_throttle_override`` are one-shot: the
+hardware source reads and clears them each tick so commands do not stick.
 """
 
 from __future__ import annotations
@@ -39,14 +65,17 @@ _DEFAULT_TOPICS = {
 }
 
 _MOCK_MISSION_CYCLE = ["idle", "balanced", "moving", "high_load"]
+# Reject path-traversal-ish or malformed topic strings from config.
 _TOPIC_PATTERN = re.compile(r"^/[A-Za-z0-9_/]+$")
 
 
 def ros2_available() -> bool:
+    """True if the rclpy Python bindings imported successfully."""
     return _RCLPY_AVAILABLE
 
 
 def _sanitize_topics(raw: dict) -> dict[str, str]:
+    """Merge config topic overrides with defaults; drop invalid names."""
     cleaned = dict(_DEFAULT_TOPICS)
     for key, value in (raw or {}).items():
         if key in _DEFAULT_TOPICS and isinstance(value, str):
@@ -66,7 +95,7 @@ def _valid_task(task: str) -> str | None:
 if _RCLPY_AVAILABLE:
 
     class _BatteryMonitorNode(Node):
-        """ROS2 node with publishers and command/sensor subscribers."""
+        """Internal rclpy node with publishers and command/sensor subscribers."""
 
         def __init__(self, bridge: "ROS2Bridge"):
             ros_cfg = bridge._ros_cfg
@@ -105,6 +134,7 @@ if _RCLPY_AVAILABLE:
             self._main_pub.publish(bat_msg)
 
             draw_msg = Float32MultiArray()
+            # Order must match _channel_ids so subscribers can unpack by index.
             draw_msg.data = [
                 float(draws.get(ch, 0.0)) for ch in self._bridge._channel_ids
             ]
@@ -148,6 +178,7 @@ class ROS2Bridge:
 
     @property
     def status(self) -> dict:
+        """Dashboard-facing ROS2 bridge health and last command state."""
         last_pub = self.last_published() or {}
         return {
             "available": _RCLPY_AVAILABLE,
@@ -169,6 +200,7 @@ class ROS2Bridge:
         }
 
     def start(self) -> None:
+        """Start mock feed or live rclpy spin thread."""
         if self._running:
             return
         self._running = True
@@ -243,6 +275,7 @@ class ROS2Bridge:
         logger.info(f"ROS2 throttle command received: {clamped:.2f}")
 
     def _handle_sensor_draw(self, values: list[float]) -> None:
+        """Map MultiArray indices onto channel_ids (positional convention)."""
         updated = False
         for i, ch_id in enumerate(self._channel_ids):
             if i < len(values) and values[i] > 0:
@@ -259,6 +292,7 @@ class ROS2Bridge:
         while self._running and self._use_mock:
             try:
                 sim_cfg = config.get("simulation") or {}
+                # Avoid fighting SimulationDriver when the internal script is on.
                 if random.random() < 0.45 and not sim_cfg.get("enabled", False):
                     mission = _MOCK_MISSION_CYCLE[self._mock_cycle_idx % len(_MOCK_MISSION_CYCLE)]
                     self._mock_cycle_idx += 1
@@ -282,19 +316,23 @@ class ROS2Bridge:
             time.sleep(interval)
 
     def consume_commanded_task(self) -> str | None:
+        """Pop pending mission command (one-shot)."""
         task = self._commanded_task
         self._commanded_task = None
         return task
 
     def consume_throttle_override(self) -> float | None:
+        """Pop pending throttle factor (one-shot pulse)."""
         throttle = self._commanded_throttle
         self._commanded_throttle = None
         return throttle
 
     def get_throttle_override(self) -> float | None:
+        """Peek throttle without consuming."""
         return self._commanded_throttle
 
     def get_sensor_draws(self) -> dict[str, float]:
+        """Latest sensor channel draws (sticky until next sensor message)."""
         return dict(self._sensor_draws)
 
     def inject_command(
@@ -319,6 +357,7 @@ class ROS2Bridge:
         allocation: dict | None = None,
         mission_info: dict | None = None,
     ) -> None:
+        """Publish (or mock-buffer) one telemetry frame for the current tick."""
         channel_draws = {
             ch_id: round(float(data.get("draw", 0.0)), 1)
             for ch_id, data in readings.items()
@@ -351,4 +390,5 @@ class ROS2Bridge:
         self._publish_count += 1
 
     def last_published(self) -> dict | None:
+        """Most recent mock outbox payload (None in live mode unless mock)."""
         return self._mock_outbox[-1] if self._mock_outbox else None

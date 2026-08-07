@@ -1,5 +1,30 @@
 """
 High-level power requirements — startup cost, task budgets, min/max per LRU.
+
+Role in the system
+------------------
+Expresses *what the mission needs* vs *what hardware allows*, complementary to
+SafetyMonitor (faults) and PowerAllocator (who gets watts now).
+
+Concepts
+--------
+EPS (Electrical Power System)
+    Aggregate pack envelope: system min/max draw and a reserve fraction of the
+    task budget (``eps_reserve_pct``) held for contingencies.
+
+LRU requirements
+    Per-group min/max/budget derived from TASK_PROFILES targets or config
+    overrides under ``requirements.lru_budgets``.
+
+Startup cost
+    One-time Wh debit at ROS2BatterySource.start() for bring-up energy.
+
+Soft vs hard limits (important)
+-------------------------------
+Soft task envelope (budget_w / task max_draw) → warning only.
+Hard fault only when draw exceeds the physical sum of channel max_draw_w.
+This prevents Webots drive (high Legs) from latching a permanent fault while
+the PMS task still says ``idle``.
 """
 
 from __future__ import annotations
@@ -25,6 +50,8 @@ _DEFAULT_REQUIREMENTS = {
 
 
 class PowerRequirements:
+    """Evaluate compliance of LRU draws and EPS envelope for a given task."""
+
     def __init__(self, power_channels: list, system_budget_w: float):
         self._channels = {ch["id"]: ch for ch in power_channels}
         self.system_budget_w = system_budget_w
@@ -43,10 +70,12 @@ class PowerRequirements:
     def _load_lru_map(self) -> dict[str, list[str]]:
         groups = (config.get("lru") or {}).get("groups") or []
         if groups:
+            # EPS is the aggregate; evaluated separately in evaluate().
             return {g["id"]: g.get("channels", []) for g in groups if g["id"] != "eps"}
         return dict(_LRU_CHANNEL_MAP)
 
     def _task_lru_limits(self, task_id: str, lru_id: str) -> dict:
+        """Min/max/budget watts for one LRU under the active task."""
         custom = (config.get("requirements") or {}).get("lru_budgets") or {}
         task_cfg = custom.get(task_id, {}).get(lru_id)
         if task_cfg:
@@ -67,12 +96,19 @@ class PowerRequirements:
         budget = round(sum(targets), 1)
         max_w = sum(self._channels.get(ch, {}).get("max_draw_w", 0) for ch in channels)
         return {
+            # Min is 55% of nominal target — below that may indicate a failed unit.
             "min_draw_w": round(budget * 0.55, 1),
             "max_draw_w": max_w,
+            # Soft budget slightly above nominal target for noise headroom.
             "budget_w": round(budget * 1.12, 1),
         }
 
     def apply_startup(self, battery_pct: float, capacity_wh: float) -> tuple[float, dict]:
+        """
+        Apply one-time startup energy cost; subsequent calls are no-ops.
+
+        Returns (new_battery_pct, info_dict).
+        """
         if self._startup_applied:
             return battery_pct, {"applied": False, "cost_wh": 0}
 
@@ -91,6 +127,11 @@ class PowerRequirements:
         total_draw_w: float,
         task_budget_w: float | None = None,
     ) -> dict:
+        """
+        Check EPS and each LRU against task envelopes.
+
+        ``lru_states`` comes from LRUMonitor.evaluate() (id, label, draw_w, …).
+        """
         violations: list[str] = []
         lru_reqs: list[dict] = []
         task_budget = task_budget_w or self.system_budget_w
@@ -157,6 +198,7 @@ class PowerRequirements:
                     f"{lru['label']}: {draw:.1f}W over soft budget ({budget_w:.1f}W)"
                 )
             elif draw < min_w * 0.85 and task_id not in ("idle",):
+                # Idle intentionally under-draws many LRUs; skip min check there.
                 status = "warning"
                 violations.append(f"{lru['label']}: {draw:.1f}W below min ({min_w:.1f}W)")
             elif draw > budget_w * 0.92:

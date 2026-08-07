@@ -1,6 +1,38 @@
 # src/hardware_ros2.py
 """
-ROS2 Battery Source — physics simulation with ROS2 pub/sub integration.
+ROS2BatterySource — primary production-like hardware path for ButlerBot PMS.
+
+Role in the system
+------------------
+This is the orchestration hub for one telemetry tick (default TICK_SECONDS = 3s):
+
+  twin feed / ROS2 commands
+       → mission task advance (scripted sim OR Webots phase)
+       → per-channel power request (mission targets + cooling + sensor blend)
+       → PowerAllocator (task budget + predictive tightening)
+       → EnergyPredictor update / forecast
+       → SafetyMonitor (thermal, LRU, requirements) + optional throttle
+       → OnboardAgent recommendations (optional auto-apply)
+       → battery drain (unless twin owns SOC)
+       → DB snapshot + ROS2 publish
+       → last_readings for dashboard broadcast
+
+When a Webots (or other) digital twin is active, channel draws and optionally
+battery SOC come from the twin PowerFeed; the internal SimulationDriver is
+paused for task advancement. When the twin is idle, SimulationDriver drives
+the Idle → Transit → Patrol → High Load mission loop.
+
+Thread safety
+-------------
+``_readings_lock`` is an RLock because ``_build_readings`` → twin sync →
+``apply_power_feed`` may re-enter on the same thread. The dashboard may also
+call ``apply_power_feed`` between ticks for low-latency UI updates.
+
+Key public attributes (consumed by dashboard / twin control)
+------------------------------------------------------------
+last_readings, allocation_status, mission_info, prediction_status,
+safety_status, simulation_status, agent_status, twin_status,
+twin_control_status, ros2_status, power_source
 """
 
 import threading
@@ -27,10 +59,18 @@ from src.twin.power_feed import PowerFeed
 from src.database import log_power_snapshot
 
 _START_BATTERY_PCT = 100.0
+# Weight for external sensor power samples blended into mission-requested draw.
 _SENSOR_BLEND = 0.30
 
 
 class ROS2BatterySource(RealHardwareSource):
+    """
+    Full Power Management System loop with ROS2 I/O and digital-twin hooks.
+
+    Extends RealHardwareSource but owns a much richer tick than generic hardware:
+    mission, allocation, safety, prediction, agent, twin, and persistence.
+    """
+
     def __init__(self):
         super().__init__()
         self.hardware_name = "ROS2 Battery Source"
@@ -45,6 +85,7 @@ class ROS2BatterySource(RealHardwareSource):
         self._predictor = EnergyPredictor()
         ch_ids = [ch.get("id") for ch in self._power_channels if ch.get("id")]
         self._ros2 = ROS2Bridge(channel_ids=ch_ids)
+        # Dashboard-facing status blobs updated every tick.
         self.allocation_status: dict = {}
         self.mission_info: dict = {}
         self.prediction_status: dict = {}
@@ -61,14 +102,18 @@ class ROS2BatterySource(RealHardwareSource):
         self._twin = get_twin_bridge()
         self.twin_status: dict = {}
         self.twin_control_status: dict = {}
+        # After agent force_task, hold PMS task for N seconds unless twin is driving.
         self._agent_task_hold_remaining: float = 0.0
-        # "internal" | "webots" | "custom" — drives last_readings power numbers
+        # "internal" | "webots" | "custom" — labels power numbers for the UI.
         self.power_source: str = "internal"
-        # RLock: _build_readings → sync_to_hardware → apply_power_feed may re-enter
+        # RLock: _build_readings → sync_to_hardware → apply_power_feed may re-enter.
         self._readings_lock = threading.RLock()
 
     def _apply_ros2_commands(self) -> None:
+        """Consume one-shot ROS2 mission/throttle commands for this tick."""
         twin_active = self._twin._is_external_active()
+        # When the internal script owns the mission, discard external task cmds
+        # so mock ROS2 feed does not fight the SimulationDriver timeline.
         if self._simulator.enabled and self._simulator.running and not twin_active:
             self._ros2.consume_commanded_task()
             return
@@ -76,6 +121,7 @@ class ROS2BatterySource(RealHardwareSource):
         task = self._ros2.consume_commanded_task()
         if task:
             if self._mission.force_task(task):
+                # Seed blend from current draws so the transition is continuous.
                 for ch_id, draw in self._channel_draw.items():
                     self._mission._blend[ch_id] = draw
                 logger.info(f"{self.hardware_name} ROS2 mission override → {task}")
@@ -84,16 +130,24 @@ class ROS2BatterySource(RealHardwareSource):
 
         throttle = self._ros2.consume_throttle_override()
         if throttle is not None:
+            # Applied once in _apply_allocated_draw, then cleared at end of tick.
             self._ros2_throttle_pulse = throttle
             logger.info(f"{self.hardware_name} ROS2 throttle pulse → {throttle:.0%}")
 
     def _blend_sensor_draw(self, ch_id: str, requested: float) -> float:
+        """Mix mission request with optional ROS2 sensor power samples."""
         sensor = self._ros2.get_sensor_draws().get(ch_id)
         if sensor is None:
             return requested
         return round(requested * (1 - _SENSOR_BLEND) + sensor * _SENSOR_BLEND, 1)
 
     def _request_draw(self, ch_id: str, target: float) -> float:
+        """
+        Produce a smoothed, noise-bounded request toward the mission target.
+
+        Uses task profile knobs: smooth_factor (pull), max_draw_delta (noise),
+        variation_band (hard envelope around target).
+        """
         profile = self._mission.profile
         max_delta = profile.max_draw_delta
         band = profile.variation_band
@@ -115,6 +169,12 @@ class ROS2BatterySource(RealHardwareSource):
         return requested
 
     def _apply_allocated_draw(self, ch_id: str, allocated_w: float, *, twin_active: bool = False) -> float:
+        """
+        Commit allocator output into ``_channel_draw`` (actual reported draw).
+
+        Twin path tracks allocated watts immediately (physics already smooth).
+        Internal path eases with alpha=0.32 to avoid UI flicker on throttle steps.
+        """
         if self._ros2_throttle_pulse is not None and self._ros2_throttle_pulse < 1.0:
             allocated_w = round(allocated_w * self._ros2_throttle_pulse, 1)
 
@@ -132,6 +192,7 @@ class ROS2BatterySource(RealHardwareSource):
         return smoothed
 
     def _battery_capacity_wh(self) -> float:
+        """Pack capacity: hardware profile first, then simulation/robot config."""
         try:
             from src.hardware_profile import battery_capacity_wh
 
@@ -145,6 +206,12 @@ class ROS2BatterySource(RealHardwareSource):
             )
 
     def _drain_battery(self, total_draw_w: float) -> None:
+        """
+        Integrate pack energy: E = P · Δt; SOC% = E / capacity_wh · 100.
+
+        Floor at 5% so the sim never reports a fully flat pack (avoids div-by-zero
+        pathologies downstream and keeps the UI recoverable).
+        """
         capacity_wh = self._battery_capacity_wh()
         energy_wh = total_draw_w * (TICK_SECONDS / 3600)
         drain_pct = (energy_wh / capacity_wh) * 100
@@ -159,6 +226,7 @@ class ROS2BatterySource(RealHardwareSource):
         ch_id: str,
         safety: dict,
     ) -> str:
+        """Map draw / battery / safety flags to a UI channel status string."""
         low_warn = (config.get("safety") or {}).get("low_battery_warning_pct", 20)
         if battery_pct <= (config.get("safety") or {}).get("low_battery_critical_pct", 10):
             return "critical"
@@ -178,6 +246,7 @@ class ROS2BatterySource(RealHardwareSource):
         return "normal"
 
     def _build_readings(self) -> dict:
+        """Public tick wrapper: never raise into the loop; degrade gracefully."""
         try:
             return self._build_readings_inner()
         except Exception as e:
@@ -254,7 +323,13 @@ class ROS2BatterySource(RealHardwareSource):
 
     @staticmethod
     def _task_from_twin_telemetry(tel) -> str | None:
-        """Map live Webots gait/phase/speed to a PMS mission task."""
+        """
+        Map live Webots gait/phase/speed to a PMS mission task.
+
+        Priority: explicit motion (drive/teleop/speed) > patrol > manipulate >
+        declared feed task > standby. Keeps the dashboard out of Idle while the
+        robot is clearly moving even if feed.task is stale.
+        """
         if tel is None:
             return None
         loc = tel.locomotion or {}
@@ -264,7 +339,8 @@ class ROS2BatterySource(RealHardwareSource):
             speed = 0.0
         gait = str(loc.get("gait") or "").lower()
         phase = str(loc.get("phase") or "").lower()
-        # Motion / teleop always wins over a stale idle task from the feed
+        # Motion / teleop always wins over a stale idle task from the feed.
+        # 0.08 m/s filters sensor noise / stand sway from true transit.
         if (
             gait in ("drive", "transit", "walk", "turn")
             or phase in ("teleop", "teleop_turn", "drive_transit", "walk_transit")
@@ -287,7 +363,7 @@ class ROS2BatterySource(RealHardwareSource):
         if not desired or desired == self._mission.task_id:
             return False
         # Real teleop/transit motion clears agent task hold so we don't stay locked
-        # on Idle/balanced for 14s while the robot is clearly driving.
+        # on Idle/balanced for ~14s while the robot is clearly driving.
         if desired == "moving" and self._agent_task_hold_remaining > 0:
             self._agent_task_hold_remaining = 0.0
         elif self._agent_task_hold_remaining > 0 and desired != "moving":
@@ -300,8 +376,13 @@ class ROS2BatterySource(RealHardwareSource):
         return False
 
     def _sync_twin_feed(self, twin_active: bool) -> None:
-        # apply_readings=False: we are already inside _build_readings which owns
-        # last_readings; only inject ROS2/battery, do not re-enter apply_power_feed.
+        """
+        Pull twin telemetry into bridge/hardware state without double-writing draws.
+
+        apply_readings=False: we are already inside _build_readings which owns
+        last_readings; only inject mission/sensors/battery, do not re-enter
+        apply_power_feed (would nest the RLock and risk inconsistent mid-tick data).
+        """
         if not twin_active:
             self.power_source = "internal"
             self._twin.sync_to_hardware(self, apply_readings=False)
@@ -326,6 +407,11 @@ class ROS2BatterySource(RealHardwareSource):
         self._twin.sync_to_hardware(self, apply_readings=False)
 
     def _build_readings_inner(self) -> dict:
+        """
+        One full PMS tick. See module docstring for pipeline order.
+
+        Returns channel_id → reading dict for dashboard / DB / ROS2.
+        """
         self.twin_status = self._twin.status()
         twin_active = self._twin._is_external_active()
         self._sync_twin_feed(twin_active)
@@ -343,11 +429,12 @@ class ROS2BatterySource(RealHardwareSource):
                 "source": tel.source,
             }
         self._apply_ros2_commands()
-        # Prefer explicit twin motion → PMS task (not only ROS2 inject path)
+        # Prefer explicit twin motion → PMS task (not only ROS2 inject path).
         twin_task_changed = False
         if twin_active and tel:
             twin_task_changed = self._apply_twin_mission_task(tel)
         if twin_active:
+            # Twin owns the timeline; do not advance the internal script.
             task_changed = twin_task_changed
         else:
             task_changed = self._simulator.advance(self._mission)
@@ -357,6 +444,7 @@ class ROS2BatterySource(RealHardwareSource):
 
         capacity_wh = self._battery_capacity_wh()
 
+        # Pre-allocation forecast lets PowerAllocator tighten budget before cuts.
         recent_draw = sum(self._channel_draw.values()) if self._channel_draw else 0
         pre_prediction = self._predictor.forecast(
             battery_pct=self._main_battery,
@@ -385,6 +473,7 @@ class ROS2BatterySource(RealHardwareSource):
             max_w = ch.get("max_draw_w", 30)
             current = self._channel_draw.get(ch_id)
             if twin_active and twin_draws:
+                # Twin is ground truth for channels it reports; Cooling may be local.
                 if ch_id in twin_draws:
                     requested[ch_id] = round(twin_draws[ch_id], 1)
                 elif ch_id == "Cooling":
@@ -393,6 +482,7 @@ class ROS2BatterySource(RealHardwareSource):
                     requested[ch_id] = round(float(current or 0.0), 1)
             else:
                 if ch_id == "Cooling":
+                    # Take max of mission profile vs thermal estimate (never under-cool).
                     mission_target = self._mission.target_draw(ch_id, max_w, current)
                     target = max(mission_target, cooling_target)
                 else:
@@ -404,6 +494,7 @@ class ROS2BatterySource(RealHardwareSource):
             self._mission.task_id, requested, prediction=pre_prediction
         )
         if twin_active and twin_draws:
+            # Override allocator cuts: twin physics draws must match UI / DB truth.
             allocation["requested"] = dict(requested)
             for ch_id, watts in twin_draws.items():
                 if ch_id in allocation.get("allocated", {}):
@@ -442,6 +533,7 @@ class ROS2BatterySource(RealHardwareSource):
         self.mission_info.update(self.prediction_status)
         loop_forecast: dict = {}
         if twin_active and twin_ctx.get("phase"):
+            # Can ButlerBot finish the remaining mission-loop phases on this pack?
             loop_forecast = forecast_twin_loop(
                 battery_pct=self._main_battery,
                 capacity_wh=capacity_wh,
@@ -476,6 +568,7 @@ class ROS2BatterySource(RealHardwareSource):
             gait = twin_ctx.get("gait") or "—"
             speed = (tel.locomotion or {}).get("speed_m_s") if tel else None
             speed_txt = f"{speed:.2f} m/s" if speed is not None else "—"
+            # Live twin: outlook is descriptive only (no synthetic transition timer).
             self.prediction_status["locomotion_outlook"] = {
                 "current_phase": phase,
                 "current_phase_label": phase_label,
@@ -491,6 +584,7 @@ class ROS2BatterySource(RealHardwareSource):
         battery_pct = round(self._main_battery, 1)
         thermal_stress = 1.0
         if twin_active and is_twin_stress_phase(twin_ctx.get("phase")):
+            # Manipulate / high-load twin phases heat faster than idle transit.
             safety_cfg = config.get("safety") or {}
             thermal_stress = float(safety_cfg.get("twin_thermal_stress_mult", 1.9))
         safety = self._safety.evaluate(
@@ -562,6 +656,7 @@ class ROS2BatterySource(RealHardwareSource):
         )
         safety_already_throttled = bool(safety.get("throttle_required"))
         if self._agent.should_auto_apply(twin_active) and agent_result.recommendations:
+            # Agent throttle stacks only when safety did not already cut power.
             allocation["allocated"], throttle_applied = self._agent.apply_throttle(
                 allocation["allocated"],
                 agent_result,
@@ -619,6 +714,7 @@ class ROS2BatterySource(RealHardwareSource):
             draw_w = self._apply_allocated_draw(ch_id, allocated_w, twin_active=twin_active)
             amps = round(draw_w / voltage, 2) if voltage > 0 else 0.0
             req_w = allocation["requested"].get(ch_id, draw_w)
+            # 0.05 W hysteresis avoids flapping throttled flag on rounding noise.
             throttled = ch_id in throttled_set or allocated_w < req_w - 0.05
 
             readings[ch_id] = {
@@ -642,6 +738,7 @@ class ROS2BatterySource(RealHardwareSource):
             if ch_id not in self._peak_power or draw_w > self._peak_power[ch_id]:
                 self._peak_power[ch_id] = draw_w
 
+        # When twin owns SOC, skip local drain so pack energy is not double-counted.
         if not (twin_active and self._twin._apply_battery):
             self._drain_battery(total_draw)
         try:
@@ -655,11 +752,13 @@ class ROS2BatterySource(RealHardwareSource):
         except Exception as e:
             logger.warning(f"ROS2 publish failed (non-fatal): {e}")
 
+        # One-shot pulse — must not stick across ticks.
         self._ros2_throttle_pulse = None
         self.health_status = "RUNNING"
         return readings
 
     def _seed_channel_draws(self) -> None:
+        """Initialize channel state from sim draw targets before first tick."""
         targets = self._simulator.draw_targets_for(self._mission.task_id)
         for ch in self._power_channels:
             ch_id = ch.get("id")
@@ -670,6 +769,7 @@ class ROS2BatterySource(RealHardwareSource):
             self._mission._blend[ch_id] = self._channel_draw[ch_id]
 
     def start(self):
+        """Start ROS2 bridge, optional sim loop, apply startup energy cost, begin ticks."""
         if self.running:
             return
         super().start()
@@ -686,6 +786,7 @@ class ROS2BatterySource(RealHardwareSource):
             f"ROS2 {ros_mode}"
         )
 
+        # One-time boot energy (inverters/bring-up) so SOC does not start at 100% forever.
         self._main_battery, startup = self._requirements.apply_startup(
             self._main_battery, capacity_wh
         )
@@ -698,6 +799,7 @@ class ROS2BatterySource(RealHardwareSource):
         threading.Thread(target=self._telemetry_loop, daemon=True, name="ROS2Telemetry").start()
 
     def _telemetry_loop(self):
+        """Daemon loop: rebuild readings every TICK_SECONDS under the readings lock."""
         while self.running:
             try:
                 with self._readings_lock:
@@ -710,11 +812,13 @@ class ROS2BatterySource(RealHardwareSource):
             time.sleep(TICK_SECONDS)
 
     def start_simulation(self) -> dict:
+        """API hook: start/restart the internal ButlerBot mission script."""
         self._simulator.start(self._mission)
         self.simulation_status = self._simulator.status(self._mission)
         return self.simulation_status
 
     def stop_simulation(self) -> dict:
+        """API hook: pause the internal mission script (twin can still drive)."""
         self._simulator.stop()
         self.simulation_status = self._simulator.status(self._mission)
         return self.simulation_status

@@ -1,5 +1,17 @@
 """
 One-click demo mode — UI highlight state + optional Webots launch on host.
+
+Role
+----
+Gives the dashboard a "demo is active" flag (timestamps, messages) and, when
+running on Windows outside Docker, can spawn ``scripts/launch_webots_twin.ps1``
+to open the ButlerBot Webots world pointed at this dashboard URL.
+
+Invariants
+----------
+- State is process-local (module dict); not persisted across restarts.
+- Inside Docker, auto-launch is refused: Webots must run on the host and POST
+  telemetry to the containerized dashboard.
 """
 
 from __future__ import annotations
@@ -26,10 +38,12 @@ def _project_root() -> Path:
 
 
 def _in_container() -> bool:
+    """True when dashboard runs under Docker (Webots cannot launch inside)."""
     return os.path.exists("/.dockerenv") or os.environ.get("RUNNING_IN_DOCKER") == "1"
 
 
 def activate_demo() -> dict:
+    """Mark demo mode active and return status payload for the UI."""
     _demo["active"] = True
     _demo["started_at"] = datetime.now(timezone.utc).isoformat()
     _demo["launch_attempted"] = False
@@ -44,6 +58,7 @@ def deactivate_demo() -> dict:
 
 
 def status() -> dict:
+    """Dashboard payload: flags, launch script path, and target dashboard URL."""
     twin_cfg = config.get("digital_twin") or {}
     dash_port = config.get("dashboard", "port", 5000)
     dash_host = config.get("dashboard", "host", "127.0.0.1")
@@ -61,7 +76,11 @@ def status() -> dict:
 
 
 def launch_webots_on_host() -> dict:
-    """Start Webots twin on the host OS (no-op with instructions when in Docker)."""
+    """
+    Start Webots twin on the host OS.
+
+    No-op with operator instructions when running in Docker or non-Windows.
+    """
     st = status()
     if _in_container():
         _demo["launch_attempted"] = True
@@ -81,6 +100,7 @@ def launch_webots_on_host() -> dict:
         return {**st, "ok": False, "launched": False}
 
     try:
+        # CREATE_NEW_CONSOLE so Webots logs stay visible and outlive the request.
         subprocess.Popen(
             [
                 "powershell",

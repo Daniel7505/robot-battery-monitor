@@ -1,5 +1,26 @@
 """
-Twin mission loop feasibility — can ButlerBot finish the current cycle?
+Twin mission-loop feasibility — can ButlerBot finish the current cycle?
+
+Role in the system
+------------------
+Given pack SOC, capacity, and the active Webots phase, estimate Wh remaining
+to complete ``BUTLERBOT_MISSION_FLOW`` from that phase to the end of the loop.
+
+ROS2BatterySource attaches the result as ``prediction_status["loop_forecast"]``
+when a twin phase is live.
+
+Outputs
+-------
+loop_wh_remaining, margin_wh / margin_pct, finish_battery_pct,
+can_complete_loop / can_repeat_loop, feasibility_status
+  (comfortable | tight | marginal | insufficient),
+phase_breakdown list.
+
+Energy model
+------------
+Per phase: Wh = draw_w × duration_s / 3600.
+Draw prefers step.channel_draws sum, else profile phase_reference_draw_w.
+An 8% contingency is required for ``can_complete_loop``.
 """
 
 from __future__ import annotations
@@ -18,6 +39,7 @@ def _flow_steps(flow: list[dict] | None = None) -> list[dict]:
 
 
 def _phase_index(phase: str | None, flow: list[dict]) -> int:
+    """Index of current phase in the mission flow (0 if unknown)."""
     if not phase:
         return 0
     norm = normalize_phase_name(phase)
@@ -30,6 +52,7 @@ def _phase_index(phase: str | None, flow: list[dict]) -> int:
 
 
 def _step_wh(step: dict, profile: dict) -> float:
+    """Energy for a full phase step under the active hardware profile."""
     duration_s = float(
         step.get("duration_s")
         or phase_reference_duration_s(step.get("phase", ""), profile)
@@ -79,6 +102,7 @@ def forecast_twin_loop(
         else:
             draw_w = round(phase_reference_draw_w(phase, prof), 1)
 
+        # Partial credit for the phase already in progress.
         if i == start_idx and phase_elapsed_s > 0:
             remaining_s = max(0.0, duration_s - phase_elapsed_s)
             if current_draw_w > 0:
@@ -96,7 +120,7 @@ def forecast_twin_loop(
             "energy_wh": wh,
         })
 
-    # Full loop (one more pass) for repeat missions
+    # Full loop (one more pass) for repeat-mission planning.
     full_loop_wh = round(sum(_step_wh(s, prof) for s in steps), 3)
 
     margin_wh = round(energy_wh - loop_wh, 2)

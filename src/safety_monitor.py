@@ -1,5 +1,35 @@
 """
-Fault detection, safety limits, thermal awareness, and LRU-level monitoring.
+Fault detection, safety limits, thermal model, and LRU/requirements aggregation.
+
+Role in the system
+------------------
+Runs every PMS tick after allocation. Produces:
+
+  - faults / warnings / alerts
+  - estimated thermal_c and thermal_status
+  - degradation_level (normal → caution → degraded → critical)
+  - throttle_required / throttle_factor / throttle_reason
+  - nested lru + requirements payloads (optionally filtered by twin phase)
+
+Hard vs soft (by design)
+------------------------
+Hard faults: pack over system_budget_w, channel over max_draw_w, critical
+battery/thermal, requirement hard-max faults.
+
+Soft warnings: over task budget while twin drive watts disagree with PMS task,
+expected teleop power steps, soft requirement envelope.
+
+Twin-aware behavior
+-------------------
+When ``twin_phase`` is set, mission_context filters suppress false alarms on
+intentionally idle LRUs and exempt them from throttle. Drive-like phases skip
+"caution" throttle for high Legs utilization. Twin power spikes warn only
+(no throttle) — teleop 5→20W steps are expected.
+
+Thermal model
+-------------
+First-order lag toward a load-dependent target with continuous cooling toward
+ambient. ``thermal_stress`` multiplies heating during twin high-load phases.
 """
 
 from __future__ import annotations
@@ -35,6 +65,8 @@ _DEFAULT_SAFETY = {
 
 
 class SafetyMonitor:
+    """Aggregate safety evaluation and graceful-degradation throttling."""
+
     def __init__(self, power_channels: list, system_budget_w: float):
         self._channels = {ch["id"]: ch for ch in power_channels}
         self.system_budget_w = system_budget_w
@@ -49,6 +81,7 @@ class SafetyMonitor:
         cfg = dict(_DEFAULT_SAFETY)
         safety = config.get("safety") or {}
         monitoring = config.get("monitoring") or {}
+        # Bridge legacy monitoring.low_battery_threshold into safety keys.
         if monitoring.get("low_battery_threshold") is not None:
             cfg["low_battery_warning_pct"] = monitoring["low_battery_threshold"]
         for key, default in _DEFAULT_SAFETY.items():
@@ -59,6 +92,12 @@ class SafetyMonitor:
     def _thermal_step(
         self, total_draw_w: float, tick_seconds: float, *, thermal_stress: float = 1.0
     ) -> float:
+        """
+        Advance estimated chassis temperature for this tick.
+
+        target rises with load_ratio × heating; alpha is a lag factor so heat
+        does not jump instantly to the steady-state curve.
+        """
         ambient = self._cfg["thermal_ambient_c"]
         max_c = self._cfg["thermal_max_c"]
         stress = max(1.0, float(thermal_stress))
@@ -90,6 +129,12 @@ class SafetyMonitor:
         thermal_stress: float = 1.0,
         twin_phase: str | None = None,
     ) -> dict:
+        """
+        Full safety pass for one tick.
+
+        Side effect: updates internal previous-draw and thermal state used for
+        spike detection and the next thermal step.
+        """
         faults: list[str] = []
         warnings: list[str] = []
         alerts: list[str] = []
@@ -322,6 +367,12 @@ class SafetyMonitor:
         return result
 
     def apply_throttle(self, allocated: dict[str, float], safety: dict) -> dict[str, float]:
+        """
+        Scale allocated watts by global/per-LRU factors from evaluate().
+
+        Exempt channels (twin standby LRUs) keep full draw. Spike channels get
+        at least safety_throttle_factor even if LRU factor is milder.
+        """
         if not safety.get("throttle_required"):
             return dict(allocated)
 

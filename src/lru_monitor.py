@@ -1,5 +1,29 @@
 """
 LRU-level monitoring — hierarchical power groups with fault detection and degradation.
+
+Role in the system
+------------------
+Groups power channels into Line Replaceable Units (LRUs) for spacecraft-style
+health reporting:
+
+  Tier 1  EPS — aggregate pack / system budget
+  Tier 2  locomotion, arms, torso, compute, (optional cooling)
+
+Each tick, evaluates draw vs max, power spikes vs previous sample, and a simple
+voltage-sag model (I²R-like load ratio → estimated bus voltage).
+
+Degradation levels
+------------------
+normal → caution (warnings) → degraded (over-draw / spikes) → critical (faults)
+
+``throttle_factors`` maps degradation + spike LRUs onto per-channel scale factors
+ordered by ``degrade_priority`` (lower priority cut first).
+
+Voltage sag guardrails
+----------------------
+Estimated sag alone must not hard-fault at normal idle loads (Compute near max
+was permanently "critical low voltage"). Critical voltage requires actual
+over-draw *and* severe sag.
 """
 
 from __future__ import annotations
@@ -58,6 +82,8 @@ _DEFAULT_LRU_CFG = {
 
 
 class LRUMonitor:
+    """Per-LRU draw / spike / voltage health with degradation-aware throttle maps."""
+
     def __init__(self, power_channels: list, system_budget_w: float = 72):
         self._channels = {ch["id"]: ch for ch in power_channels}
         self.system_budget_w = system_budget_w
@@ -72,6 +98,7 @@ class LRUMonitor:
         for g in groups:
             channels = g.get("channels", [])
             if g["id"] == "eps":
+                # EPS max is the system budget, not sum of channel caps.
                 max_draw = self.system_budget_w
                 nominal_v = 48
             else:
@@ -109,6 +136,7 @@ class LRUMonitor:
         ]
 
     def _estimate_voltage(self, draw_w: float, max_w: float, nominal_v: float) -> float:
+        """Simple load-ratio bus sag: V ≈ Vnom · (1 − k · load_ratio)."""
         if max_w <= 0:
             return nominal_v
         load_ratio = min(1.2, draw_w / max_w)
@@ -127,6 +155,12 @@ class LRUMonitor:
         allocated: dict[str, float],
         channel_meta: dict[str, dict] | None = None,
     ) -> dict:
+        """
+        Score each LRU for this tick's allocated draws.
+
+        ``channel_meta`` is accepted for API symmetry with SafetyMonitor but
+        LRU max/voltage use group definitions from config.
+        """
         faults: list[str] = []
         warnings: list[str] = []
         lru_states: list[dict] = []
@@ -146,12 +180,14 @@ class LRUMonitor:
             nominal_v = lru["nominal_voltage"]
             prev = self._prev_draw.get(lru_id, 0.0)
 
+            # EPS is the pack: report nominal voltage, not sag-modeled bus.
             estimated_v = nominal_v if lru_id == "eps" else self._estimate_voltage(draw_w, max_w, nominal_v)
             voltage_pct = 100.0 if lru_id == "eps" else round((estimated_v / nominal_v) * 100, 1) if nominal_v else 100.0
             util_pct = round((draw_w / max_w) * 100, 1) if max_w else 0.0
 
             over = draw_w > max_w + 0.05
             spike = prev > 1.0 and (draw_w - prev) / prev >= spike_pct
+            # Compute often sits near its max; require higher util before sag warnings.
             util_floor = 0.70 if lru_id == "compute" else 0.5
             low_v = (
                 lru_id != "eps"
@@ -186,7 +222,7 @@ class LRUMonitor:
                 )
                 low_voltage_lrus.append(lru_id)
 
-            # Status: estimated sag → warning; fault only on over-draw / crit_v
+            # Status: estimated sag → warning; fault only on over-draw / crit_v.
             status = self._lru_status(over, spike, low_v or severe_sag, crit_v, util_pct)
             lru_states.append({
                 "id": lru_id,
@@ -224,6 +260,12 @@ class LRUMonitor:
         }
 
     def throttle_factors(self, degradation: str, spike_lrus: list[str]) -> dict[str, float]:
+        """
+        Per-channel scale factors for graceful degradation.
+
+        Lower ``degrade_priority`` LRUs are cut first/harder so compute and
+        locomotion survive longer than arms during a power crisis.
+        """
         level_factors = {
             "normal": 1.0,
             "caution": self._cfg["degrade_throttle_caution"],
@@ -243,6 +285,7 @@ class LRUMonitor:
 
         for i, lru in enumerate(sorted_lrus):
             if degradation == "caution":
+                # Only spike-contributing LRUs take the caution cut.
                 lru_factor = base if lru["id"] in spike_set else 1.0
             elif degradation == "degraded":
                 lru_factor = base if i < 2 else max(base, 0.88)

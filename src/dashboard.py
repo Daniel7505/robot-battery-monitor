@@ -1,4 +1,31 @@
-# src/dashboard.py
+"""
+Robot Battery Monitor — Power Management System (PMS) web hub.
+
+This module is the operator-facing front door for ButlerBot:
+
+* **Flask** serves the live dashboard HTML and REST APIs.
+* **SocketIO** pushes battery / allocation / safety snapshots to the browser
+  (server → client only; no client command socket handlers).
+* **Digital twin API** (`/api/twin/*`) is the bridge between Webots (or other
+  simulators) and the onboard power model: telemetry in, teleop/commands out.
+* **Background loop** (`broadcast_updates`) samples hardware readings and emits
+  `battery_update` events — faster (~0.5 s) while an external twin feed is live.
+* **Pause** is client-side only: the UI freezes its snapshot so operators can
+  inspect numbers; the hardware tick and twin ingest keep running.
+
+Architecture (high level)::
+
+    Webots controller ──POST /api/twin/telemetry──► DigitalTwinBridge
+    Webots controller ◄─GET  /api/twin/state──────  (throttle, teleop, battery)
+    Browser          ◄─SocketIO battery_update────  _build_battery_payload()
+    Browser          ──POST /api/twin/command─────► drive / stop / battery_reset
+
+Entry point: ``run_dashboard()`` (also ``python run_dashboard.py``).
+"""
+
+# ---------------------------------------------------------------------------
+# App setup & shared globals
+# ---------------------------------------------------------------------------
 from flask import Flask, render_template_string, jsonify
 from flask_socketio import SocketIO
 from datetime import datetime
@@ -13,10 +40,15 @@ from src.database import get_all_readings, get_latest_allocation
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
+# threading async_mode matches the daemon broadcaster thread below
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
 
 
-
+# ---------------------------------------------------------------------------
+# HTML_TEMPLATE — live PMS operator UI (inline for single-file deploy)
+# Large CSS/JS block intentionally left as-is; this string is the full page
+# served at GET /. Pause, twin controls, LRU, agent, and sim panels live here.
+# ---------------------------------------------------------------------------
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -1494,8 +1526,18 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
+
+# ===========================================================================
+# REST routes
+# ===========================================================================
+# Page render, demo helpers, simulation control, analytics, twin bridge API,
+# and a lightweight JSON snapshot used by simple clients.
+
+# --- Page render -----------------------------------------------------------
+
 @app.route('/')
 def dashboard():
+    """SSR first paint of the PMS UI (SocketIO takes over live fields)."""
     entries = get_all_readings(limit=300)
     main_battery = entries[0]["battery"] if entries else 94
 
@@ -1522,6 +1564,8 @@ def dashboard():
                                   now=now)
 
 
+# --- Demo / sim helpers ----------------------------------------------------
+
 @app.route('/api/demo/activate', methods=['POST'])
 def api_demo_activate():
     from src.demo_mode import activate_demo
@@ -1542,6 +1586,7 @@ def api_demo_status():
 
 @app.route('/api/demo/launch-webots', methods=['POST'])
 def api_demo_launch_webots():
+    """Activate demo mode and attempt host-side Webots launch."""
     from src.demo_mode import activate_demo, launch_webots_on_host
     activate_demo()
     return jsonify(launch_webots_on_host())
@@ -1549,6 +1594,11 @@ def api_demo_launch_webots():
 
 @app.route('/api/simulation/<action>', methods=['POST'])
 def api_simulation(action):
+    """Start/stop the internal mission script driver (not Webots itself).
+
+    ``action`` is ``start`` or ``stop``. Only available when the hardware
+    backend exposes simulation controls.
+    """
     from src.hardware import get_hardware_source
 
     hardware = get_hardware_source()
@@ -1558,6 +1608,8 @@ def api_simulation(action):
         return jsonify(hardware.stop_simulation())
     return jsonify({"error": "Simulation not available for this hardware mode"}), 400
 
+
+# --- Analytics -------------------------------------------------------------
 
 @app.route('/api/analytics')
 def api_analytics():
@@ -1586,8 +1638,34 @@ def api_analytics_report():
     return jsonify(report)
 
 
+# --- Digital twin API (Webots / external simulators) -----------------------
+# Contract summary for first-time readers:
+#
+#   GET  /api/twin/state
+#       Full PMS + teleop snapshot for the controller to poll.
+#       Includes agent/safety throttle, teleop wheel cmds, stop_epoch,
+#       and one-shot battery_pct / reset_thermal after battery_reset.
+#
+#   POST /api/twin/telemetry?adapter=webots
+#       Body: joints, locomotion, channel_draws, robot.main_battery_pct, …
+#       Ingests external power feed; syncs hardware readings immediately so
+#       the UI does not wait for the 3 s hardware tick.
+#
+#   POST /api/twin/command
+#       Body fields (any subset):
+#         drive: {left, right, duration_s}  — rad/s wheel velocities
+#         drive_stop: true                 — zeros drive; bumps stop_epoch
+#         battery_reset: true, battery_pct — one-shot replenish for Webots
+#         source: string                   — operator / script label
+#       stop_epoch: monotonic counter the controller compares so a late poll
+#       still sees a new stop even if wheel cmds already read as zero.
+#
+#   GET  /api/twin/schema | /api/twin/example
+#       Discovery helpers for adapters and demos.
+
 @app.route('/api/twin/state')
 def api_twin_state():
+    """Export twin + hardware state for Webots controller / agent scripts."""
     from src.hardware import get_hardware_source
     from src.twin import get_twin_bridge
 
@@ -1600,6 +1678,7 @@ def api_twin_state():
 
 @app.route('/api/twin/telemetry', methods=['POST'])
 def api_twin_telemetry():
+    """Ingest external twin telemetry and push it into the live power model."""
     from flask import request
     from src.hardware import get_hardware_source
     from src.twin import get_twin_bridge
@@ -1635,6 +1714,11 @@ def api_twin_telemetry():
 
 @app.route('/api/twin/command', methods=['POST'])
 def api_twin_command():
+    """Apply drive / stop / battery_reset (and related) commands to the bridge.
+
+    Webots does not receive this POST directly — the controller polls
+    ``/api/twin/state`` and reads ``teleop`` fields including ``stop_epoch``.
+    """
     from flask import request
     from src.hardware import get_hardware_source
     from src.twin import get_twin_bridge
@@ -1648,6 +1732,7 @@ def api_twin_command():
 
 @app.route('/api/twin/schema')
 def api_twin_schema():
+    """JSON schema / field guide for twin telemetry and commands."""
     from src.twin import get_twin_bridge
 
     return jsonify(get_twin_bridge().schema())
@@ -1655,6 +1740,7 @@ def api_twin_schema():
 
 @app.route('/api/twin/example')
 def api_twin_example():
+    """Sample ButlerBot flow description + one telemetry step (for demos)."""
     from src.twin.butlerbot import butlerbot_flow_description, butlerbot_telemetry_step
 
     return jsonify({
@@ -1663,8 +1749,11 @@ def api_twin_example():
     })
 
 
+# --- Lightweight data snapshot --------------------------------------------
+
 @app.route('/api/data')
 def api_data():
+    """Simple channel + allocation JSON (no SocketIO required)."""
     entries = get_all_readings(limit=300)
     main_battery = entries[0]["battery"] if entries else 94
 
@@ -1698,7 +1787,15 @@ def api_data():
     })
 
 
+# ===========================================================================
+# Process entry + background services
+# ===========================================================================
+# WebSocket model: no @socketio.on handlers. The browser listens for
+# ``battery_update``; this process only emits. Pause is entirely client-side
+# (JS freezes the last payload) — hardware and twin routes keep working.
+
 def run_dashboard():
+    """Start hardware, archiver, SocketIO broadcaster, then serve HTTP."""
     from src.hardware import get_hardware_source
 
     hardware = get_hardware_source()
@@ -1745,9 +1842,14 @@ def start_auto_archiver():
     thread = threading.Thread(target=_archiver, daemon=True, name="AutoArchiver")
     thread.start()
     logger.info(f"✅ Auto-archiver started (every {interval_hours}h, archive data older than {archive_days} days)")
-    
+
+
 def _build_battery_payload():
-    """Enhanced payload with engineering metrics"""
+    """Assemble the SocketIO ``battery_update`` envelope from live hardware state.
+
+    Pulls channel draws, mission, prediction, safety/LRU, agent, twin, and
+    simulation status so one emit refreshes the whole PMS panel set.
+    """
     try:
         from src.hardware import get_hardware_source, get_hardware_mode
         hardware = get_hardware_source()
@@ -1755,7 +1857,7 @@ def _build_battery_payload():
         if hasattr(hardware, 'last_readings') and hardware.last_readings:
             latest = hardware.last_readings
             
-            # Calculate main battery (keep one decimal so Webots drain is visible)
+            # One decimal place so slow Webots drain is visible on the gauge
             batteries = [d.get('battery', 85) for d in latest.values()]
             main_battery = (
                 round(sum(batteries) / len(batteries), 1) if batteries else 85
@@ -1850,15 +1952,20 @@ def _build_battery_payload():
     except Exception as e:
         print(f"[DEBUG] Payload error: {e}")
 
-    # Fallback
+    # Fallback when hardware has not published readings yet
     return {
         "main_battery": 85,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
         "channels": []
     }
 
+
 def broadcast_updates():
-    """Push dashboard updates — faster when Webots twin is live (display only, not robot control)."""
+    """Daemon loop: emit ``battery_update`` for the live dashboard.
+
+    Interval is display-only (does not command the robot). Speeds up to ~0.5 s
+    while ``twin.external_active`` so Webots motion feels live in the UI.
+    """
     print("[DEBUG] WebSocket broadcaster ACTIVE")
     while True:
         interval_s = 2.0
@@ -1872,5 +1979,7 @@ def broadcast_updates():
             print(f"[DEBUG] Broadcast error: {e}")
 
         time.sleep(interval_s)
+
+
 if __name__ == "__main__":
     run_dashboard()

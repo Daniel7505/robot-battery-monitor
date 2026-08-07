@@ -1,22 +1,35 @@
 """
 Power feed contract — stable shape for live battery % + channel watts.
 
-Webots (or any external twin) publishes this shape via POST /api/twin/telemetry.
-DigitalTwinBridge normalizes it; ROS2BatterySource writes it into last_readings
-so the existing dashboard broadcaster needs no parallel data path.
+Role in the architecture
+------------------------
+This is the *minimal* handoff from twin telemetry into the hardware layer.
 
-Schema (minimal):
-  {
-    "source": "webots",                 # webots | custom | pybullet | hardware | external
-    "robot": {"main_battery_pct": 87.5},
-    "channel_draws": {
-      "Legs": 18.2, "Arms": 6.0, "Torso": 7.5, "Compute": 9.0, "Cooling": 3.0
-    },
-    "mission": {"task": "moving"}       # optional
-  }
+  TwinTelemetry (rich: pose, joints, sensors, mission…)
+      → power_feed_from_telemetry()
+      → PowerFeed (battery_pct + channel_draws [+ task/throttle])
+      → hardware.apply_power_feed() / last_readings
 
-Fallback: when no fresh external feed, ROS2BatterySource keeps internal
-SimulationDriver / mock ROS2 behavior unchanged.
+The dashboard broadcaster and allocator only need those live numbers. Keeping
+this contract small means Webots (or any external twin) can publish via
+POST /api/twin/telemetry without inventing a second UI data path.
+
+Minimal schema example::
+
+    {
+      "source": "webots",
+      "robot": {"main_battery_pct": 87.5},
+      "channel_draws": {
+        "Legs": 18.2, "Arms": 6.0, "Torso": 7.5, "Compute": 9.0, "Cooling": 3.0
+      },
+      "mission": {"task": "moving"}
+    }
+
+Fallback behavior
+-----------------
+When no fresh external feed is active, ``DigitalTwinBridge.get_power_feed()``
+returns None and ``ROS2BatterySource`` keeps internal SimulationDriver / mock
+ROS2 behavior unchanged — external twin is strictly additive.
 """
 
 from __future__ import annotations
@@ -28,13 +41,19 @@ from typing import Any
 
 POWER_FEED_SCHEMA_VERSION = "1.0"
 
-# Wheeled ButlerBot channels (matches config power_channels)
+# Wheeled ButlerBot channels (matches config power_channels).
 WHEELED_CHANNEL_IDS = ("Legs", "Arms", "Torso", "Compute", "Cooling")
 
 
 @dataclass(frozen=True)
 class PowerFeed:
-    """Authoritative live power numbers for the dashboard hardware layer."""
+    """Authoritative live power numbers for the dashboard hardware layer.
+
+    Frozen so a feed snapshot cannot be mutated after the bridge hands it off —
+    each ingest builds a new instance. ``usable()`` requires at least battery
+    or draws; empty shells are rejected so stale/partial posts cannot blank
+    the dashboard.
+    """
 
     source: str
     battery_pct: float | None = None
@@ -45,6 +64,7 @@ class PowerFeed:
     locomotion: dict[str, Any] = field(default_factory=dict)
 
     def usable(self) -> bool:
+        """True if this feed can drive at least one live reading field."""
         return self.battery_pct is not None or bool(self.channel_draws)
 
     def to_dict(self) -> dict:
@@ -61,7 +81,12 @@ class PowerFeed:
 
 
 def power_feed_from_telemetry(tel) -> PowerFeed | None:
-    """Build a PowerFeed from a TwinTelemetry instance (or None)."""
+    """Project TwinTelemetry → PowerFeed (or None if unusable).
+
+    Clamps battery into [0, 100] and rounds draws so the hardware layer always
+    sees finite, presentation-friendly numbers. Locomotion is carried for
+    status/UI context even though allocation only uses watts + task.
+    """
     if tel is None:
         return None
     draws = {

@@ -1,15 +1,36 @@
 """
 ButlerBot wheeled robot — example digital twin data flow.
 
-Demonstrates how a compact wheeled mobile manipulator cycles through
-standby → drive → patrol → manipulate phases with reference-hardware draws.
+What this is
+------------
+A *reference mission cycle* for the wheeled ButlerBot mobile manipulator:
+standby → drive → patrol → manipulate → return idle. Each step carries:
+
+  - PMS task id (idle / moving / balanced / high_load)
+  - duration (for scripted feeders and UI timelines)
+  - locomotion metadata (gait + nominal speed)
+  - channel_draws in watts grounded to reference-hardware scale
+
+How integrators use it
+----------------------
+  - ``butlerbot_telemetry_step(i)`` builds a POST-ready twin payload for step i
+  - ``examples/butlerbot_twin_feed.py`` loops those posts without Webots
+  - ``control.webots_phase_flow()`` reuses the same phase list for the dashboard
+  - ``bridge.schema()`` embeds ``butlerbot_flow_description()`` for discovery
+
+This is *not* the physics sim — it is the contract demo that proves the bridge
+and dashboard work when only HTTP telemetry is available.
+
+``BUTLERBOT_WALKING_FLOW`` is a backward-compatible alias from an earlier
+biped-oriented naming; the platform is wheeled differential drive.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-# Wheeled mission cycle for ButlerBot (reference-hardware watts)
+# Wheeled mission cycle for ButlerBot (reference-hardware watts).
+# Order matters: feed scripts and UI timelines advance through this list.
 BUTLERBOT_MISSION_FLOW = [
     {
         "phase": "standby",
@@ -53,7 +74,7 @@ BUTLERBOT_MISSION_FLOW = [
     },
 ]
 
-# Backward-compatible alias
+# Backward-compatible alias (historical name from biped-era docs).
 BUTLERBOT_WALKING_FLOW = BUTLERBOT_MISSION_FLOW
 
 
@@ -65,7 +86,11 @@ def butlerbot_telemetry_step(
     battery_pct: float = 88.0,
     robot_name: str = "ButlerBot",
 ) -> dict:
-    """Build a twin telemetry payload for one step of the ButlerBot mission flow."""
+    """Build a twin telemetry payload for one step of the ButlerBot mission flow.
+
+    Ready for ``POST /api/twin/telemetry`` (adapter=butlerbot/custom). Pose is
+    zeroed here; real Webots posts overwrite pose from GPS/IMU.
+    """
     step = BUTLERBOT_MISSION_FLOW[step_index % len(BUTLERBOT_MISSION_FLOW)]
     total_draw = round(sum(step["channel_draws"].values()), 1)
     return {

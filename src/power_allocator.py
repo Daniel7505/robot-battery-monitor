@@ -1,11 +1,38 @@
 # src/power_allocator.py
 """
-Power allocation with task-aware limits and predictive dynamic budgeting.
+Task-aware power allocator with predictive dynamic budgeting.
+
+Role in the system
+------------------
+Sits between raw channel *requests* (mission + sensors) and *allocated* watts
+that safety/agent may further reduce. Inputs:
+
+  task       PMS task id (idle / moving / balanced / high_load)
+  requested  channel_id → requested watts
+  prediction optional EnergyPredictor.forecast() used to tighten budget early
+
+Outputs a decision dict: budget_w, allocated, throttled_channels, warnings,
+decisions (human-readable audit trail), status.
+
+Algorithm (high level)
+----------------------
+1. Cap each request to channel max_draw_w.
+2. Base budget = system_budget_w × task budget_factor.
+3. Optionally reduce budget when prediction says draw is high / mission energy
+   is marginal (never below 72% of base).
+4. If sum(requested) > budget, cut channels in task-specific throttle_order
+   down to per-channel floors, then proportional scale if still over.
+
+Invariants
+----------
+- Allocated watts never exceed channel hardware caps (step 1).
+- Min floors (_MIN_CHANNEL_DRAW_W) protect critical subsystems from zeroing out.
 """
 
 from src.logger import logger
 from src.mission_tasks import TASK_PROFILES
 
+# Soft floors during task throttling — keep locomotion/compute alive.
 _MIN_CHANNEL_DRAW_W = {
     "Legs": 4.0,
     "Arms": 5.0,
@@ -15,9 +42,12 @@ _MIN_CHANNEL_DRAW_W = {
 
 
 class PowerAllocator:
+    """Allocate system power budget across channels for the active mission task."""
+
     def __init__(self, power_channels: list, system_budget_w: float | None = None):
         self._channels = {ch["id"]: ch for ch in power_channels}
         if system_budget_w is None:
+            # ~76% of sum(max) leaves headroom for spikes / EPS reserve.
             system_budget_w = sum(ch.get("max_draw_w", 0) for ch in power_channels) * 0.76
         self.system_budget_w = system_budget_w
 
@@ -27,6 +57,10 @@ class PowerAllocator:
         return round(self.system_budget_w * factor, 1)
 
     def _dynamic_budget(self, task: str, base_budget: float, prediction: dict | None) -> float:
+        """
+        Tighten budget before hard throttling when the predictor is confident
+        that load or mission energy is unfavorable.
+        """
         if not prediction:
             return base_budget
 
@@ -34,6 +68,7 @@ class PowerAllocator:
         confidence = prediction.get("confidence_pct", 0) / 100.0
         predicted_draw = prediction.get("predicted_draw_w", 0)
 
+        # Only tighten when we trust the forecast and it exceeds current budget.
         if confidence >= 0.60 and predicted_draw > budget:
             tighten = 0.08 + 0.10 * confidence
             budget = round(budget * (1.0 - tighten), 1)
@@ -41,12 +76,15 @@ class PowerAllocator:
         if not prediction.get("mission_energy_ok", True):
             budget = round(budget * 0.90, 1)
 
+        # End-of-mission SOC risk: conserve when pack would finish critically low.
         if prediction.get("mission_battery_pct_at_end", 100) < 15 and confidence >= 0.55:
             budget = round(budget * 0.88, 1)
 
+        # Never starve the task envelope below 72% of its nominal base.
         return max(round(base_budget * 0.72, 1), budget)
 
     def _throttle_order(self, task: str) -> list[str]:
+        """Which channels to cut first when over budget (task-dependent priority)."""
         profile = TASK_PROFILES.get(task)
         if profile:
             return profile.throttle_order
@@ -58,6 +96,12 @@ class PowerAllocator:
         requested: dict[str, float],
         prediction: dict | None = None,
     ) -> dict:
+        """
+        Produce allocated watts per channel for this tick.
+
+        Returns a dict suitable for DB logging and dashboard display (see module
+        docstring). ``requested`` in the result is after channel-cap clamping.
+        """
         decisions: list[str] = []
         warnings: list[str] = []
         throttled_channels: list[str] = []
@@ -97,6 +141,7 @@ class PowerAllocator:
                 f"({total_requested:.1f}W requested / {budget:.1f}W effective budget)"
             )
 
+            # Priority cuts first (preserve locomotion during transit, etc.).
             for ch_id in self._throttle_order(task):
                 if over <= 0 or ch_id not in allocated:
                     continue
@@ -112,6 +157,7 @@ class PowerAllocator:
                 if ch_id not in throttled_channels:
                     throttled_channels.append(ch_id)
 
+            # Last resort: scale all channels (including floors) proportionally.
             if over > 0:
                 scale = budget / total_requested
                 for ch_id in allocated:

@@ -1,8 +1,28 @@
 """
 Webots power estimation — map motor/joint telemetry to PMS channel draws.
 
-Grounded in config/hardware_profiles/<id>.yaml (active: butlerbot_wheeled):
-drive motors, stabilizers, compute+sensors, optional vision mode, battery Wh.
+Architecture
+------------
+The Webots controller observes joint velocity (and optional torque) each step.
+This module turns those samples into the five PMS channels the dashboard knows:
+
+  joint ω, τ  →  estimate_motor_power_w  →  per-motor watts
+              →  aggregate_channel_draws →  Legs / Arms / Torso / Compute
+              →  build_webots_telemetry  →  POST /api/twin/telemetry payload
+
+Ground truth for motor idle/cruise/peak, wheel radius, compute, and stabilizers
+is the active hardware profile (``config/hardware_profiles/<id>.yaml``), not
+hardcoded constants — constants below are only fallbacks if a block is missing.
+
+Motion-aware design goals
+-------------------------
+  1. Idle teleop must not report full drive stress (motion_scale → 0 near rest).
+  2. Legs should land mid-band at cruise, not peg channel max every frame.
+  3. Prefer body speed when available (smoother than noisy hub encoders).
+  4. Missing torque (common in Webots) synthesizes load from |ω| via τ_proxy.
+
+Stress multipliers (gait/phase) are applied *lightly* and only when motion is
+actually present, so a labeled "drive" phase with stationary wheels stays calm.
 """
 
 from __future__ import annotations
@@ -19,7 +39,8 @@ from src.hardware_profile import (
     wheel_radius_m,
 )
 
-# ButlerBot Webots motor name → PMS channel
+# ButlerBot Webots motor name → PMS channel.
+# "Legs" is historical channel id for locomotion (wheels on the wheeled profile).
 WEBOTS_MOTOR_CHANNELS: dict[str, str] = {
     "left_wheel": "Legs",
     "right_wheel": "Legs",
@@ -35,10 +56,11 @@ WEBOTS_MOTOR_CHANNELS: dict[str, str] = {
     "gripper": "Arms",
 }
 
-# Fallbacks only if profile missing compute block
+# Fallbacks only if profile missing compute block.
 COMPUTE_IDLE_W = 6.5
 COMPUTE_ACTIVE_W = 10.0
 
+# Gait-level stress when phase is unknown; phase table wins when present.
 _GAIT_STRESS: dict[str, float] = {
     "stand": 1.0,
     "idle": 1.0,
@@ -100,6 +122,9 @@ def estimate_motor_power_w(
     - Over-cruise: soft headroom (~25% of cruise), not a hard jump toward peak
     - Real torque (when present): blend in P ≈ idle + (τ·ω)/η
     Goal: mid-band at cruise, avoid always pegging the Legs channel max.
+
+    Non-wheel joints fall back to mechanical power × scale or efficiency.
+    Final value is clamped by profile motor peak via ``clamp_motor_power_w``.
     """
     prof = _resolve_profile(profile)
     name = str(motor_name or "")
@@ -174,7 +199,11 @@ def motor_powers_from_joints(
     *,
     speed_m_s: float = 0.0,
 ) -> dict[str, float]:
-    """Build per-motor watt map from joint state samples."""
+    """Build per-motor watt map from joint state samples.
+
+    Always recomputes from v/τ so profile idle/cruise applies even if the
+    controller stamped an older ``power_w`` — profile remains source of truth.
+    """
     prof = _resolve_profile(profile)
     powers: dict[str, float] = {}
     for joint in joints:
@@ -215,7 +244,11 @@ def motion_scale(*, speed_m_s: float = 0.0, joints: list[dict] | None = None) ->
 
 
 def stress_multiplier(*, gait: str = "stand", phase: str = "") -> float:
-    """Combined gait/phase stress factor for Webots twin telemetry."""
+    """Combined gait/phase stress factor for Webots twin telemetry.
+
+    Phase table takes precedence when the phase name is known (scripted mission
+    or teleop labels); otherwise gait-only stress is used.
+    """
     g = str(gait).lower()
     p = normalize_phase_name(phase) if phase else ""
     if p and p in _PHASE_STRESS:
@@ -232,7 +265,7 @@ def _compute_draw_w(
     speed_m_s: float = 0.0,
     vision: bool = False,
 ) -> float:
-    """SBC + sensors (+ optional vision) from profile."""
+    """SBC + sensors (+ optional vision/agent modes) from profile compute blocks."""
     compute = profile.get("compute") or {}
     sensors = profile.get("sensors") or {}
     modes = profile.get("modes") or {}
@@ -254,6 +287,7 @@ def _compute_draw_w(
 
 
 def _stabilizer_draw_w(profile: dict, *, speed_m_s: float = 0.0) -> tuple[str, float]:
+    """Profile stabilizer idle→active ramp; channel is usually Torso."""
     stab = profile.get("stabilizers") or {}
     channel = str(stab.get("channel") or "Torso")
     idle_w = float(stab.get("idle_w", 0.0))
@@ -277,7 +311,12 @@ def aggregate_channel_draws(
     joints: list[dict] | None = None,
     profile: dict | None = None,
 ) -> dict[str, float]:
-    """Sum motor draws into Legs / Arms / Torso / Compute (+ stabilizers)."""
+    """Sum motor draws into Legs / Arms / Torso / Compute (+ stabilizers).
+
+    Mild stress from gait/phase is motion-gated: without real wheel/body
+    motion the stress multiplier does not inflate channels. Caps come from
+    profile channel max_draw_w so twin posts never exceed the allocator map.
+    """
     prof = _resolve_profile(profile)
     channels: dict[str, float] = {}
     channel_caps = prof.get("channels") or {}
@@ -301,6 +340,7 @@ def aggregate_channel_draws(
     if mult > 1.0 and (speed_m_s > 0.05 or motion_scale(speed_m_s=speed_m_s, joints=joints) > 0.2):
         motion = motion_scale(speed_m_s=speed_m_s, joints=joints)
         if motion > 0.0:
+            # Only a fraction of (mult-1) is applied — full mult would peg Legs.
             effective = 1.0 + (mult - 1.0) * motion * 0.32
             for ch_id in list(channels.keys()):
                 if ch_id == "Compute":
@@ -320,6 +360,7 @@ def aggregate_channel_draws(
 
 
 def gait_to_task(gait: str) -> str:
+    """Map locomotion gait string onto a PMS mission task id."""
     return _GAIT_TO_TASK.get(str(gait).lower(), "balanced")
 
 
@@ -336,7 +377,13 @@ def build_webots_telemetry(
     motor_power_w: dict[str, float] | None = None,
     profile: dict | None = None,
 ) -> dict:
-    """Build a DigitalTwinBridge telemetry payload from Webots controller data."""
+    """Build a DigitalTwinBridge telemetry payload from Webots controller data.
+
+    Controllers should pass ``sensors`` with hub rates, yaw, braking flags, etc.
+    so residual-spin diagnostics survive the twin models → dashboard path.
+    Pre-built channel_draws from this function are preferred by WebotsAdapter
+    over re-aggregation, so HUD and PMS stay numerically aligned.
+    """
     prof = _resolve_profile(profile)
     capacity_wh = battery_capacity_wh(prof)
     batt = prof.get("battery") or {}

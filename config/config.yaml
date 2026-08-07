@@ -1,14 +1,27 @@
+# =============================================================================
+# Robot Battery Monitor / ButlerBot — main configuration
+# =============================================================================
+# Loaded by src.config. Section roles:
+#   dashboard, monitoring, safety, lru, requirements, robot, power,
+#   cooling, database, power_channels, digital_twin, agent, simulation,
+#   hardware, logging
+# Hardware kinematics/profile details also live under config/hardware_profiles/.
+# =============================================================================
+
+# HTTP bind defaults for the local PMS UI (Docker maps host port separately)
 dashboard:
   host: "127.0.0.1"
   port: 5000
   refresh_seconds: 3
 
+# Logging / archive cadence for historical battery samples
 monitoring:
   low_battery_threshold: 20
   archive_after_days: 30
   log_level: "INFO"
   archive_interval_hours: 24      # ← How often to run auto-archive (in background)
 
+# Battery, thermal, and over-budget trip points for the safety monitor
 safety:
   low_battery_warning_pct: 20
   low_battery_critical_pct: 10
@@ -25,6 +38,7 @@ safety:
   safety_throttle_factor: 0.85
   critical_throttle_factor: 0.70
 
+# Line-replaceable unit groups for degrade priority (EPS first, arms last, etc.)
 lru:
   groups:
     - id: eps
@@ -68,6 +82,7 @@ lru:
     degrade_throttle_degraded: 0.80
     degrade_throttle_critical: 0.65
 
+# Soft power budgets by mission task (must not false-trip idle → throttle loops)
 requirements:
   startup_cost_wh: 6.0
   eps_reserve_pct: 12
@@ -101,6 +116,7 @@ requirements:
       compute: {min_draw_w: 7, max_draw_w: 12, budget_w: 10}
       cooling: {min_draw_w: 4, max_draw_w: 10, budget_w: 8}
 
+# Robot identity + pack size (profile file supplies wheeled/biped kinematics)
 robot:
   name: "ButlerBot"
   main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
@@ -108,6 +124,7 @@ robot:
 
 hardware_profile: butlerbot_wheeled
 
+# System-level allocatable power ceiling (includes cooling channel)
 power:
   system_budget_w: 62   # Total allocatable watts (includes active cooling)
 
@@ -115,6 +132,7 @@ cooling:
   max_draw_w: 10
   label: "Dry-ice / active cooling loop"
 
+# Postgres connection for host-local runs (Docker overrides via env / DATABASE_URL)
 database:
   host: "localhost"
   port: 5432
@@ -122,6 +140,7 @@ database:
   user: "robot"
   password: "robot"
 
+# Named power channels shown on the dashboard and allocated by the PMS
 power_channels:
   - id: "Legs"
     name: "Leg Drive Motors"
@@ -144,6 +163,8 @@ power_channels:
     max_draw_w: 10
     nominal_voltage: 24
 
+# Digital twin bridge: Webots (or other) telemetry + dashboard teleop commands
+# prefer_external: use live Webots power when feed is fresh (stale_after_s)
 digital_twin:
   enabled: true
   adapter: generic
@@ -157,6 +178,7 @@ digital_twin:
   apply_battery_override: true
   sync_interval_s: 3
 
+# Onboard agent: throttle / task suggestions under stress or low battery
 agent:
   enabled: true
   auto_apply_throttle: true
@@ -171,6 +193,7 @@ agent:
   loop_margin_warn_pct: 18
   loop_margin_critical_pct: 8
 
+# Internal scripted mission driver (dashboard Sim panel) — not Webots itself
 simulation:
   enabled: true
   auto_start: true
@@ -200,6 +223,7 @@ simulation:
     balanced:   {Legs: 12.0, Arms: 9.0, Torso: 7.5, Compute: 8.5, Cooling: 3.5}
     high_load:  {Legs: 24.0, Arms: 16.0, Torso: 12.0, Compute: 10.0, Cooling: 7.5}
 
+# Hardware backend: ROS2 topics (mock allowed in Docker via ROS2_MOCK env)
 hardware:
   mode: "real"
   type: "ros2"
@@ -214,6 +238,5 @@ hardware:
       throttle_command: "/robot/battery/command/throttle"
       sensor_power: "/robot/sensors/power_draw"
 
-# Other settings...
 logging:
   level: "INFO"

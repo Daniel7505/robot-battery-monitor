@@ -1,4 +1,20 @@
-"""Webots adapter — maps Supervisor/controller payloads to twin telemetry."""
+"""
+Webots adapter — maps Supervisor/controller payloads to twin telemetry.
+
+Why prefer pre-built channel_draws
+----------------------------------
+The Webots controller typically posts output from ``build_webots_telemetry()``,
+which already applied profile cruise curves, motion damping, and channel caps.
+Recomputing from motors alone can *drop* that damping and disagree with the
+on-robot HUD. Therefore:
+
+  1. Use payload channel_draws / power.channel_draws when present.
+  2. Else rebuild from motor_power_w or joints via webots_power helpers.
+  3. Last resort: map raw motor id → channel with a static name table.
+
+Task inference falls back to gait→task when mission.task is omitted so the
+allocator still receives a coherent PMS task under partial payloads.
+"""
 
 from __future__ import annotations
 

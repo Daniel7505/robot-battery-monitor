@@ -1,8 +1,42 @@
 """
 Onboard AI agent — reactive rule-based decision engine.
 
-Evaluates live telemetry each tick and produces throttle suggestions, task-change
-recommendations, and safety alerts. Designed for modular upgrade to richer logic.
+Architecture
+------------
+Each PMS tick, hardware assembles live battery, allocation, safety, prediction,
+mission, and optional twin context. ``OnboardAgent.evaluate`` runs an ordered
+list of pure rules that emit ``AgentRecommendation`` objects. Separately:
+
+  - ``apply_throttle`` may multiply allocated channel watts (when auto-apply on)
+  - ``apply_task_suggestions`` may force a lighter mission task
+  - ``status_dict`` feeds the dashboard agent panel + twin control view
+
+Rules are modular (``register_rule``) so richer ML/planner logic can replace
+individual policies without rewriting the evaluate/apply pipeline.
+
+Intervention model
+------------------
+Recommendations alone are *advisory*. Intervention becomes visible when:
+  - auto-apply actually mutates allocation/task (``applied_actions``), or
+  - high/critical priority recs are present (``intervening`` flag for UI)
+
+``should_auto_apply(twin_active)``: with a live twin, ``twin_auto_apply``
+defaults true so Webots stress/loop risks can act; without twin, throttle
+auto-apply stays opt-in to avoid idle THROTTLED spam in pure mock mode.
+
+Throttle stacking guard
+-----------------------
+If SafetyMonitor already cut draw this tick, ``apply_throttle`` refuses to
+stack another system factor — double application caused permanent throttled
+state under idle/no-twin. ``_rule_safety_mirror`` similarly skips re-emitting
+system throttle when allocation is already throttled/fault.
+
+Mission / twin awareness
+------------------------
+Twin phase filters channel throttle recommendations via
+``throttle_exempt_channels`` (e.g. do not cut Legs during transit when policy
+says locomotion is mission-critical). Stress, loop-forecast, and negotiator
+rules only fire with meaningful twin/loop context so mock mode stays quiet.
 """
 
 from __future__ import annotations
@@ -32,8 +66,10 @@ _DEFAULT_AGENT = {
     "loop_margin_critical_pct": 8,
 }
 
+# Align with control.TWIN_STRESS_PHASES — high-draw scripted segments.
 _TWIN_STRESS_PHASES = frozenset({"drive_transit", "walk_transit", "patrol", "manipulate"})
 
+# Preferable lighter task when energy rules fire.
 _TASK_DOWNGRADE = {
     "high_load": "balanced",
     "moving": "balanced",
@@ -46,6 +82,8 @@ _PRIORITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 @dataclass
 class AgentContext:
+    """Snapshot of PMS + twin state for one evaluate() pass (immutable intent)."""
+
     battery_pct: float
     task_id: str
     total_draw_w: float
@@ -64,6 +102,8 @@ class AgentContext:
 
 @dataclass
 class AgentRecommendation:
+    """Single rule output — action the agent wants, not necessarily applied."""
+
     action: str
     priority: str
     reason: str
@@ -88,6 +128,7 @@ class AgentRecommendation:
         }
 
     def signature(self) -> str:
+        """Stable id for dedupe and log spam suppression across ticks."""
         parts = [self.action, self.rule_id, self.channel or "", self.task or "", self.message or ""]
         if self.factor is not None:
             parts.append(f"{self.factor:.2f}")
@@ -96,6 +137,8 @@ class AgentRecommendation:
 
 @dataclass
 class AgentResult:
+    """Aggregate evaluate() output: posture, recs, rules fired, applied list."""
+
     posture: str = "normal"
     summary: str = "All systems nominal"
     recommendations: list[AgentRecommendation] = field(default_factory=list)
@@ -103,6 +146,7 @@ class AgentResult:
     applied_actions: list[str] = field(default_factory=list)
 
     def to_status(self, enabled: bool, recent_log: list[dict]) -> dict:
+        """Dashboard-facing agent_status blob (controlling / intervening flags)."""
         recs = sorted(
             self.recommendations,
             key=lambda r: _PRIORITY_ORDER.get(r.priority, 0),
@@ -135,7 +179,14 @@ RuleFn = Callable[[AgentContext, dict], list[AgentRecommendation]]
 
 
 class OnboardAgent:
-    """Rule-based onboard agent with pluggable decision rules."""
+    """Rule-based onboard agent with pluggable decision rules.
+
+    Lifecycle per tick (caller-driven):
+      1. evaluate(...)           → AgentResult
+      2. apply_throttle(...)     → maybe mutate allocated watts
+      3. apply_task_suggestions  → maybe force lighter task
+      4. status_dict(result)     → hardware.agent_status
+    """
 
     def __init__(self):
         self._cfg = self._load_config()
@@ -170,6 +221,11 @@ class OnboardAgent:
         return bool(self._cfg.get("twin_auto_apply", True))
 
     def should_auto_apply(self, twin_active: bool) -> bool:
+        """Whether this tick should enforce throttle recommendations.
+
+        Twin-active path uses ``twin_auto_apply`` so demo missions intervene by
+        default; pure internal sim requires explicit ``auto_apply_throttle``.
+        """
         if not self.enabled:
             return False
         if twin_active and self.twin_auto_apply:
@@ -177,9 +233,12 @@ class OnboardAgent:
         return self.auto_apply_throttle
 
     def register_rule(self, rule_id: str, fn: RuleFn) -> None:
+        """Append a custom rule (tests / future planners)."""
         self._rules.append((rule_id, fn))
 
     def _register_default_rules(self) -> None:
+        # Order is evaluation order; higher-severity rules listed first for
+        # log readability (dedupe is signature-based, not priority-based).
         self._rules = [
             ("critical_battery", self._rule_critical_battery),
             ("low_battery", self._rule_low_battery),
@@ -207,6 +266,11 @@ class OnboardAgent:
         *,
         twin_context: dict | None = None,
     ) -> AgentResult:
+        """Run all rules against the live snapshot; return posture + recommendations.
+
+        Does not mutate hardware — apply_* methods are separate so callers can
+        choose advisory vs closed-loop modes.
+        """
         if not self.enabled:
             return AgentResult(posture="disabled", summary="Agent disabled")
 
@@ -291,6 +355,7 @@ class OnboardAgent:
         gait: str | None,
         pms_task: str | None,
     ) -> None:
+        """Log Webots phase transitions once per phase (not every tick)."""
         if not phase or phase == self._last_twin_phase:
             return
         self._last_twin_phase = phase
@@ -316,6 +381,7 @@ class OnboardAgent:
         pms_task: str | None = None,
         priority: str = "medium",
     ) -> None:
+        """Log allocator/safety throttles that are not agent-originated."""
         self.record_event(
             "pms_throttle",
             detail,
@@ -328,11 +394,13 @@ class OnboardAgent:
         )
 
     def _phase_exempt_channels(self, ctx: AgentContext) -> frozenset[str]:
+        """Channels mission context forbids throttling during this twin phase."""
         if not ctx.twin_phase:
             return frozenset()
         return throttle_exempt_channels(ctx.twin_phase)
 
     def _lru_is_standby(self, lru: dict, phase: str | None) -> bool:
+        """Standby LRUs should not generate degradation throttles mid-mission."""
         if lru.get("mission_role") == "standby":
             return True
         return is_standby_lru(lru.get("id", ""), phase)
@@ -340,6 +408,7 @@ class OnboardAgent:
     def _phase_filter_recommendations(
         self, recs: list[AgentRecommendation], ctx: AgentContext
     ) -> list[AgentRecommendation]:
+        """Drop channel throttles that conflict with mission-critical axes."""
         exempt = self._phase_exempt_channels(ctx)
         if not exempt:
             return recs
@@ -362,6 +431,7 @@ class OnboardAgent:
     def _derive_posture(
         self, ctx: AgentContext, recs: list[AgentRecommendation]
     ) -> tuple[str, str]:
+        """Map highest severity into UI posture: normal / advisory / cautious / critical."""
         priorities = {r.priority for r in recs}
         if "critical" in priorities or ctx.battery_pct <= self._cfg["critical_battery_pct"]:
             summary = next(
@@ -455,6 +525,11 @@ class OnboardAgent:
         *,
         safety_already_throttled: bool = False,
     ) -> tuple[dict[str, float], list[str]]:
+        """Multiply allocated watts by system/channel factors from recommendations.
+
+        Requires ``auto_apply_throttle`` (callers often gate via should_auto_apply
+        first for twin mode). Refuses to stack on top of SafetyMonitor cuts.
+        """
         if not self.auto_apply_throttle:
             return allocated, []
 
@@ -490,7 +565,11 @@ class OnboardAgent:
         return out, applied
 
     def apply_task_suggestions(self, mission, result: AgentResult) -> list[str]:
-        """Apply high-priority task-downgrade recommendations to the PMS mission."""
+        """Apply high-priority task-downgrade recommendations to the PMS mission.
+
+        Medium forecast suggestions are intentionally ignored — they thrashed
+        idle ↔ balanced every hold window with no twin present.
+        """
         if not self.auto_apply_task_suggestions and not self.twin_auto_apply:
             return []
 
@@ -512,6 +591,7 @@ class OnboardAgent:
     # --- Default rules (modular — register custom rules via register_rule) ---
 
     def _rule_twin_stress(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """During high-draw Webots phases, intervene if utilization is elevated."""
         phase = (ctx.twin_phase or "").lower()
         if phase not in _TWIN_STRESS_PHASES:
             return []
@@ -575,6 +655,7 @@ class OnboardAgent:
         return recs
 
     def _rule_loop_forecast(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Act when mission-loop energy margin cannot finish the twin cycle."""
         fc = ctx.loop_forecast
         if not fc or not fc.get("ok"):
             return []
@@ -634,7 +715,11 @@ class OnboardAgent:
         return recs
 
     def _rule_negotiator(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
-        """Trade time vs energy when loop margin is tight but completion is possible."""
+        """Trade time vs energy when loop margin is tight but completion is possible.
+
+        Suggests slower tasks / gentle channel cuts rather than aborting the
+        mission — the "finish with headroom" compromise path.
+        """
         fc = ctx.loop_forecast
         if not fc or not fc.get("ok") or not fc.get("can_complete_loop", True):
             return []
@@ -845,6 +930,7 @@ class OnboardAgent:
         ]
 
     def _rule_lru_degraded(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Throttle channels owned by warning/fault LRUs (skip standby units)."""
         lrus = (ctx.safety.get("lru") or {}).get("lrus") or []
         recs: list[AgentRecommendation] = []
         for lru in lrus:
@@ -859,6 +945,7 @@ class OnboardAgent:
             factor = 0.80 if status == "warning" else 0.68
             priority = "medium" if status == "warning" else "high"
             for ch in channels:
+                # Soft-warn on compute alone is usually noise; skip.
                 if ch == "Compute" and status == "warning":
                     continue
                 recs.append(
@@ -873,6 +960,7 @@ class OnboardAgent:
         return recs
 
     def _rule_high_utilization(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Cut channels in task throttle_order when system utilization is high."""
         if ctx.utilization_pct < cfg["high_utilization_pct"]:
             return []
         profile = TASK_PROFILES.get(ctx.task_id)
@@ -880,6 +968,7 @@ class OnboardAgent:
         exempt = self._phase_exempt_channels(ctx)
         order = [ch for ch in order if ch not in exempt]
         recs: list[AgentRecommendation] = []
+        # Slightly more aggressive under live Webots (demo observability).
         factor = 0.82 if ctx.twin_source == "webots" else 0.90
         priority = "high" if ctx.utilization_pct >= 80 else "medium"
         for ch in order[:2]:
@@ -921,6 +1010,7 @@ class OnboardAgent:
         ]
 
     def _rule_safety_mirror(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Surface safety alerts and mirror throttle when safety has not already acted."""
         recs: list[AgentRecommendation] = []
         for alert in ctx.safety.get("alerts") or []:
             if "CRITICAL" in alert.upper() or "THERMAL" in alert.upper():

@@ -1,9 +1,22 @@
 """
-ButlerBot simulation driver — realistic scripted mission loop.
+ButlerBot simulation driver — scripted mission loop for internal (non-twin) runs.
 
-Cycles Idle → Walking/Transit → Balanced/Patrol → High Load → Idle, driving
-mission status, LRU draws, allocation, prediction, safety, and thermal together.
-Power levels are tuned for small/medium servo motors on a compact mobile robot.
+Role in the system
+------------------
+When no external digital twin is active, ROS2BatterySource calls
+``SimulationDriver.advance(mission)`` each telemetry tick. The driver:
+
+  - Holds a multi-phase script (Idle → Walking → Patrol → High Load → Idle)
+  - Forces MissionTaskManager onto each segment for a fixed duration
+  - Seeds mission blend targets with servo-scale draw profiles
+  - Optionally loops forever (config ``simulation.loop``)
+
+Power levels are tuned for small/medium servo motors on a compact mobile robot
+(tens of watts, not industrial arms).
+
+When Webots is live, ``status_for_external_twin`` builds the same-shaped status
+dict so the dashboard simulation panel still shows phase/script context without
+advancing the internal script.
 """
 
 from __future__ import annotations
@@ -12,7 +25,7 @@ from src.config import config
 from src.logger import logger
 from src.mission_tasks import TASK_PROFILES, TICK_SECONDS, MissionTaskManager
 
-# ButlerBot default timeline (full realistic loop)
+# Default full realistic loop (overridable via config simulation.script).
 BUTLERBOT_SCRIPT = [
     {"task": "idle", "duration_s": 20, "label": "Idle / Standby"},
     {"task": "moving", "duration_s": 28, "label": "Walking / Transit"},
@@ -21,7 +34,7 @@ BUTLERBOT_SCRIPT = [
     {"task": "idle", "duration_s": 14, "label": "Return to Idle"},
 ]
 
-# Small/medium servo motor draw targets (watts) per channel
+# Small/medium servo motor draw targets (watts) per channel and task.
 BUTLERBOT_DRAW_PROFILES = {
     "idle": {"Legs": 3.5, "Arms": 5.0, "Torso": 3.5, "Compute": 7.5},
     "moving": {"Legs": 20.0, "Arms": 8.0, "Torso": 10.5, "Compute": 9.0},
@@ -31,6 +44,7 @@ BUTLERBOT_DRAW_PROFILES = {
 
 
 def _load_script(cfg: dict) -> list[dict]:
+    """Parse config script entries; skip unknown tasks; fall back to default."""
     raw = cfg.get("script") or BUTLERBOT_SCRIPT
     script = []
     for entry in raw:
@@ -41,6 +55,7 @@ def _load_script(cfg: dict) -> list[dict]:
         duration = int(entry.get("duration_s", 15))
         script.append({
             "task": task,
+            # Never shorter than one telemetry tick.
             "duration_s": max(TICK_SECONDS, duration),
             "label": entry.get("label") or TASK_PROFILES[task].label,
         })
@@ -61,6 +76,7 @@ class SimulationDriver:
             "robot", "main_battery_capacity_wh", 480
         )
         self._script = _load_script(sim_cfg)
+        # Config draw_profiles override defaults per task_id.
         self._draw_profiles = {
             **BUTLERBOT_DRAW_PROFILES,
             **(sim_cfg.get("draw_profiles") or {}),
@@ -83,12 +99,14 @@ class SimulationDriver:
         return self._running
 
     def draw_targets_for(self, task_id: str) -> dict[str, float]:
+        """Watt targets for channels under this task (sim profile or TaskProfile)."""
         custom = self._draw_profiles.get(task_id)
         if custom:
             return dict(custom)
         return dict(TASK_PROFILES[task_id].draw_targets)
 
     def start(self, mission: MissionTaskManager) -> None:
+        """Reset to segment 0 and force the first scripted task onto ``mission``."""
         if not self._enabled:
             logger.info("Simulation driver disabled in config")
             return
@@ -113,9 +131,16 @@ class SimulationDriver:
             self._apply_current_segment(mission)
 
     def advance(self, mission: MissionTaskManager) -> bool:
+        """
+        One tick of the scripted timeline.
+
+        Returns True when the mission task changed (segment boundary).
+        If disabled/stopped, delegates to MissionTaskManager.advance() random walk.
+        """
         if not self._enabled or not self._running:
             return mission.advance()
 
+        # Mirror remaining ticks into mission so UI timers stay consistent.
         mission._ticks_remaining = self._ticks_remaining
         self._ticks_remaining -= 1
         mission._blend_progress = min(1.0, mission._blend_progress + 0.10)
@@ -160,6 +185,7 @@ class SimulationDriver:
         return self._apply_current_segment(mission)
 
     def status(self, mission: MissionTaskManager | None = None) -> dict:
+        """Dashboard-facing simulation panel payload for the internal script."""
         seg = self._script[self._segment_idx] if self._script else {}
         task = seg.get("task", mission.task_id if mission else "")
         targets = self.draw_targets_for(task) if task in TASK_PROFILES else {}
@@ -200,7 +226,12 @@ def status_for_external_twin(
     source: str = "webots",
     live_draw_w: float | None = None,
 ) -> dict:
-    """Dashboard simulation panel when Webots (not internal script) drives the loop."""
+    """
+    Dashboard simulation panel when Webots (not the internal script) drives the loop.
+
+    Maps twin phase onto the Webots phase flow index so segment labels remain
+    meaningful while the internal script is paused.
+    """
     from src.twin.butlerbot import BUTLERBOT_MISSION_FLOW
     from src.twin.control import PHASE_LABELS, webots_phase_flow
 
@@ -209,6 +240,7 @@ def status_for_external_twin(
     idx = 0
     for i, step in enumerate(flow):
         sp = step.get("phase", "").lower()
+        # walk_transit is an alias of drive_transit for biped vs wheeled naming.
         if sp == norm or (norm == "walk_transit" and sp == "drive_transit"):
             idx = i
             break

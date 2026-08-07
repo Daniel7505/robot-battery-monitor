@@ -1,6 +1,32 @@
 # src/database.py
 """
-PostgreSQL database layer for power channel and allocation telemetry.
+PostgreSQL persistence layer for power-channel and allocation telemetry.
+
+Role in the system
+------------------
+Every telemetry tick (ROS2 path) and simple simulator reads write here so the
+dashboard, CLI, and analytics views share one source of truth.
+
+Schema (three tables)
+---------------------
+allocation_snapshots
+    One row per PMS tick: task, budgets, utilization, status, main battery, warnings.
+channel_readings
+    Per-channel draws for that tick (optional FK to snapshot_id).
+energy_predictions
+    Forecast snapshot linked to the same allocation tick.
+
+Connection
+----------
+Prefer ``DATABASE_URL`` (or config ``database.url``); else host/port/name/user/password.
+
+Invariants
+----------
+- Writes retry up to 3 times (transient Docker/Postgres race at startup).
+- ``db_cursor`` commits on success, rolls back on error, always closes.
+- ``archive_old_data`` deletes (does not export) rows older than the retention window;
+  directory ``logs/archives`` is reserved for future/offline dumps.
+- ``init_db`` also creates analytics views via ``src.analytics``.
 """
 
 import json
@@ -76,6 +102,7 @@ CREATE INDEX IF NOT EXISTS idx_energy_predictions_recorded_at
 
 
 def _connection_params() -> dict:
+    """Resolve DSN or discrete connect kwargs from env / config."""
     url = os.getenv("DATABASE_URL") or (config.get("database") or {}).get("url")
     if url:
         return {"dsn": url}
@@ -91,7 +118,7 @@ def _connection_params() -> dict:
 
 
 def get_db_connection():
-    """Return a new PostgreSQL connection."""
+    """Return a new PostgreSQL connection (caller must close)."""
     params = _connection_params()
     if "dsn" in params:
         return psycopg2.connect(params["dsn"])
@@ -100,6 +127,7 @@ def get_db_connection():
 
 @contextmanager
 def db_cursor():
+    """Context manager: yield (conn, cur), commit/rollback, close both."""
     conn = get_db_connection()
     cur = conn.cursor()
     try:
@@ -114,6 +142,7 @@ def db_cursor():
 
 
 def init_db():
+    """Create tables/indexes and analytics views. Safe to call on every startup."""
     os.makedirs("logs", exist_ok=True)
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
@@ -126,7 +155,7 @@ def init_db():
 
 
 def truncate_tables():
-    """Clear telemetry tables — used in tests."""
+    """Clear telemetry tables — used in tests only."""
     with db_cursor() as (conn, cur):
         cur.execute(
             "TRUNCATE energy_predictions, channel_readings, "
@@ -135,6 +164,7 @@ def truncate_tables():
 
 
 def _format_time(value) -> str:
+    """Normalize DB timestamps to local wall-clock display strings."""
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
@@ -143,7 +173,12 @@ def _format_time(value) -> str:
 
 
 def log_channel_reading(channel: str, battery_level: int, power_draw: int = 0):
-    """Log a simple channel reading (simulator / legacy path)."""
+    """
+    Log a simple channel reading (simulator / legacy path).
+
+    Does not create an allocation snapshot — use ``log_power_snapshot`` for the
+    full PMS telemetry tick.
+    """
     for attempt in range(3):
         try:
             with db_cursor() as (conn, cur):
@@ -157,6 +192,7 @@ def log_channel_reading(channel: str, battery_level: int, power_draw: int = 0):
                 )
             return
         except Exception as e:
+            # Postgres may not be ready yet when the container starts.
             logger.warning(f"DB write failed (attempt {attempt + 1}/3): {e}")
             if attempt == 2:
                 logger.error("Failed to log reading after retries")
@@ -170,7 +206,16 @@ def log_power_snapshot(
     main_battery: float,
     prediction: dict | None = None,
 ) -> None:
-    """Log allocation snapshot, channel readings, and optional energy prediction."""
+    """
+    Atomically log one PMS tick: snapshot + per-channel rows + optional prediction.
+
+    Inputs
+    ------
+    allocation : dict from PowerAllocator / ROS2BatterySource (task, budgets, warnings…)
+    readings   : channel_id → {battery, draw, requested_w, allocated_w, …}
+    main_battery : pack SOC percent
+    prediction : EnergyPredictor.forecast() result (optional)
+    """
     if not allocation or not readings:
         return
 
@@ -224,6 +269,7 @@ def log_power_snapshot(
                     )
 
                 if prediction:
+                    # Full prediction dict stored in details JSONB for later replay.
                     cur.execute(
                         """
                         INSERT INTO energy_predictions (
@@ -256,7 +302,7 @@ def log_power_snapshot(
 
 
 def archive_old_data(days: int = 30):
-    """Delete readings and snapshots older than X days."""
+    """Delete readings, predictions, and snapshots older than ``days`` (UTC)."""
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -271,6 +317,8 @@ def archive_old_data(days: int = 30):
                 logger.info(f"No data older than {days} days to archive.")
                 return
 
+            # Child tables first is unnecessary with CASCADE-friendly FKs SET NULL,
+            # but explicit deletes keep orphan cleanup predictable.
             cur.execute(
                 "DELETE FROM channel_readings WHERE recorded_at < %s",
                 (cutoff,),
@@ -290,6 +338,7 @@ def archive_old_data(days: int = 30):
 
 
 def get_all_readings(limit=500):
+    """Newest-first channel readings for CLI summary / simple consumers."""
     with db_cursor() as (conn, cur):
         cur.execute(
             """
@@ -314,6 +363,7 @@ def get_all_readings(limit=500):
 
 
 def get_channel_history(channel: str, limit=300):
+    """Newest-first history for a single channel_id."""
     try:
         with db_cursor() as (conn, cur):
             cur.execute(
@@ -338,7 +388,7 @@ def get_channel_history(channel: str, limit=300):
 
 
 def get_latest_allocation():
-    """Return the most recent allocation snapshot with channel details."""
+    """Return the most recent allocation snapshot with nested channel details."""
     try:
         with db_cursor() as (conn, cur):
             cur.execute(

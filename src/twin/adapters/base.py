@@ -1,4 +1,15 @@
-"""Twin adapter base — normalize external simulator payloads to TwinTelemetry."""
+"""
+Twin adapter base — normalize external simulator payloads to TwinTelemetry.
+
+Design
+------
+Adapters are pure transformers: dict in, ``TwinTelemetry`` out. They do not
+talk to the network, hardware layer, or dashboard. That keeps unit tests free
+of Webots/PyBullet and lets the bridge remain source-agnostic.
+
+Implementations override ``normalize``. ``validate_payload`` is a convenience
+that runs the full normalize → TwinTelemetry.validate pipeline.
+"""
 
 from __future__ import annotations
 
@@ -17,4 +28,5 @@ class TwinAdapter(ABC):
         """Convert adapter-specific payload into standard twin telemetry."""
 
     def validate_payload(self, payload: dict) -> list[str]:
+        """Return contract errors for a raw payload (empty = acceptable)."""
         return self.normalize(payload).validate()

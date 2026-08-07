@@ -2,8 +2,16 @@
 """
 Agent/command-path baseline: drive forward ~2 feet, then stop.
 
-Uses the twin command API (same path as dashboard Drive buttons), not Webots keyboard.
+Integration smoke test for the twin command path (same API as the dashboard
+Drive buttons) — not Webots keyboard teleop. Requires:
+
+* Dashboard up at ``--url`` (default http://127.0.0.1:5000)
+* Webots twin publishing external feed (``bridge.external_active``)
+
 Distance estimate: ~0.4 m/s * 1.6 s ≈ 0.64 m ≈ 2.1 ft.
+
+Pass criteria (approx.): Legs draw rises ≥4 W over preflight and mission
+shows ``moving`` during the drive window; then stop settles to idle.
 
 Usage:
   python scripts/agent_short_drive.py
@@ -21,6 +29,7 @@ import urllib.request
 
 
 def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 5.0) -> dict:
+    """Minimal JSON HTTP helper (stdlib only — no requests dependency)."""
     data = None
     headers = {}
     if body is not None:
@@ -32,6 +41,7 @@ def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float
 
 
 def snap(base: str) -> dict:
+    """Flatten twin state into a small row for logging / pass-fail checks."""
     st = _req(f"{base}/api/twin/state")
     feed = st.get("external_feed") or {}
     loc = feed.get("locomotion") or {}
@@ -68,6 +78,7 @@ def main() -> int:
     args = ap.parse_args()
     base = args.url.rstrip("/")
 
+    # --- Preflight: dashboard + live Webots feed ---
     print("=== agent_short_drive: preflight ===")
     try:
         s0 = snap(base)
@@ -82,7 +93,7 @@ def main() -> int:
         f"hw={s0['hw']} cap={s0['cap']} thr={s0['thr']}"
     )
 
-    # Ensure stopped
+    # Ensure stopped before the measured leg
     _req(f"{base}/api/twin/command", "POST", {"drive_stop": True})
     time.sleep(1.5)
 
@@ -98,6 +109,7 @@ def main() -> int:
     result = _req(f"{base}/api/twin/command", "POST", cmd)
     print("command result:", json.dumps(result, default=str))
 
+    # Sample while the timed drive is active (bridge zeros wheels after duration_s)
     drive_rows = []
     t_end = time.time() + args.duration + 0.8
     while time.time() < t_end:

@@ -35,7 +35,12 @@ import time
 
 from src.config import config
 from src.logger import logger
-from src.database import get_all_readings, get_latest_allocation
+from src.database import (
+    get_all_readings,
+    get_latest_allocation,
+    log_drive_measurement,
+    get_drive_measurements,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -1750,6 +1755,31 @@ def api_twin_example():
 
 
 # --- Lightweight data snapshot --------------------------------------------
+
+@app.route('/api/measurements', methods=['GET'])
+def api_measurements_list():
+    """List recent short-drive energy / wheel-lock measurements from Postgres."""
+    from flask import request
+    limit = 20
+    try:
+        limit = min(100, max(1, int(request.args.get("limit", 20))))
+    except (TypeError, ValueError):
+        pass
+    return jsonify({"ok": True, "measurements": get_drive_measurements(limit=limit)})
+
+
+@app.route('/api/measurements', methods=['POST'])
+def api_measurements_create():
+    """Store one drive measurement (energy, distance, wheel lock sensors)."""
+    from flask import request
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"ok": False, "error": "JSON object required"}), 400
+    new_id = log_drive_measurement(body)
+    if new_id is None:
+        return jsonify({"ok": False, "error": "DB write failed"}), 500
+    return jsonify({"ok": True, "id": new_id})
+
 
 @app.route('/api/data')
 def api_data():

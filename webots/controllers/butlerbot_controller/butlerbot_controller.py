@@ -987,6 +987,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     # After Stop, ignore stale "active" drive polls for this long (seconds).
     # Prevents a race from re-arming cruise mid-park (horizon chase / Tokyo drift).
     park_holdoff_s = 0.0
+    # Wheel rotation sensors (encoder-based): absolute angle + lock detection
+    # These answer "are the wheels actually locking?" for park diagnosis.
+    wheel_enc_prev: dict[str, float] = {}
+    wheel_rot_abs: dict[str, float] = {"left_wheel": 0.0, "right_wheel": 0.0}
+    wheel_rot_since_stop: dict[str, float] = {"left_wheel": 0.0, "right_wheel": 0.0}
+    wheel_lock_hold_s: dict[str, float] = {"left_wheel": 0.0, "right_wheel": 0.0}
+    was_abs_active = False
 
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -1476,11 +1483,101 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     braking=abs_brake.active,
                 )
 
+            # --- Wheel rotation sensors (PositionSensor on each drive hub) ---
+            # Tracks absolute encoder angle, cumulative rotation, and lock hold.
+            hub_rates = {
+                "left_wheel": left_wv,
+                "right_wheel": right_wv,
+            }
+            # Reset "since stop" integrator when a new ABS park begins
+            if abs_brake.active and not was_abs_active:
+                wheel_rot_since_stop = {"left_wheel": 0.0, "right_wheel": 0.0}
+                wheel_lock_hold_s = {"left_wheel": 0.0, "right_wheel": 0.0}
+            was_abs_active = abs_brake.active
+
+            for wname, rate in hub_rates.items():
+                sname = f"{wname}_sensor"
+                enc = None
+                try:
+                    enc = float(sensors[sname].getValue())
+                except Exception:
+                    enc = None
+                if enc is not None and math.isfinite(enc):
+                    prev = wheel_enc_prev.get(wname)
+                    if prev is not None:
+                        dth = enc - prev
+                        # unwrap large jumps (shouldn't happen for continuous joint)
+                        while dth > math.pi:
+                            dth -= 2.0 * math.pi
+                        while dth < -math.pi:
+                            dth += 2.0 * math.pi
+                        adth = abs(dth)
+                        wheel_rot_abs[wname] = wheel_rot_abs.get(wname, 0.0) + adth
+                        # Integrate rotation after stop / while parking or idle
+                        if abs_brake.active or (
+                            abs(left_v) < 0.05
+                            and abs(right_v) < 0.05
+                            and not user_driving
+                            and not api_driving
+                        ):
+                            wheel_rot_since_stop[wname] = (
+                                wheel_rot_since_stop.get(wname, 0.0) + adth
+                            )
+                    wheel_enc_prev[wname] = enc
+                # Lock detector: |ω| quiet for a short hold
+                if abs(rate) < STOP_WHEEL_RAD_S * 1.5:
+                    wheel_lock_hold_s[wname] = wheel_lock_hold_s.get(wname, 0.0) + dt
+                else:
+                    wheel_lock_hold_s[wname] = 0.0
+
+            wheel_locked = {
+                w: wheel_lock_hold_s.get(w, 0.0) >= 0.25
+                for w in ("left_wheel", "right_wheel")
+            }
+            wheels_both_locked = all(wheel_locked.values())
+
             # Publish faster while parking so suites/agents see control_diag live
             publish_ticks = 1 if abs_brake.active else publish_every
             if tick % publish_ticks == 0:
                 lock_l = _WHEEL_LOCK_POS.get("left_wheel")
                 lock_r = _WHEEL_LOCK_POS.get("right_wheel")
+                wheel_sensors = {
+                    "left": {
+                        "encoder_rad": (
+                            None
+                            if "left_wheel" not in wheel_enc_prev
+                            else round(wheel_enc_prev["left_wheel"], 4)
+                        ),
+                        "omega_rad_s": round(left_wv, 4),
+                        "rot_abs_rad": round(wheel_rot_abs.get("left_wheel", 0.0), 4),
+                        "rot_since_stop_rad": round(
+                            wheel_rot_since_stop.get("left_wheel", 0.0), 4
+                        ),
+                        "rot_since_stop_deg": round(
+                            math.degrees(wheel_rot_since_stop.get("left_wheel", 0.0)), 2
+                        ),
+                        "locked": wheel_locked["left_wheel"],
+                        "lock_hold_s": round(wheel_lock_hold_s.get("left_wheel", 0.0), 3),
+                    },
+                    "right": {
+                        "encoder_rad": (
+                            None
+                            if "right_wheel" not in wheel_enc_prev
+                            else round(wheel_enc_prev["right_wheel"], 4)
+                        ),
+                        "omega_rad_s": round(right_wv, 4),
+                        "rot_abs_rad": round(wheel_rot_abs.get("right_wheel", 0.0), 4),
+                        "rot_since_stop_rad": round(
+                            wheel_rot_since_stop.get("right_wheel", 0.0), 4
+                        ),
+                        "rot_since_stop_deg": round(
+                            math.degrees(wheel_rot_since_stop.get("right_wheel", 0.0)), 2
+                        ),
+                        "locked": wheel_locked["right_wheel"],
+                        "lock_hold_s": round(wheel_lock_hold_s.get("right_wheel", 0.0), 3),
+                    },
+                    "both_locked": wheels_both_locked,
+                }
                 control_diag = {
                     "schema": "butlerbot_control_diag_v1",
                     "hub_left_rad_s": round(left_wv, 4),
@@ -1512,6 +1609,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     "residual_spin": residual_spin,
                     "phase": phase_name,
                     "gait": gait,
+                    # Explicit wheel rotation sensors (encoder truth for lock)
+                    "wheels": wheel_sensors,
                 }
                 payload = build_payload(
                     joints,
@@ -1530,8 +1629,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
-                        # Full control snapshot for Build Grok / stop suites / agents
                         "control_diag": control_diag,
+                        "wheels": wheel_sensors,
                     },
                 )
                 result = publish_telemetry(payload, dashboard)

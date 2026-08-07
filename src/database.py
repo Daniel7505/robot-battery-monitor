@@ -98,6 +98,30 @@ CREATE TABLE IF NOT EXISTS energy_predictions (
 
 CREATE INDEX IF NOT EXISTS idx_energy_predictions_recorded_at
     ON energy_predictions (recorded_at DESC);
+
+-- Short-drive energy / lock measurements (agent + parts-DB foundation)
+CREATE TABLE IF NOT EXISTS drive_measurements (
+    id SERIAL PRIMARY KEY,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    label VARCHAR(64) NOT NULL DEFAULT 'short_drive',
+    duration_s NUMERIC(8,3),
+    distance_m NUMERIC(10,4),
+    energy_wh NUMERIC(12,6),
+    avg_legs_w NUMERIC(8,2),
+    peak_legs_w NUMERIC(8,2),
+    avg_total_w NUMERIC(8,2),
+    battery_start_pct NUMERIC(5,2),
+    battery_end_pct NUMERIC(5,2),
+    wheels_locked_after BOOLEAN,
+    hub_left_max_abs NUMERIC(10,4),
+    hub_right_max_abs NUMERIC(10,4),
+    rot_left_since_stop_deg NUMERIC(12,3),
+    rot_right_since_stop_deg NUMERIC(12,3),
+    details JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_drive_measurements_recorded_at
+    ON drive_measurements (recorded_at DESC);
 """
 
 
@@ -445,3 +469,95 @@ def get_latest_allocation():
     except Exception as e:
         logger.error(f"get_latest_allocation failed: {e}")
         return None
+
+
+def log_drive_measurement(row: dict) -> int | None:
+    """Insert one short-drive energy/lock measurement. Returns new row id."""
+    try:
+        with db_cursor() as (conn, cur):
+            cur.execute(
+                """
+                INSERT INTO drive_measurements (
+                    label, duration_s, distance_m, energy_wh,
+                    avg_legs_w, peak_legs_w, avg_total_w,
+                    battery_start_pct, battery_end_pct,
+                    wheels_locked_after,
+                    hub_left_max_abs, hub_right_max_abs,
+                    rot_left_since_stop_deg, rot_right_since_stop_deg,
+                    details
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    row.get("label", "short_drive"),
+                    row.get("duration_s"),
+                    row.get("distance_m"),
+                    row.get("energy_wh"),
+                    row.get("avg_legs_w"),
+                    row.get("peak_legs_w"),
+                    row.get("avg_total_w"),
+                    row.get("battery_start_pct"),
+                    row.get("battery_end_pct"),
+                    row.get("wheels_locked_after"),
+                    row.get("hub_left_max_abs"),
+                    row.get("hub_right_max_abs"),
+                    row.get("rot_left_since_stop_deg"),
+                    row.get("rot_right_since_stop_deg"),
+                    json.dumps(row.get("details") or {}),
+                ),
+            )
+            new_id = cur.fetchone()[0]
+        logger.info(f"drive_measurement id={new_id} label={row.get('label')}")
+        return int(new_id)
+    except Exception as e:
+        logger.error(f"log_drive_measurement failed: {e}")
+        return None
+
+
+def get_drive_measurements(limit: int = 20) -> list[dict]:
+    """Newest drive measurements first (for API / CLI)."""
+    try:
+        with db_cursor() as (conn, cur):
+            cur.execute(
+                """
+                SELECT id, recorded_at, label, duration_s, distance_m, energy_wh,
+                       avg_legs_w, peak_legs_w, avg_total_w,
+                       battery_start_pct, battery_end_pct,
+                       wheels_locked_after,
+                       hub_left_max_abs, hub_right_max_abs,
+                       rot_left_since_stop_deg, rot_right_since_stop_deg,
+                       details
+                FROM drive_measurements
+                ORDER BY recorded_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "id": r[0],
+                "recorded_at": _format_time(r[1]),
+                "label": r[2],
+                "duration_s": float(r[3]) if r[3] is not None else None,
+                "distance_m": float(r[4]) if r[4] is not None else None,
+                "energy_wh": float(r[5]) if r[5] is not None else None,
+                "avg_legs_w": float(r[6]) if r[6] is not None else None,
+                "peak_legs_w": float(r[7]) if r[7] is not None else None,
+                "avg_total_w": float(r[8]) if r[8] is not None else None,
+                "battery_start_pct": float(r[9]) if r[9] is not None else None,
+                "battery_end_pct": float(r[10]) if r[10] is not None else None,
+                "wheels_locked_after": r[11],
+                "hub_left_max_abs": float(r[12]) if r[12] is not None else None,
+                "hub_right_max_abs": float(r[13]) if r[13] is not None else None,
+                "rot_left_since_stop_deg": float(r[14]) if r[14] is not None else None,
+                "rot_right_since_stop_deg": float(r[15]) if r[15] is not None else None,
+                "details": r[16] or {},
+            })
+        return out
+    except Exception as e:
+        logger.error(f"get_drive_measurements failed: {e}")
+        return []

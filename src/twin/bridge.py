@@ -338,7 +338,30 @@ class DigitalTwinBridge:
             },
             "external_feed": tel.to_dict() if tel and self._is_external_active() else None,
             "teleop": self._export_teleop(),
+            # Top-level control snapshot for suites / agents (from Webots sensors)
+            "control_diag": self._export_control_diag(tel),
         }
+
+    def _export_control_diag(self, tel) -> dict | None:
+        """Pull ``sensors.control_diag`` from last external telemetry if live."""
+        if tel is None or not self._is_external_active():
+            return None
+        raw = tel.raw if isinstance(getattr(tel, "raw", None), dict) else {}
+        sensors = raw.get("sensors") if isinstance(raw.get("sensors"), dict) else {}
+        diag = sensors.get("control_diag")
+        if isinstance(diag, dict) and diag:
+            return diag
+        # Fallback: promote flat hub fields if present
+        if sensors.get("left_wheel_rad_s") is not None:
+            return {
+                "schema": "butlerbot_control_diag_v1_flat",
+                "hub_left_rad_s": sensors.get("left_wheel_rad_s"),
+                "hub_right_rad_s": sensors.get("right_wheel_rad_s"),
+                "yaw_rate_rad_s": sensors.get("yaw_rate"),
+                "abs_active": sensors.get("braking"),
+                "residual_spin": sensors.get("residual_spin"),
+            }
+        return None
 
     def _export_teleop(self) -> dict:
         """Active external drive / battery commands for Webots to poll.

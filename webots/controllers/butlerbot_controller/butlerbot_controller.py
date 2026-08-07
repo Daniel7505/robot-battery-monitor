@@ -1467,7 +1467,43 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     braking=abs_brake.active,
                 )
 
-            if tick % publish_every == 0:
+            # Publish faster while parking so suites/agents see control_diag live
+            publish_ticks = 1 if abs_brake.active else publish_every
+            if tick % publish_ticks == 0:
+                lock_l = _WHEEL_LOCK_POS.get("left_wheel")
+                lock_r = _WHEEL_LOCK_POS.get("right_wheel")
+                control_diag = {
+                    "schema": "butlerbot_control_diag_v1",
+                    "hub_left_rad_s": round(left_wv, 4),
+                    "hub_right_rad_s": round(right_wv, 4),
+                    "hub_diff_rad_s": round(abs(left_wv - right_wv), 4),
+                    "yaw_rate_rad_s": round(yaw_rate, 4),
+                    "gps_speed_m_s": round(raw_speed_m_s, 4),
+                    "gps_forward_m_s": round(raw_forward_m_s, 4),
+                    "cmd_left": round(left_v, 3),
+                    "cmd_right": round(right_v, 3),
+                    "cmd_source": (
+                        "abs_park"
+                        if abs_brake.active
+                        else (
+                            cached_api_source
+                            if api_driving
+                            else ("keyboard" if user_driving else ("auto" if auto_loop else "idle"))
+                        )
+                    ),
+                    "abs_active": abs_brake.active,
+                    "abs_spin_mode": bool(getattr(abs_brake, "_spin_mode", False)),
+                    "abs_elapsed_s": round(float(getattr(abs_brake, "_elapsed_s", 0.0)), 3),
+                    "abs_calm_hold_s": round(float(getattr(abs_brake, "_calm_hold_s", 0.0)), 3),
+                    "stop_epoch_seen": last_stop_epoch,
+                    "park_holdoff_s": round(park_holdoff_s, 3),
+                    "lock_left": None if lock_l is None else round(float(lock_l), 4),
+                    "lock_right": None if lock_r is None else round(float(lock_r), 4),
+                    "locks_engaged": lock_l is not None and lock_r is not None,
+                    "residual_spin": residual_spin,
+                    "phase": phase_name,
+                    "gait": gait,
+                }
                 payload = build_payload(
                     joints,
                     gait=gait,
@@ -1477,14 +1513,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     pose=_read_pose(gps, imu),
                     sensors={
                         "imu_roll": _safe_imu_roll(imu),
-                        "yaw_rate": round(yaw_rate, 3),
-                        "left_wheel_rad_s": round(left_wv, 3),
-                        "right_wheel_rad_s": round(right_wv, 3),
+                        "yaw_rate": round(yaw_rate, 4),
+                        "left_wheel_rad_s": round(left_wv, 4),
+                        "right_wheel_rad_s": round(right_wv, 4),
                         "thermal_c": round(thermal_c, 2),
                         "teleop_active": user_driving,
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
+                        # Full control snapshot for Build Grok / stop suites / agents
+                        "control_diag": control_diag,
                     },
                 )
                 result = publish_telemetry(payload, dashboard)

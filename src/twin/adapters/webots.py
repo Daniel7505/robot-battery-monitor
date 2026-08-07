@@ -110,6 +110,10 @@ class WebotsAdapter(TwinAdapter):
                 },
                 "pose": payload.get("pose", {}),
                 "timestamp": payload.get("timestamp"),
+                # Preserve controller sensors/control_diag (hub rates, ABS, locks)
+                # — stripping these made residual-spin diagnosis blind.
+                "sensors": payload.get("sensors") or {},
+                "joints": payload.get("joints") or [],
             },
             adapter=self.name,
         )

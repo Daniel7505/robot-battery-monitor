@@ -284,6 +284,26 @@ flowchart LR
 
 ---
 
+## Control diagnostics (for agents / Build Grok)
+
+Live Webots controller publishes ``sensors.control_diag`` each telemetry tick
+(faster while ABS park is active). Also mirrored at top-level on twin state:
+
+```
+GET http://127.0.0.1:5000/api/twin/state  →  control_diag { ... }
+```
+
+Useful fields: ``hub_left_rad_s``, ``hub_right_rad_s``, ``yaw_rate_rad_s``,
+``gps_speed_m_s``, ``cmd_left`` / ``cmd_right``, ``abs_active``, ``locks_engaged``,
+``stop_epoch_seen``, ``park_holdoff_s``.
+
+Stop quality suite (longer drives + hard park + diag print):
+
+```
+.\scripts\stop_suite.ps1
+.\scripts\stop_suite.ps1 -DriveSeconds 4 -LongDriveSeconds 6
+```
+
 ## North star vs implemented (honest scope)
 
 | Concept | Status in this repo |

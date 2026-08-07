@@ -23,22 +23,26 @@ Good for learning, testing, and eventually connecting to real robot hardware.
 
 ---
 
-## Code tour (for first-time readers)
+## Architecture (high level — start here for reviews)
 
-If you are opening this repo cold (code review, portfolio, or family showcase), start here. Modules have long docstrings that explain **role, data flow, and non-obvious design choices** — especially stop/spin handling and the Webots twin bridge.
+If you want to understand **how the system fits together** before reading code, open:
 
-| Start here | Why |
-|------------|-----|
-| `src/__init__.py` | Package map of the whole PMS |
-| `run_dashboard.py` | Process boot: DB → hardware → Flask dashboard |
-| `src/dashboard.py` | Operator UI + REST twin APIs + SocketIO broadcast |
-| `src/twin/bridge.py` | Arbitration: external Webots vs internal sim; `stop_epoch`; battery override |
-| `src/teleop_agent.py` | Pure drive/ABS/throttle math (testable without Webots) |
-| `src/onboard_agent.py` | Rules that intervene when the operator pushes power/heat too hard |
-| `src/hardware_ros2.py` | Production-like tick: allocate, safety, twin, agent, log |
-| `webots/.../butlerbot_controller.py` | Sim step loop, keyboard teleop, residual-spin fixes |
-| `config/config.yaml` | Knobs for twin, agent, mission, hardware profile |
-| `docs/STABILITY.md` | Why the robot used to spin after stop, and what fixed it |
+**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — pyramid breakdown, layered stack, PMS hub interactions, live-twin sequence, stop handshake, and deploy swimlanes (Mermaid, renders on GitHub).
+
+**Pyramid idea (one glance):** ButlerBot as a whole → operator UI / PMS / twin / hardware / data → channels, safety, agent, motion control → concrete files in this repo.
+
+```mermaid
+flowchart TB
+    ROBOT["ButlerBot system"]
+    ROBOT --> OPS["Operator dashboard"]
+    ROBOT --> PMS["Power Management System"]
+    ROBOT --> TWIN["Webots digital twin"]
+    ROBOT --> HW["Hardware abstraction"]
+    ROBOT --> DATA["Postgres history"]
+    PMS --> CH["Legs · Arms · Torso · Compute · Cooling"]
+    TWIN --> BR["HTTP Twin Bridge"]
+    BR <-->|"telemetry / state / commands"| PMS
+```
 
 **Data path when Webots is live:**
 
@@ -49,6 +53,26 @@ Browser            <--SocketIO battery_update----  dashboard broadcast loop
 ```
 
 **Do not save the Webots world on exit** — it can pollute `butlerbot.wbt` with sim state.
+
+---
+
+## Code tour (for first-time readers)
+
+If you are opening this repo cold (code review, portfolio, or family showcase), start here after the architecture page. Modules have long docstrings that explain **role, data flow, and non-obvious design choices** — especially stop/spin handling and the Webots twin bridge.
+
+| Start here | Why |
+|------------|-----|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams (pyramid, layers, sequences) |
+| `src/__init__.py` | Package map of the whole PMS |
+| `run_dashboard.py` | Process boot: DB → hardware → Flask dashboard |
+| `src/dashboard.py` | Operator UI + REST twin APIs + SocketIO broadcast |
+| `src/twin/bridge.py` | Arbitration: external Webots vs internal sim; `stop_epoch`; battery override |
+| `src/teleop_agent.py` | Pure drive/ABS/throttle math (testable without Webots) |
+| `src/onboard_agent.py` | Rules that intervene when the operator pushes power/heat too hard |
+| `src/hardware_ros2.py` | Production-like tick: allocate, safety, twin, agent, log |
+| `webots/.../butlerbot_controller.py` | Sim step loop, keyboard teleop, residual-spin fixes |
+| `config/config.yaml` | Knobs for twin, agent, mission, hardware profile |
+| `docs/STABILITY.md` | Why the robot used to spin after stop, and what fixed it |
 
 ---
 

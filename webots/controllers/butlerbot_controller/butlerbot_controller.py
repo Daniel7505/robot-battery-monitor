@@ -511,21 +511,30 @@ def _hard_zero_wheels(
         wv = rates.get(wheel)
         spinning = wv is not None and abs(float(wv)) > STOP_WHEEL_RAD_S * 2.5
 
-        # Phase 1 — active brake from measured hub rate (not GPS)
+        # Phase 1 — demand zero hub rate with full torque (velocity mode).
+        # Do NOT command continuous reverse ω — that held |ω|≈7.5 and Legs~27W
+        # forever (park never completed, locks never engaged).
         if spinning:
             try:
                 motor.setPosition(float("inf"))
-                # Oppose this hub's rotation; floor magnitude so creep still dies
-                mag = min(
-                    MOTOR_MAX_VELOCITY,
-                    max(4.0, abs(float(wv)) * 1.15),
-                )
-                motor.setVelocity(_clamp_motor_vel(-math.copysign(mag, float(wv))))
+                motor.setVelocity(0.0)
             except Exception:
                 pass
+            # Still latch target so phase-2 lock is ready as soon as |ω| drops
+            if sensors is not None:
+                sensor = sensors.get(f"{wheel}_sensor")
+                if sensor is not None:
+                    try:
+                        pos = float(sensor.getValue())
+                        if math.isfinite(pos) and (
+                            wheel not in _WHEEL_LOCK_POS or track
+                        ):
+                            _WHEEL_LOCK_POS[wheel] = pos
+                    except Exception:
+                        pass
             continue
 
-        # Phase 2 — position lock at fixed target
+        # Phase 2 — position lock at fixed target (hubs already near zero)
         if sensors is None:
             motor.setPosition(float("inf"))
             motor.setVelocity(0.0)
@@ -1609,9 +1618,10 @@ def _read_joints(
                 velocity = motor.getVelocity()
             except Exception:
                 velocity = 0.0
-        # Encoder can lag a step behind command; use cmd vel as floor while driving
+        cmd_v = 0.0
         if "wheel" in motor_name and cmd_wheel_v:
             cmd_v = abs(float(cmd_wheel_v.get(motor_name, 0.0)))
+            # Encoder can lag a step behind command; use cmd as floor while driving
             if cmd_v > abs(velocity):
                 velocity = math.copysign(cmd_v, velocity if abs(velocity) > 1e-6 else cmd_v)
         # Only synthesize ω from body speed when we have a non-zero wheel cmd floor
@@ -1620,10 +1630,28 @@ def _read_joints(
             "wheel" in motor_name
             and abs(velocity) < 0.15
             and speed_m_s > 0.06
-            and cmd_wheel_v
-            and abs(float(cmd_wheel_v.get(motor_name, 0.0))) > 0.05
+            and cmd_v > 0.05
         ):
             velocity = speed_m_s / max(WHEEL_RADIUS_M, 0.02)
+
+        # Parked / locked hubs: do NOT count position-hold torque or motor
+        # maxVelocity target as cruise load. That produced Legs~27W while pose
+        # was frozen (false high idle for agents / energy baseline).
+        wheel_parked = (
+            "wheel" in motor_name
+            and cmd_v < 0.05
+            and abs(velocity) < 0.15
+            and speed_m_s < 0.05
+        )
+        if wheel_parked:
+            joints.append({
+                "name": motor_name,
+                "position": round(position, 4),
+                "velocity": 0.0,
+                "torque": 0.0,
+                "power_w": 2.0,  # profile wheel idle_w
+            })
+            continue
 
         # Velocity-based torque model (Nm ≈ k·|ω|). Torque feedback is often 0
         # when not enabled in the world — never overwrite a useful estimate with 0.
@@ -1637,7 +1665,8 @@ def _read_joints(
             except Exception:
                 pass
         # Prefer per-wheel |ω| for power; body speed only when wheel vel is weak
-        joint_speed = speed_m_s if abs(velocity) < 0.2 else 0.0
+        # and we still have a drive command (parked path already returned).
+        joint_speed = speed_m_s if (abs(velocity) < 0.2 and cmd_v > 0.05) else 0.0
         power_w = _estimate_joint_power(
             motor_name, velocity, torque, speed_m_s=joint_speed
         )

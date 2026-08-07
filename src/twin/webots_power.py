@@ -144,6 +144,11 @@ def estimate_motor_power_w(
     is_wheel = "wheel" in name.lower()
     eff = float(spec.get("efficiency") or 0.0)
 
+    # Near-zero hub rate (and no body-speed override) → pure idle. Avoids
+    # counting position-hold / tiny encoder noise as cruise power.
+    if is_wheel and vel <= 0.05 and (speed_m_s is None or float(speed_m_s) <= 0.04):
+        return clamp_motor_power_w(name, idle_w, prof) if name else round(idle_w, 2)
+
     # Profile cruise curve for wheels: smooth |ω| (or body speed) → watts
     cruise_w = spec.get("cruise_w")
     if is_wheel and cruise_w is not None and vel > 0.02:

@@ -9,7 +9,7 @@ WorldInfo {
   contactProperties [
     ContactProperties {
       coulombFriction [
-        4
+        8
       ]
       bounce 0
       softCFM 0.00001
@@ -18,6 +18,8 @@ WorldInfo {
   info [
     "ButlerBot Neo — upright wheeled humanoid (abstract Unitree Neo proportions)"
     "Driven hip wheels + 4 passive corner casters for pitch/roll stability (gyro later)"
+    "TRACK (ENU): start line x=0.0 m  finish line x=5.0 m  length=5.0 m  y lane |y|<=0.6"
+    "GPS on robot reports world translation (same frame as these markers)"
   ]
 }
 
@@ -49,7 +51,142 @@ Floor {
   }
 }
 
+# =============================================================================
+# One-lane test track (known length + known world GPS / pose coordinates)
+# Coordinate system: ENU (x forward east, y north, z up)
+# Start line:  x = 0.0 m   (robot spawn on this line, facing +x)
+# Finish line: x = 5.0 m
+# Lane width:  |y| <= 0.6 m (paint edges)
+# Distance start→finish along lane center: 5.0 m exactly
+# =============================================================================
+
+# START line (green stripe) — GPS of stripe center: (0.0, 0.0, 0.01)
+# Visual only: NO boundingObject (paint must not block the robot)
+Transform {
+  translation 0 0 0.015
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.1 0.85 0.25
+        roughness 0.7
+        metalness 0
+        emissiveColor 0.05 0.2 0.05
+      }
+      geometry Box {
+        size 0.08 1.4 0.02
+      }
+    }
+  ]
+}
+
+# FINISH line (red stripe) — GPS of stripe center: (5.0, 0.0, 0.01)
+Transform {
+  translation 5 0 0.015
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.15 0.12
+        roughness 0.7
+        metalness 0
+        emissiveColor 0.25 0.04 0.03
+      }
+      geometry Box {
+        size 0.08 1.4 0.02
+      }
+    }
+  ]
+}
+
+# Lane edges + 1 m hash marks (visual only — Transform, no collision)
+Transform {
+  translation 2.5 0.65 0.008
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.95 0.95 0.2
+        roughness 0.8
+        metalness 0
+      }
+      geometry Box {
+        size 5.2 0.06 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 2.5 -0.65 0.008
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.95 0.95 0.2
+        roughness 0.8
+        metalness 0
+      }
+      geometry Box {
+        size 5.2 0.06 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 1 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 2 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 3 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 4 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+
 Robot {
+  # Spawn ON the start line (x=0), lane center y=0, facing +x (toward finish)
   translation 0 0 0
   rotation 0 0 1 0
   name "ButlerBot"

@@ -265,7 +265,10 @@ class AbsBrakeController:
         self.active = True
         self._elapsed_s = 0.0
         self._calm_hold_s = 0.0
-        # Keep existing lock targets if any; do not clear mid-spin (that chases).
+        # Fresh stop: clear lock targets so the next hard-zero latches *now*.
+        # Tracking current encoder every tick while freewheeling does nothing
+        # (zero position error) — that was the "never stops / horizon chase" bug.
+        _clear_wheel_locks()
         if _teleop is not None:
             self._spin_mode = _teleop.is_spin_brake(
                 last_left_v=last_left_v,
@@ -354,21 +357,21 @@ class AbsBrakeController:
         else:
             self._calm_hold_s = 0.0
 
-        # Track ONLY while hubs still spin. Freeze when hubs quiet.
-        hubs_still_spinning = (
-            abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
-            or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
-        )
+        # ALWAYS freeze latched targets during ABS (never track). Tracking
+        # freewheel = zero error = no brake torque = constant coast.
         _hard_zero_wheels(
             motors,
             sensors,
             left_wv=left_wv,
             right_wv=right_wv,
-            track=hubs_still_spinning,
+            track=False,
         )
 
-        # Pure residual circle (S2/S3): hubs mostly quiet, body still yaws, little
-        # GPS translation — safe to apply brief differential oppose without Tokyo drift.
+        # Pure residual circle after hubs quiet: brief yaw oppose pulse only.
+        hubs_still_spinning = (
+            abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
+            or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
+        )
         pure_spin = (
             self._spin_mode
             and not hubs_still_spinning
@@ -377,7 +380,7 @@ class AbsBrakeController:
         )
         if pure_spin:
             _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
-            # Next tick will re-park both hubs so oppose is a pulse, not a cruise.
+            # Re-assert freeze next tick after the pulse.
 
         calm_need = ABS_SPIN_CALM_HOLD_S if self._spin_mode else ABS_CALM_HOLD_S
         if self._calm_hold_s >= calm_need:
@@ -490,19 +493,16 @@ def _hard_zero_wheels(
     right_wv: float | None = None,
     track: bool = False,
 ) -> None:
-    """Freeze BOTH hubs every tick — track-then-hold park brake.
+    """Freeze BOTH hubs every tick at a *fixed* encoder target.
 
-    Live bugs this fights:
-      - Freewheel coast (velocity-0 without position lock)
-      - Tokyo drift: differential oppose while still translating
-      - Lock wind-up: freezing an old encoder while hubs still spin forces reverse
-        spin on one side → continuous yaw. While ``track=True``, latch follows the
-        live encoder; when calm, freeze the last angle.
+    Critical lesson (horizon chase):
+      If we re-latch the lock to the live encoder every step while freewheeling,
+      position error is ~0 and the motor applies ~0 torque → robot never stops.
+      Latch ONCE (or only when ``track=True`` explicitly), then hold that angle.
 
     CRITICAL: never call setPosition(NaN). WHEEL_HOLD_VEL ≤ world maxVelocity (15).
     """
     hold_vel = min(WHEEL_HOLD_VEL, MOTOR_MAX_VELOCITY)
-    rates = {"left_wheel": left_wv, "right_wheel": right_wv}
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
@@ -521,11 +521,8 @@ def _hard_zero_wheels(
                 motor.setPosition(float("inf"))
                 motor.setVelocity(0.0)
                 continue
-            wv = rates.get(wheel)
-            spinning = wv is not None and abs(wv) > STOP_WHEEL_RAD_S * 2.0
-            # Track while commanded to track, or while this hub is still spinning
-            # (prevents reverse-to-old-target torque that yaws the chassis).
-            if track or spinning or wheel not in _WHEEL_LOCK_POS:
+            # Latch once unless caller forces track (rare). Never chase freewheel.
+            if wheel not in _WHEEL_LOCK_POS or track:
                 _WHEEL_LOCK_POS[wheel] = pos
             hold = _WHEEL_LOCK_POS[wheel]
             motor.setPosition(hold)
@@ -1264,25 +1261,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_age_s = 0.0
 
                 if residual_hub or residual_yaw or residual_coast or pose_residual:
-                    hubs_spin = (
-                        abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
-                        or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
-                    )
-                    _hard_zero_wheels(
-                        motors,
-                        sensors,
-                        left_wv=left_wv,
-                        right_wv=right_wv,
-                        track=hubs_spin,
-                    )
-                    # Pure circle residual (not coasting): pulse yaw oppose, then re-park
-                    if (
-                        residual_yaw
-                        and not residual_coast
-                        and not hubs_spin
-                        and raw_speed_m_s < PURE_SPIN_OPPOSE_SPEED_M_S
-                    ):
-                        _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
+                    # Re-request park (clears locks + latches new targets). Do not
+                    # track freewheel here.
                     if not abs_brake.active:
                         why = []
                         if residual_hub:
@@ -1309,6 +1289,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_xy = gps_xy
                         pose_anchor_yaw = prev_yaw
                         pose_anchor_age_s = 0.0
+                    else:
+                        _hard_zero_wheels(
+                            motors,
+                            sensors,
+                            left_wv=left_wv,
+                            right_wv=right_wv,
+                            track=False,
+                        )
                 else:
                     _hard_zero_wheels(
                         motors,

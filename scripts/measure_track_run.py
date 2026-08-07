@@ -12,13 +12,14 @@ Drive continuously (re-assert cmd) until robot GPS x >= finish - tol,
 or timeout. Compare:
   * start pose vs start line GPS
   * end pose vs finish line GPS
-  * path length vs 5.0 m
-  * time vs min 5 s free roll
+  * path length vs track length (default 15 m)
+  * time vs free-roll budget
   * wheel odometry ∫ωr vs ground distance
+  * energy: ∫total_w dt, avg/peak Legs W, battery % delta
 
 Usage:
   python scripts/measure_track_run.py
-  python scripts/measure_track_run.py --wheel-v 5.5 --timeout 40
+  python scripts/measure_track_run.py --wheel-v 5.5 --timeout 60 --label energy_r1
 """
 
 from __future__ import annotations
@@ -35,10 +36,11 @@ from pathlib import Path
 # Defaults match webots/worlds/track_calibration.json and butlerbot.wbt paint
 START_X = 0.0
 START_Y = 0.0
-FINISH_X = 5.0
+FINISH_X = 15.0
 FINISH_Y = 0.0
-TRACK_LENGTH_M = 5.0
+TRACK_LENGTH_M = 15.0
 WHEEL_RADIUS_M = 0.08
+BATTERY_CAPACITY_WH = 480.0
 
 
 def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0) -> dict:
@@ -103,13 +105,40 @@ def load_calibration() -> dict:
     return {}
 
 
+def power_snapshot(st: dict) -> dict:
+    """Pull Legs W + total W + battery % from twin state for energy logs."""
+    feed = st.get("external_feed") or {}
+    bridge = st.get("bridge") or {}
+    pf = bridge.get("power_feed") or feed
+    draws = pf.get("channel_draws") or {}
+    if not draws:
+        draws = {
+            c.get("id"): c.get("draw_w")
+            for c in (st.get("channels") or [])
+            if isinstance(c, dict) and c.get("id")
+        }
+    legs = float(draws.get("Legs") or 0.0)
+    total = float(st.get("power", {}).get("total_draw_w") or 0.0)
+    if total <= 0 and draws:
+        total = float(sum(float(v or 0) for v in draws.values()))
+    bat = (st.get("robot") or {}).get("main_battery_pct")
+    if bat is None:
+        bat = feed.get("battery_pct")
+    return {
+        "legs_w": legs,
+        "total_w": total,
+        "battery_pct": None if bat is None else float(bat),
+        "draws": {str(k): float(v or 0) for k, v in draws.items()},
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--url", default="http://127.0.0.1:5000")
     ap.add_argument("--wheel-v", type=float, default=5.5, help="Commanded hub rad/s")
-    ap.add_argument("--timeout", type=float, default=45.0, help="Max seconds to reach finish")
-    ap.add_argument("--finish-tol", type=float, default=0.25, help="x within finish (m)")
-    ap.add_argument("--label", default="track_run_5m_v1")
+    ap.add_argument("--timeout", type=float, default=60.0, help="Max seconds to reach finish")
+    ap.add_argument("--finish-tol", type=float, default=0.35, help="x within finish (m)")
+    ap.add_argument("--label", default="track_run_15m_v1")
     ap.add_argument("--sample-hz", type=float, default=8.0)
     args = ap.parse_args()
     base = args.url.rstrip("/")
@@ -118,6 +147,7 @@ def main() -> int:
     finish_x = float((cal.get("finish") or {}).get("x_m", FINISH_X))
     track_len = float((cal.get("lane") or {}).get("length_m", TRACK_LENGTH_M))
     r = float(cal.get("wheel_radius_m", WHEEL_RADIUS_M))
+    capacity_wh = float(cal.get("battery_capacity_wh", BATTERY_CAPACITY_WH))
     v_cmd = args.wheel_v * r
     dt = 1.0 / max(args.sample_hz, 2.0)
 
@@ -142,14 +172,20 @@ def main() -> int:
 
     st0 = twin(base)
     x0, y0 = pose_xy(st0)
+    p0 = power_snapshot(st0)
     err_start = math.hypot(x0 - start_x, y0 - START_Y)
     print(f"  robot at start: x={x0:.4f} y={y0:.4f}  |err vs start line|={err_start:.4f} m")
+    print(
+        f"  energy start: battery={p0['battery_pct']}%  "
+        f"Legs={p0['legs_w']:.1f} W  total={p0['total_w']:.1f} W"
+    )
     if err_start > 0.5:
         print("  WARN: robot not near start line — reload world (spawn is x=0)")
 
     print("CONTINUOUS free roll toward finish (re-assert drive)...")
     print("  Watch Webots: green → red, one continuous push, then stop.")
     print("  Wheel sensors: ω time-series + ABS park engagements logged.")
+    print("  Energy: Legs W / total W / battery sampled each step.")
     t0 = time.time()
     last_assert = 0.0
     samples: list[dict] = []
@@ -159,6 +195,11 @@ def main() -> int:
     t_finish = None
     park_events: list[dict] = []
     prev_abs = False
+    energy_wh_integral = 0.0
+    legs_sum = 0.0
+    total_sum = 0.0
+    peak_legs = 0.0
+    n_power = 0
 
     while time.time() - t0 < args.timeout:
         t = time.time() - t0
@@ -178,6 +219,7 @@ def main() -> int:
         st = twin(base)
         x, y = pose_xy(st)
         d = diag(st)
+        pw = power_snapshot(st)
         wl = abs(float(d.get("hub_left_rad_s") or 0))
         wr = abs(float(d.get("hub_right_rad_s") or 0))
         v_odo = 0.5 * (wl + wr) * r
@@ -207,6 +249,12 @@ def main() -> int:
             )
         prev_abs = abs_on
 
+        legs_sum += pw["legs_w"]
+        total_sum += pw["total_w"]
+        peak_legs = max(peak_legs, pw["legs_w"])
+        n_power += 1
+        energy_wh_integral += pw["total_w"] * dt / 3600.0
+
         samples.append(
             {
                 "t": round(t, 3),
@@ -218,6 +266,9 @@ def main() -> int:
                 "omega_r": round(wr, 4),
                 "abs": abs_on,
                 "src": d.get("cmd_source"),
+                "legs_w": round(pw["legs_w"], 2),
+                "total_w": round(pw["total_w"], 2),
+                "battery_pct": pw["battery_pct"],
                 "locked_l": wL.get("locked"),
                 "locked_r": wR.get("locked"),
                 "rot_stop_l_deg": wL.get("rot_since_stop_deg"),
@@ -307,11 +358,32 @@ def main() -> int:
     print(f"  ABS on fraction    {100*abs_frac:.1f}% of samples after t>1s")
     print(f"  low-ω fraction     {100*low_omega:.1f}% (ω<0.5 while should cruise)")
 
+    p1 = power_snapshot(st1)
+    avg_legs = legs_sum / n_power if n_power else 0.0
+    avg_total = total_sum / n_power if n_power else 0.0
+    bat0 = p0.get("battery_pct")
+    bat1 = p1.get("battery_pct")
+    energy_from_bat = None
+    if bat0 is not None and bat1 is not None:
+        energy_from_bat = max(0.0, (bat0 - bat1) / 100.0 * capacity_wh)
+    # Prefer integral of measured draw (higher resolution than battery % quantize)
+    energy_wh = round(energy_wh_integral, 6)
+    print()
+    print("  ENERGY:")
+    print(f"    battery start→end   {bat0} % → {bat1} %")
+    if energy_from_bat is not None:
+        print(f"    energy (Δbattery)   {energy_from_bat:.4f} Wh  (cap {capacity_wh:.0f} Wh)")
+    print(f"    energy (∫total_w)   {energy_wh:.4f} Wh")
+    print(f"    avg Legs            {avg_legs:.2f} W   peak Legs {peak_legs:.2f} W")
+    print(f"    avg total system    {avg_total:.2f} W")
+    if run_t > 0:
+        print(f"    Wh per meter (∫)    {energy_wh / max(chord, 0.01):.5f} Wh/m")
+
     ok_start = err_start < 0.5
-    ok_finish = finished and err_finish < args.finish_tol + 0.15
+    ok_finish = finished and err_finish < args.finish_tol + 0.5
     ok_time = run_t >= 5.0
-    ok_dist = abs(chord - track_len) < 1.0 or abs(path_gps - track_len) < 1.0
-    ok_odo = abs(path_odo - track_len) < 1.5
+    ok_dist = abs(chord - track_len) < 2.5 or abs(path_gps - track_len) < 2.5
+    ok_odo = abs(path_odo - track_len) < 3.0
     # Free-roll continuity: few/no mid-run park engages
     ok_free_roll = len(park_events) == 0 and abs_frac < 0.05
 
@@ -321,20 +393,20 @@ def main() -> int:
     print(f"    reached finish line          : {'PASS' if finished else 'FAIL'}")
     print(f"    end x ≈ finish GPS           : {'PASS' if ok_finish else 'FAIL'}")
     print(f"    run time ≥ 5 s               : {'PASS' if ok_time else 'FAIL'}")
-    print(f"    body distance ≈ 5 m          : {'PASS' if ok_dist else 'FAIL'}")
-    print(f"    wheel odo ≈ 5 m              : {'PASS' if ok_odo else 'FAIL'} (slip-sensitive)")
+    print(f"    body distance ≈ track        : {'PASS' if ok_dist else 'FAIL'}")
+    print(f"    wheel odo ≈ track            : {'PASS' if ok_odo else 'FAIL'} (slip-sensitive)")
     print(f"    free-roll (no mid ABS park)  : {'PASS' if ok_free_roll else 'FAIL'}  << hop test")
 
     row = {
         "label": args.label,
         "duration_s": round(run_t, 3),
         "distance_m": round(chord, 4),
-        "energy_wh": None,
-        "avg_legs_w": None,
-        "peak_legs_w": None,
-        "avg_total_w": None,
-        "battery_start_pct": (st0.get("robot") or {}).get("main_battery_pct"),
-        "battery_end_pct": (st1.get("robot") or {}).get("main_battery_pct"),
+        "energy_wh": energy_wh,
+        "avg_legs_w": round(avg_legs, 3),
+        "peak_legs_w": round(peak_legs, 3),
+        "avg_total_w": round(avg_total, 3),
+        "battery_start_pct": bat0,
+        "battery_end_pct": bat1,
         "wheels_locked_after": (diag(st1).get("wheels") or {}).get("both_locked"),
         "hub_left_max_abs": max((s["omega"] for s in samples), default=0),
         "hub_right_max_abs": max((s["omega"] for s in samples), default=0),
@@ -357,6 +429,13 @@ def main() -> int:
             "abs_fraction_after_1s": abs_frac,
             "low_omega_fraction": low_omega,
             "free_roll_ok": ok_free_roll,
+            "energy_wh_integral": energy_wh,
+            "energy_wh_from_battery": energy_from_bat,
+            "battery_capacity_wh": capacity_wh,
+            "avg_legs_w": round(avg_legs, 3),
+            "peak_legs_w": round(peak_legs, 3),
+            "avg_total_w": round(avg_total, 3),
+            "wh_per_m": round(energy_wh / max(chord, 0.01), 6),
             "omega_sparkline": sparkline(omegas),
             "abs_sparkline": sparkline(abs_flags),
             "samples_n": len(samples),
@@ -364,7 +443,14 @@ def main() -> int:
             "samples_tail": samples[-6:],
             # Downsampled series for DB graphing later
             "omega_series": [
-                {"t": s["t"], "omega": s["omega"], "abs": s["abs"], "x": s["x"]}
+                {
+                    "t": s["t"],
+                    "omega": s["omega"],
+                    "abs": s["abs"],
+                    "x": s["x"],
+                    "legs_w": s.get("legs_w"),
+                    "total_w": s.get("total_w"),
+                }
                 for s in samples[:: max(1, len(samples) // 40)]
             ],
         },

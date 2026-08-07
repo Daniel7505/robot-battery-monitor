@@ -4,21 +4,59 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
 
 WorldInfo {
-  basicTimeStep 32
+  basicTimeStep 8
+  # Stiffer global solver helps cylinder-wheel floor contact stay continuous
+  # (intermittent contact → GPS speed flicker + body crawl under slip).
+  ERP 0.6
+  CFM 1e-9
   coordinateSystem "ENU"
   contactProperties [
+    # Drive hubs ↔ floor: sticky rubber-like (named materials on wheel solids)
     ContactProperties {
+      material1 "drive_wheel"
+      material2 "default"
       coulombFriction [
-        8
+        80
+      ]
+      forceDependentSlip [
+        0
+      ]
+      frictionRotation 1 1
+      bounce 0
+      softCFM 1e-6
+      softERP 0.7
+    }
+    # Casters ↔ floor: support pitch/roll but barely resist slide (no scrub drag)
+    ContactProperties {
+      material1 "caster"
+      material2 "default"
+      coulombFriction [
+        0.08
+      ]
+      forceDependentSlip [
+        1
       ]
       bounce 0
-      softCFM 0.00001
+      softCFM 1e-5
+      softERP 0.5
+    }
+    # Fallback any-any (safety net)
+    ContactProperties {
+      coulombFriction [
+        40
+      ]
+      forceDependentSlip [
+        0
+      ]
+      bounce 0
+      softCFM 1e-6
+      softERP 0.6
     }
   ]
   info [
     "ButlerBot Neo — upright wheeled humanoid (abstract Unitree Neo proportions)"
     "Driven hip wheels + 4 passive corner casters for pitch/roll stability (gyro later)"
-    "TRACK (ENU): start line x=0.0 m  finish line x=5.0 m  length=5.0 m  y lane |y|<=0.6"
+    "TRACK (ENU): start line x=0.0 m  finish line x=15.0 m  length=15.0 m  y lane |y|<=0.6"
     "GPS on robot reports world translation (same frame as these markers)"
   ]
 }
@@ -55,13 +93,13 @@ Floor {
 # One-lane test track (known length + known world GPS / pose coordinates)
 # Coordinate system: ENU (x forward east, y north, z up)
 # Start line:  x = 0.0 m   (robot spawn on this line, facing +x)
-# Finish line: x = 5.0 m
+# Finish line: x = 15.0 m  (3× original 5 m lane for energy repeatability runs)
 # Lane width:  |y| <= 0.6 m (paint edges)
-# Distance start→finish along lane center: 5.0 m exactly
+# Distance start→finish along lane center: 15.0 m exactly
+# Visual only: NO boundingObject on paint (must not block the robot)
 # =============================================================================
 
-# START line (green stripe) — GPS of stripe center: (0.0, 0.0, 0.01)
-# Visual only: NO boundingObject (paint must not block the robot)
+# START line (green) — GPS (0.0, 0.0)
 Transform {
   translation 0 0 0.015
   children [
@@ -79,9 +117,9 @@ Transform {
   ]
 }
 
-# FINISH line (red stripe) — GPS of stripe center: (5.0, 0.0, 0.01)
+# FINISH line (red) — GPS (15.0, 0.0)
 Transform {
-  translation 5 0 0.015
+  translation 15 0 0.015
   children [
     Shape {
       appearance PBRAppearance {
@@ -97,9 +135,9 @@ Transform {
   ]
 }
 
-# Lane edges + 1 m hash marks (visual only — Transform, no collision)
+# Lane edges (center x=7.5, length 15.2 m)
 Transform {
-  translation 2.5 0.65 0.008
+  translation 7.5 0.65 0.008
   children [
     Shape {
       appearance PBRAppearance {
@@ -108,13 +146,13 @@ Transform {
         metalness 0
       }
       geometry Box {
-        size 5.2 0.06 0.01
+        size 15.2 0.06 0.01
       }
     }
   ]
 }
 Transform {
-  translation 2.5 -0.65 0.008
+  translation 7.5 -0.65 0.008
   children [
     Shape {
       appearance PBRAppearance {
@@ -123,39 +161,13 @@ Transform {
         metalness 0
       }
       geometry Box {
-        size 5.2 0.06 0.01
+        size 15.2 0.06 0.01
       }
     }
   ]
 }
-Transform {
-  translation 1 0 0.01
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.9 0.9 0.95
-        roughness 0.9
-      }
-      geometry Box {
-        size 0.04 0.5 0.01
-      }
-    }
-  ]
-}
-Transform {
-  translation 2 0 0.01
-  children [
-    Shape {
-      appearance PBRAppearance {
-        baseColor 0.9 0.9 0.95
-        roughness 0.9
-      }
-      geometry Box {
-        size 0.04 0.5 0.01
-      }
-    }
-  ]
-}
+
+# Hash marks every 3 m (3, 6, 9, 12)
 Transform {
   translation 3 0 0.01
   children [
@@ -171,7 +183,35 @@ Transform {
   ]
 }
 Transform {
-  translation 4 0 0.01
+  translation 6 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 9 0 0.01
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.9 0.9 0.95
+        roughness 0.9
+      }
+      geometry Box {
+        size 0.04 0.5 0.01
+      }
+    }
+  ]
+}
+Transform {
+  translation 12 0 0.01
   children [
     Shape {
       appearance PBRAppearance {
@@ -190,6 +230,8 @@ Robot {
   translation 0 0 0
   rotation 0 0 1 0
   name "ButlerBot"
+  # Supervisor enables soft grip coupling (body vel ↔ wheel odo) for tire fidelity
+  supervisor TRUE
   controller "butlerbot_controller"
   controllerArgs [
     "--dashboard-url=http://127.0.0.1:5000"
@@ -215,14 +257,18 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 0.17 0.08
-        # Higher damping helps kill residual yaw after in-place turn (S2/S3).
-        dampingConstant 6.5
+        # Low viscous damping for free-roll traction. High damping (was 6.5) forced
+        # τ≈damping*ω through the tire contact every step → continuous slip
+        # (body GPS crawl while encoders held 5.5 rad/s). Residual spin after turns
+        # is killed by ABS hard-zero / dual-hub lock, not joint viscous drag.
+        dampingConstant 0.15
       }
       device [
         RotationalMotor {
           name "left_wheel"
           maxVelocity 15
-          maxTorque 50
+          # Pololu 37D 50:1 stall ≈ 2.06 N·m; slight margin for ABS hold
+          maxTorque 2.5
         }
         PositionSensor {
           name "left_wheel_sensor"
@@ -231,6 +277,7 @@ Robot {
       endPoint Solid {
         name "left_wheel_solid"
         translation 0 0.17 0.08
+        contactMaterial "drive_wheel"
         children [
           Pose {
             rotation 1 0 0 1.5708
@@ -240,7 +287,7 @@ Robot {
                   baseColor 0.08 0.08 0.1
                 }
                 geometry Cylinder {
-                  height 0.03
+                  height 0.08
                   radius 0.08
                 }
               }
@@ -248,17 +295,18 @@ Robot {
           }
         ]
         boundingObject Cylinder {
-          height 0.03
+          height 0.08
           radius 0.08
         }
         physics Physics {
           density -1
-          mass 0.6
+          # 80 mm rubber tire+hub ≈ 0.085 kg (profile geometry.wheel_mass_kg)
+          mass 0.085
           centerOfMass [
             0 0 0
           ]
           inertiaMatrix [
-            6.4e-04 1.15e-03 6.4e-04
+            1.4e-04 2.7e-04 1.4e-04
             0 0 0
           ]
         }
@@ -268,13 +316,13 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 -0.17 0.08
-        dampingConstant 6.5
+        dampingConstant 0.15
       }
       device [
         RotationalMotor {
           name "right_wheel"
           maxVelocity 15
-          maxTorque 50
+          maxTorque 2.5
         }
         PositionSensor {
           name "right_wheel_sensor"
@@ -283,6 +331,7 @@ Robot {
       endPoint Solid {
         name "right_wheel_solid"
         translation 0 -0.17 0.08
+        contactMaterial "drive_wheel"
         children [
           Pose {
             rotation 1 0 0 1.5708
@@ -292,7 +341,7 @@ Robot {
                   baseColor 0.08 0.08 0.1
                 }
                 geometry Cylinder {
-                  height 0.03
+                  height 0.08
                   radius 0.08
                 }
               }
@@ -300,17 +349,17 @@ Robot {
           }
         ]
         boundingObject Cylinder {
-          height 0.03
+          height 0.08
           radius 0.08
         }
         physics Physics {
           density -1
-          mass 0.6
+          mass 0.085
           centerOfMass [
             0 0 0
           ]
           inertiaMatrix [
-            6.4e-04 1.15e-03 6.4e-04
+            1.4e-04 2.7e-04 1.4e-04
             0 0 0
           ]
         }
@@ -318,12 +367,13 @@ Robot {
     }
     DEF FRONT_LEFT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor 0.11 0.13 0.04
+        anchor 0.11 0.13 0.046
         dampingConstant 0.8
       }
       endPoint Solid {
         name "front_left_caster"
-        translation 0.11 0.13 0.04
+        translation 0.11 0.13 0.046
+        contactMaterial "caster"
         children [
           Shape {
             appearance PBRAppearance {
@@ -348,12 +398,13 @@ Robot {
     }
     DEF FRONT_RIGHT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor 0.11 -0.13 0.04
+        anchor 0.11 -0.13 0.046
         dampingConstant 0.8
       }
       endPoint Solid {
         name "front_right_caster"
-        translation 0.11 -0.13 0.04
+        translation 0.11 -0.13 0.046
+        contactMaterial "caster"
         children [
           Shape {
             appearance PBRAppearance {
@@ -378,12 +429,13 @@ Robot {
     }
     DEF REAR_LEFT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor -0.11 0.13 0.04
+        anchor -0.11 0.13 0.046
         dampingConstant 0.8
       }
       endPoint Solid {
         name "rear_left_caster"
-        translation -0.11 0.13 0.04
+        translation -0.11 0.13 0.046
+        contactMaterial "caster"
         children [
           Shape {
             appearance PBRAppearance {
@@ -408,12 +460,13 @@ Robot {
     }
     DEF REAR_RIGHT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor -0.11 -0.13 0.04
+        anchor -0.11 -0.13 0.046
         dampingConstant 0.8
       }
       endPoint Solid {
         name "rear_right_caster"
-        translation -0.11 -0.13 0.04
+        translation -0.11 -0.13 0.046
+        contactMaterial "caster"
         children [
           Shape {
             appearance PBRAppearance {
@@ -664,28 +717,10 @@ Robot {
         }
       }
     }
-    DEF HUD Display {
-      translation 0 0 0.62
-      children [
-        Shape {
-          appearance PBRAppearance {
-            baseColorMap ImageTexture {
-            }
-            roughness 1
-            metalness 0
-            emissiveColor 0.1 0.12 0.16
-          }
-          geometry Plane {
-            size 0.64 0.36
-          }
-        }
-      ]
-      name "hud"
-      width 320
-      height 180
-    }
     GPS {
       name "gps"
+      accuracy 0
+      resolution -1
     }
     InertialUnit {
       name "imu"
@@ -693,12 +728,13 @@ Robot {
   ]
   physics Physics {
     density -1
-    mass 4.5
+    # Chassis class mass from hardware profile (geometry.chassis_mass_kg ≈ 3.2)
+    mass 3.2
     centerOfMass [
       0 0 0.12
     ]
     inertiaMatrix [
-      0.07 0.08 0.10
+      0.055 0.062 0.078
       0 0 0
     ]
   }

@@ -1,8 +1,9 @@
 {
   "schema": "butlerbot_track_v1",
   "coordinate_system": "ENU",
-  "description": "One-lane track painted in butlerbot.wbt — start at x=0, finish at x=5",
+  "description": "One-lane track painted in butlerbot.wbt — start at x=0, finish at x=15 (3x original 5 m)",
   "wheel_radius_m": 0.08,
+  "battery_capacity_wh": 480.0,
   "start": {
     "name": "track_start_line",
     "x_m": 0.0,
@@ -12,7 +13,7 @@
   },
   "finish": {
     "name": "track_finish_line",
-    "x_m": 5.0,
+    "x_m": 15.0,
     "y_m": 0.0,
     "z_m": 0.01,
     "color": "red"
@@ -20,7 +21,7 @@
   "lane": {
     "y_min_m": -0.6,
     "y_max_m": 0.6,
-    "length_m": 5.0
+    "length_m": 15.0
   },
   "robot_spawn": {
     "x_m": 0.0,
@@ -30,8 +31,8 @@
     "note": "On start line, facing +x toward finish"
   },
   "pass_criteria": {
-    "finish_x_tolerance_m": 0.25,
+    "finish_x_tolerance_m": 0.35,
     "lane_y_tolerance_m": 0.7,
-    "min_run_time_s": 5.0
+    "min_run_time_s": 10.0
   }
 }

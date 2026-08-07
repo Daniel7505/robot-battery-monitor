@@ -57,10 +57,11 @@ def test_brake_complete_when_slow_enough():
     assert abs_brake_complete(forward_m_s=0.2, speed_m_s=0.2) is False
 
 
-def test_battery_drain_slow_for_teleop():
+def test_battery_drain_real_world_scale():
+    """40 W for 30 s on 480 Wh ≈ 0.033 Wh → ~0.0069 % (no demo accel)."""
     drop = sum(battery_drain_pct(40.0, 0.032, drain_scale=1.0) for _ in range(int(30 / 0.032)))
-    assert drop < 2.0
-    assert drop > 0.0
+    assert 0.005 < drop < 0.02
+    assert BATTERY_DRAIN_SCALE == 1.0
 
 
 def test_latch_uses_last_forward_drive_after_turn():
@@ -127,4 +128,6 @@ def test_battery_drain_scales_with_draw():
     low = battery_drain_pct(20.0, 1.0)
     high = battery_drain_pct(80.0, 1.0)
     assert high > low * 3
-    assert BATTERY_DRAIN_SCALE <= 15.0
+    assert BATTERY_DRAIN_SCALE == 1.0
+    # Exact physics: 480 W for 1 s on 480 Wh = 0.1 %
+    assert abs(battery_drain_pct(480.0, 1.0) - 0.1) < 1e-9

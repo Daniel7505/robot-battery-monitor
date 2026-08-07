@@ -31,11 +31,16 @@ from datetime import datetime, timezone
 
 from src.hardware_profile import (
     battery_capacity_wh,
+    battery_c_rate_limits,
+    battery_draw_c_rate,
     clamp_motor_power_w,
     get_active_profile,
+    motor_driver_spec,
     motor_idle_and_scale,
+    motor_part_meta,
     motor_spec,
     normalize_phase_name,
+    wheel_mass_kg,
     wheel_radius_m,
 )
 
@@ -143,6 +148,13 @@ def estimate_motor_power_w(
     spec = motor_spec(prof, name) if name else {}
     is_wheel = "wheel" in name.lower()
     eff = float(spec.get("efficiency") or 0.0)
+    # Real-part electrical limits from datasheet (optional fields)
+    free_run_w = float(spec.get("free_run_w") or 0.0)
+    stall_elec_w = 0.0
+    if spec.get("stall_current_a") is not None and spec.get("voltage_v") is not None:
+        stall_elec_w = float(spec["stall_current_a"]) * float(spec["voltage_v"])
+    elif spec.get("peak_power_w") is not None:
+        stall_elec_w = float(spec["peak_power_w"])
 
     # Near-zero hub rate (and no body-speed override) → pure idle. Avoids
     # counting position-hold / tiny encoder noise as cruise power.
@@ -164,10 +176,12 @@ def estimate_motor_power_w(
         # Cap load fraction so full teleop does not explode past soft headroom
         frac = min(1.25, frac)
         cruise = float(cruise_w)
+        # Floor partial-spin draw near free-run when datasheet provides it
+        base = max(idle_w, free_run_w * min(1.0, frac) if free_run_w > 0 else idle_w)
         if frac <= 1.0:
             # Partial load: slightly superlinear (iron/copper grow with speed)
             shape = frac ** 1.25
-            raw = idle_w + (cruise - idle_w) * shape
+            raw = base + (cruise - base) * shape
         else:
             # Over-cruise: soft approach to ~1.25× cruise (not channel peak)
             over = min(1.0, (frac - 1.0) / 0.25)
@@ -185,6 +199,8 @@ def estimate_motor_power_w(
             spec.get("curve_top_w")
             or min(float(spec.get("cont_w") or cruise * 1.6), cruise * 1.45)
         )
+        if stall_elec_w > 0:
+            curve_top = min(curve_top, stall_elec_w * 0.45)  # stay off stall burn
         raw = min(raw, curve_top)
     else:
         mechanical = tau * vel
@@ -355,6 +371,27 @@ def aggregate_channel_draws(
                 else:
                     channels[ch_id] = round(channels[ch_id] * min(effective, 1.10), 2)
 
+    # H-bridge losses: motor electrical → 12 V bus (driver η)
+    driver = motor_driver_spec(prof)
+    if driver and "Legs" in channels:
+        eff_d = float(driver.get("efficiency") or 1.0)
+        eff_d = max(0.5, min(1.0, eff_d))
+        idle_d = float(driver.get("idle_w") or 0.0)
+        legs_motors = float(channels["Legs"])
+        legs_bus = legs_motors / eff_d + idle_d
+        cont_bus = driver.get("continuous_bus_w")
+        if cont_bus is not None:
+            legs_bus = min(legs_bus, float(cont_bus))
+        channels["Legs"] = round(legs_bus, 2)
+
+    # DC-DC 48→12: pack-side drive power = 12 V bus / converter η + idle
+    dcdc = prof.get("dc_dc_48_12") or {}
+    if dcdc and "Legs" in channels:
+        eff_c = float(dcdc.get("efficiency") or 1.0)
+        eff_c = max(0.5, min(1.0, eff_c))
+        idle_c = float(dcdc.get("idle_w") or 0.0)
+        channels["Legs"] = round(float(channels["Legs"]) / eff_c + idle_c, 2)
+
     for ch_id, total in list(channels.items()):
         cap = channel_caps.get(ch_id, {})
         max_w = cap.get("max_draw_w")
@@ -431,10 +468,92 @@ def build_webots_telemetry(
             "mode": "wheeled",
             "wheel_radius_m": wheel_radius_m(prof),
         },
+        # Real-part BOM trace (motors, driver, pack, wheels)
+        "hardware_parts": {
+            "left_wheel": motor_part_meta("left_wheel", prof),
+            "right_wheel": motor_part_meta("right_wheel", prof),
+            "motor_driver": {
+                k: v
+                for k, v in (motor_driver_spec(prof) or {}).items()
+                if k
+                in (
+                    "part_number",
+                    "vendor",
+                    "chip",
+                    "product_url",
+                    "datasheet_url",
+                    "continuous_current_a_per_ch",
+                    "peak_current_a_per_ch",
+                    "efficiency",
+                    "continuous_bus_w",
+                )
+            },
+            "dc_dc_48_12": {
+                k: v
+                for k, v in (prof.get("dc_dc_48_12") or {}).items()
+                if k
+                in (
+                    "label",
+                    "part_class",
+                    "vendor",
+                    "product_url",
+                    "efficiency",
+                    "continuous_power_w",
+                    "idle_w",
+                    "mass_kg",
+                )
+            },
+            "battery": {
+                k: v
+                for k, v in (prof.get("battery") or {}).items()
+                if k
+                in (
+                    "label",
+                    "chemistry",
+                    "capacity_wh",
+                    "capacity_ah",
+                    "nominal_voltage_v",
+                    "continuous_c_rate",
+                    "peak_c_rate",
+                    "continuous_discharge_a",
+                    "peak_discharge_a",
+                    "continuous_power_w",
+                    "mass_kg",
+                    "product_url",
+                )
+            },
+            "compute": {
+                k: v
+                for k, v in (prof.get("compute") or {}).items()
+                if k
+                in (
+                    "label",
+                    "model",
+                    "vendor",
+                    "product_url",
+                    "idle_w",
+                    "active_w",
+                    "peak_w",
+                    "mass_kg",
+                )
+            },
+            "wheel_tire": (prof.get("geometry") or {}).get("tire") or {
+                "mass_kg": wheel_mass_kg(prof),
+                "diameter_mm": 1000 * wheel_radius_m(prof) * 2,
+            },
+            "chassis": (prof.get("geometry") or {}).get("chassis")
+            or {
+                "mass_kg": (prof.get("geometry") or {}).get("chassis_mass_kg"),
+            },
+        },
         "pose": pose or {},
         "sensors": sensors or {},
         "power": {
             "total_draw_w": round(sum(channel_draws.values()), 1),
+            "pack_c_rate": round(
+                battery_draw_c_rate(sum(channel_draws.values()), prof), 3
+            ),
+            "pack_limits": battery_c_rate_limits(prof),
             "channel_draws": channel_draws,
             "hardware_profile": prof.get("profile_id"),
         },

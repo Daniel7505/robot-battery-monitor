@@ -42,6 +42,11 @@ import traceback
 
 from controller import Robot, Motor, PositionSensor, GPS, InertialUnit, Keyboard, Display
 
+try:
+    from controller import Supervisor
+except ImportError:  # pragma: no cover - Webots always provides Supervisor
+    Supervisor = None  # type: ignore[misc, assignment]
+
 from twin_publisher import (
     battery_from_twin_state,
     build_payload,
@@ -102,9 +107,20 @@ SENSOR_NAMES = [
 
 # Must stay ≤ RotationalMotor maxVelocity in butlerbot.wbt (wheels = 15).
 MOTOR_MAX_VELOCITY = 15.0
+# Pololu 37D 50:1 (#4753) stall ≈ 2.06 N·m @ 12 V (datasheet extrapolated).
+# Available torque slightly above stall so ABS park can still hold hubs.
+# Must match butlerbot.wbt RotationalMotor maxTorque and hardware profile.
+WHEEL_STALL_TORQUE_NM = 2.06
+WHEEL_AVAILABLE_TORQUE_NM = 2.5
 MAX_WHEEL_V = 10.0
 MAX_JOINT_V = 1.8
 WHEEL_RADIUS_M = 0.08
+# Differential track width (left/right wheel y anchors ±0.17 m)
+WHEEL_TRACK_M = 0.34
+# Soft grip coupling gain while intentionally driving (0=ODE only, 1=full odo lock).
+# Thin cylinder tires in ODE under-deliver continuous contact; this pulls body linear
+# velocity toward wheel odometry so track free-roll matches v=ωr without hop/spin.
+SOFT_GRIP_GAIN = 0.55
 MAX_BRAKE_WHEEL_V = 12.0
 MIN_BRAKE_WHEEL_V = 1.5
 # Linear "stopped" gate — must be tight; looser values completed ABS while coasting.
@@ -163,14 +179,20 @@ HUD_H = 180
 
 
 class SpeedEstimator:
-    """Finite-difference body speed from GPS samples.
+    """Body speed from GPS with EMA smoothing.
 
-    Returns translation speed only — yaw-in-place is invisible here and must
-    be caught via wheel encoders / IMU in the stop path.
+    Prefer ``GPS.getSpeed()`` (physics speed) when available; fall back to
+    finite-difference of position. A short EMA removes the classic
+    alternating 0.00 / 0.2 m/s flicker from single-step FD under light slip
+    while still tracking true body motion for residual-park logic.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, ema_tau_s: float = 0.12) -> None:
         self._prev_pos: list[float] | None = None
+        self._ema_speed = 0.0
+        self._ema_forward = 0.0
+        self._ema_tau_s = ema_tau_s
+        self._have_ema = False
 
     def estimate_motion(self, gps: GPS, dt: float) -> tuple[float, float]:
         """Return (scalar speed m/s, signed forward speed along +X)."""
@@ -178,20 +200,50 @@ class SpeedEstimator:
             pos = list(gps.getValues())
         except Exception:
             return 0.0, 0.0
+
+        fd_speed = 0.0
+        fd_forward = 0.0
         if self._prev_pos is not None and dt > 0:
             dx = pos[0] - self._prev_pos[0]
             dy = pos[1] - self._prev_pos[1]
             inv_dt = 1.0 / max(dt, 0.001)
-            forward = dx * inv_dt
-            speed = math.sqrt(dx * dx + dy * dy) * inv_dt
-            self._prev_pos = pos
-            if _teleop is not None:
-                return _teleop.sanitize_motion(speed, forward)
-            speed = min(speed, 0.85)
-            forward = max(-0.85, min(0.85, forward))
-            return round(speed, 3), round(forward, 3)
+            fd_forward = dx * inv_dt
+            fd_speed = math.sqrt(dx * dx + dy * dy) * inv_dt
         self._prev_pos = pos
-        return 0.0, 0.0
+
+        # Physics speed from Webots when available (less noisy than 1-step FD)
+        speed = fd_speed
+        try:
+            phys = float(gps.getSpeed())
+            if math.isfinite(phys) and phys >= 0.0:
+                speed = phys
+        except Exception:
+            pass
+
+        # Preserve forward sign from FD (getSpeed is scalar)
+        if abs(fd_forward) > 1e-6:
+            forward = math.copysign(speed, fd_forward)
+        else:
+            forward = fd_forward
+
+        # EMA over ~ema_tau_s
+        if dt > 0 and self._ema_tau_s > 0:
+            alpha = 1.0 - math.exp(-dt / self._ema_tau_s)
+            if not self._have_ema:
+                self._ema_speed = speed
+                self._ema_forward = forward
+                self._have_ema = True
+            else:
+                self._ema_speed += alpha * (speed - self._ema_speed)
+                self._ema_forward += alpha * (forward - self._ema_forward)
+            speed = self._ema_speed
+            forward = self._ema_forward
+
+        if _teleop is not None:
+            return _teleop.sanitize_motion(speed, forward)
+        speed = min(max(0.0, speed), 0.85)
+        forward = max(-0.85, min(0.85, forward))
+        return round(speed, 3), round(forward, 3)
 
     def estimate(self, gps: GPS, dt: float) -> float:
         speed, _ = self.estimate_motion(gps, dt)
@@ -475,8 +527,8 @@ def _clear_wheel_locks() -> None:
 def _enable_full_wheel_torque(motor: Motor) -> None:
     """Raise torque/force caps so Stop can fight residual hub spin (both sides)."""
     for attr, value in (
-        ("setAvailableTorque", 50.0),
-        ("setAvailableForce", 50.0),
+        ("setAvailableTorque", WHEEL_AVAILABLE_TORQUE_NM),
+        ("setAvailableForce", WHEEL_AVAILABLE_TORQUE_NM),
     ):
         if hasattr(motor, attr):
             try:
@@ -640,6 +692,59 @@ def _gps_xy(gps: GPS | None) -> tuple[float, float] | None:
         return float(vals[0]), float(vals[1])
     except Exception:
         return None
+
+
+def _apply_soft_grip(
+    robot: Robot,
+    *,
+    left_wv: float,
+    right_wv: float,
+    imu: InertialUnit | None,
+    gain: float = SOFT_GRIP_GAIN,
+) -> None:
+    """Blend body linear (+ yaw) velocity toward wheel-odometry kinematics.
+
+    ODE thin-cylinder tire contacts often deliver intermittent force, so hubs
+    can hold commanded ω while the body crawls. While the operator/API is
+    intentionally driving, softly couple body velocity to v=ωr so free-roll
+    matches the track budget. Disabled during ABS park / idle.
+    """
+    if gain <= 0.0 or not hasattr(robot, "getSelf"):
+        return
+    try:
+        node = robot.getSelf()
+    except Exception:
+        return
+    if node is None:
+        return
+    try:
+        v_odo = 0.5 * (left_wv + right_wv) * WHEEL_RADIUS_M
+        # Yaw rate for differential: ω_z ≈ (ω_r - ω_l) * r / track
+        yaw_rate_odo = (right_wv - left_wv) * WHEEL_RADIUS_M / max(WHEEL_TRACK_M, 0.05)
+        yaw = 0.0
+        if imu is not None:
+            try:
+                yaw = float(imu.getRollPitchYaw()[2])
+            except Exception:
+                yaw = 0.0
+        tx = v_odo * math.cos(yaw)
+        ty = v_odo * math.sin(yaw)
+        vel = node.getVelocity()
+        if vel is None or len(vel) < 6:
+            return
+        g = max(0.0, min(1.0, float(gain)))
+        new_vel = [
+            (1.0 - g) * float(vel[0]) + g * tx,
+            (1.0 - g) * float(vel[1]) + g * ty,
+            float(vel[2]),
+            float(vel[3]),
+            float(vel[4]),
+            (1.0 - g) * float(vel[5]) + g * yaw_rate_odo,
+        ]
+        node.setVelocity(new_vel)
+    except Exception:
+        # Grip assist is best-effort; never break the control loop
+        return
 
 
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
@@ -1449,22 +1554,28 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 gait = "drive"
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
-            if abs_brake.active:
-                drain_scale = 0.1
-            elif moving or turning:
-                drain_scale = 1.0 if (user_driving or turning) else 0.2
-            else:
-                drain_scale = 0.05
+            # Real pack physics: always full P·dt drain (no demo accel / idle fudge).
+            # total_draw already includes driver + DC-DC path losses when twin_power is used.
             if _teleop is not None:
+                cap_wh = float(
+                    getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
+                )
                 battery_pct = max(
                     5.0,
                     battery_pct
-                    - _teleop.battery_drain_pct(total_draw, dt, drain_scale=drain_scale),
+                    - _teleop.battery_drain_pct(
+                        total_draw,
+                        dt,
+                        capacity_wh=cap_wh,
+                        scale=1.0,
+                        drain_scale=1.0,
+                    ),
                 )
             else:
                 battery_pct = max(
                     5.0,
-                    battery_pct - (total_draw * dt) / (480.0 * 3600.0) * 100.0 * 50.0 * drain_scale,
+                    battery_pct
+                    - (total_draw * dt) / (480.0 * 3600.0) * 100.0,
                 )
             thermal_c = _update_thermal(thermal_c, total_draw, dt, motion_factor=motion_factor)
 
@@ -1480,10 +1591,36 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     _set_drive(motors, left_v, right_v, 1.0)
                 else:
                     _apply_wheel_command(motors, sensors, left_v, right_v, throttle_factor)
+                # Soft no-slip coupling while intentionally driving (not during ABS)
+                _apply_soft_grip(
+                    robot,
+                    left_wv=left_wv,
+                    right_wv=right_wv,
+                    imu=imu,
+                    gain=SOFT_GRIP_GAIN,
+                )
 
             if user_driving:
                 drive_log_elapsed += dt
+                # Interval body speed from pose (stable) — not single-step FD flicker
+                try:
+                    _log_pos = list(gps.getValues())
+                except Exception:
+                    _log_pos = None
                 if drive_log_elapsed >= 2.0:
+                    odo_v = 0.5 * (abs(left_wv) + abs(right_wv)) * WHEEL_RADIUS_M
+                    avg_body = speed_m_s
+                    if (
+                        _log_pos is not None
+                        and getattr(speed_estimator, "_log_anchor", None) is not None
+                    ):
+                        ax, ay = speed_estimator._log_anchor  # type: ignore[attr-defined]
+                        avg_body = (
+                            math.hypot(_log_pos[0] - ax, _log_pos[1] - ay)
+                            / max(drive_log_elapsed, 1e-3)
+                        )
+                    if _log_pos is not None:
+                        speed_estimator._log_anchor = (_log_pos[0], _log_pos[1])  # type: ignore[attr-defined]
                     drive_log_elapsed = 0.0
                     throttle_note = (
                         f" agent={throttle_factor:.0%}"
@@ -1492,10 +1629,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     )
                     print(
                         f"Driving L={left_v:.1f} R={right_v:.1f} "
-                        f"@ {_format_pose(gps)} {speed_m_s:.2f} m/s{throttle_note}"
+                        f"@ {_format_pose(gps)} "
+                        f"gps={avg_body:.2f} odo={odo_v:.2f} m/s"
+                        f"{throttle_note}"
                     )
             else:
                 drive_log_elapsed = 0.0
+                if hasattr(speed_estimator, "_log_anchor"):
+                    speed_estimator._log_anchor = None  # type: ignore[attr-defined]
 
             # --- HUD + twin publish (throttled) ---
             if hud is not None:
@@ -1678,9 +1819,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
 
 
 def main() -> None:
-    """Webots entry: parse controllerArgs, construct Robot, run the twin loop."""
+    """Webots entry: parse controllerArgs, construct Robot/Supervisor, run twin loop."""
     opts = parse_controller_args()
-    robot = Robot()
+    # Supervisor enables soft grip coupling (node.setVelocity). Falls back to Robot.
+    if Supervisor is not None:
+        robot = Supervisor()
+    else:
+        robot = Robot()
     try:
         _run_loop(robot, opts)
     except Exception as exc:

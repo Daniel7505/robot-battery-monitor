@@ -591,8 +591,22 @@ class OnboardAgent:
     # --- Default rules (modular — register custom rules via register_rule) ---
 
     def _rule_twin_stress(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
-        """During high-draw Webots phases, intervene if utilization is elevated."""
+        """During high-draw Webots phases, intervene if utilization is elevated.
+
+        Free-roll / intentional teleop drive stays quiet when Legs are under the
+        channel max (expected cruise). Demo thrash on track runs polluted
+        hardware-optimization measurements.
+        """
         phase = (ctx.twin_phase or "").lower()
+        # Intentional free-roll / API teleop — quiet when Legs under channel max
+        if phase in ("teleop", "teleop_turn"):
+            legs_draw = 0.0
+            leg_rd = (ctx.readings or {}).get("Legs") or {}
+            if isinstance(leg_rd, dict):
+                legs_draw = float(leg_rd.get("draw_w") or leg_rd.get("watts") or 0.0)
+            # Also quiet when utilization is only mild (track free-roll ~35–40 W / 62)
+            if legs_draw <= 40.0 or ctx.utilization_pct < 75.0:
+                return []
         if phase not in _TWIN_STRESS_PHASES:
             return []
         threshold = cfg.get("twin_stress_utilization_pct", 65)
@@ -997,6 +1011,10 @@ class OnboardAgent:
     def _rule_power_spike(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
         spikes = ctx.safety.get("spike_channels") or []
         exempt = self._phase_exempt_channels(ctx)
+        phase = (ctx.twin_phase or "").lower()
+        # Free-roll teleop: Legs step-up from idle is expected, not a fault spike
+        if phase in ("teleop", "teleop_turn") and ctx.twin_source == "webots":
+            spikes = [ch for ch in spikes if ch != "Legs"]
         return [
             AgentRecommendation(
                 action="throttle_channel",

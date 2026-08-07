@@ -36,6 +36,9 @@ env/
 logs/*.db
 logs/*.log
 archives/
+webots/controllers/**/logs/
+webots/worlds/*.jpg
+webots/worlds/.*.wbproj
 __pycache__/
 
 # OS

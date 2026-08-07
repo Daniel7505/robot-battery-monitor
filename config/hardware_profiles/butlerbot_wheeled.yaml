@@ -1,68 +1,174 @@
 # =============================================================================
-# ButlerBot wheeled — first grounded hardware profile (v1)
+# ButlerBot wheeled — grounded hardware profile (v1.2)
 # =============================================================================
-# Public-spec style numbers for a compact warehouse butler (~0.9–1.0 m tall).
-# Used by src/twin/webots_power.py for channel watts and battery metadata.
-# Not a vendor BOM — realistic class averages so drain/watts are interpretable.
+# Real catalog parts:
+#   * Drive: Pololu 37D 50:1 12V + encoder (#4753) ×2
+#   * Driver: SparkFun Dual TB6612FNG (1.2 A cont / 3.2 A peak per ch)
+#   * Pack:  48 V 10 Ah Li-ion (NMC class) 480 Wh with C-rate limits
+#   * Wheels: 80 mm rubber tire + hub mass class
+# Used by webots_power.py, battery helpers, Webots mass/torque.
 # =============================================================================
 
 profile_id: butlerbot_wheeled
-label: "ButlerBot Wheeled (reference hardware)"
-version: "1.0"
+label: "ButlerBot Wheeled (real BOM v1.3)"
+version: "1.3"
 description: >
-  Compact wheeled mobile manipulator: dual 48V BLDC hub drives, light
-  stabilizer/caster budget, Jetson-class compute + baseload sensors,
-  48V Li-ion pack. Tuned so Webots idle stays calm (~5W Legs) and
-  short drive shows a clear Legs rise without re-entering throttle spirals.
+  Compact wheeled mobile manipulator grounded in catalog SKUs: dual Pololu
+  37D gearmotors, dual TB6612FNG H-bridge, Mean Well-class 48→12 DC-DC,
+  48V 10Ah NMC pack (480 Wh) with C-rates, 80 mm rubber wheels, Jetson Orin
+  Nano–class compute, aluminum chassis mass class. Battery drain is real P·dt
+  (no demo accel) for agent hardware optimization.
 
-# --- Battery pack -------------------------------------------------------------
+# --- Battery pack — REAL SPECS (project core) ---------------------------------
+# Class: 48 V 10 Ah Li-ion / NMC ebike-style pack (480 Wh). Representative of
+# common catalog packs (e.g. 13S NMC 10 Ah, continuous ~2C / peak ~3C).
+# Refs: industry 48V10Ah listings — 480 Wh, cont 15–20 A, peak 20–30 A, ~2.7 kg.
 battery:
-  chemistry: Li-ion
-  form_factor: "48V modular pack (10S-class)"
+  label: "48V 10Ah NMC Li-ion pack (480 Wh)"
+  part_class: "48V 10Ah ebike / mobile-robot pack"
+  chemistry: "NMC Li-ion"
+  form_factor: "13S pack class (nominal 48 V)"
+  pack_config: "13S2P class"
+  vendor: "generic-catalog"          # swap to exact OEM when purchased
+  product_url: "https://www.aegisbattery.com/products/aegis-48v-10ah-lithium-ion-battery-pack-nmc-48v-lithium-battery"
   nominal_voltage_v: 48
+  max_charge_voltage_v: 54.6         # 13S × 4.2 V
+  cutoff_voltage_v: 39.0             # 13S × ~3.0 V under load
   capacity_ah: 10
-  capacity_wh: 480          # primary: used for % drain interpretation
-  usable_fraction: 0.90     # soft limit for planning (not hard-coded yet)
+  capacity_wh: 480                   # primary: SOC / drain / forecasts
+  usable_fraction: 0.90              # soft planning limit (BMS / DoD)
+  # --- C-rate (the important battery truth for this project) ------------------
+  continuous_c_rate: 2.0             # 2C continuous
+  peak_c_rate: 3.0                   # 3C short peak
+  charge_c_rate: 0.5                 # 0.5C charge typical
+  continuous_discharge_a: 20         # 2C × 10 Ah
+  peak_discharge_a: 30               # 3C × 10 Ah (brief)
+  continuous_power_w: 960            # 48 V × 20 A
+  peak_power_w: 1440                 # 48 V × 30 A
+  cycle_life_80pct: 1000
+  mass_kg: 2.7
+  internal_resistance_mohm: 80
+  bms:
+    continuous_a: 20
+    peak_a: 30
+    label: "integrated 20–30 A class BMS"
+  note: >
+    Drive motors are 12 V; pack feeds a DC-DC for the motor bus. Energy is
+    still tracked in Wh at the pack. Twin should flag if total draw exceeds
+    continuous_power_w for long periods (C-rate stress).
 
-# --- Drive motors (two wheels) ------------------------------------------------
-# Class: 48V hub / hoverboard-style BLDC, ~100–150W continuous each.
+# --- Motor driver — REAL PART -------------------------------------------------
+# SparkFun Dual TB6612FNG (ROB-14451 / ROB-13845 class)
+# https://www.sparkfun.com/sparkfun-motor-driver-dual-tb6612fng-1a.html
+# Datasheet: Toshiba TB6612FNG — 1.2 A cont / 3.2 A peak per channel, VM ≤ 13.5 V
+# Perfect for cruise (~0.7–1 A/motor). Stall of 37D is 5.5 A — peak only, brief;
+# twin clamps continuous electrical to driver continuous budget.
+motor_driver:
+  label: "SparkFun Dual TB6612FNG (1A class)"
+  part_number: "ROB-14451"
+  vendor: "SparkFun"
+  chip: "TB6612FNG"
+  product_url: "https://www.sparkfun.com/sparkfun-motor-driver-dual-tb6612fng-1a.html"
+  datasheet_url: "https://cdn.sparkfun.com/datasheets/Robotics/TB6612FNG.pdf"
+  part_class: "dual H-bridge brushed DC driver"
+  channels: 2
+  logic_voltage_v: 5.0
+  motor_voltage_min_v: 2.5
+  motor_voltage_max_v: 13.5
+  continuous_current_a_per_ch: 1.2
+  peak_current_a_per_ch: 3.2
+  # Electrical efficiency of H-bridge (copper + switching); motors still use η_motor
+  efficiency: 0.92
+  idle_w: 0.35                   # logic + quiescent when enabled
+  # Continuous electrical budget for BOTH channels at 12 V (2 × 1.2 A × 12 V)
+  continuous_bus_w: 28.8
+  peak_bus_w: 76.8               # 2 × 3.2 A × 12 V (brief)
+  note: >
+    Undersized for sustained stall of 37D (5.5 A). Twin cruise stays under
+    1.2 A/ch; ABS peaks use peak budget. Upgrade path: Pololu G2 18v15.
+
+# --- DC-DC 48 V → 12 V (closes pack vs motor-bus story) ------------------------
+# Catalog class: industrial non-isolated / isolated brick 48→12, ~100–150 W.
+# Efficiency ~94% typical (Mean Well / Vicor class modules).
+dc_dc_48_12:
+  label: "48V→12V DC-DC brick (~120 W class)"
+  part_class: "isolated DC-DC converter 48 to 12 V"
+  vendor: "Mean Well class"
+  product_url: "https://www.meanwell.com/converter/en/index.html"
+  input_voltage_nom_v: 48
+  input_voltage_range_v: [36, 72]
+  output_voltage_v: 12
+  continuous_power_w: 120
+  peak_power_w: 150
+  efficiency: 0.94
+  idle_w: 1.2                 # no-load / quiescent on 48 V rail
+  mass_kg: 0.18
+  note: >
+    Legs channel is motor-bus (12 V) electrical after H-bridge. Pack-side
+    drive power = Legs / efficiency + idle_w. Other channels assumed on
+    pack or separate rails until more converters are SKU'd.
+
+# --- Drive motors (two wheels) — REAL PART ------------------------------------
+# Pololu #4753 — 50:1 Metal Gearmotor 37Dx70L mm 12V with 64 CPR encoder
+# Datasheet: https://www.pololu.com/file/0J1736/pololu-37d-metal-gearmotors-rev-1-2.pdf
+# Product:   https://www.pololu.com/product/4753
+#
+# Key datasheet points @ 12 V (50:1):
+#   no-load: 200 RPM, 0.2 A
+#   stall (extrapolated): 21 kg·cm ≈ 2.06 N·m, 5.5 A
+#   max efficiency: ~180 RPM, 22 kg·mm, 4.0 W mech, 0.66 A, η≈51%
+#
+# Track map (r=0.08 m): cruise v=0.44 m/s → ω=5.5 rad/s ≈ 52.5 RPM
+#   ≈ 26% of free-run speed — working band, not free-spin.
+#
 # Electrical model (velocity-only when torque feedback missing):
 #   partial: idle → cruise_w along |ω|/ω_cruise ^ 1.25
-#   over-cruise: soft headroom to ~1.25× cruise (curve_top_w), not channel peg
+#   over-cruise: soft headroom to curve_top_w
 #   real torque: blend idle + (τ·ω)/efficiency
+_drive_motor_pololu_37d_50_1: &pololu_37d_50_1
+  label: "Pololu 37D 50:1 12V + 64 CPR encoder (#4753)"
+  part_number: "4753"
+  vendor: "Pololu"
+  product_url: "https://www.pololu.com/product/4753"
+  datasheet_url: "https://www.pololu.com/file/0J1736/pololu-37d-metal-gearmotors-rev-1-2.pdf"
+  part_class: "37D metal gearmotor 50:1 brushed DC"
+  channel: Legs
+  voltage_v: 12
+  gear_ratio: 50
+  # --- Datasheet electrical / mechanical ------------------------------------
+  no_load_rpm: 200
+  no_load_current_a: 0.2
+  stall_current_a: 5.5
+  stall_torque_kg_cm: 21
+  stall_torque_nm: 2.06          # 21 kg·cm × 0.09807
+  max_efficiency_rpm: 180
+  max_efficiency_torque_kg_mm: 22
+  max_efficiency_mech_w: 4.0
+  max_efficiency_current_a: 0.66
+  efficiency: 0.51               # datasheet max-efficiency region
+  # Electrical watts derived from datasheet (12 V bus)
+  rated_power_w: 8               # ≈ 0.66 A × 12 V at max-efficiency
+  peak_power_w: 66               # 5.5 A × 12 V stall (brief)
+  free_run_w: 2.4                # 0.2 A × 12 V no-load spin
+  # Twin power curve (per motor, Legs channel sums L+R)
+  idle_w: 0.5                    # at rest (controller bias, no free-run)
+  cruise_w: 8.0                  # electrical at track cruise ~0.44 m/s
+  cruise_speed_m_s: 0.44         # matches measure_track_run ω=5.5, r=0.08
+  curve_top_w: 12.0              # soft cont. ≤ TB6612 1.2 A × 12 V = 14.4 W/ch
+  cont_w: 14.4                   # driver continuous electrical per channel
+  peak_w: 22                     # brief peak ≤ driver 3.2 A × ~0.6 duty (not full stall)
+  torque_proxy_coeff: 0.22       # τ≈coeff·|ω| when feedback missing (lower geared)
+  encoder_cpr: 64
+  encoder_location: "motor_shaft_before_gearbox"
+  max_torque_nm: 2.5             # Webots maxTorque / ABS available (stall + margin)
+
 motors:
   left_wheel:
-    label: "Left BLDC hub (48V, ~120W cont class)"
-    part_class: "48V hub motor 6–7in"
-    channel: Legs
-    voltage_v: 48
-    rated_power_w: 120
-    peak_power_w: 250
-    rated_speed_rpm: 150
-    efficiency: 0.75          # used when torque feedback present
-    idle_w: 2.0               # controller + no-load losses at rest
-    cruise_w: 9.5             # target electrical at cruise_speed_m_s (mid-band)
-    cruise_speed_m_s: 0.40
-    curve_top_w: 13.5         # soft per-motor ceiling for continuous curve
-    cont_w: 22                # sustained electrical budget (sim twin scale)
-    peak_w: 28                # per-motor hard clamp (channel also caps Legs)
-    torque_proxy_coeff: 0.38  # τ ≈ coeff · |ω| when feedback is 0
+    <<: *pololu_37d_50_1
+    side: left
   right_wheel:
-    label: "Right BLDC hub (48V, ~120W cont class)"
-    part_class: "48V hub motor 6–7in"
-    channel: Legs
-    voltage_v: 48
-    rated_power_w: 120
-    peak_power_w: 250
-    rated_speed_rpm: 150
-    efficiency: 0.75
-    idle_w: 2.0
-    cruise_w: 9.5
-    cruise_speed_m_s: 0.40
-    curve_top_w: 13.5
-    cont_w: 22
-    peak_w: 28
-    torque_proxy_coeff: 0.38
+    <<: *pololu_37d_50_1
+    side: right
 
   # Upper body (kept for Webots joints; light loads at rest)
   torso_joint:
@@ -112,35 +218,75 @@ stabilizers:
   active_w: 2.5               # when moving (rolling resistance proxy)
   active_speed_m_s: 0.15      # speed at which active_w is fully applied
 
-# --- Compute + sensors (always-on baseload) -----------------------------------
+# --- Compute + sensors — Jetson Orin Nano class SKU ---------------------------
+# NVIDIA Jetson Orin Nano Super / 8GB module class power envelopes (public).
 compute:
-  model: "Jetson Orin Nano–class SBC"
-  voltage_v: 24
-  idle_w: 6.5                 # board at light load
-  active_w: 10.0              # teleop / motion (CPU up)
-  peak_w: 20.0
+  label: "NVIDIA Jetson Orin Nano (8GB class)"
+  part_class: "Jetson Orin Nano module + carrier"
+  vendor: "NVIDIA"
+  product_url: "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  model: "Jetson Orin Nano 8GB class"
+  voltage_v: 5                 # module rail; carrier often 9–20 V in
+  # Module power modes: ~7–15 W typical for Nano-class developer use
+  idle_w: 7.0
+  active_w: 12.0               # teleop / light vision
+  peak_w: 15.0                 # short peaks (within Nano envelope)
+  mass_kg: 0.05                # module only; carrier extra below
+  carrier_mass_kg: 0.12
 
 sensors:
   label: "IMU + cameras + encoders baseload"
-  idle_w: 1.5                 # always-on with compute
-  active_w: 2.0               # slightly higher when moving
+  idle_w: 1.5
+  active_w: 2.0
 
 # Optional mode adders (simple flags for later; vision applied when moving)
 modes:
-  vision_active_w: 2.5        # light VIO / camera pipeline when driving
-  agent_active_w: 0.5         # onboard agent loop overhead (tiny)
+  vision_active_w: 2.5
+  agent_active_w: 0.5
 
-# Chassis geometry used by velocity→ω conversion
+# Chassis geometry + REAL wheel/tire + body mass class
+# 80 mm OD rubber robot tire + plastic hub ≈ 80–120 g.
+# Body: compact aluminum plate chassis class ~3.2 kg (sans pack/motors).
 geometry:
   wheel_radius_m: 0.08
-  track_width_m: 0.32
+  wheel_diameter_mm: 80
+  wheel_width_m: 0.035
+  track_width_m: 0.34
+  wheel_mass_kg: 0.085
+  motor_mass_kg: 0.20
+  wheel_assembly_mass_kg: 0.28
+  # Webots Robot root mass should track chassis (pack separate when modeled)
+  chassis_mass_kg: 3.2
+  chassis_length_m: 0.36
+  chassis_width_m: 0.28
+  chassis_height_m: 0.12
+  footprint_m2: 0.1008           # L×W
+  com_height_m: 0.12
+  tire:
+    label: "80 mm rubber robot wheel"
+    part_class: "80x35 mm rubber tire + hub"
+    diameter_mm: 80
+    width_mm: 35
+    mass_kg: 0.085
+    material: "rubber / plastic hub"
+    product_url: "https://abra-electronics.com/robotics/robot-wheels/tire-80-black-8035mm-rubber-wheel.html"
+    note: "Catalog class mass; swap to exact SKU when ordered"
+  chassis:
+    label: "Aluminum plate mobile base (class)"
+    part_class: "custom / OpenChassis class aluminum frame"
+    material: "6061 aluminum plate + standoffs"
+    mass_kg: 3.2
+    length_m: 0.36
+    width_m: 0.28
+    height_m: 0.12
+    note: "Placeholder until CAD BOM; matches Webots body mass target"
 
 # --- PMS channel caps (dashboard / safety envelopes) --------------------------
 channels:
   Legs:
-    description: "Differential drive (2× hub motors)"
-    max_draw_w: 28
-    nominal_voltage_v: 48
+    description: "Differential drive (2× Pololu 37D 50:1 12V gearmotors)"
+    max_draw_w: 40              # 2 × peak_w headroom for brief spikes
+    nominal_voltage_v: 12       # motor bus (pack is still 48 V)
     motors: [left_wheel, right_wheel]
   Arms:
     description: "Dual arm joints + gripper budget"
@@ -164,12 +310,13 @@ channels:
     motors: []
 
 # Expected mean system draw by mission phase (loop forecast / docs)
+# Updated for Pololu drive: Legs cruise ~16 W (2×8) + baseload ~17–21 W
 phase_draw_w:
   standby: 18.0
-  teleop: 45.0
-  drive_transit: 48.0
-  patrol: 40.0
-  manipulate: 55.0
+  teleop: 38.0
+  drive_transit: 40.0
+  patrol: 36.0
+  manipulate: 50.0
   return_idle: 20.0
 
 phase_duration_s:

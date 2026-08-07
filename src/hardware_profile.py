@@ -110,6 +110,63 @@ def battery_nominal_voltage_v(profile: dict | None = None) -> float:
     return float(batt.get("nominal_voltage_v", 48))
 
 
+def battery_c_rate_limits(profile: dict | None = None) -> dict:
+    """Pack continuous/peak C-rate and power budgets for twin stress checks."""
+    prof = profile or get_active_profile()
+    batt = prof.get("battery") or {}
+    v = float(batt.get("nominal_voltage_v", 48) or 48)
+    ah = float(batt.get("capacity_ah", 10) or 10)
+    cont_c = float(batt.get("continuous_c_rate", 0) or 0)
+    peak_c = float(batt.get("peak_c_rate", 0) or 0)
+    cont_a = float(batt.get("continuous_discharge_a") or (cont_c * ah if cont_c else 0))
+    peak_a = float(batt.get("peak_discharge_a") or (peak_c * ah if peak_c else 0))
+    cont_w = float(batt.get("continuous_power_w") or (v * cont_a if cont_a else 0))
+    peak_w = float(batt.get("peak_power_w") or (v * peak_a if peak_a else 0))
+    return {
+        "chemistry": batt.get("chemistry"),
+        "capacity_ah": ah,
+        "capacity_wh": float(batt.get("capacity_wh") or v * ah),
+        "nominal_voltage_v": v,
+        "continuous_c_rate": cont_c or (cont_a / ah if ah else 0),
+        "peak_c_rate": peak_c or (peak_a / ah if ah else 0),
+        "charge_c_rate": float(batt.get("charge_c_rate") or 0),
+        "continuous_discharge_a": cont_a,
+        "peak_discharge_a": peak_a,
+        "continuous_power_w": cont_w,
+        "peak_power_w": peak_w,
+        "mass_kg": batt.get("mass_kg"),
+        "usable_fraction": float(batt.get("usable_fraction") or 0.9),
+    }
+
+
+def battery_draw_c_rate(draw_w: float, profile: dict | None = None) -> float:
+    """Instantaneous discharge C-rate for a system draw (W)."""
+    limits = battery_c_rate_limits(profile)
+    cont_w = float(limits.get("continuous_power_w") or 0)
+    cont_c = float(limits.get("continuous_c_rate") or 0)
+    if cont_w <= 0 or cont_c <= 0:
+        return 0.0
+    return float(draw_w) / cont_w * cont_c
+
+
+def motor_driver_spec(profile: dict | None = None) -> dict:
+    """Motor driver block (H-bridge) from the active profile."""
+    prof = profile or get_active_profile()
+    return dict(prof.get("motor_driver") or {})
+
+
+def wheel_mass_kg(profile: dict | None = None) -> float:
+    """Tire+hub mass (kg) for physics / inertia; excludes motor stator if separate."""
+    prof = profile or get_active_profile()
+    geom = prof.get("geometry") or {}
+    if geom.get("wheel_mass_kg") is not None:
+        return float(geom["wheel_mass_kg"])
+    tire = geom.get("tire") or {}
+    if tire.get("mass_kg") is not None:
+        return float(tire["mass_kg"])
+    return 0.085
+
+
 def wheel_radius_m(profile: dict | None = None) -> float:
     prof = profile or get_active_profile()
     geom = prof.get("geometry") or {}
@@ -122,6 +179,49 @@ def clamp_motor_power_w(motor_name: str, watts: float, profile: dict | None = No
     spec = motor_spec(prof, motor_name)
     peak = float(spec.get("peak_w") or spec.get("peak_power_w") or 120)
     return round(min(max(0.0, watts), peak), 2)
+
+
+def motor_stall_torque_nm(motor_name: str, profile: dict | None = None) -> float | None:
+    """Datasheet stall torque (N·m) when the profile has a real-part number."""
+    prof = profile or get_active_profile()
+    spec = motor_spec(prof, motor_name)
+    if spec.get("stall_torque_nm") is not None:
+        return float(spec["stall_torque_nm"])
+    # Accept kg·cm from hobby datasheets (1 kg·cm ≈ 0.09807 N·m)
+    if spec.get("stall_torque_kg_cm") is not None:
+        return float(spec["stall_torque_kg_cm"]) * 0.0980665
+    return None
+
+
+def motor_max_torque_nm(
+    motor_name: str, profile: dict | None = None, *, default: float = 50.0
+) -> float:
+    """Webots / ABS available torque cap (N·m) from profile max_torque or stall."""
+    prof = profile or get_active_profile()
+    spec = motor_spec(prof, motor_name)
+    if spec.get("max_torque_nm") is not None:
+        return float(spec["max_torque_nm"])
+    stall = motor_stall_torque_nm(motor_name, prof)
+    if stall is not None:
+        return stall * 1.2  # small hold margin above stall for park
+    return float(default)
+
+
+def motor_part_meta(motor_name: str, profile: dict | None = None) -> dict:
+    """Vendor/SKU/datasheet fields for telemetry and BOM traces."""
+    spec = motor_spec(profile or get_active_profile(), motor_name)
+    keys = (
+        "part_number",
+        "vendor",
+        "product_url",
+        "datasheet_url",
+        "part_class",
+        "voltage_v",
+        "gear_ratio",
+        "stall_torque_nm",
+        "efficiency",
+    )
+    return {k: spec[k] for k in keys if k in spec and spec[k] is not None}
 
 
 def motor_idle_and_scale(

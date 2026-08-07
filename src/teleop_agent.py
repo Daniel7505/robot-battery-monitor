@@ -223,7 +223,9 @@ MOTION_SETTLED_SPEED_M_S = 0.08
 MOTION_SETTLED_WHEEL_RAD_S = 0.2
 
 BATTERY_CAPACITY_WH = 480.0
-BATTERY_DRAIN_SCALE = 12.0
+# Real-world physics: Wh → % with no demo time-compression.
+# (Was 12.0 for wall-clock demos; agent/hardware optimization needs scale=1.)
+BATTERY_DRAIN_SCALE = 1.0
 
 
 def sanitize_motion(speed_m_s: float, forward_m_s: float) -> tuple[float, float]:
@@ -395,12 +397,13 @@ def battery_drain_pct(
     scale: float = BATTERY_DRAIN_SCALE,
     drain_scale: float = 1.0,
 ) -> float:
-    """Physics-based % drop (scaled for gameplay) — 480 Wh pack.
+    """Real-world % SOC drop from pack draw: ΔE = P·dt, % = 100·ΔE/capacity.
 
-    ``scale`` compresses wall-clock demos so operators see meaningful SOC change
-    without waiting hours of sim time.
+    Default ``scale`` is 1.0 (building / agent optimization). Demo time-compression
+    is intentionally off — accelerated drain confuses hardware optimization.
+    ``drain_scale`` remains for idle/brake soft factors only (≤1), not demos.
     """
-    if draw_w <= 0 or dt_s <= 0:
+    if draw_w <= 0 or dt_s <= 0 or capacity_wh <= 0:
         return 0.0
     return (draw_w * dt_s) / (capacity_wh * 3600.0) * 100.0 * scale * drain_scale
 

@@ -1020,6 +1020,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             )
 
             if KEY_SPACE in pressed:
+                park_holdoff_s = max(park_holdoff_s, 2.0)
                 abs_brake.request(
                     forward_m_s,
                     speed_m_s,

@@ -78,7 +78,8 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 0.17 0.08
-        dampingConstant 2.8
+        # Higher damping helps kill residual yaw after in-place turn (S2/S3).
+        dampingConstant 6.5
       }
       device [
         RotationalMotor {
@@ -130,7 +131,7 @@ Robot {
       jointParameters HingeJointParameters {
         axis 0 1 0
         anchor 0 -0.17 0.08
-        dampingConstant 2.8
+        dampingConstant 6.5
       }
       device [
         RotationalMotor {

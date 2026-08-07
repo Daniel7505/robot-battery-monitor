@@ -351,13 +351,19 @@ class AbsBrakeController:
             self._calm_hold_s = 0.0
 
         # Every ABS tick: park both hubs. Never differential / soft-oppose here.
-        still_moving = not (wheels_ok and yaw_ok and linear_ok)
+        # Track ONLY while hubs still spin. If hubs are locked but body still yaws
+        # (post-turn residual), freeze encoder targets — re-tracking on yaw alone
+        # left pure circle spin after S2/S3.
+        hubs_still_spinning = (
+            abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
+            or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
+        )
         _hard_zero_wheels(
             motors,
             sensors,
             left_wv=left_wv,
             right_wv=right_wv,
-            track=still_moving,
+            track=hubs_still_spinning,
         )
 
         if self._calm_hold_s >= ABS_CALM_HOLD_S:
@@ -1245,13 +1251,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_age_s = 0.0
 
                 if residual_hub or residual_yaw or residual_coast or pose_residual:
-                    # Still moving — park both hubs only (no yaw-oppose → no Tokyo drift)
+                    # Still moving — park both hubs only (no yaw-oppose → no Tokyo drift).
+                    # Track only if hubs spinning; freeze hard on pure residual yaw.
+                    hubs_spin = (
+                        abs(left_wv) > STOP_WHEEL_RAD_S * 2.0
+                        or abs(right_wv) > STOP_WHEEL_RAD_S * 2.0
+                    )
                     _hard_zero_wheels(
                         motors,
                         sensors,
                         left_wv=left_wv,
                         right_wv=right_wv,
-                        track=True,
+                        track=hubs_spin,
                     )
                     if not abs_brake.active:
                         why = []

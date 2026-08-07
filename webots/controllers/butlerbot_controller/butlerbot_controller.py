@@ -100,6 +100,8 @@ SENSOR_NAMES = [
     "left_arm_sensor", "right_arm_sensor",
 ]
 
+# Must stay ≤ RotationalMotor maxVelocity in butlerbot.wbt (wheels = 15).
+MOTOR_MAX_VELOCITY = 15.0
 MAX_WHEEL_V = 10.0
 MAX_JOINT_V = 1.8
 WHEEL_RADIUS_M = 0.08
@@ -117,15 +119,15 @@ STOP_YAW_RATE_RAD_S = 0.025
 STOP_WHEEL_DIFF_RAD_S = 0.05
 # ABS must stay calm this long before complete (was 0.45s — finished early).
 ABS_CALM_HOLD_S = 0.80
-# Engage position-lock once hub is below this (was 0.25 — left creep unlocked).
-HUB_LOCK_ENGAGE_RAD_S = 0.08
 # Re-ABS if GPS still reports translation while we think we are idle.
 RESIDUAL_SPEED_M_S = 0.018
 # Pose window residual (m / rad over ~0.6 s) — catches ultra-slow drift GPS rate misses.
 POSE_RESIDUAL_TRANS_M = 0.025
 POSE_RESIDUAL_YAW_RAD = 0.04
 POSE_RESIDUAL_WINDOW_S = 0.65
-WHEEL_HOLD_VEL = 18.0  # firmer position-mode hold (was 12)
+# Position-mode approach rate when holding encoder angle — MUST be ≤ MOTOR_MAX_VELOCITY
+# or Webots warns every step and the hold is weaker than we think.
+WHEEL_HOLD_VEL = 15.0
 
 KEY_W = ord("W")
 KEY_A = ord("A")
@@ -405,7 +407,7 @@ class AbsBrakeController:
             motor = motors[wheel]
             _enable_full_wheel_torque(motor)
             motor.setPosition(float("inf"))
-            motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
+            motor.setVelocity(_clamp_motor_vel(_clamp(cmd, MAX_BRAKE_WHEEL_V)))
         return False
 
 
@@ -452,6 +454,11 @@ def _clamp(value: float, limit: float) -> float:
     return max(-limit, min(limit, value))
 
 
+def _clamp_motor_vel(value: float) -> float:
+    """Clamp any wheel velocity command to the world motor maxVelocity."""
+    return _clamp(value, MOTOR_MAX_VELOCITY)
+
+
 def _safe_imu_roll(imu: InertialUnit | None) -> float:
     if imu is None:
         return 0.0
@@ -490,45 +497,53 @@ def _hard_zero_wheels(
     left_wv: float | None = None,
     right_wv: float | None = None,
 ) -> None:
-    """Zero BOTH hubs every tick — no freewheel, no single-wheel residual.
+    """Freeze BOTH hubs every tick — position lock preferred, never freewheel coast.
 
-    Live bug: GPS speed≈0 + phase standby while left wheel still spins on camera.
-    GPS only sees translation; pure yaw / one freewheeling hub is invisible to it.
+    Live bugs this fights:
+      - GPS≈0 while a hub freewheels (NaN setPosition / no lock)
+      - "Chasing the horizon" after Stop: velocity-mode setVelocity(0) does NOT
+        hold the wheel against physics — the chassis keeps rolling. We must
+        latch a finite encoder angle and hold it in position mode.
+      - WHEEL_HOLD_VEL must be ≤ world maxVelocity (15) or Webots clips + warns.
 
-    CRITICAL: never call setPosition(NaN). Sensor values are NaN before the first
-    valid step — that invalid position leaves a hub freewheeling (user left spin).
-
-    While a hub is still spinning fast: velocity-0 + full torque only.
-    Once slow + finite encoder: hold fixed encoder angle.
+    CRITICAL: never call setPosition(NaN). Invalid early encoder → freewheel.
     """
-    rates = {"left_wheel": left_wv, "right_wheel": right_wv}
+    hold_vel = min(WHEEL_HOLD_VEL, MOTOR_MAX_VELOCITY)
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
-        wv = rates.get(wheel)
-        # Engage position lock earlier so ultra-slow hub creep cannot freewheel.
-        spinning = wv is not None and abs(wv) >= HUB_LOCK_ENGAGE_RAD_S
-        # Always assert velocity zero in velocity mode first (safe even if sensors NaN)
-        motor.setPosition(float("inf"))
-        motor.setVelocity(0.0)
-        if spinning or sensors is None:
+        if sensors is None:
+            motor.setPosition(float("inf"))
+            motor.setVelocity(0.0)
             continue
         sensor = sensors.get(f"{wheel}_sensor")
         if sensor is None:
+            motor.setPosition(float("inf"))
+            motor.setVelocity(0.0)
             continue
         try:
             if wheel not in _WHEEL_LOCK_POS:
                 pos = float(sensor.getValue())
                 if not math.isfinite(pos):
-                    continue  # keep velocity-0 only until encoder is valid
+                    # Encoder not ready — velocity zero only until first finite sample
+                    motor.setPosition(float("inf"))
+                    motor.setVelocity(0.0)
+                    continue
                 _WHEEL_LOCK_POS[wheel] = pos
             hold = _WHEEL_LOCK_POS.get(wheel)
             if hold is None or not math.isfinite(hold):
+                motor.setPosition(float("inf"))
+                motor.setVelocity(0.0)
                 continue
+            # Position lock: approach/hold latched angle at max legal motor speed
             motor.setPosition(hold)
-            motor.setVelocity(WHEEL_HOLD_VEL)
+            motor.setVelocity(hold_vel)
         except Exception:
-            pass
+            try:
+                motor.setPosition(float("inf"))
+                motor.setVelocity(0.0)
+            except Exception:
+                pass
 
 
 def _halt_wheels(
@@ -594,7 +609,7 @@ def _oppose_body_yaw(
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
         motor.setPosition(float("inf"))
-        motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
+        motor.setVelocity(_clamp_motor_vel(_clamp(cmd, MAX_BRAKE_WHEEL_V)))
 
 
 def _gps_xy(gps: GPS | None) -> tuple[float, float] | None:
@@ -615,7 +630,7 @@ def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle
         motor = motors[side]
         _enable_full_wheel_torque(motor)
         motor.setPosition(float("inf"))
-        motor.setVelocity(_clamp(cmd, MAX_WHEEL_V))
+        motor.setVelocity(_clamp_motor_vel(_clamp(cmd, MAX_WHEEL_V)))
 
 
 def _apply_wheel_command(

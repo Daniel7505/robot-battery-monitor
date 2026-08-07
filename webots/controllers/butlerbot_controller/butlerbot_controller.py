@@ -105,14 +105,27 @@ MAX_JOINT_V = 1.8
 WHEEL_RADIUS_M = 0.08
 MAX_BRAKE_WHEEL_V = 12.0
 MIN_BRAKE_WHEEL_V = 1.5
-STOP_SPEED_M_S = 0.02
-STOP_WHEEL_RAD_S = 0.08
+# Linear "stopped" gate — must be tight; looser values completed ABS while coasting.
+STOP_SPEED_M_S = 0.012
+STOP_WHEEL_RAD_S = 0.03
 BRAKE_COAST_PHASE_S = 0.15
 MAX_BRAKE_DURATION_S = 12.0
-# Residual body yaw (rad/s) that must die before we report idle — pure spin
-# has GPS≈0 while the robot still rotates on camera.
-STOP_YAW_RATE_RAD_S = 0.12
-WHEEL_HOLD_VEL = 12.0  # position-mode approach rate for hub lock (not MAX_JOINT_V)
+# Residual body yaw (rad/s). 0.12 was too loose: "look away 3s and it moved"
+# (sub-visual creep). ~0.025 ≈ 1.4 deg/s still catches that class.
+STOP_YAW_RATE_RAD_S = 0.025
+# Hub L−R mismatch while "locked" (rad/s)
+STOP_WHEEL_DIFF_RAD_S = 0.05
+# ABS must stay calm this long before complete (was 0.45s — finished early).
+ABS_CALM_HOLD_S = 0.80
+# Engage position-lock once hub is below this (was 0.25 — left creep unlocked).
+HUB_LOCK_ENGAGE_RAD_S = 0.08
+# Re-ABS if GPS still reports translation while we think we are idle.
+RESIDUAL_SPEED_M_S = 0.018
+# Pose window residual (m / rad over ~0.6 s) — catches ultra-slow drift GPS rate misses.
+POSE_RESIDUAL_TRANS_M = 0.025
+POSE_RESIDUAL_YAW_RAD = 0.04
+POSE_RESIDUAL_WINDOW_S = 0.65
+WHEEL_HOLD_VEL = 18.0  # firmer position-mode hold (was 12)
 
 KEY_W = ord("W")
 KEY_A = ord("A")
@@ -294,7 +307,7 @@ class AbsBrakeController:
         return (
             abs(left_wv) < STOP_WHEEL_RAD_S
             and abs(right_wv) < STOP_WHEEL_RAD_S
-            and abs(left_wv - right_wv) < 0.12
+            and abs(left_wv - right_wv) < STOP_WHEEL_DIFF_RAD_S
         )
 
     def apply(
@@ -311,8 +324,9 @@ class AbsBrakeController:
     ) -> bool:
         """Apply ABS braking. Returns True when fully stopped.
 
-        Must kill BOTH hub rates and residual body yaw. GPS speed is NOT sufficient
-        (pure in-place spin reads ~0 on GPS while the left wheel still turns on camera).
+        Must kill BOTH hub rates, residual body yaw, *and* linear GPS coast.
+        Completing on hubs+yaw alone left ultra-slow roll/spin after stop
+        (camera looks still; look away 3s and pose has changed).
         """
         if not self.active:
             return False
@@ -325,31 +339,40 @@ class AbsBrakeController:
 
         wheels_ok = self._wheels_locked(left_wv, right_wv)
         yaw_ok = abs(yaw_rate) < STOP_YAW_RATE_RAD_S
-        if wheels_ok and yaw_ok:
+        # Require body translation calm too — otherwise ABS ends while coasting.
+        linear_ok = speed_m_s < STOP_SPEED_M_S and abs(forward_m_s) < STOP_SPEED_M_S
+        if wheels_ok and yaw_ok and linear_ok:
             self._calm_hold_s += dt
         else:
             self._calm_hold_s = 0.0
 
-        # Complete only when BOTH hubs quiet AND body yaw quiet for a hold
-        if self._calm_hold_s >= 0.45:
+        # Complete only when hubs + yaw + GPS linear are quiet for a hold
+        if self._calm_hold_s >= ABS_CALM_HOLD_S:
             self.active = False
+            _clear_wheel_locks()  # re-latch locks at true rest encoder angles
             _hard_zero_wheels(
                 motors, sensors, left_wv=left_wv, right_wv=right_wv
             )
             print(
                 f"ABS complete @ speed={speed_m_s:.3f} "
-                f"wv L={left_wv:.2f} R={right_wv:.2f} yaw_rate={yaw_rate:.2f} "
+                f"wv L={left_wv:.2f} R={right_wv:.2f} yaw_rate={yaw_rate:.3f} "
                 f"hold={self._calm_hold_s:.2f}s"
             )
             return True
 
-        # Never force-complete while a hub or body yaw is still moving
-        if self._elapsed_s >= MAX_BRAKE_DURATION_S and wheels_ok and yaw_ok:
+        # Never force-complete while a hub, yaw, or coast remains
+        if (
+            self._elapsed_s >= MAX_BRAKE_DURATION_S
+            and wheels_ok
+            and yaw_ok
+            and linear_ok
+        ):
             self.active = False
+            _clear_wheel_locks()
             _hard_zero_wheels(
                 motors, sensors, left_wv=left_wv, right_wv=right_wv
             )
-            print("ABS timeout complete (wheels+yaw quiet)")
+            print("ABS timeout complete (wheels+yaw+linear quiet)")
             return True
 
         # Residual body yaw with quiet encoders: oppose yaw (left freewheel case)
@@ -483,7 +506,8 @@ def _hard_zero_wheels(
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
         wv = rates.get(wheel)
-        spinning = wv is not None and abs(wv) >= 0.25
+        # Engage position lock earlier so ultra-slow hub creep cannot freewheel.
+        spinning = wv is not None and abs(wv) >= HUB_LOCK_ENGAGE_RAD_S
         # Always assert velocity zero in velocity mode first (safe even if sensors NaN)
         motor.setPosition(float("inf"))
         motor.setVelocity(0.0)
@@ -553,13 +577,16 @@ def _oppose_body_yaw(
     motors: dict[str, Motor],
     yaw_rate: float,
     *,
-    gain: float = 2.5,
+    gain: float = 4.0,
+    min_rate: float | None = None,
 ) -> None:
     """Brief differential command opposing residual body spin (GPS may be ~0)."""
-    if abs(yaw_rate) < STOP_YAW_RATE_RAD_S:
+    floor = STOP_YAW_RATE_RAD_S if min_rate is None else min_rate
+    if abs(yaw_rate) < floor:
         return
     # Positive yaw_rate ≈ CCW: oppose with left+, right- (and reverse for CW)
-    mag = min(5.0, abs(yaw_rate) * gain)
+    # Floor magnitude so sub-visual creep still gets a real oppose pulse.
+    mag = min(5.0, max(0.8, abs(yaw_rate) * gain))
     sign = 1.0 if yaw_rate > 0.0 else -1.0
     left_cmd = sign * mag
     right_cmd = -sign * mag
@@ -568,6 +595,17 @@ def _oppose_body_yaw(
         _enable_full_wheel_torque(motor)
         motor.setPosition(float("inf"))
         motor.setVelocity(_clamp(cmd, MAX_BRAKE_WHEEL_V))
+
+
+def _gps_xy(gps: GPS | None) -> tuple[float, float] | None:
+    """Body planar position from GPS, or None if unavailable."""
+    if gps is None:
+        return None
+    try:
+        vals = list(gps.getValues())
+        return float(vals[0]), float(vals[1])
+    except Exception:
+        return None
 
 
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
@@ -908,6 +946,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     last_teleop_right = 0.0
     prev_yaw = _imu_yaw(imu)
     yaw_rate = 0.0
+    # Pose residual window — catches "look away 3s" ultra-slow drift GPS rate misses
+    pose_anchor_xy: tuple[float, float] | None = None
+    pose_anchor_yaw = prev_yaw
+    pose_anchor_age_s = 0.0
 
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -934,36 +976,51 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 print(f"Auto mission loop: {'ON' if auto_loop else 'OFF'}")
 
             # --- Sense: GPS translation, encoder rates, body yaw rate ---
+            # Keep RAW GPS for residual kill — never zero it away before that check.
             speed_m_s, forward_m_s = speed_estimator.estimate_motion(gps, dt)
+            raw_speed_m_s = speed_m_s
+            raw_forward_m_s = forward_m_s
             left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
+            gps_xy = _gps_xy(gps)
 
             hubs_locked = (
                 abs(left_wv_early) < STOP_WHEEL_RAD_S
                 and abs(right_wv_early) < STOP_WHEEL_RAD_S
-                and abs(left_wv_early - right_wv_early) < 0.12
+                and abs(left_wv_early - right_wv_early) < STOP_WHEEL_DIFF_RAD_S
             )
             yaw_quiet = abs(yaw_rate) < STOP_YAW_RATE_RAD_S
+            linear_quiet = (
+                raw_speed_m_s < STOP_SPEED_M_S
+                and abs(raw_forward_m_s) < STOP_SPEED_M_S
+            )
             no_drive_cmd = (
                 abs(last_teleop_left) < 0.05
                 and abs(last_teleop_right) < 0.05
                 and abs(cached_api_left) < 0.05
                 and abs(cached_api_right) < 0.05
             )
-            # ONLY zero GPS for mission/power when hubs AND body yaw are quiet.
-            # Never mask a left-wheel / in-place spin as "idle" (camera can still spin).
-            if hubs_locked and yaw_quiet and no_drive_cmd and not abs_brake.active:
+            # ONLY zero GPS for mission/power labels when hubs + yaw + linear are quiet.
+            # Old path zeroed on hubs+yaw alone → false idle while still coasting/creeping.
+            if (
+                hubs_locked
+                and yaw_quiet
+                and linear_quiet
+                and no_drive_cmd
+                and not abs_brake.active
+            ):
                 speed_m_s = 0.0
                 forward_m_s = 0.0
 
             settled = (
                 hubs_locked
                 and yaw_quiet
+                and linear_quiet
                 and (
-                    _teleop.motion_settled(speed_m_s, left_wv_early, right_wv_early)
+                    _teleop.motion_settled(raw_speed_m_s, left_wv_early, right_wv_early)
                     if _teleop is not None
-                    else speed_m_s < 0.08
+                    else raw_speed_m_s < 0.08
                 )
             )
 
@@ -1137,34 +1194,88 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 )
             else:
                 left_v = right_v = 0.0
-                residual_hub = abs(left_wv) > 0.10 or abs(right_wv) > 0.10
+                # Multi-layer residual kill:
+                # 1) hub freewheel  2) yaw rate  3) GPS coast  4) pose window creep
+                residual_hub = (
+                    abs(left_wv) > STOP_WHEEL_RAD_S * 1.2
+                    or abs(right_wv) > STOP_WHEEL_RAD_S * 1.2
+                    or abs(left_wv - right_wv) > STOP_WHEEL_DIFF_RAD_S * 1.5
+                )
                 residual_yaw = abs(yaw_rate) >= STOP_YAW_RATE_RAD_S
-                if residual_hub or residual_yaw:
-                    # Still spinning on camera while GPS≈0 — kill it, do not report idle
-                    if residual_yaw and not residual_hub:
-                        _oppose_body_yaw(motors, yaw_rate)
+                residual_coast = raw_speed_m_s >= RESIDUAL_SPEED_M_S
+
+                pose_residual = False
+                pose_anchor_age_s += dt
+                if gps_xy is not None:
+                    if pose_anchor_xy is None:
+                        pose_anchor_xy = gps_xy
+                        pose_anchor_yaw = prev_yaw
+                        pose_anchor_age_s = 0.0
+                    elif pose_anchor_age_s >= POSE_RESIDUAL_WINDOW_S:
+                        dx = gps_xy[0] - pose_anchor_xy[0]
+                        dy = gps_xy[1] - pose_anchor_xy[1]
+                        trans = math.sqrt(dx * dx + dy * dy)
+                        dyaw = prev_yaw - pose_anchor_yaw
+                        while dyaw > math.pi:
+                            dyaw -= 2.0 * math.pi
+                        while dyaw < -math.pi:
+                            dyaw += 2.0 * math.pi
+                        if (
+                            trans >= POSE_RESIDUAL_TRANS_M
+                            or abs(dyaw) >= POSE_RESIDUAL_YAW_RAD
+                        ):
+                            pose_residual = True
+                        pose_anchor_xy = gps_xy
+                        pose_anchor_yaw = prev_yaw
+                        pose_anchor_age_s = 0.0
+
+                if residual_hub or residual_yaw or residual_coast or pose_residual:
+                    # Still moving (maybe sub-visual) — kill it, do not report idle
+                    if residual_yaw and not residual_hub and not residual_coast:
+                        _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
                     else:
+                        _clear_wheel_locks()
                         _hard_zero_wheels(
                             motors, sensors, left_wv=left_wv, right_wv=right_wv
                         )
                     if not abs_brake.active:
+                        why = []
+                        if residual_hub:
+                            why.append("hub")
+                        if residual_yaw:
+                            why.append("yaw")
+                        if residual_coast:
+                            why.append("coast")
+                        if pose_residual:
+                            why.append("pose")
                         print(
-                            f"Residual spin — re-ABS L={left_wv:.2f} R={right_wv:.2f} "
-                            f"yaw_rate={yaw_rate:.2f}"
+                            f"Residual ({'+'.join(why)}) — re-ABS "
+                            f"L={left_wv:.2f} R={right_wv:.2f} "
+                            f"yaw_rate={yaw_rate:.3f} speed={raw_speed_m_s:.3f}"
                         )
                         abs_brake.request(
-                            forward_m_s,
-                            speed_m_s,
+                            raw_forward_m_s,
+                            raw_speed_m_s,
                             last_left_v=last_teleop_left,
                             last_right_v=last_teleop_right,
                             left_wv=left_wv,
                             right_wv=right_wv,
                         )
+                        pose_anchor_xy = gps_xy
+                        pose_anchor_yaw = prev_yaw
+                        pose_anchor_age_s = 0.0
                 else:
                     _hard_zero_wheels(
                         motors, sensors, left_wv=left_wv, right_wv=right_wv
                     )
                 _hold_neutral_upper_body(motors)
+
+            # While actively driving, keep pose anchor fresh so residual window
+            # only measures post-stop creep (not the drive itself).
+            if user_driving or abs_brake.active or auto_loop:
+                pose_anchor_xy = gps_xy
+                pose_anchor_yaw = prev_yaw
+                pose_anchor_age_s = 0.0
 
             # --- Power / mission labeling / battery + thermal models ---
             # Detect turn/spin before power + mission (GPS may be ~0 while wheels yaw)

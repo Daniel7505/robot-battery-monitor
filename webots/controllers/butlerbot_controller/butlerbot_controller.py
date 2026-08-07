@@ -324,11 +324,14 @@ class AbsBrakeController:
         dt: float,
         yaw_rate: float = 0.0,
     ) -> bool:
-        """Apply ABS braking. Returns True when fully stopped.
+        """Park-brake ABS — dual hub freeze only (no differential oppose).
 
-        Must kill BOTH hub rates, residual body yaw, *and* linear GPS coast.
-        Completing on hubs+yaw alone left ultra-slow roll/spin after stop
-        (camera looks still; look away 3s and pose has changed).
+        Soft reverse and yaw-oppose were producing "Tokyo drift": body still
+        translating while hubs applied unequal torque. Live fix path is:
+
+          track encoder while fast → freeze both hubs when slow → hold.
+
+        Complete only when hubs + yaw + GPS linear stay quiet for ABS_CALM_HOLD_S.
         """
         if not self.active:
             return False
@@ -341,73 +344,43 @@ class AbsBrakeController:
 
         wheels_ok = self._wheels_locked(left_wv, right_wv)
         yaw_ok = abs(yaw_rate) < STOP_YAW_RATE_RAD_S
-        # Require body translation calm too — otherwise ABS ends while coasting.
         linear_ok = speed_m_s < STOP_SPEED_M_S and abs(forward_m_s) < STOP_SPEED_M_S
         if wheels_ok and yaw_ok and linear_ok:
             self._calm_hold_s += dt
         else:
             self._calm_hold_s = 0.0
 
-        # Complete only when hubs + yaw + GPS linear are quiet for a hold
+        # Every ABS tick: park both hubs. Never differential / soft-oppose here.
+        still_moving = not (wheels_ok and yaw_ok and linear_ok)
+        _hard_zero_wheels(
+            motors,
+            sensors,
+            left_wv=left_wv,
+            right_wv=right_wv,
+            track=still_moving,
+        )
+
         if self._calm_hold_s >= ABS_CALM_HOLD_S:
             self.active = False
-            _clear_wheel_locks()  # re-latch locks at true rest encoder angles
+            # Freeze final latched angles (no clear — clearing re-opens freewheel).
             _hard_zero_wheels(
-                motors, sensors, left_wv=left_wv, right_wv=right_wv
+                motors, sensors, left_wv=left_wv, right_wv=right_wv, track=False
             )
             print(
-                f"ABS complete @ speed={speed_m_s:.3f} "
+                f"ABS park complete @ speed={speed_m_s:.3f} "
                 f"wv L={left_wv:.2f} R={right_wv:.2f} yaw_rate={yaw_rate:.3f} "
                 f"hold={self._calm_hold_s:.2f}s"
             )
             return True
 
-        # Never force-complete while a hub, yaw, or coast remains
-        if (
-            self._elapsed_s >= MAX_BRAKE_DURATION_S
-            and wheels_ok
-            and yaw_ok
-            and linear_ok
-        ):
+        if self._elapsed_s >= MAX_BRAKE_DURATION_S and wheels_ok and yaw_ok and linear_ok:
             self.active = False
-            _clear_wheel_locks()
             _hard_zero_wheels(
-                motors, sensors, left_wv=left_wv, right_wv=right_wv
+                motors, sensors, left_wv=left_wv, right_wv=right_wv, track=False
             )
-            print("ABS timeout complete (wheels+yaw+linear quiet)")
+            print("ABS park timeout complete")
             return True
 
-        # Residual body yaw with quiet encoders: oppose yaw (left freewheel case)
-        if abs(yaw_rate) >= STOP_YAW_RATE_RAD_S and abs(left_wv) < 0.5 and abs(right_wv) < 0.5:
-            _oppose_body_yaw(motors, yaw_rate)
-            return False
-
-        # Spin / low speed / unequal hubs: hard-zero BOTH wheels every tick
-        use_hard = (
-            self._spin_mode
-            or speed_m_s < 0.25
-            or abs(left_wv - right_wv) > 0.35
-            or abs(left_wv) > 0.5
-            or abs(right_wv) > 0.5
-            or self._elapsed_s >= 0.35
-        )
-        if use_hard:
-            _hard_zero_wheels(
-                motors, sensors, left_wv=left_wv, right_wv=right_wv
-            )
-            return False
-
-        # Short linear soft-oppose only for agreed forward cruise
-        if abs(forward_m_s) >= STOP_SPEED_M_S:
-            self._motion_sign = math.copysign(1.0, forward_m_s)
-        elif self._motion_sign == 0.0:
-            self._motion_sign = 1.0
-        cmd = _symmetric_brake_cmd(self._motion_sign, speed_m_s) * 0.7
-        for wheel in ("left_wheel", "right_wheel"):
-            motor = motors[wheel]
-            _enable_full_wheel_torque(motor)
-            motor.setPosition(float("inf"))
-            motor.setVelocity(_clamp_motor_vel(_clamp(cmd, MAX_BRAKE_WHEEL_V)))
         return False
 
 
@@ -496,19 +469,21 @@ def _hard_zero_wheels(
     *,
     left_wv: float | None = None,
     right_wv: float | None = None,
+    track: bool = False,
 ) -> None:
-    """Freeze BOTH hubs every tick — position lock preferred, never freewheel coast.
+    """Freeze BOTH hubs every tick — track-then-hold park brake.
 
     Live bugs this fights:
-      - GPS≈0 while a hub freewheels (NaN setPosition / no lock)
-      - "Chasing the horizon" after Stop: velocity-mode setVelocity(0) does NOT
-        hold the wheel against physics — the chassis keeps rolling. We must
-        latch a finite encoder angle and hold it in position mode.
-      - WHEEL_HOLD_VEL must be ≤ world maxVelocity (15) or Webots clips + warns.
+      - Freewheel coast (velocity-0 without position lock)
+      - Tokyo drift: differential oppose while still translating
+      - Lock wind-up: freezing an old encoder while hubs still spin forces reverse
+        spin on one side → continuous yaw. While ``track=True``, latch follows the
+        live encoder; when calm, freeze the last angle.
 
-    CRITICAL: never call setPosition(NaN). Invalid early encoder → freewheel.
+    CRITICAL: never call setPosition(NaN). WHEEL_HOLD_VEL ≤ world maxVelocity (15).
     """
     hold_vel = min(WHEEL_HOLD_VEL, MOTOR_MAX_VELOCITY)
+    rates = {"left_wheel": left_wv, "right_wheel": right_wv}
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
         _enable_full_wheel_torque(motor)
@@ -522,20 +497,18 @@ def _hard_zero_wheels(
             motor.setVelocity(0.0)
             continue
         try:
-            if wheel not in _WHEEL_LOCK_POS:
-                pos = float(sensor.getValue())
-                if not math.isfinite(pos):
-                    # Encoder not ready — velocity zero only until first finite sample
-                    motor.setPosition(float("inf"))
-                    motor.setVelocity(0.0)
-                    continue
-                _WHEEL_LOCK_POS[wheel] = pos
-            hold = _WHEEL_LOCK_POS.get(wheel)
-            if hold is None or not math.isfinite(hold):
+            pos = float(sensor.getValue())
+            if not math.isfinite(pos):
                 motor.setPosition(float("inf"))
                 motor.setVelocity(0.0)
                 continue
-            # Position lock: approach/hold latched angle at max legal motor speed
+            wv = rates.get(wheel)
+            spinning = wv is not None and abs(wv) > STOP_WHEEL_RAD_S * 2.0
+            # Track while commanded to track, or while this hub is still spinning
+            # (prevents reverse-to-old-target torque that yaws the chassis).
+            if track or spinning or wheel not in _WHEEL_LOCK_POS:
+                _WHEEL_LOCK_POS[wheel] = pos
+            hold = _WHEEL_LOCK_POS[wheel]
             motor.setPosition(hold)
             motor.setVelocity(hold_vel)
         except Exception:
@@ -556,7 +529,9 @@ def _halt_wheels(
 ) -> None:
     """Stop drive wheels — both always. lock=True uses hard dual-hub freeze."""
     if lock:
-        _hard_zero_wheels(motors, sensors, left_wv=left_wv, right_wv=right_wv)
+        _hard_zero_wheels(
+            motors, sensors, left_wv=left_wv, right_wv=right_wv, track=True
+        )
         return
     for wheel in ("left_wheel", "right_wheel"):
         motor = motors[wheel]
@@ -965,6 +940,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     pose_anchor_xy: tuple[float, float] | None = None
     pose_anchor_yaw = prev_yaw
     pose_anchor_age_s = 0.0
+    # After Stop, ignore stale "active" drive polls for this long (seconds).
+    # Prevents a race from re-arming cruise mid-park (horizon chase / Tokyo drift).
+    park_holdoff_s = 0.0
 
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -980,6 +958,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            if park_holdoff_s > 0.0:
+                park_holdoff_s = max(0.0, park_holdoff_s - dt)
             # --- Input: keyboard + R (auto loop) / Space (ABS) ---
             if keyboard is not None:
                 keys, pressed = key_tracker.poll(keyboard)
@@ -1091,6 +1071,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 print(f"Keyboard active — keys detected (sample code {next(iter(keys))})")
 
             # --- Poll dashboard: throttle, API drive, stop_epoch, battery_reset ---
+            # ORDER MATTERS: stop_epoch always wins over a stale "active" drive.
+            # Clearing ABS on active mid-stop left residual Tokyo-drift coast.
             if tick % state_poll_every == 0:
                 twin_state = fetch_twin_state(dashboard)
                 remote_throttle = remote_throttle_factor(twin_state)
@@ -1100,15 +1082,37 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if api_cmd.get("reset_thermal"):
                         thermal_c = 22.0
                     print(f"Battery replenished → {battery_pct:.0f}% (dashboard command)")
-                if api_cmd.get("active"):
-                    # New external drive cancels any incomplete stop
+
+                stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
+                got_new_stop = stop_epoch > last_stop_epoch
+                api_source = str(api_cmd.get("source") or "")
+                api_active = bool(api_cmd.get("active"))
+
+                if got_new_stop:
+                    last_stop_epoch = stop_epoch
+                    cached_api_left = 0.0
+                    cached_api_right = 0.0
+                    cached_api_source = "stop"
+                    last_api_sig = ""
+                    park_holdoff_s = 2.0  # ignore stale active drive for 2s
+                    print("External drive stop — park brake")
+                    if not abs_brake.active:
+                        abs_brake.request(
+                            forward_m_s,
+                            speed_m_s,
+                            last_left_v=last_teleop_left,
+                            last_right_v=last_teleop_right,
+                            left_wv=left_wv_early,
+                            right_wv=right_wv_early,
+                        )
+                elif api_active and park_holdoff_s <= 0.0:
+                    # Intentional drive (holdoff expired). May supersede finished park.
                     if abs_brake.active:
                         abs_brake.clear()
                     _clear_wheel_locks()
                     cached_api_left = float(api_cmd.get("left_v") or 0.0)
                     cached_api_right = float(api_cmd.get("right_v") or 0.0)
-                    cached_api_source = str(api_cmd.get("source") or "api")
-                    # Track last command for stop/spin detection (API used to skip this)
+                    cached_api_source = api_source or "api"
                     last_teleop_left = cached_api_left
                     last_teleop_right = cached_api_right
                     sig = f"{cached_api_left}:{cached_api_right}:{cached_api_source}"
@@ -1118,26 +1122,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"External drive from {cached_api_source}: "
                             f"L={cached_api_left} R={cached_api_right}"
                         )
+                elif api_active and park_holdoff_s > 0.0:
+                    # Stale active during post-stop holdoff — ignore
+                    cached_api_left = 0.0
+                    cached_api_right = 0.0
                 else:
-                    api_source = str(api_cmd.get("source") or "")
-                    stop_epoch = float(api_cmd.get("stop_epoch") or 0.0)
                     was_api_driving = (
                         abs(cached_api_left) > 0.01 or abs(cached_api_right) > 0.01
                     )
-                    need_abs = False
-                    if stop_epoch > last_stop_epoch:
-                        last_stop_epoch = stop_epoch
-                        need_abs = True
-                        print("External drive stop — ABS braking")
-                    elif api_source == "stop" and cached_api_source != "stop":
-                        need_abs = True
-                        print("External drive stop — ABS braking")
-                    elif was_api_driving and not abs_brake.active:
-                        # duration_s expired: bridge zeros cmd without stop_epoch —
-                        # still ABS so residual yaw/coast is killed.
-                        need_abs = True
-                        print("External drive expired — ABS braking")
-                    if need_abs and not abs_brake.active:
+                    if was_api_driving and not abs_brake.active:
+                        # duration_s expired without stop_epoch — still park
+                        print("External drive expired — park brake")
                         abs_brake.request(
                             forward_m_s,
                             speed_m_s,
@@ -1188,7 +1183,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     cached_api_left = 0.0
                     cached_api_right = 0.0
                     _hard_zero_wheels(
-                        motors, sensors, left_wv=left_wv, right_wv=right_wv
+                        motors,
+                        sensors,
+                        left_wv=left_wv,
+                        right_wv=right_wv,
+                        track=False,
                     )
             elif api_driving:
                 user_driving = True
@@ -1245,14 +1244,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_age_s = 0.0
 
                 if residual_hub or residual_yaw or residual_coast or pose_residual:
-                    # Still moving (maybe sub-visual) — kill it, do not report idle
-                    if residual_yaw and not residual_hub and not residual_coast:
-                        _oppose_body_yaw(motors, yaw_rate, min_rate=0.01)
-                    else:
-                        _clear_wheel_locks()
-                        _hard_zero_wheels(
-                            motors, sensors, left_wv=left_wv, right_wv=right_wv
-                        )
+                    # Still moving — park both hubs only (no yaw-oppose → no Tokyo drift)
+                    _hard_zero_wheels(
+                        motors,
+                        sensors,
+                        left_wv=left_wv,
+                        right_wv=right_wv,
+                        track=True,
+                    )
                     if not abs_brake.active:
                         why = []
                         if residual_hub:
@@ -1264,7 +1263,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         if pose_residual:
                             why.append("pose")
                         print(
-                            f"Residual ({'+'.join(why)}) — re-ABS "
+                            f"Residual ({'+'.join(why)}) — re-park "
                             f"L={left_wv:.2f} R={right_wv:.2f} "
                             f"yaw_rate={yaw_rate:.3f} speed={raw_speed_m_s:.3f}"
                         )
@@ -1281,7 +1280,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         pose_anchor_age_s = 0.0
                 else:
                     _hard_zero_wheels(
-                        motors, sensors, left_wv=left_wv, right_wv=right_wv
+                        motors,
+                        sensors,
+                        left_wv=left_wv,
+                        right_wv=right_wv,
+                        track=False,
                     )
                 _hold_neutral_upper_body(motors)
 

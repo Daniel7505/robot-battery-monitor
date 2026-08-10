@@ -1,5 +1,8 @@
 # Robot Battery Monitor
 
+**Co-built with Grok Build 4.5** · Owner: [Daniel7505](https://github.com/Daniel7505) · Kickoff: Grok Web ~4.4–4.5  
+**AI / human review fence:** [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)
+
 A simple web app that watches how much power a robot uses and how much battery is left.
 
 Think of it like a car dashboard, but for a robot. It tracks power for different body parts (legs, arms, torso, computer) and shows everything on a live web page that updates every few seconds.

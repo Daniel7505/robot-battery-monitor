@@ -25,6 +25,8 @@ Good for learning, testing, and eventually connecting to real robot hardware.
 
 ## Architecture (high level — start here for reviews)
 
+**Future AI models / cold reviewers:** read **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) first** — ownership, do/don’t fence, blast-radius list, and credits (Grok Build 4.5 majority builder; Grok Web ~4.4–4.5 kickoff). Then architecture.
+
 If you want to understand **how the system fits together** before reading code, open:
 
 **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — pyramid breakdown, layered stack, PMS hub interactions, live-twin sequence, stop handshake, and deploy swimlanes (Mermaid, renders on GitHub).
@@ -62,6 +64,7 @@ If you are opening this repo cold (code review, portfolio, or family showcase), 
 
 | Start here | Why |
 |------------|-----|
+| [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) | **AI + human review fence** — do/don’t, stop/power sacred list, credits |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams (pyramid, layers, sequences) |
 | `src/__init__.py` | Package map of the whole PMS |
 | `run_dashboard.py` | Process boot: DB → hardware → Flask dashboard |
@@ -497,3 +500,19 @@ Make sure Postgres is running and you set `DATABASE_URL` correctly (see steps ab
 5. Try simulator mode first, then ROS2 mode when you are ready
 
 That is it. You do not need to understand every file in the project on day one. Start the app, open the dashboard, and explore.
+
+---
+
+## Credits & AI collaboration
+
+This repo is a **human + AI co-build** (credit where credit is due):
+
+| Who | Role |
+|-----|------|
+| **Daniel** ([Daniel7505](https://github.com/Daniel7505)) | Owner — goals, visual ground truth, pacing, final say |
+| **Grok Build 4.5** (xAI) | Majority of the deep build — twin bridge, teleop/ABS/stop reliability, power feed, agent, Webots controller work, tests, architecture docs |
+| **Grok Web ~4.4 → 4.5** (xAI) | Project kickoff and early product framing |
+
+For future models (and humans doing a serious review), the standing fence is:
+
+**[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)** — look here first; do not silently rewrite the stop/power core; append your lineage row when you ship a meaningful arc.

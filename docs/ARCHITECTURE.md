@@ -14,6 +14,7 @@ These diagrams describe **what the repo actually does today**, not every long-te
 
 Related deep dives:
 
+- **AI / cold review fence (start here if you will edit):** [`REVIEW_CHECKLIST.md`](REVIEW_CHECKLIST.md)
 - Twin power contract: [`TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md)
 - Residual spin / stop reliability: [`STABILITY.md`](STABILITY.md)
 - Wheeled energy baseline: [`V1_WHEELED_ENERGY_BASELINE.md`](V1_WHEELED_ENERGY_BASELINE.md)

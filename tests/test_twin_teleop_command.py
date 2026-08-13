@@ -46,6 +46,25 @@ def test_drive_stop_clears_teleop():
     assert teleop.get("stop_epoch", 0) > 0
 
 
+def test_drive_duration_allows_15m_hold():
+    """15 m cruise is ~34 s; the old 30 s clamp parked mid-lane."""
+    reset_twin_bridge()
+    reset_hardware_source()
+    bridge = DigitalTwinBridge()
+    hw = ROS2BatterySource()
+    result = bridge.apply_command(
+        hw,
+        {"drive": {"left": 5.5, "right": 5.5, "duration_s": 70}, "source": "test"},
+    )
+    assert result["ok"] is True
+    teleop = bridge.export_state(hw)["teleop"]
+    assert teleop["active"] is True
+    until = teleop.get("drive_until")
+    assert until is not None
+    remaining = until - __import__("time").time()
+    assert remaining > 60.0
+
+
 def test_each_drive_stop_gets_new_stop_epoch():
     reset_twin_bridge()
     bridge = DigitalTwinBridge()
@@ -55,3 +74,18 @@ def test_each_drive_stop_gets_new_stop_epoch():
     bridge.apply_command(hw, {"drive_stop": True})
     second = bridge.export_state(hw)["teleop"]["stop_epoch"]
     assert second > first
+
+
+def test_lane_keep_arm_and_disarm():
+    reset_twin_bridge()
+    reset_hardware_source()
+    bridge = DigitalTwinBridge()
+    hw = ROS2BatterySource()
+    on = bridge.apply_command(hw, {"lane_keep": True})
+    assert on["ok"] is True
+    assert bridge.export_state(hw)["teleop"]["lane_keep"] is True
+    off = bridge.apply_command(hw, {"lane_keep": False})
+    assert off["ok"] is True
+    teleop = bridge.export_state(hw)["teleop"]
+    assert teleop["lane_keep"] is False
+    assert teleop.get("stop_epoch", 0) > 0

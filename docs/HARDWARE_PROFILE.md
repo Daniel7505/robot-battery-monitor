@@ -25,7 +25,9 @@ robot:
 | **battery** | 48 V Li-ion, **480 Wh** (10 Ah class) |
 | **motors.left/right_wheel** | 48 V BLDC hub class (~120 W cont), idle/cruise/peak + efficiency |
 | **stabilizers** | Small caster/balance load on **Torso** (idle + speed-linked) |
-| **compute + sensors** | SBC baseload + IMU/camera baseload |
+| **IMU** | **Adafruit BNO085** (#4754) 9-DOF fusion — catalog SKU, I2C 0x4A |
+| **balance_control** | Pitch-hold PD on both hubs (`kp` 2.0 / `max_correct` 0.8 after 2026-08-12 seesaw; sensor is real) |
+| **compute + sensors** | Jetson Orin Nano class + cameras/encoders (IMU is its own block). Twin also has two down-look line cameras + a finish camera for agent lane-keep. |
 | **modes** | Optional vision/agent adders when moving |
 | **channels** | PMS caps (Legs max 28 W, etc.) |
 

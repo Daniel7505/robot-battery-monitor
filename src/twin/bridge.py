@@ -118,6 +118,7 @@ class DigitalTwinBridge:
             "source": "",
             "battery_pct": None,
             "reset_thermal": False,
+            "lane_keep": False,
         }
         # Monotonic stop handshake; bumped on every drive_stop command.
         self._webots_stop_seq = 0
@@ -328,7 +329,7 @@ class DigitalTwinBridge:
                 "posture": agent.get("posture"),
                 "summary": agent.get("summary"),
                 "recommendation_count": agent.get("recommendation_count", 0),
-                "intervening": bool(agent.get("intervening") or agent.get("applied_actions")),
+                "intervening": bool(agent.get("intervening")),
                 "throttle_factor": safety.get("throttle_factor"),
             },
             "simulation": {
@@ -391,6 +392,7 @@ class DigitalTwinBridge:
             "active": abs(left) > 0.01 or abs(right) > 0.01,
             "source": self._webots_teleop.get("source") or "",
             "drive_until": until if until > now else None,
+            "lane_keep": bool(self._webots_teleop.get("lane_keep")),
         }
         stop_epoch = self._webots_teleop.get("stop_epoch")
         if stop_epoch:
@@ -487,7 +489,10 @@ class DigitalTwinBridge:
             except (TypeError, ValueError):
                 errors.append("Invalid drive command")
             else:
-                duration = max(0.2, min(30.0, duration))
+                # 15 m @ 0.44 m/s ≈ 34 s. Old 30 s cap expired mid-lane and
+                # residual-park sat the robot down. Still capped so a stuck
+                # client cannot command wheels forever.
+                duration = max(0.2, min(120.0, duration))
                 self._webots_teleop.update({
                     "left_v": left,
                     "right_v": right,
@@ -495,6 +500,21 @@ class DigitalTwinBridge:
                     "source": str(command.get("source") or "api"),
                 })
                 applied.append(f"drive L={left:.1f} R={right:.1f} ({duration:.1f}s)")
+
+        if "lane_keep" in command:
+            armed = bool(command.get("lane_keep"))
+            self._webots_teleop["lane_keep"] = armed
+            applied.append(f"lane_keep={'on' if armed else 'off'}")
+            if not armed:
+                self._webots_stop_seq += 1
+                self._webots_teleop.update({
+                    "left_v": 0.0,
+                    "right_v": 0.0,
+                    "drive_until": 0.0,
+                    "source": "stop",
+                    "stop_epoch": float(self._webots_stop_seq),
+                })
+                applied.append("drive_stop")
 
         if command.get("drive_stop"):
             # Hard stop handshake: zero cmd + new stop_epoch so the controller
@@ -506,6 +526,7 @@ class DigitalTwinBridge:
                 "drive_until": 0.0,
                 "source": "stop",
                 "stop_epoch": float(self._webots_stop_seq),
+                "lane_keep": False,
             })
             applied.append("drive_stop")
 

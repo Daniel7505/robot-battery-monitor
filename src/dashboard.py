@@ -380,7 +380,9 @@ HTML_TEMPLATE = '''
             <button type="button" id="teleop-left-btn" class="teleop-test-btn">◀ Turn Left</button>
             <button type="button" id="teleop-right-btn" class="teleop-test-btn">Turn Right ▶</button>
             <button type="button" id="teleop-stop-btn" class="teleop-test-btn">■ Stop</button>
+            <button type="button" id="lane-keep-btn" class="teleop-test-btn">◎ Lane keep</button>
         </div>
+        <p class="teleop-hint" id="lane-keep-status">Lane keep off — agent will use the yellow edges and brake on the red mark.</p>
         <p class="teleop-hint">Webots steals WASD for the camera — use <strong>Arrow keys</strong> or <strong>I/J/K/L</strong> in the 3D view, or drive from here via the twin API.</p>
         <div class="agent-action-log">
             <div class="agent-action-log-title">Agent Action Log <span style="font-weight:normal;color:#678;font-size:0.85em">— real-time decisions tied to simulation</span></div>
@@ -591,6 +593,7 @@ HTML_TEMPLATE = '''
     let lastActionLogSig = '';
     let lastInfluenceSig = '';
     let lastRecSig = '';
+    let laneKeepArmed = false;
 
     let currentTwinPhase = '';
 
@@ -720,6 +723,20 @@ HTML_TEMPLATE = '''
             speedoCard.classList.remove('braking');
         }
         document.getElementById('twin-loco-meta').innerText = active ? pose : '—';
+
+        const lkStatus = document.getElementById('lane-keep-status');
+        const lkBtn = document.getElementById('lane-keep-btn');
+        if (lkStatus) {
+            const yL = tc && tc.left_yellow != null ? Number(tc.left_yellow).toFixed(2) : '—';
+            const yR = tc && tc.right_yellow != null ? Number(tc.right_yellow).toFixed(2) : '—';
+            const red = tc && tc.finish_red != null ? Number(tc.finish_red).toFixed(2) : '—';
+            const armed = !!(tc && tc.lane_keep);
+            laneKeepArmed = armed;
+            if (lkBtn) lkBtn.innerText = armed ? '◎ Lane keep ON' : '◎ Lane keep';
+            lkStatus.innerText = armed
+                ? `Lane keep ON — yellow L ${yL} / R ${yR} · red ${red}`
+                : `Lane keep off — yellow L ${yL} / R ${yR} · red ${red}`;
+        }
 
         const loopFc = (tc && tc.loop_forecast) || {};
         const loopEl = document.getElementById('twin-loop-forecast');
@@ -1023,6 +1040,24 @@ HTML_TEMPLATE = '''
                 else hint.innerText = 'Stop failed: ' + (data.errors || []).join(', ');
             })
             .catch(() => { document.getElementById('pause-hint').innerText = 'Stop request failed'; });
+    });
+    document.getElementById('lane-keep-btn').addEventListener('click', () => {
+        const next = !laneKeepArmed;
+        postTwinCommand({ lane_keep: next, source: 'dashboard' })
+            .then(data => {
+                const hint = document.getElementById('pause-hint');
+                if (data.ok) {
+                    laneKeepArmed = next;
+                    hint.innerText = next
+                        ? 'Lane keep armed — agent driving from yellow/red cameras'
+                        : 'Lane keep off';
+                    const btn = document.getElementById('lane-keep-btn');
+                    btn.innerText = next ? '◎ Lane keep ON' : '◎ Lane keep';
+                } else {
+                    hint.innerText = 'Lane keep failed: ' + (data.errors || []).join(', ');
+                }
+            })
+            .catch(() => { document.getElementById('pause-hint').innerText = 'Lane keep request failed'; });
     });
 
     document.getElementById('demo-btn').addEventListener('click', () => {

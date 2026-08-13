@@ -238,9 +238,13 @@ class EnergyPredictor:
 
         if not mission_energy_ok or battery_pct <= 12:
             return "critical"
-        if confidence < 50 or (high_draw and locomotion_ramp and battery_pct < 25):
+        # Confidence and "task may change soon" are uncertainty, not danger.
+        # A 95% pack at idle/drive-start used to scream HIGH/MEDIUM because
+        # the EMA window was empty or the PMS task was about to rotate.
+        thin_pack = battery_pct < 25
+        if thin_pack and (confidence < 50 or (high_draw and locomotion_ramp)):
             return "high"
-        if confidence < 70 or high_draw or locomotion_ramp or not mission_energy_ok:
+        if high_draw or (thin_pack and (locomotion_ramp or confidence < 70)):
             return "medium"
         return "low"
 

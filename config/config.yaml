@@ -196,6 +196,12 @@ agent:
   task_override_hold_s: 14
   loop_margin_warn_pct: 18
   loop_margin_critical_pct: 8
+  # Do not treat noisy short-horizon HIGH as an intervention above this SOC
+  # when loop forecast is comfortable (or not yet computed).
+  prediction_risk_min_battery_pct: 25
+  lane_keep_cruise: 5.5
+  lane_keep_k_steer: 2.4
+  lane_keep_red_thresh: 0.28
 
 # Internal scripted mission driver (dashboard Sim panel) — not Webots itself
 simulation:

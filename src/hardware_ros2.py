@@ -423,10 +423,21 @@ class ROS2BatterySource(RealHardwareSource):
             gait = loc.get("gait")
             if phase:
                 self._agent.record_phase_change(phase, gait, tel.task)
+            raw = tel.raw if isinstance(getattr(tel, "raw", None), dict) else {}
+            sensors = raw.get("sensors") if isinstance(raw.get("sensors"), dict) else {}
             twin_ctx = {
                 "phase": phase,
                 "gait": gait,
                 "source": tel.source,
+                "lane_sensors": {
+                    "left_yellow": sensors.get("left_yellow"),
+                    "right_yellow": sensors.get("right_yellow"),
+                    "finish_red": sensors.get("finish_red"),
+                },
+                "lane_keep": bool(
+                    sensors.get("lane_keep")
+                    or (getattr(self._twin, "_webots_teleop", None) or {}).get("lane_keep")
+                ),
             }
         self._apply_ros2_commands()
         # Prefer explicit twin motion → PMS task (not only ROS2 inject path).

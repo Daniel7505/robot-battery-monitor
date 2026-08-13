@@ -171,6 +171,7 @@ def teleop_from_twin_state(state: dict) -> dict:
         "stop_epoch": float(teleop.get("stop_epoch") or 0.0),
         "battery_pct": teleop.get("battery_pct"),
         "reset_thermal": bool(teleop.get("reset_thermal")),
+        "lane_keep": bool(teleop.get("lane_keep")),
     }
 
 

@@ -174,7 +174,7 @@ def build_twin_control_status(bridge, hardware) -> dict:
     mission_context = context_summary(phase, pms_task) if phase else {}
     task_align = task_phase_alignment(phase, pms_task) if external and phase else {}
 
-    intervening = bool(agent.get("intervening") or agent.get("applied_actions"))
+    intervening = bool(agent.get("intervening"))
     stress = is_twin_stress_phase(phase)
     sensors = (tel.raw.get("sensors") if tel and tel.raw else {}) or {}
     # Don't keep stale "Idle / Standby" label when we overrode the task for motion
@@ -214,4 +214,11 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "last_telemetry_at": twin_status.get("last_telemetry_at"),
         "hardware_profile": get_active_profile_id(),
         "loop_forecast": loop_forecast,
+        "lane_keep": bool(
+            sensors.get("lane_keep")
+            or (getattr(bridge, "_webots_teleop", None) or {}).get("lane_keep")
+        ),
+        "left_yellow": sensors.get("left_yellow"),
+        "right_yellow": sensors.get("right_yellow"),
+        "finish_red": sensors.get("finish_red"),
     }

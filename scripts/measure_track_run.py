@@ -72,6 +72,23 @@ def pose_xy(st: dict) -> tuple[float, float]:
     return float(p.get("x_m") or 0.0), float(p.get("y_m") or 0.0)
 
 
+def pose_rock(st: dict) -> dict:
+    """Body + head motion orthogonal to +x travel (seesaw / nod)."""
+    feed = st.get("external_feed") or {}
+    p = feed.get("pose") or {}
+    s = feed.get("sensors") or {}
+    pitch = p.get("pitch_rad")
+    if pitch is None:
+        pitch = s.get("imu_pitch")
+    return {
+        "z": float(p.get("z_m") or 0.0),
+        "pitch": float(pitch or 0.0),
+        "head_x": s.get("head_x_m"),
+        "head_y": s.get("head_y_m"),
+        "head_z": s.get("head_z_m"),
+    }
+
+
 def wait_park(base: str, timeout_s: float = 12.0) -> None:
     for _ in range(3):
         cmd(base, {"drive_stop": True})
@@ -140,6 +157,11 @@ def main() -> int:
     ap.add_argument("--finish-tol", type=float, default=0.35, help="x within finish (m)")
     ap.add_argument("--label", default="track_run_15m_v1")
     ap.add_argument("--sample-hz", type=float, default=8.0)
+    ap.add_argument(
+        "--hold",
+        action="store_true",
+        help="One drive command for the whole run (no 0.4s re-assert pulse)",
+    )
     args = ap.parse_args()
     base = args.url.rstrip("/")
     cal = load_calibration()
@@ -182,12 +204,17 @@ def main() -> int:
     if err_start > 0.5:
         print("  WARN: robot not near start line — reload world (spawn is x=0)")
 
-    print("CONTINUOUS free roll toward finish (re-assert drive)...")
-    print("  Watch Webots: green → red, one continuous push, then stop.")
+    if args.hold:
+        print("HOLD cruise — one drive command, then stop at the line.")
+        print("  Watch: spin up → flat ω → brake. No 0.4s re-tap.")
+    else:
+        print("CONTINUOUS free roll toward finish (re-assert drive)...")
+        print("  Watch Webots: green → red, one continuous push, then stop.")
     print("  Wheel sensors: ω time-series + ABS park engagements logged.")
     print("  Energy: Legs W / total W / battery sampled each step.")
     t0 = time.time()
-    last_assert = 0.0
+    last_assert = -999.0
+    hold_sent = False
     samples: list[dict] = []
     path_gps = 0.0
     path_odo = 0.0
@@ -203,7 +230,22 @@ def main() -> int:
 
     while time.time() - t0 < args.timeout:
         t = time.time() - t0
-        if t - last_assert >= 0.4:
+        if args.hold:
+            if not hold_sent:
+                cmd(
+                    base,
+                    {
+                        "drive": {
+                            "left": args.wheel_v,
+                            "right": args.wheel_v,
+                            "duration_s": max(args.timeout, 40.0),
+                        }
+                    },
+                )
+                hold_sent = True
+                last_assert = t
+                print(f"  HOLD sent ω={args.wheel_v:.2f} for {max(args.timeout, 40.0):.0f}s")
+        elif t - last_assert >= 0.4:
             cmd(
                 base,
                 {
@@ -218,6 +260,7 @@ def main() -> int:
 
         st = twin(base)
         x, y = pose_xy(st)
+        rock = pose_rock(st)
         d = diag(st)
         pw = power_snapshot(st)
         wl = abs(float(d.get("hub_left_rad_s") or 0))
@@ -260,6 +303,11 @@ def main() -> int:
                 "t": round(t, 3),
                 "x": x,
                 "y": y,
+                "z": round(rock["z"], 4),
+                "pitch": round(rock["pitch"], 5),
+                "head_x": rock["head_x"],
+                "head_y": rock["head_y"],
+                "head_z": rock["head_z"],
                 "v_odo": round(v_odo, 4),
                 "omega": round(0.5 * (wl + wr), 4),
                 "omega_l": round(wl, 4),
@@ -323,6 +371,37 @@ def main() -> int:
     print(f"  abs park:  [{sparkline(abs_flags)}]  (high = ABS engaged)")
     print(f"  scale: omega max during run = {max(omegas) if omegas else 0:.2f} rad/s")
     print(f"  park engage count mid-run   = {len(park_events)}")
+    pitches = [float(s.get("pitch") or 0) for s in samples]
+    head_zs = [s.get("head_z") for s in samples if s.get("head_z") is not None]
+    ys = [float(s.get("y") or 0) for s in samples]
+    if pitches:
+        pmin, pmax = min(pitches), max(pitches)
+        print()
+        print(" ROCK / NOD (should be quiet if the body is steady)")
+        print(f"  pitch rad: [{sparkline([abs(p) for p in pitches])}]")
+        print(f"  pitch min/max {pmin:.4f} / {pmax:.4f} rad  "
+              f"({math.degrees(pmin):.2f} / {math.degrees(pmax):.2f} deg)")
+        print(f"  body y min/max {min(ys):.4f} / {max(ys):.4f} m")
+    if head_zs:
+        print(f"  head z  : [{sparkline(head_zs)}]")
+        print(f"  head z min/max {min(head_zs):.4f} / {max(head_zs):.4f} m  "
+              f"peak-to-peak {max(head_zs)-min(head_zs):.4f} m")
+    csv_path = Path(__file__).resolve().parent.parent.parent
+    # Prefer Grok Workspace if present
+    gw = Path.home() / "OneDrive" / "Desktop" / "Grok Workspace" / "track-rock.csv"
+    try:
+        lines = ["t,x,y,z,pitch_rad,pitch_deg,head_x,head_y,head_z,omega"]
+        for s in samples:
+            pit = float(s.get("pitch") or 0)
+            lines.append(
+                f"{s['t']},{s['x']},{s['y']},{s.get('z')},{pit},"
+                f"{math.degrees(pit):.4f},{s.get('head_x')},{s.get('head_y')},"
+                f"{s.get('head_z')},{s.get('omega')}"
+            )
+        gw.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"  rock CSV → {gw}")
+    except Exception as exc:
+        print(f"  rock CSV skip: {exc}")
     if park_events:
         for ev in park_events[:12]:
             print(

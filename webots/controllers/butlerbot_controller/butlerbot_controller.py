@@ -40,7 +40,7 @@ import os
 import sys
 import traceback
 
-from controller import Robot, Motor, PositionSensor, GPS, InertialUnit, Keyboard, Display
+from controller import Camera, Robot, Motor, PositionSensor, GPS, InertialUnit, Keyboard, Display
 
 try:
     from controller import Supervisor
@@ -506,6 +506,15 @@ def _clamp_motor_vel(value: float) -> float:
     return _clamp(value, MOTOR_MAX_VELOCITY)
 
 
+def _safe_imu_pitch(imu: InertialUnit | None) -> float:
+    if imu is None:
+        return 0.0
+    try:
+        return float(imu.getRollPitchYaw()[1])
+    except Exception:
+        return 0.0
+
+
 def _safe_imu_roll(imu: InertialUnit | None) -> float:
     if imu is None:
         return 0.0
@@ -745,6 +754,132 @@ def _apply_soft_grip(
     except Exception:
         # Grip assist is best-effort; never break the control loop
         return
+
+
+def _pitch_balance_delta(
+    imu: InertialUnit | None,
+    prev_pitch: float,
+    dt: float,
+    cfg: dict,
+    *,
+    abs_active: bool,
+) -> tuple[float, float]:
+    """Equal hub correction from IMU pitch (BNO085 stand-in). Returns (dω, pitch)."""
+    pitch = _safe_imu_pitch(imu)
+    if not cfg.get("enabled"):
+        return 0.0, pitch
+    if abs_active and not cfg.get("apply_while_abs"):
+        return 0.0, pitch
+    if abs(pitch) < float(cfg.get("deadband_rad") or 0.025):
+        return 0.0, pitch
+    rate = (pitch - prev_pitch) / dt if dt > 1e-4 else 0.0
+    raw = -float(cfg["kp_pitch"]) * pitch - float(cfg["kd_pitch_rate"]) * rate
+    lim = float(cfg.get("max_correct_rad_s") or 0.8)
+    return _clamp(raw, lim), pitch
+
+
+def _load_balance_cfg() -> dict:
+    try:
+        from src.hardware_profile import balance_control_spec
+
+        return balance_control_spec()
+    except Exception:
+        return {
+            "enabled": False,
+            "kp_pitch": 2.0,
+            "kd_pitch_rate": 0.85,
+            "max_correct_rad_s": 0.8,
+            "deadband_rad": 0.025,
+            "apply_while_abs": False,
+        }
+
+
+def _load_lane_keep():
+    try:
+        from src.lane_keep import lane_keep_command, peak_score_bgra, red_score, yellow_score
+
+        return lane_keep_command, yellow_score, red_score, peak_score_bgra
+    except Exception as exc:
+        print(f"WARNING: lane_keep policy not loaded ({exc})")
+        return None, None, None, None
+
+
+def _camera_max_rgb(cam: Camera | None) -> tuple[float, float, float]:
+    """Debug: brightest R,G,B seen through Webots accessors."""
+    if cam is None:
+        return (0.0, 0.0, 0.0)
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+        get_r = cam.imageGetRed
+        get_g = cam.imageGetGreen
+        get_b = cam.imageGetBlue
+    except Exception:
+        return (0.0, 0.0, 0.0)
+    if not image or w <= 0 or h <= 0:
+        return (0.0, 0.0, 0.0)
+    mr = mg = mb = 0
+    step = 3
+    for y in range(0, h, step):
+        for x in range(0, w, step):
+            mr = max(mr, get_r(image, w, x, y))
+            mg = max(mg, get_g(image, w, x, y))
+            mb = max(mb, get_b(image, w, x, y))
+    return (mr / 255.0, mg / 255.0, mb / 255.0)
+
+
+def _camera_peak_score(cam: Camera | None, score_fn, peak_fn) -> float:
+    """Peak color score using Webots imageGetRed/Green/Blue (not raw BGRA)."""
+    if cam is None or score_fn is None:
+        return 0.0
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+    except Exception:
+        return 0.0
+    if not image or w <= 0 or h <= 0:
+        return 0.0
+    get_r = getattr(cam, "imageGetRed", None)
+    get_g = getattr(cam, "imageGetGreen", None)
+    get_b = getattr(cam, "imageGetBlue", None)
+    if get_r is None or get_g is None or get_b is None:
+        if peak_fn is None:
+            return 0.0
+        try:
+            return float(peak_fn(image, w, h, score_fn))
+        except Exception:
+            return 0.0
+    scale = 1.0 / 255.0
+    # Floor lives in the lower part of a forward cam; sky washes the top.
+    # Scan every pixel in that band so a 2 cm stripe can still register.
+    best = 0.0
+    y0 = h // 3
+    for y in range(y0, h):
+        for x in range(w):
+            rgb = (
+                get_r(image, w, x, y) * scale,
+                get_g(image, w, x, y) * scale,
+                get_b(image, w, x, y) * scale,
+            )
+            val = float(score_fn(rgb))
+            if val > best:
+                best = val
+    return best
+
+
+def _read_lane_eyes(cams: dict, yellow_fn, red_fn, peak_fn) -> dict:
+    """Peak color scores so a thin paint stripe still registers."""
+    ly = _camera_peak_score(cams.get("line_left"), yellow_fn, peak_fn)
+    ry = _camera_peak_score(cams.get("line_right"), yellow_fn, peak_fn)
+    fr_l = _camera_peak_score(cams.get("finish_cam"), red_fn, peak_fn)
+    fr_r = _camera_peak_score(cams.get("finish_cam_r"), red_fn, peak_fn)
+    return {
+        "left_yellow": round(ly, 3),
+        "right_yellow": round(ry, 3),
+        "finish_red": round(max(fr_l, fr_r), 3),
+    }
 
 
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
@@ -991,8 +1126,8 @@ def _draw_hud(
 
 def _init_devices(
     robot: Robot, timestep: int
-) -> tuple[dict[str, Motor], dict[str, PositionSensor], GPS, InertialUnit, Keyboard, Display | None]:
-    """Enable motors, encoders, GPS, IMU, keyboard, and optional HUD display."""
+) -> tuple:
+    """Enable motors, encoders, GPS, head GPS, IMU, keyboard, and optional HUD."""
     motors: dict[str, Motor] = {}
     sensors: dict[str, PositionSensor] = {}
     for name in MOTOR_NAMES:
@@ -1012,6 +1147,13 @@ def _init_devices(
 
     gps: GPS = robot.getDevice("gps")
     gps.enable(timestep)
+    gps_head = None
+    try:
+        gps_head = robot.getDevice("gps_head")
+        if gps_head is not None:
+            gps_head.enable(timestep)
+    except Exception:
+        gps_head = None
     imu: InertialUnit = robot.getDevice("imu")
     imu.enable(timestep)
 
@@ -1034,7 +1176,20 @@ def _init_devices(
     except Exception:
         hud = None
 
-    return motors, sensors, gps, imu, keyboard, hud
+    cams: dict[str, Camera | None] = {}
+    for name in ("line_left", "line_right", "finish_cam", "finish_cam_r"):
+        cam = None
+        try:
+            cam = robot.getDevice(name)
+            if cam is not None:
+                cam.enable(timestep)
+        except Exception:
+            cam = None
+        cams[name] = cam
+        if cam is None:
+            print(f"WARNING: camera '{name}' not found — lane-keep eye missing")
+
+    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
 
 
 def _format_pose(gps: GPS) -> str:
@@ -1043,6 +1198,92 @@ def _format_pose(gps: GPS) -> str:
         return f"({pos[0]:.2f}, {pos[1]:.2f})"
     except Exception:
         return "(?, ?)"
+
+
+# Sideline onlooker: robot's right (−Y), ~14 ft out. Matches DEF VIEWPOINT.
+# ENU identity looks −Z (down); +X rotation tilts toward +Y (at the bot).
+# Daniel mouse-framed sideline 2026-08-12 (follow off).
+_CAM_EYE = (0.02270, -3.81863, 0.81003)
+_CAM_LOOK = (0.0, 0.0, 0.55)
+_CAM_FOV = 0.85
+_CAM_ORIENTATION = (0.0, 0.0, 1.0, 1.56)
+
+
+def _apply_follow_camera(robot: Robot) -> None:
+    """Reset the world Viewpoint onto ButlerBot (close 3/4 chase).
+
+    Live Webots keeps a zoomed-out / look-down pose for the whole session even
+    when the .wbt file already has follow=ButlerBot. Re-applying at controller
+    start makes every launch (and every reload) land on the robot without a
+    manual zoom. Does not touch motors / stop / power.
+    """
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        return
+    try:
+        vp = robot.getFromDef("VIEWPOINT")
+    except Exception:
+        vp = None
+    if vp is None:
+        print("Viewpoint DEF VIEWPOINT not found — skip follow-cam reset")
+        return
+    try:
+        field = vp.getField
+        follow = field("follow")
+        if follow:
+            follow.setSFString("ButlerBot")
+        ftype = field("followType")
+        if ftype:
+            ftype.setSFString("Tracking Shot")
+        smooth = field("followSmoothness")
+        if smooth:
+            smooth.setSFFloat(0.2)
+        pos = field("position")
+        if pos:
+            pos.setSFVec3f(list(_CAM_EYE))
+        ori = field("orientation")
+        if ori:
+            ori.setSFRotation(list(_CAM_ORIENTATION))
+        fov = field("fieldOfView")
+        if fov:
+            fov.setSFFloat(_CAM_FOV)
+        print(
+            "Camera reset: Tracking Shot on ButlerBot "
+            f"(Daniel sideline) eye={_CAM_EYE} fov={_CAM_FOV}"
+        )
+    except Exception as exc:
+        print(f"Follow-cam reset skipped: {exc}")
+
+
+_DUMP_CAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DUMP_CAM")
+
+
+def _maybe_dump_viewpoint(robot: Robot) -> None:
+    """If DUMP_CAM exists beside this controller, print live viewpoint and remove it."""
+    if not os.path.isfile(_DUMP_CAM):
+        return
+    try:
+        os.remove(_DUMP_CAM)
+    except OSError:
+        pass
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        print("VIEWPOINT dump: not a Supervisor")
+        return
+    try:
+        vp = robot.getFromDef("VIEWPOINT")
+        if vp is None:
+            print("VIEWPOINT dump: DEF VIEWPOINT missing")
+            return
+        pos = vp.getField("position").getSFVec3f()
+        ori = vp.getField("orientation").getSFRotation()
+        fol = vp.getField("follow").getSFString()
+        print(
+            "VIEWPOINT COPY "
+            f"position {pos[0]:.5f} {pos[1]:.5f} {pos[2]:.5f} "
+            f"orientation {ori[0]:.6f} {ori[1]:.6f} {ori[2]:.6f} {ori[3]:.6f} "
+            f"follow={fol!r}"
+        )
+    except Exception as exc:
+        print(f"VIEWPOINT dump failed: {exc}")
 
 
 def _run_loop(robot: Robot, opts: dict) -> None:
@@ -1057,7 +1298,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     # Poll teleop/stop often — 1s latency made dashboard Stop feel like a slow fade.
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
-    motors, sensors, gps, imu, keyboard, hud = _init_devices(robot, timestep)
+    motors, sensors, gps, gps_head, imu, keyboard, hud, cams = _init_devices(robot, timestep)
     speed_estimator = SpeedEstimator()
     key_tracker = KeyTracker()
     abs_brake = AbsBrakeController()
@@ -1084,6 +1325,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     last_teleop_left = 0.0
     last_teleop_right = 0.0
     prev_yaw = _imu_yaw(imu)
+    prev_pitch = _safe_imu_pitch(imu)
+    balance_cfg = _load_balance_cfg()
+    if balance_cfg.get("enabled"):
+        print(
+            "Pitch-hold ON (BNO085-class IMU) "
+            f"kp={balance_cfg['kp_pitch']} kd={balance_cfg['kd_pitch_rate']}"
+        )
+    lane_keep_fn, yellow_fn, red_fn, peak_fn = _load_lane_keep()
+    lane_keep_on = False
+    last_lane_sig = ""
+    lane_eyes = {"left_yellow": 0.0, "right_yellow": 0.0, "finish_red": 0.0}
     yaw_rate = 0.0
     # Pose residual window — catches "look away 3s" ultra-slow drift GPS rate misses
     pose_anchor_xy: tuple[float, float] | None = None
@@ -1104,6 +1356,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     wheel_lock_hold_s: dict[str, float] = {"left_wheel": 0.0, "right_wheel": 0.0}
     was_abs_active = False
 
+    _apply_follow_camera(robot)
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
     print("Teleop: Arrow keys or I/J/K/L — Space = stop. Click the FLOOR (not the robot)")
@@ -1118,6 +1371,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            if tick % 8 == 0:
+                _maybe_dump_viewpoint(robot)
             if park_holdoff_s > 0.0:
                 park_holdoff_s = max(0.0, park_holdoff_s - dt)
             if drive_grace_s > 0.0:
@@ -1256,6 +1511,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     got_new_stop = stop_epoch > last_stop_epoch
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
+                    lane_keep_on = bool(api_cmd.get("lane_keep"))
 
                     if got_new_stop:
                         last_stop_epoch = stop_epoch
@@ -1304,6 +1560,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         confirmed_end = (
                             api_source in ("", "stop", "api")
                             and not api_active
+                            and not lane_keep_on
                         )
                         if (
                             was_api_driving
@@ -1325,6 +1582,58 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             cached_api_source = api_source
                             if api_source != "stop":
                                 last_api_sig = ""
+
+            if yellow_fn and red_fn and peak_fn:
+                lane_eyes = _read_lane_eyes(cams, yellow_fn, red_fn, peak_fn)
+
+            if (
+                lane_keep_on
+                and lane_keep_fn is not None
+                and not abs_brake.active
+                and not user_driving
+                and park_holdoff_s <= 0.0
+            ):
+                lk = lane_keep_fn(
+                    lane_eyes["left_yellow"],
+                    lane_eyes["right_yellow"],
+                    lane_eyes["finish_red"],
+                )
+                if lk["brake"]:
+                    print("Lane-keep: red finish — ABS")
+                    abs_brake.request(
+                        forward_m_s,
+                        speed_m_s,
+                        last_left_v=last_teleop_left,
+                        last_right_v=last_teleop_right,
+                        left_wv=left_wv_early,
+                        right_wv=right_wv_early,
+                    )
+                    cached_api_left = 0.0
+                    cached_api_right = 0.0
+                    cached_api_source = "agent"
+                    last_lane_sig = "brake"
+                else:
+                    cached_api_left = float(lk["left"])
+                    cached_api_right = float(lk["right"])
+                    cached_api_source = "agent"
+                    last_teleop_left = cached_api_left
+                    last_teleop_right = cached_api_right
+                    drive_grace_s = max(drive_grace_s, 1.0)
+                    sig = (
+                        f"{lk['left']:.1f}:{lk['right']:.1f}:"
+                        f"{lane_eyes['left_yellow']:.2f}:{lane_eyes['right_yellow']:.2f}"
+                    )
+                    if sig != last_lane_sig:
+                        last_lane_sig = sig
+                        mx = _camera_max_rgb(cams.get("finish_cam"))
+                        print(
+                            "Lane-keep "
+                            f"L={lk['left']:.2f} R={lk['right']:.2f} "
+                            f"yL={lane_eyes['left_yellow']:.2f} "
+                            f"yR={lane_eyes['right_yellow']:.2f} "
+                            f"red={lane_eyes['finish_red']:.2f} "
+                            f"navRGB=({mx[0]:.2f},{mx[1]:.2f},{mx[2]:.2f})"
+                        )
 
             if stop_pressed:
                 print("Keyboard stop — ABS braking")
@@ -1586,7 +1895,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             throttle_factor = _merge_throttle(local_throttle, remote_for_teleop)
             agent_message = local_msg if throttle_factor < 1.0 else None
 
+            dω, prev_pitch = _pitch_balance_delta(
+                imu,
+                prev_pitch,
+                dt,
+                balance_cfg,
+                abs_active=abs_brake.active,
+            )
             if user_driving and not abs_brake.active:
+                left_v += dω
+                right_v += dω
                 if api_driving:
                     _set_drive(motors, left_v, right_v, 1.0)
                 else:
@@ -1791,11 +2109,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     pose=_read_pose(gps, imu),
                     sensors={
                         "imu_roll": _safe_imu_roll(imu),
+                        "imu_pitch": _safe_imu_pitch(imu),
+                        **_read_head_gps(gps_head),
                         "yaw_rate": round(yaw_rate, 4),
                         "left_wheel_rad_s": round(left_wv, 4),
                         "right_wheel_rad_s": round(right_wv, 4),
                         "thermal_c": round(thermal_c, 2),
                         "teleop_active": user_driving,
+                        "lane_keep": lane_keep_on,
+                        "left_yellow": lane_eyes.get("left_yellow"),
+                        "right_yellow": lane_eyes.get("right_yellow"),
+                        "finish_red": lane_eyes.get("finish_red"),
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -1953,6 +2277,21 @@ def _read_joints(
     return joints
 
 
+def _read_head_gps(gps_head) -> dict:
+    """Head-mounted GPS — sees pitch/rock as y/z wobble, not just +x travel."""
+    if gps_head is None:
+        return {}
+    try:
+        p = gps_head.getValues()
+        return {
+            "head_x_m": round(float(p[0]), 4),
+            "head_y_m": round(float(p[1]), 4),
+            "head_z_m": round(float(p[2]), 4),
+        }
+    except Exception:
+        return {}
+
+
 def _read_pose(gps: GPS, imu: InertialUnit) -> dict:
     pose: dict = {}
     try:
@@ -1964,6 +2303,8 @@ def _read_pose(gps: GPS, imu: InertialUnit) -> dict:
         return pose
     try:
         rpy = imu.getRollPitchYaw()
+        pose["roll_rad"] = round(rpy[0], 4)
+        pose["pitch_rad"] = round(rpy[1], 4)
         pose["heading_rad"] = round(rpy[2], 4)
     except Exception:
         pass

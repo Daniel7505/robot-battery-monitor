@@ -16,9 +16,9 @@ individual policies without rewriting the evaluate/apply pipeline.
 
 Intervention model
 ------------------
-Recommendations alone are *advisory*. Intervention becomes visible when:
-  - auto-apply actually mutates allocation/task (``applied_actions``), or
-  - high/critical priority recs are present (``intervening`` flag for UI)
+Recommendations alone are *advisory*. Intervention becomes visible when
+high/critical priority recs are present (``intervening`` flag for UI).
+Applied medium/low trims stay off that banner so a healthy cruise is quiet.
 
 ``should_auto_apply(twin_active)``: with a live twin, ``twin_auto_apply``
 defaults true so Webots stress/loop risks can act; without twin, throttle
@@ -37,6 +37,10 @@ Twin phase filters channel throttle recommendations via
 ``throttle_exempt_channels`` (e.g. do not cut Legs during transit when policy
 says locomotion is mission-critical). Stress, loop-forecast, and negotiator
 rules only fire with meaningful twin/loop context so mock mode stays quiet.
+
+``_rule_prediction_risk`` is gated: a healthy pack plus a comfortable (or
+absent) loop forecast will not emit HIGH alerts / throttle just because the
+short-horizon EMA predictor had low confidence at a task start.
 """
 
 from __future__ import annotations
@@ -47,6 +51,7 @@ from typing import Callable
 
 from src.config import config
 from src.logger import logger
+from src.lane_keep import lane_keep_command
 from src.mission_context import context_summary, is_standby_lru, throttle_exempt_channels
 from src.mission_tasks import TASK_PROFILES
 
@@ -62,8 +67,12 @@ _DEFAULT_AGENT = {
     "twin_stress_utilization_pct": 65,
     "task_override_hold_s": 12,
     "prediction_risk_tasks": ("high", "critical"),
+    "prediction_risk_min_battery_pct": 25,
     "loop_margin_warn_pct": 18,
     "loop_margin_critical_pct": 8,
+    "lane_keep_cruise": 5.5,
+    "lane_keep_k_steer": 2.4,
+    "lane_keep_red_thresh": 0.28,
 }
 
 # Align with control.TWIN_STRESS_PHASES — high-draw scripted segments.
@@ -98,6 +107,8 @@ class AgentContext:
     twin_gait: str | None = None
     twin_source: str | None = None
     loop_forecast: dict = field(default_factory=dict)
+    lane_sensors: dict = field(default_factory=dict)
+    lane_keep_armed: bool = False
 
 
 @dataclass
@@ -153,10 +164,10 @@ class AgentResult:
             reverse=True,
         )
         controlling = enabled and (bool(recs) or bool(self.applied_actions))
-        intervening = enabled and (
-            bool(self.applied_actions)
-            or any(r.get("applied") for r in (rec.to_dict() for rec in recs))
-            or any(r.priority in ("high", "critical") for r in recs)
+        # INTERVENING is for real protection, not a gentle cruise trim.
+        # Applied medium/low actions used to light the banner on a 95% pack.
+        intervening = enabled and any(
+            r.priority in ("high", "critical") for r in recs
         )
         return {
             "enabled": enabled,
@@ -252,6 +263,7 @@ class OnboardAgent:
             ("twin_stress", self._rule_twin_stress),
             ("loop_forecast", self._rule_loop_forecast),
             ("negotiator", self._rule_negotiator),
+            ("lane_keep", self._rule_lane_keep),
         ]
 
     def evaluate(
@@ -290,6 +302,8 @@ class OnboardAgent:
             twin_gait=twin.get("gait"),
             twin_source=twin.get("source"),
             loop_forecast=dict(mission.get("loop_forecast") or {}),
+            lane_sensors=dict(twin.get("lane_sensors") or {}),
+            lane_keep_armed=bool(twin.get("lane_keep")),
         )
 
         recommendations: list[AgentRecommendation] = []
@@ -865,9 +879,77 @@ class OnboardAgent:
             )
         return recs
 
+    def _energy_context_is_comfortable(self, ctx: AgentContext, cfg: dict) -> bool:
+        """True when a noisy short-horizon HIGH should not become an intervention.
+
+        Loop forecast is the mission-energy truth. A healthy pack with a
+        comfortable (or missing) loop forecast should not get throttled
+        because the EMA predictor dipped confidence at a task start.
+        """
+        min_bat = float(cfg.get("prediction_risk_min_battery_pct", 25))
+        if ctx.battery_pct < min_bat:
+            return False
+        if ctx.prediction.get("mission_energy_ok") is False:
+            return False
+        fc = ctx.loop_forecast or {}
+        if not fc or not fc.get("ok"):
+            return True
+        if not fc.get("can_complete_loop", True):
+            return False
+        warn = float(cfg.get("loop_margin_warn_pct", 18))
+        if float(fc.get("margin_pct", 100)) < warn:
+            return False
+        return True
+
+    def _rule_lane_keep(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
+        """Log what the driving policy sees. Wheels are commanded in Webots."""
+        if not ctx.lane_keep_armed:
+            return []
+        sense = ctx.lane_sensors or {}
+        left_y = float(sense.get("left_yellow") or 0.0)
+        right_y = float(sense.get("right_yellow") or 0.0)
+        finish = float(sense.get("finish_red") or 0.0)
+        cmd = lane_keep_command(
+            left_y,
+            right_y,
+            finish,
+            cruise=float(cfg.get("lane_keep_cruise", 5.5)),
+            k_steer=float(cfg.get("lane_keep_k_steer", 2.4)),
+            red_thresh=float(cfg.get("lane_keep_red_thresh", 0.28)),
+        )
+        if cmd["brake"]:
+            return [
+                AgentRecommendation(
+                    action="safety_alert",
+                    priority="medium",
+                    reason="Red finish in view — agent braking",
+                    message="LANE KEEP — red mark, ABS",
+                )
+            ]
+        if abs(cmd["error"]) < 0.05:
+            return [
+                AgentRecommendation(
+                    action="status",
+                    priority="info",
+                    reason="Centered on lane",
+                    message="LANE KEEP — holding center",
+                )
+            ]
+        side = "left" if cmd["error"] > 0 else "right"
+        return [
+            AgentRecommendation(
+                action="status",
+                priority="info",
+                reason=f"Correcting toward {side}",
+                message=f"LANE KEEP — yellow {side} (err {cmd['error']:+.2f})",
+            )
+        ]
+
     def _rule_prediction_risk(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
         risk = (ctx.prediction.get("risk_level") or "low").lower()
         if risk not in cfg.get("prediction_risk_tasks", ("high", "critical")):
+            return []
+        if self._energy_context_is_comfortable(ctx, cfg):
             return []
         suggested = _TASK_DOWNGRADE.get(ctx.task_id, "idle")
         recs = [
@@ -975,6 +1057,13 @@ class OnboardAgent:
 
     def _rule_high_utilization(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
         """Cut channels in task throttle_order when system utilization is high."""
+        phase = (ctx.twin_phase or "").lower()
+        # Intentional teleop cruise: idle→drive step-up is expected, not a crisis.
+        if (
+            phase in ("teleop", "teleop_turn")
+            and ctx.battery_pct >= float(cfg.get("prediction_risk_min_battery_pct", 25))
+        ):
+            return []
         if ctx.utilization_pct < cfg["high_utilization_pct"]:
             return []
         profile = TASK_PROFILES.get(ctx.task_id)

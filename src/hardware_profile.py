@@ -155,6 +155,26 @@ def motor_driver_spec(profile: dict | None = None) -> dict:
     return dict(prof.get("motor_driver") or {})
 
 
+def imu_spec(profile: dict | None = None) -> dict:
+    """Catalog IMU block (BNO085 class) from the active profile."""
+    prof = profile or get_active_profile()
+    return dict(prof.get("imu") or {})
+
+
+def balance_control_spec(profile: dict | None = None) -> dict:
+    """Pitch-hold PD limits. Sensor SKU is real; gains are first-cut."""
+    prof = profile or get_active_profile()
+    raw = dict(prof.get("balance_control") or {})
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "kp_pitch": float(raw.get("kp_pitch", 2.0)),
+        "kd_pitch_rate": float(raw.get("kd_pitch_rate", 0.85)),
+        "max_correct_rad_s": float(raw.get("max_correct_rad_s", 0.8)),
+        "deadband_rad": float(raw.get("deadband_rad", 0.025)),
+        "apply_while_abs": bool(raw.get("apply_while_abs", False)),
+    }
+
+
 def wheel_mass_kg(profile: dict | None = None) -> float:
     """Tire+hub mass (kg) for physics / inertia; excludes motor stator if separate."""
     prof = profile or get_active_profile()

@@ -289,11 +289,14 @@ def _compute_draw_w(
     """SBC + sensors (+ optional vision/agent modes) from profile compute blocks."""
     compute = profile.get("compute") or {}
     sensors = profile.get("sensors") or {}
+    imu = profile.get("imu") or {}
     modes = profile.get("modes") or {}
     idle_w = float(compute.get("idle_w", COMPUTE_IDLE_W))
     active_w = float(compute.get("active_w", COMPUTE_ACTIVE_W))
-    sens_idle = float(sensors.get("idle_w", 0.0))
-    sens_active = float(sensors.get("active_w", sens_idle))
+    sens_idle = float(sensors.get("idle_w", 0.0)) + float(imu.get("idle_w", 0.0))
+    sens_active = float(sensors.get("active_w", sensors.get("idle_w", 0.0))) + float(
+        imu.get("active_w", imu.get("idle_w", 0.0))
+    )
     moving = not (gait in ("stand", "idle", "standby") and speed_m_s < 0.06)
     if not moving:
         board = idle_w

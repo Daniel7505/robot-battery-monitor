@@ -1,7 +1,9 @@
 from src.hardware_profile import (
+    balance_control_spec,
     battery_capacity_wh,
     clear_profile_cache,
     get_active_profile,
+    imu_spec,
     load_hardware_profile,
     motor_idle_and_scale,
     motor_spec,
@@ -24,6 +26,26 @@ def test_load_butlerbot_wheeled_profile():
     assert prof["channels"]["Legs"]["max_draw_w"] == 28
     assert "stabilizers" in prof
     assert "sensors" in prof
+    assert prof["imu"]["part_number"] == "4754"
+    assert prof["imu"]["chip"].startswith("BNO085")
+    assert prof["balance_control"]["enabled"] is True
+
+
+def test_bno085_imu_and_balance_control():
+    imu = imu_spec()
+    assert imu["part_number"] == "4754"
+    assert imu["vendor"] == "Adafruit"
+    assert imu["gyro_range_dps"] == 2000
+    phys = imu["physical"]
+    assert phys["length_mm"] == 25.6
+    assert phys["width_mm"] == 22.7
+    assert phys["height_mm"] == 4.6
+    assert phys["mass_g"] == 2.5
+    bal = balance_control_spec()
+    assert bal["enabled"] is True
+    assert bal["kp_pitch"] == 2.0
+    assert bal["max_correct_rad_s"] == 0.8
+    assert bal["max_correct_rad_s"] <= 5.5
 
 
 def test_active_profile_wheel_has_cruise_and_efficiency():

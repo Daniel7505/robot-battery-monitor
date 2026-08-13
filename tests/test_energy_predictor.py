@@ -83,6 +83,34 @@ def test_anticipated_phases_returns_probabilities():
     assert all("expected_draw_w" in p for p in phases)
 
 
+def test_healthy_pack_low_confidence_is_not_high_risk():
+    """Empty EMA window used to mark a 95% pack HIGH. Uncertainty ≠ danger."""
+    pred = EnergyPredictor()
+    result = pred.forecast(
+        battery_pct=95,
+        capacity_wh=480,
+        task_id="moving",
+        task_remaining_s=40,
+        blend_progress=0.2,
+        current_draw_w=35,
+    )
+    assert result["confidence_pct"] < 50
+    assert result["risk_level"] == "low"
+
+
+def test_thin_pack_low_confidence_is_high_risk():
+    pred = EnergyPredictor()
+    result = pred.forecast(
+        battery_pct=20,
+        capacity_wh=480,
+        task_id="moving",
+        task_remaining_s=40,
+        blend_progress=0.2,
+        current_draw_w=35,
+    )
+    assert result["risk_level"] in ("high", "critical")
+
+
 def test_dynamic_budget_tightens_on_high_predicted_load():
     channels = [{"id": "Legs", "max_draw_w": 35}, {"id": "Compute", "max_draw_w": 15}]
     alloc = PowerAllocator(channels, system_budget_w=72)

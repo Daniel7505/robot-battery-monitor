@@ -55,18 +55,23 @@ WorldInfo {
   ]
   info [
     "ButlerBot Neo — upright wheeled humanoid (abstract Unitree Neo proportions)"
-    "Driven hip wheels + 4 passive corner casters for pitch/roll stability (gyro later)"
+    "Driven hip wheels + 4 catch casters; BNO085-class IMU pitch-hold (biped precursor)"
     "TRACK (ENU): start line x=0.0 m  finish line x=15.0 m  length=15.0 m  y lane |y|<=0.6"
     "GPS on robot reports world translation (same frame as these markers)"
   ]
 }
 
-Viewpoint {
+DEF VIEWPOINT Viewpoint {
+  # Sideline onlooker: robot's RIGHT (−Y), ~14 ft (4.3 m) out, eye height.
+  # ENU identity looks −Z (down); +X rotation tilts toward +Y (at the bot).
+  # Tracking Shot walks with him so we see the 15 m dash in profile.
   follow "ButlerBot"
   followType "Tracking Shot"
-  orientation -0.22 0.28 0.93 0.95
-  position 0 -2.4 1.35
-  fieldOfView 0.9
+  followSmoothness 0.2
+  # Daniel mouse-framed sideline 2026-08-12 — Tracking Shot keeps this offset
+  orientation 0 0 1 1.56
+  position 0.02270 -3.81863 0.81003
+  fieldOfView 0.85
 }
 
 Background {
@@ -287,16 +292,23 @@ Robot {
                   baseColor 0.08 0.08 0.1
                 }
                 geometry Cylinder {
-                  height 0.08
+                  height 0.05
                   radius 0.08
                 }
               }
             ]
           }
         ]
-        boundingObject Cylinder {
-          height 0.08
-          radius 0.08
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. Same 90° about X
+        # on visual AND collision so the axle rolls. 4.5 rotated the Shape only.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
         }
         physics Physics {
           density -1
@@ -341,16 +353,23 @@ Robot {
                   baseColor 0.08 0.08 0.1
                 }
                 geometry Cylinder {
-                  height 0.08
+                  height 0.05
                   radius 0.08
                 }
               }
             ]
           }
         ]
-        boundingObject Cylinder {
-          height 0.08
-          radius 0.08
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. Same 90° about X
+        # on visual AND collision so the axle rolls. 4.5 rotated the Shape only.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
         }
         physics Physics {
           density -1
@@ -365,14 +384,16 @@ Robot {
         }
       }
     }
+    # Catch spheres. subdivision 4 = smoother contact (2 was a faceted bump).
+    # z=0.044 → bottom ~4 mm above wheel contact. At 0.04 they fight the hubs.
     DEF FRONT_LEFT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor 0.11 0.13 0.046
+        anchor 0.11 0.13 0.044
         dampingConstant 0.8
       }
       endPoint Solid {
         name "front_left_caster"
-        translation 0.11 0.13 0.046
+        translation 0.11 0.13 0.044
         contactMaterial "caster"
         children [
           Shape {
@@ -382,13 +403,13 @@ Robot {
             }
             geometry Sphere {
               radius 0.04
-              subdivision 2
+              subdivision 4
             }
           }
         ]
         boundingObject Sphere {
           radius 0.04
-          subdivision 2
+          subdivision 4
         }
         physics Physics {
           density -1
@@ -398,12 +419,12 @@ Robot {
     }
     DEF FRONT_RIGHT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor 0.11 -0.13 0.046
+        anchor 0.11 -0.13 0.044
         dampingConstant 0.8
       }
       endPoint Solid {
         name "front_right_caster"
-        translation 0.11 -0.13 0.046
+        translation 0.11 -0.13 0.044
         contactMaterial "caster"
         children [
           Shape {
@@ -413,13 +434,13 @@ Robot {
             }
             geometry Sphere {
               radius 0.04
-              subdivision 2
+              subdivision 4
             }
           }
         ]
         boundingObject Sphere {
           radius 0.04
-          subdivision 2
+          subdivision 4
         }
         physics Physics {
           density -1
@@ -429,12 +450,12 @@ Robot {
     }
     DEF REAR_LEFT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor -0.11 0.13 0.046
+        anchor -0.11 0.13 0.044
         dampingConstant 0.8
       }
       endPoint Solid {
         name "rear_left_caster"
-        translation -0.11 0.13 0.046
+        translation -0.11 0.13 0.044
         contactMaterial "caster"
         children [
           Shape {
@@ -444,13 +465,13 @@ Robot {
             }
             geometry Sphere {
               radius 0.04
-              subdivision 2
+              subdivision 4
             }
           }
         ]
         boundingObject Sphere {
           radius 0.04
-          subdivision 2
+          subdivision 4
         }
         physics Physics {
           density -1
@@ -460,12 +481,12 @@ Robot {
     }
     DEF REAR_RIGHT_CASTER BallJoint {
       jointParameters BallJointParameters {
-        anchor -0.11 -0.13 0.046
+        anchor -0.11 -0.13 0.044
         dampingConstant 0.8
       }
       endPoint Solid {
         name "rear_right_caster"
-        translation -0.11 -0.13 0.046
+        translation -0.11 -0.13 0.044
         contactMaterial "caster"
         children [
           Shape {
@@ -475,13 +496,13 @@ Robot {
             }
             geometry Sphere {
               radius 0.04
-              subdivision 2
+              subdivision 4
             }
           }
         ]
         boundingObject Sphere {
           radius 0.04
-          subdivision 2
+          subdivision 4
         }
         physics Physics {
           density -1
@@ -563,6 +584,11 @@ Robot {
           DEF HEAD_VIS Transform {
             translation 0 0 0.38
             children [
+              GPS {
+                name "gps_head"
+                accuracy 0
+                resolution -1
+              }
               Shape {
                 appearance PBRAppearance {
                   baseColor 0.16 0.18 0.22
@@ -716,6 +742,45 @@ Robot {
           ]
         }
       }
+    }
+    # Down-look eyes for the yellow edges (y=±0.65). Wide FOV so each
+    # camera sees its stripe when the body is near lane center.
+    Camera {
+      translation 0.08 0.55 0.12
+      name "line_left"
+      width 8
+      height 8
+      fieldOfView 1.4
+      near 0.03
+    }
+    Camera {
+      translation 0.08 -0.55 0.12
+      name "line_right"
+      width 8
+      height 8
+      fieldOfView 1.4
+      near 0.03
+    }
+    # Wide stereo pair (nav-cam class). Looks forward+down so a thin floor
+    # mark on *this* track or a future one can still fill a few pixels.
+    # Paint stays as-is — the eyes adapt, not the world.
+    Camera {
+      translation 0.10 0.04 0.32
+      rotation 0 1 0 -1.32
+      name "finish_cam"
+      width 64
+      height 40
+      fieldOfView 1.2
+      near 0.05
+    }
+    Camera {
+      translation 0.10 -0.04 0.32
+      rotation 0 1 0 -1.32
+      name "finish_cam_r"
+      width 64
+      height 40
+      fieldOfView 1.2
+      near 0.05
     }
     GPS {
       name "gps"

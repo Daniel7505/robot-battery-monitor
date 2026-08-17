@@ -16,6 +16,7 @@ import sqlite3
 from dataclasses import asdict, dataclass
 
 from src.parts_db import connect, get_part, list_motors, list_parts
+from src.twin_energy import estimate_mission_energy, paper_energy
 
 # Twin cruise is 0.44 m/s. Used when the mission does not set a speed.
 DEFAULT_CRUISE_M_S = 0.44
@@ -188,7 +189,26 @@ def _score(mission: Mission, raw: dict) -> dict:
     time_s = float(mission.track_length_m) / v_use
     drive_w = float(motor.get("continuous_power_w") or 8.0) * qty["motor"]
     draw_w = drive_w + BASELOAD_W
-    energy_wh = draw_w * time_s / 3600.0
+    paper = paper_energy(mission.track_length_m, draw_w=draw_w, time_s=time_s)
+    try:
+        twin = estimate_mission_energy(
+            mission.track_length_m,
+            track="s",
+            motor_cont_w=float(motor.get("continuous_power_w") or 8.0),
+            motor_qty=qty["motor"],
+        )
+    except Exception:
+        twin = None
+    if twin is not None:
+        energy_wh = float(twin["energy_wh"])
+        energy_source = str(twin["source"])
+        draw_w_used = float(twin["draw_w"])
+        time_s_used = float(twin["time_s"])
+    else:
+        energy_wh = float(paper["energy_wh"])
+        energy_source = "paper"
+        draw_w_used = draw_w
+        time_s_used = time_s
     usable = None if pack_wh is None else float(pack_wh) * PACK_USABLE
     energy_ok = usable is not None and usable >= energy_wh
     speed_ok = v_max is None or v_max >= v_req * 0.95
@@ -205,11 +225,14 @@ def _score(mission: Mission, raw: dict) -> dict:
         notes.append(f"Voltage compatible: {bv} V pack ≈ {mv} V motor bus.")
     if not energy_ok:
         notes.append(
-            f"Energy tight: est {energy_wh:.2f} Wh vs usable "
+            f"Energy tight ({energy_source}): est {energy_wh:.2f} Wh vs usable "
             f"{usable if usable is None else f'{usable:.1f}'} Wh."
         )
     else:
-        notes.append(f"Energy OK: est {energy_wh:.2f} Wh, usable {usable:.1f} Wh.")
+        notes.append(
+            f"Energy OK ({energy_source}): est {energy_wh:.2f} Wh, usable {usable:.1f} Wh"
+            f" (paper was {paper['energy_wh']:.2f} Wh)."
+        )
     if not speed_ok:
         notes.append(
             f"Speed short: motor free-run ~{v_max:.2f} m/s, need {v_req:.2f} m/s."
@@ -269,13 +292,15 @@ def _score(mission: Mission, raw: dict) -> dict:
             "cost_usd": cost,
             "mass_g": mass,
             "energy_wh_est": round(energy_wh, 3),
+            "energy_wh_paper": paper["energy_wh"],
+            "energy_source": energy_source,
             "pack_wh": pack_wh,
             "usable_wh": None if usable is None else round(usable, 2),
             "energy_ok": energy_ok,
-            "draw_w_est": round(draw_w, 1),
+            "draw_w_est": round(draw_w_used, 1),
             "v_req_m_s": round(v_req, 3),
             "v_max_m_s": None if v_max is None else round(v_max, 3),
-            "time_s_est": round(time_s, 1),
+            "time_s_est": round(time_s_used, 1),
             "camera_compute_cost": compute_tax,
         },
         "notes": notes,
@@ -326,7 +351,8 @@ def format_report(result: dict) -> str:
         lines.append(
             f"{i}. [{flag}] {c['name']}   score={c['score']}   "
             f"${t['cost_usd']}   {t['mass_g']} g   "
-            f"{t['energy_wh_est']} Wh / pack {t['pack_wh']} Wh"
+            f"{t['energy_wh_est']} Wh ({t.get('energy_source')}) / "
+            f"paper {t.get('energy_wh_paper')} Wh / pack {t['pack_wh']} Wh"
         )
         lines.append(f"   {c['rationale']}")
         sku_bits = [f"{row['qty']}×{row['sku']}" for row in c["bom"]]

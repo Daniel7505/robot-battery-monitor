@@ -38,9 +38,9 @@ python -m src.design_agent --length 25 --max-cost 800 --max-mass 6000 --minutes 
 
 1. Loads motors × batteries × cameras from the catalog (wheels / compute / ESC / IMU are shared).
 2. Qty: 2 drive motors, 2 wheels, 2 cameras (line-pair), one of everything else.
-3. Energy: `(2 × motor continuous W + 18 W baseload) × time / 3600` vs `0.8 × pack Wh`.
+3. Energy (twin-backed): `src/twin_energy.py` uses the V1 wheeled baseline (~40 W total at 0.44 m/s → ~0.025 Wh/m, ×1.35 on an S). The old paper number (draw × `max_minutes`) is still returned as `energy_wh_paper` for comparison. Optional `data/twin_energy.json` (`wh_per_m`) overrides if present. **No Webots required.**
 4. Speed: motor no-load RPM × wheel radius vs required `length / max_minutes`.
 5. Voltage note if pack and motors differ by more than 2 V (48 V pack vs 12 V 37D).
 6. Rank: feasible first, then cheaper / lighter / lower camera `compute_cost`.
 
-This is not physics. A 3S LiPo + 37D can look “fine” on paper and still be the wrong robot on the twin. That is the next plug-in, not this pass.
+Still not a live physics search. A 3S LiPo can look fine at 0.9 Wh vs 55 Wh and still be the wrong robot on the twin. Next plug-in is a real `measure_*` run writing `data/twin_energy.json`.

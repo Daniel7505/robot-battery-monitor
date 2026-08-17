@@ -220,5 +220,8 @@ def build_twin_control_status(bridge, hardware) -> dict:
         ),
         "left_yellow": sensors.get("left_yellow"),
         "right_yellow": sensors.get("right_yellow"),
+        "left_offset": sensors.get("left_offset"),
+        "right_offset": sensors.get("right_offset"),
+        "steer": sensors.get("steer"),
         "finish_red": sensors.get("finish_red"),
     }

@@ -909,6 +909,14 @@ class OnboardAgent:
         left_y = float(sense.get("left_yellow") or 0.0)
         right_y = float(sense.get("right_yellow") or 0.0)
         finish = float(sense.get("finish_red") or 0.0)
+        steer = sense.get("steer")
+        o_l = sense.get("left_offset")
+        o_r = sense.get("right_offset")
+        x_m = sense.get("x_m")
+        y_m = sense.get("y_m")
+        where = ""
+        if x_m is not None and y_m is not None:
+            where = f" @ ({float(x_m):.2f}, {float(y_m):.2f})"
         cmd = lane_keep_command(
             left_y,
             right_y,
@@ -916,32 +924,60 @@ class OnboardAgent:
             cruise=float(cfg.get("lane_keep_cruise", 5.5)),
             k_steer=float(cfg.get("lane_keep_k_steer", 2.4)),
             red_thresh=float(cfg.get("lane_keep_red_thresh", 0.28)),
+            left_offset=None if o_l is None else float(o_l),
+            right_offset=None if o_r is None else float(o_r),
+            left_y_m=(
+                None
+                if sense.get("left_y_m") is None
+                else float(sense.get("left_y_m"))
+            ),
+            right_y_m=(
+                None
+                if sense.get("right_y_m") is None
+                else float(sense.get("right_y_m"))
+            ),
         )
+        live = cmd.get("steer") if cmd.get("steer") is not None else steer
         if cmd["brake"]:
+            why = str(cmd.get("reason") or "")
+            lost = "lost paint" in why
+            watched = "watch" in why
+            if watched:
+                label = "geometry watch — stop"
+            elif lost:
+                label = "lost paint, stop"
+            else:
+                label = "red mark, ABS"
             return [
                 AgentRecommendation(
                     action="safety_alert",
                     priority="medium",
-                    reason="Red finish in view — agent braking",
-                    message="LANE KEEP — red mark, ABS",
+                    reason=why or label,
+                    message=f"LANE KEEP — {label}{where}",
                 )
             ]
-        if abs(cmd["error"]) < 0.05:
+        if live is None:
+            live = cmd.get("error") or 0.0
+        live_f = float(live)
+        if abs(live_f) < 0.05:
             return [
                 AgentRecommendation(
                     action="status",
                     priority="info",
-                    reason="Centered on lane",
-                    message="LANE KEEP — holding center",
+                    reason="Corridor clear — keep rolling",
+                    message=f"LANE KEEP — corridor clear {live_f:+.2f}{where}",
                 )
             ]
-        side = "left" if cmd["error"] > 0 else "right"
+        wall = "right" if live_f < 0 else "left"
         return [
             AgentRecommendation(
                 action="status",
                 priority="info",
-                reason=f"Correcting toward {side}",
-                message=f"LANE KEEP — yellow {side} (err {cmd['error']:+.2f})",
+                reason=f"Push off {wall} yellow wall",
+                message=(
+                    f"LANE KEEP — push off {wall} {live_f:+.2f} "
+                    f"oL={o_l} oR={o_r}{where}"
+                ),
             )
         ]
 

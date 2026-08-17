@@ -1,7 +1,8 @@
 {
-  "schema": "butlerbot_track_v1",
+  "schema": "butlerbot_track_v2",
   "coordinate_system": "ENU",
-  "description": "One-lane track painted in butlerbot.wbt — start at x=0, finish at x=15 (3x original 5 m)",
+  "description": "Mirrored gentle S. Start (0,0), first lobe SOUTH (−Y) 3-12 m, second NORTH (+Y) 12-21 m, finish straight 21-24.5 m. Same width and paint as the scored S.",
+  "shape": "gentle_S_mirrored",
   "wheel_radius_m": 0.08,
   "battery_capacity_wh": 480.0,
   "start": {
@@ -13,26 +14,30 @@
   },
   "finish": {
     "name": "track_finish_line",
-    "x_m": 15.0,
+    "x_m": 24.5,
     "y_m": 0.0,
     "z_m": 0.01,
     "color": "red"
   },
   "lane": {
-    "y_min_m": -0.6,
-    "y_max_m": 0.6,
-    "length_m": 15.0
+    "half_width_m": 0.65,
+    "path_length_m": 25.04,
+    "amplitude_m": 1.0,
+    "lobe_m": 9.0,
+    "start_straight_m": 3.0,
+    "finish_straight_m": 3.5,
+    "min_radius_m": 4.1
   },
   "robot_spawn": {
     "x_m": 0.0,
     "y_m": 0.0,
     "z_m": 0.0,
     "heading_rad": 0.0,
-    "note": "On start line, facing +x toward finish"
+    "note": "On start line, facing +x into the S"
   },
   "pass_criteria": {
     "finish_x_tolerance_m": 0.35,
-    "lane_y_tolerance_m": 0.7,
-    "min_run_time_s": 10.0
+    "cross_track_tolerance_m": 0.7,
+    "min_run_time_s": 20.0
   }
 }

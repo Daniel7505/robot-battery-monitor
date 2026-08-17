@@ -254,6 +254,13 @@ HTML_TEMPLATE = '''
         .twin-influence-bar { padding: 10px 14px; margin: 10px 0; border-radius: 6px; font-size: 0.88em; background: #111; border: 1px solid #333; color: #bbb; }
         .twin-influence-bar.highlight { background: #1a1408; border-color: #a80; color: #fc8; animation: flash-entry 1.5s ease-out; }
         .twin-influence-bar.critical { background: #1a0808; border-color: #a33; color: #f88; }
+        .steer-tool { margin-top: 10px; padding: 10px 12px; border: 1px solid #2a4a3a; border-radius: 6px; background: #08120e; }
+        .steer-tool-title { color: #8fc; font-weight: bold; font-size: 0.9em; margin-bottom: 6px; }
+        .steer-bar { position: relative; height: 14px; background: #123; border-radius: 7px; margin: 6px 0; }
+        .steer-bar .steer-center { position: absolute; left: 50%; top: 0; width: 2px; height: 100%; background: #678; }
+        .steer-needle { position: absolute; top: -3px; width: 8px; height: 20px; margin-left: -4px; background: #fff; border-radius: 2px; }
+        .steer-readout { color: #9ab; font-size: 0.82em; font-family: Consolas, monospace; }
+        .steer-action-log { margin-top: 8px; max-height: 140px; overflow-y: auto; font-size: 0.78em; font-family: Consolas, monospace; color: #8da; }
         .agent-action-log { margin-top: 12px; max-height: 200px; overflow-y: auto; font-size: 0.82em; border: 1px solid #2a3a4a; border-radius: 6px; background: #080c10; }
         .agent-action-log-title { padding: 8px 12px; background: #0d1520; border-bottom: 1px solid #2a3a4a; color: #9cf; font-weight: bold; font-size: 0.9em; }
         .agent-action-entry { padding: 8px 12px; border-bottom: 1px solid #151a20; display: flex; gap: 10px; align-items: flex-start; }
@@ -383,6 +390,12 @@ HTML_TEMPLATE = '''
             <button type="button" id="lane-keep-btn" class="teleop-test-btn">◎ Lane keep</button>
         </div>
         <p class="teleop-hint" id="lane-keep-status">Lane keep off — agent will use the yellow edges and brake on the red mark.</p>
+        <div class="steer-tool" id="steer-tool">
+            <div class="steer-tool-title">Steer (virtual wheel) — intensity + GPS</div>
+            <div class="steer-bar"><div class="steer-center"></div><div id="steer-needle" class="steer-needle" style="left:50%"></div></div>
+            <div id="steer-readout">steer — · oL — · oR — · pose —</div>
+            <div id="steer-action-log" class="steer-action-log">Waiting for lane-keep steer samples…</div>
+        </div>
         <p class="teleop-hint">Webots steals WASD for the camera — use <strong>Arrow keys</strong> or <strong>I/J/K/L</strong> in the 3D view, or drive from here via the twin API.</p>
         <div class="agent-action-log">
             <div class="agent-action-log-title">Agent Action Log <span style="font-weight:normal;color:#678;font-size:0.85em">— real-time decisions tied to simulation</span></div>
@@ -594,6 +607,8 @@ HTML_TEMPLATE = '''
     let lastInfluenceSig = '';
     let lastRecSig = '';
     let laneKeepArmed = false;
+    const steerActionLog = [];
+    let lastSteerLogKey = '';
 
     let currentTwinPhase = '';
 
@@ -736,6 +751,38 @@ HTML_TEMPLATE = '''
             lkStatus.innerText = armed
                 ? `Lane keep ON — yellow L ${yL} / R ${yR} · red ${red}`
                 : `Lane keep off — yellow L ${yL} / R ${yR} · red ${red}`;
+        }
+        const steer = tc && tc.steer != null ? Number(tc.steer) : null;
+        const oL = tc && tc.left_offset != null ? Number(tc.left_offset) : null;
+        const oR = tc && tc.right_offset != null ? Number(tc.right_offset) : null;
+        const sTxt = (steer == null || Number.isNaN(steer)) ? '—' : steer.toFixed(3);
+        const lTxt = oL == null || Number.isNaN(oL) ? '—' : oL.toFixed(3);
+        const rTxt = oR == null || Number.isNaN(oR) ? '—' : oR.toFixed(3);
+        const needle = document.getElementById('steer-needle');
+        const readout = document.getElementById('steer-readout');
+        if (needle && steer != null && !Number.isNaN(steer)) {
+            const pct = Math.max(0, Math.min(100, 50 + steer * 50));
+            needle.style.left = pct + '%';
+        }
+        if (readout) {
+            readout.innerText = `steer ${sTxt} · oL ${lTxt} · oR ${rTxt} · pose ${pose}`;
+        }
+        if (tc && tc.lane_keep && steer != null && !Number.isNaN(steer) && tc.pose) {
+            const key = sTxt + '|' + (tc.pose.x_m ?? '') + '|' + (tc.pose.y_m ?? '');
+            if (key !== lastSteerLogKey) {
+                lastSteerLogKey = key;
+                const now = new Date();
+                const ts = now.toTimeString().slice(0, 8);
+                const side = steer < -0.03 ? 'LEFT' : (steer > 0.03 ? 'RIGHT' : 'HOLD');
+                steerActionLog.unshift(
+                    `${ts}  ${side}  steer=${steer.toFixed(3)}  `
+                    + `gps=(${Number(tc.pose.x_m || 0).toFixed(2)}, ${Number(tc.pose.y_m || 0).toFixed(2)})  `
+                    + `oL=${oL == null ? '—' : oL.toFixed(2)} oR=${oR == null ? '—' : oR.toFixed(2)}`
+                );
+                if (steerActionLog.length > 40) steerActionLog.pop();
+                const logEl = document.getElementById('steer-action-log');
+                if (logEl) logEl.innerText = steerActionLog.join('\n');
+            }
         }
 
         const loopFc = (tc && tc.loop_forecast) || {};

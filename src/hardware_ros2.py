@@ -425,6 +425,7 @@ class ROS2BatterySource(RealHardwareSource):
                 self._agent.record_phase_change(phase, gait, tel.task)
             raw = tel.raw if isinstance(getattr(tel, "raw", None), dict) else {}
             sensors = raw.get("sensors") if isinstance(raw.get("sensors"), dict) else {}
+            pose = tel.pose if isinstance(getattr(tel, "pose", None), dict) else {}
             twin_ctx = {
                 "phase": phase,
                 "gait": gait,
@@ -432,7 +433,12 @@ class ROS2BatterySource(RealHardwareSource):
                 "lane_sensors": {
                     "left_yellow": sensors.get("left_yellow"),
                     "right_yellow": sensors.get("right_yellow"),
+                    "left_offset": sensors.get("left_offset"),
+                    "right_offset": sensors.get("right_offset"),
+                    "steer": sensors.get("steer"),
                     "finish_red": sensors.get("finish_red"),
+                    "x_m": pose.get("x_m"),
+                    "y_m": pose.get("y_m"),
                 },
                 "lane_keep": bool(
                     sensors.get("lane_keep")

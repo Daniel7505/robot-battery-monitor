@@ -286,6 +286,28 @@ def test_lane_keep_rule_logs_when_armed():
     assert agent.status_dict(result)["intervening"] is False
 
 
+def test_lane_keep_lost_paint_is_not_red():
+    agent = OnboardAgent()
+    result = agent.evaluate(
+        battery_pct=94,
+        task_id="moving",
+        allocation=_base_allocation(task="moving"),
+        safety=_base_safety(),
+        prediction={"risk_level": "low", "mission_energy_ok": True},
+        mission={"task": "moving"},
+        readings={},
+        twin_context={
+            "phase": "teleop",
+            "source": "webots",
+            "lane_keep": True,
+            "lane_sensors": {"left_yellow": 0.0, "right_yellow": 0.0, "finish_red": 0.0},
+        },
+    )
+    msgs = " ".join((r.message or "") for r in result.recommendations).lower()
+    assert "lost paint" in msgs
+    assert "red" not in msgs
+
+
 def test_lane_keep_red_is_not_silent():
     agent = OnboardAgent()
     result = agent.evaluate(

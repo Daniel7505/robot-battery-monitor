@@ -38,6 +38,7 @@ import importlib.util
 import math
 import os
 import sys
+import time
 import traceback
 
 from controller import Camera, Robot, Motor, PositionSensor, GPS, InertialUnit, Keyboard, Display
@@ -796,12 +797,97 @@ def _load_balance_cfg() -> dict:
 
 def _load_lane_keep():
     try:
-        from src.lane_keep import lane_keep_command, peak_score_bgra, red_score, yellow_score
+        from src.lane_keep import (
+            lane_keep_command,
+            offset_to_column,
+            peak_score_bgra,
+            red_score,
+            yellow_band_fill,
+            yellow_line_curve,
+            yellow_line_offset,
+            yellow_look_band,
+            yellow_score,
+        )
 
-        return lane_keep_command, yellow_score, red_score, peak_score_bgra
+        return (
+            lane_keep_command,
+            yellow_score,
+            red_score,
+            peak_score_bgra,
+            yellow_line_offset,
+            yellow_look_band,
+            offset_to_column,
+            yellow_line_curve,
+            yellow_band_fill,
+        )
     except Exception as exc:
         print(f"WARNING: lane_keep policy not loaded ({exc})")
-        return None, None, None, None
+        return None, None, None, None, None, None, None, None, None
+
+
+def _load_lookdown_math():
+    try:
+        from src.lane_keep import (
+            MarkStopTracker,
+            beam_sf_rotation,
+            camera_fov_pyramid,
+            classify_view,
+            FORECAST_IMAGE_ROLL_RAD,
+            roll_camera_sf,
+            cruise_speed_m_s,
+            ground_hit_ahead_m,
+            image_row_to_ground_ahead_m,
+            look_at_sf_rotation,
+            stopping_distance_m,
+            time_to_mark_s,
+        )
+
+        return {
+            "look_at": look_at_sf_rotation,
+            "beam_rot": beam_sf_rotation,
+            "fov_pyramid": camera_fov_pyramid,
+            "roll_cam": roll_camera_sf,
+            "forecast_roll": FORECAST_IMAGE_ROLL_RAD,
+            "classify": classify_view,
+            "ground_hit": ground_hit_ahead_m,
+            "row_range": image_row_to_ground_ahead_m,
+            "tracker_cls": MarkStopTracker,
+            "cruise_v": cruise_speed_m_s,
+            "d_stop": stopping_distance_m,
+            "t_mark": time_to_mark_s,
+        }
+    except Exception as exc:
+        print(f"WARNING: look-down math not loaded ({exc})")
+        return None
+
+
+def _camera_mean_rgb(cam: Camera | None) -> tuple[float, float, float]:
+    """Mean RGB via Webots accessors — SKY/GROUND interlock."""
+    if cam is None:
+        return (0.0, 0.0, 0.0)
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+        get_r = cam.imageGetRed
+        get_g = cam.imageGetGreen
+        get_b = cam.imageGetBlue
+    except Exception:
+        return (0.0, 0.0, 0.0)
+    if not image or w <= 0 or h <= 0:
+        return (0.0, 0.0, 0.0)
+    rs = gs = bs = 0
+    n = 0
+    step = 1 if w * h <= 4000 else 2
+    for y in range(0, h, step):
+        for x in range(0, w, step):
+            rs += get_r(image, w, x, y)
+            gs += get_g(image, w, x, y)
+            bs += get_b(image, w, x, y)
+            n += 1
+    if n <= 0:
+        return (0.0, 0.0, 0.0)
+    return (rs / (n * 255.0), gs / (n * 255.0), bs / (n * 255.0))
 
 
 def _camera_max_rgb(cam: Camera | None) -> tuple[float, float, float]:
@@ -829,34 +915,41 @@ def _camera_max_rgb(cam: Camera | None) -> tuple[float, float, float]:
     return (mr / 255.0, mg / 255.0, mb / 255.0)
 
 
-def _camera_peak_score(cam: Camera | None, score_fn, peak_fn) -> float:
-    """Peak color score using Webots imageGetRed/Green/Blue (not raw BGRA)."""
+def _camera_peak_score_and_row(
+    cam: Camera | None, score_fn, peak_fn
+) -> tuple[float, int | None]:
+    """Peak color score and the image row it came from (Webots accessors)."""
     if cam is None or score_fn is None:
-        return 0.0
+        return 0.0, None
     try:
         image = cam.getImage()
         w = int(cam.getWidth())
         h = int(cam.getHeight())
     except Exception:
-        return 0.0
+        return 0.0, None
     if not image or w <= 0 or h <= 0:
-        return 0.0
+        return 0.0, None
     get_r = getattr(cam, "imageGetRed", None)
     get_g = getattr(cam, "imageGetGreen", None)
     get_b = getattr(cam, "imageGetBlue", None)
     if get_r is None or get_g is None or get_b is None:
         if peak_fn is None:
-            return 0.0
+            return 0.0, None
         try:
-            return float(peak_fn(image, w, h, score_fn))
+            return float(peak_fn(image, w, h, score_fn)), None
         except Exception:
-            return 0.0
+            return 0.0, None
     scale = 1.0 / 255.0
     # Floor lives in the lower part of a forward cam; sky washes the top.
     # Scan every pixel in that band so a 2 cm stripe can still register.
     best = 0.0
-    y0 = h // 3
-    for y in range(y0, h):
+    closest_y: int | None = None
+    # Finish cams: skip sky in the top third. Tiny yellow eyes: full frame.
+    y0 = 0 if h <= 20 else h // 3
+    # Bottom row is nearest floor. Prefer the closest pixel that still
+    # looks like the mark so range is the leading edge, not a far bloom.
+    for y in range(h - 1, y0 - 1, -1):
+        row_best = 0.0
         for x in range(w):
             rgb = (
                 get_r(image, w, x, y) * scale,
@@ -864,21 +957,136 @@ def _camera_peak_score(cam: Camera | None, score_fn, peak_fn) -> float:
                 get_b(image, w, x, y) * scale,
             )
             val = float(score_fn(rgb))
+            if val > row_best:
+                row_best = val
             if val > best:
                 best = val
-    return best
+        if closest_y is None and row_best >= 0.28:
+            closest_y = y
+    return best, closest_y if closest_y is not None else None
 
 
-def _read_lane_eyes(cams: dict, yellow_fn, red_fn, peak_fn) -> dict:
+def _camera_peak_score(cam: Camera | None, score_fn, peak_fn) -> float:
+    score, _row = _camera_peak_score_and_row(cam, score_fn, peak_fn)
+    return score
+
+
+def _yellow_ground_y(cam, node, pixel_fn, ground_fn) -> float | None:
+    """Robot-frame Y of the nearest yellow pixel on the floor."""
+    if cam is None or node is None or pixel_fn is None or ground_fn is None:
+        return None
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+        fov = float(cam.getFov())
+        pos = tuple(node.getField("translation").getSFVec3f())
+        rot = tuple(node.getField("rotation").getSFRotation())
+    except Exception:
+        return None
+    if not image or w <= 0 or h <= 0:
+        return None
+    try:
+        pix = pixel_fn(image, w, h)
+    except Exception:
+        return None
+    if pix is None:
+        return None
+    try:
+        hit = ground_fn(pos, rot, pix[0], pix[1], w, h, fov)
+    except Exception:
+        return None
+    if hit is None:
+        return None
+    return float(hit[1])
+
+
+def _forecast_offset(cam: Camera | None, offset_fn) -> float | None:
+    """Offset on the 90° CW buffer — same picture the Z/W HUD shows."""
+    if cam is None or offset_fn is None:
+        return None
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+    except Exception:
+        return None
+    if not image or w <= 0 or h <= 0:
+        return None
+    try:
+        from src.lane_keep import rotate_bgra_90_cw
+
+        rot_buf, rw, rh = rotate_bgra_90_cw(image, w, h)
+        return offset_fn(rot_buf, rw, rh)
+    except Exception:
+        return None
+
+
+def _line_offset(cam: Camera | None, offset_fn) -> float | None:
+    if cam is None or offset_fn is None:
+        return None
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+    except Exception:
+        return None
+    if not image or w <= 0 or h <= 0:
+        return None
+    try:
+        return offset_fn(image, w, h)
+    except Exception:
+        return None
+
+
+def _read_lane_eyes(
+    cams: dict,
+    yellow_fn,
+    red_fn,
+    peak_fn,
+    offset_fn=None,
+    curve_fn=None,
+    fill_fn=None,
+    far_fn=None,
+) -> dict:
     """Peak color scores so a thin paint stripe still registers."""
     ly = _camera_peak_score(cams.get("line_left"), yellow_fn, peak_fn)
     ry = _camera_peak_score(cams.get("line_right"), yellow_fn, peak_fn)
-    fr_l = _camera_peak_score(cams.get("finish_cam"), red_fn, peak_fn)
-    fr_r = _camera_peak_score(cams.get("finish_cam_r"), red_fn, peak_fn)
+    lo = _line_offset(cams.get("line_left"), offset_fn)
+    ro = _line_offset(cams.get("line_right"), offset_fn)
+    lc = _line_offset(cams.get("line_left"), curve_fn)
+    rc = _line_offset(cams.get("line_right"), curve_fn)
+    lf = _line_offset(cams.get("line_left"), fill_fn)
+    rf = _line_offset(cams.get("line_right"), fill_fn)
+    lfo = _line_offset(cams.get("line_left"), far_fn)
+    rfo = _line_offset(cams.get("line_right"), far_fn)
+    zo = _line_offset(cams.get("forecast_z"), offset_fn)
+    wo = _line_offset(cams.get("forecast_w"), offset_fn)
+    zf = _line_offset(cams.get("forecast_z"), fill_fn)
+    wf = _line_offset(cams.get("forecast_w"), fill_fn)
+    fr_l, row_l = _camera_peak_score_and_row(cams.get("finish_cam"), red_fn, peak_fn)
+    fr_r, row_r = _camera_peak_score_and_row(cams.get("finish_cam_r"), red_fn, peak_fn)
+    if fr_r > fr_l:
+        red, row = fr_r, row_r
+    else:
+        red, row = fr_l, row_l
     return {
         "left_yellow": round(ly, 3),
         "right_yellow": round(ry, 3),
-        "finish_red": round(max(fr_l, fr_r), 3),
+        "left_offset": None if lo is None else round(float(lo), 3),
+        "right_offset": None if ro is None else round(float(ro), 3),
+        "left_curve": None if lc is None else round(float(lc), 3),
+        "right_curve": None if rc is None else round(float(rc), 3),
+        "left_fill": None if lf is None else round(float(lf), 3),
+        "right_fill": None if rf is None else round(float(rf), 3),
+        "left_far_offset": None if lfo is None else round(float(lfo), 3),
+        "right_far_offset": None if rfo is None else round(float(rfo), 3),
+        "z_offset": None if zo is None else round(float(zo), 3),
+        "w_offset": None if wo is None else round(float(wo), 3),
+        "z_fill": None if zf is None else round(float(zf), 3),
+        "w_fill": None if wf is None else round(float(wf), 3),
+        "finish_red": round(red, 3),
+        "finish_red_row": row,
     }
 
 
@@ -1177,7 +1385,14 @@ def _init_devices(
         hud = None
 
     cams: dict[str, Camera | None] = {}
-    for name in ("line_left", "line_right", "finish_cam", "finish_cam_r"):
+    for name in (
+        "line_left",
+        "line_right",
+        "finish_cam",
+        "finish_cam_r",
+        "forecast_z",
+        "forecast_w",
+    ):
         cam = None
         try:
             cam = robot.getDevice(name)
@@ -1192,6 +1407,195 @@ def _init_devices(
     return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
 
 
+def _label_eye_huds(robot: Robot, cams: dict) -> list[dict]:
+    """Attach overlays to the live camera buffers. Returns handles for paint."""
+    specs = (
+        ("hud_left", "line_left", 0xFFE000, "L", "left_offset", False),
+        ("hud_red", "finish_cam", 0xFF40A0, "RED", None, False),
+        ("hud_right", "line_right", 0xFFE000, "R", "right_offset", False),
+        # Full frame — do not black out the top. Daniel needs the whole FOV.
+        ("hud_z", "forecast_z", 0xFF8800, "Z", "z_offset", True),
+        ("hud_w", "forecast_w", 0x22DD55, "W", "w_offset", True),
+    )
+    handles: list[dict] = []
+    for dname, cname, color, text, offset_key, full_frame in specs:
+        try:
+            disp = robot.getDevice(dname)
+        except Exception:
+            disp = None
+        cam = cams.get(cname)
+        if disp is None or cam is None:
+            print(f"HUD {dname}: missing display or camera")
+            continue
+        try:
+            disp.attachCamera(cam)
+            try:
+                disp.setFont("Arial", 10, True)
+            except Exception:
+                pass
+            try:
+                disp.detachCamera()
+            except Exception:
+                pass
+            handles.append(
+                {
+                    "disp": disp,
+                    "cam": cam,
+                    "color": int(color),
+                    "text": text,
+                    "offset_key": offset_key,
+                    "full_frame": bool(full_frame),
+                }
+            )
+            print(f"HUD {dname} ← {cname} labeled {text}")
+        except Exception as exc:
+            print(f"HUD {dname} skip: {exc}")
+    return handles
+
+
+def _paint_eye_huds(
+    handles: list[dict],
+    lane_eyes: dict,
+    band_fn,
+    col_fn,
+) -> None:
+    """Dim ignored rows, outline the brain's band, tick the measured column.
+
+    Same yellow_look_band() the steer law uses — change the band in
+    lane_keep.py and this box moves with it.
+    """
+    for handle in handles:
+        disp = handle["disp"]
+        try:
+            w = int(disp.getWidth())
+            h = int(disp.getHeight())
+        except Exception:
+            continue
+        if w < 2 or h < 2:
+            continue
+        try:
+            cam = handle.get("cam")
+            if cam is not None:
+                raw = cam.getImage()
+                if raw:
+                    ref = disp.imageNew(raw, Display.BGRA, w, h)
+                    disp.imagePaste(ref, 0, 0, False)
+                    disp.imageDelete(ref)
+            if handle.get("full_frame"):
+                y0, y1 = 0, h
+                disp.setColor(int(handle["color"]))
+                disp.drawRectangle(0, 0, max(1, w - 1), max(1, h - 1))
+                off = lane_eyes.get(handle["offset_key"])
+                if off is not None and col_fn is not None:
+                    col = int(col_fn(float(off), w))
+                    disp.setColor(0xFFFF00)
+                    disp.drawLine(col, 0, col, h - 1)
+            elif handle["offset_key"] is not None and band_fn is not None:
+                y0, y1 = band_fn(h)
+                y0 = max(0, min(h, int(y0)))
+                y1 = max(y0 + 1, min(h, int(y1)))
+                try:
+                    disp.setAlpha(0.5)
+                except Exception:
+                    pass
+                disp.setColor(0x000000)
+                if y0 > 0:
+                    disp.fillRectangle(0, 0, w, y0)
+                if y1 < h:
+                    disp.fillRectangle(0, y1, w, h - y1)
+                try:
+                    disp.setAlpha(1.0)
+                except Exception:
+                    pass
+                disp.setColor(0x00FFFF)
+                disp.drawRectangle(0, y0, max(1, w - 1), max(1, y1 - y0 - 1))
+                fy0 = fy1 = None
+                try:
+                    from src.lane_keep import yellow_far_band as _far_band
+
+                    fy0, fy1 = _far_band(h)
+                    fy0 = max(y0, min(y1, int(fy0)))
+                    fy1 = max(fy0 + 1, min(y1, int(fy1)))
+                    disp.setColor(0xFF8800)
+                    disp.drawRectangle(0, fy0, max(1, w - 1), max(1, fy1 - fy0 - 1))
+                except Exception:
+                    fy0 = fy1 = None
+                split = y0 + (y1 - y0) // 2
+                disp.setColor(0x00FFFF)
+                disp.drawLine(0, split, max(1, w - 1), split)
+                off = lane_eyes.get(handle["offset_key"])
+                if off is not None and col_fn is not None:
+                    col = int(col_fn(float(off), w))
+                    disp.setColor(0xFFFF00)
+                    disp.drawLine(col, y0, col, y1 - 1)
+                far_key = None
+                if handle["offset_key"] == "left_offset":
+                    far_key = "left_far_offset"
+                elif handle["offset_key"] == "right_offset":
+                    far_key = "right_far_offset"
+                far_off = None if far_key is None else lane_eyes.get(far_key)
+                if (
+                    far_off is not None
+                    and col_fn is not None
+                    and fy0 is not None
+                    and fy1 is not None
+                    and lane_eyes.get("preview_ok")
+                ):
+                    far_col = int(col_fn(float(far_off), w))
+                    disp.setColor(0xFF8800)
+                    disp.drawLine(far_col, fy0, far_col, fy1 - 1)
+                fused = lane_eyes.get("steer")
+                if fused is not None and col_fn is not None:
+                    fcol = int(col_fn(float(fused), w))
+                    disp.setColor(0xFFFFFF)
+                    disp.drawLine(fcol, y0, fcol, y1 - 1)
+            disp.setColor(int(handle["color"]))
+            disp.drawText(str(handle["text"]), 2, 1)
+        except Exception:
+            continue
+
+
+_STEER_LOG = os.path.join(
+    os.path.expanduser("~"),
+    "OneDrive",
+    "Desktop",
+    "Grok Workspace",
+    "steer-actions.csv",
+)
+_steer_log_ready = False
+_steer_log_key = ""
+
+
+def _log_steer_action(pose: dict, lane_eyes: dict) -> None:
+    """Append one GPS-tagged steer sample. Same facts the dashboard log uses."""
+    global _steer_log_ready, _steer_log_key
+    steer = lane_eyes.get("steer")
+    if steer is None:
+        return
+    x = pose.get("x_m")
+    y = pose.get("y_m")
+    key = f"{float(steer):.3f}|{x}|{y}"
+    if key == _steer_log_key:
+        return
+    _steer_log_key = key
+    try:
+        if not _steer_log_ready:
+            new = not os.path.isfile(_STEER_LOG)
+            with open(_STEER_LOG, "a", encoding="ascii") as fh:
+                if new:
+                    fh.write("unix_s,x_m,y_m,steer,oL,oR,yL,yR,red\n")
+            _steer_log_ready = True
+        with open(_STEER_LOG, "a", encoding="ascii") as fh:
+            fh.write(
+                f"{time.time():.3f},{x},{y},{float(steer):.4f},"
+                f"{lane_eyes.get('left_offset')},{lane_eyes.get('right_offset')},"
+                f"{lane_eyes.get('left_yellow')},{lane_eyes.get('right_yellow')},"
+                f"{lane_eyes.get('finish_red')}\n"
+            )
+    except OSError:
+        pass
+
+
 def _format_pose(gps: GPS) -> str:
     try:
         pos = gps.getValues()
@@ -1200,13 +1604,12 @@ def _format_pose(gps: GPS) -> str:
         return "(?, ?)"
 
 
-# Sideline onlooker: robot's right (−Y), ~14 ft out. Matches DEF VIEWPOINT.
-# ENU identity looks −Z (down); +X rotation tilts toward +Y (at the bot).
-# Daniel mouse-framed sideline 2026-08-12 (follow off).
-_CAM_EYE = (0.02270, -3.81863, 0.81003)
+# Chase from behind and up. Daniel mouse-framed 2026-08-16 (not exact 45 deg).
+# Position is the live follow offset; Tracking Shot walks with him.
+_CAM_EYE = (-3.18573, -0.03020, 3.54536)
 _CAM_LOOK = (0.0, 0.0, 0.55)
 _CAM_FOV = 0.85
-_CAM_ORIENTATION = (0.0, 0.0, 1.0, 1.56)
+_CAM_ORIENTATION = (-0.001250, 0.999989, 0.004550, 0.536256)
 
 
 def _apply_follow_camera(robot: Robot) -> None:
@@ -1248,10 +1651,401 @@ def _apply_follow_camera(robot: Robot) -> None:
             fov.setSFFloat(_CAM_FOV)
         print(
             "Camera reset: Tracking Shot on ButlerBot "
-            f"(Daniel sideline) eye={_CAM_EYE} fov={_CAM_FOV}"
+            f"(Daniel chase) eye={_CAM_EYE} fov={_CAM_FOV}"
         )
     except Exception as exc:
         print(f"Follow-cam reset skipped: {exc}")
+
+
+_LOOKDOWN_PAIRS = (
+    ("FINISH_CAM", "LOOKDOWN_AIM_L", None),
+    ("FINISH_CAM_R", "LOOKDOWN_AIM_R", None),
+    # Purple LOOKDOWN_BEAM_* removed — they cluttered the Z/W view.
+    # LINE_CAM_* stay identity. Forecast Z/W are a separate pair.
+)
+_FORECAST_PAIRS = (
+    ("FORECAST_CAM_Z", "FORECAST_AIM_Z", "Z_BEAM", "Z_FOV_COORD"),
+    ("FORECAST_CAM_W", "FORECAST_AIM_W", "W_BEAM", "W_FOV_COORD"),
+)
+# Daniel mouse-frames these. Copy DUMP_CAM numbers; do not guess ENU.
+# None = do not overwrite rotation (he is lining Z/W up to the wire).
+_FORECAST_LOCK = {
+    # Daniel 2026-08-16: this boot's view is the first correct Z/W.
+    # DUMP_CAM: identity 0 0 1 0. Do not look-at overwrite.
+    "FORECAST_CAM_Z": (0.0, 0.0, 1.0, 0.0),
+    "FORECAST_CAM_W": (0.0, 0.0, 1.0, 0.0),
+}
+_LINE_CAM_IDENTITY = (0.0, 1.0, 0.0, 0.0)
+_LOOKDOWN_SNAP_DIR = os.path.join(
+    os.path.expanduser("~"), "OneDrive", "Desktop", "Grok Workspace"
+)
+
+
+def _aim_lookdown_cameras(robot: Robot, mathkit: dict | None) -> float:
+    """Point finish cams at the magenta floor pucks. Returns ground-hit D (m)."""
+    look_ahead = 1.0
+    if not mathkit or Supervisor is None or not isinstance(robot, Supervisor):
+        print("Look-down aim skipped — Supervisor or math unavailable")
+        return look_ahead
+    look_at = mathkit["look_at"]
+    beam_rot = mathkit["beam_rot"]
+    ground_hit = mathkit["ground_hit"]
+    for cam_def, aim_def, beam_def in _LOOKDOWN_PAIRS:
+        try:
+            cam_node = robot.getFromDef(cam_def)
+            aim_node = robot.getFromDef(aim_def)
+            beam_node = robot.getFromDef(beam_def) if beam_def else None
+        except Exception as exc:
+            print(f"Look-down aim: missing {cam_def}/{aim_def}: {exc}")
+            continue
+        if cam_node is None or aim_node is None:
+            print(f"Look-down aim: DEF {cam_def} or {aim_def} not found")
+            continue
+        try:
+            cam_pos = tuple(cam_node.getField("translation").getSFVec3f())
+            aim_pos = tuple(aim_node.getField("translation").getSFVec3f())
+            rot = look_at(cam_pos, aim_pos)
+            cam_node.getField("rotation").setSFRotation(list(rot))
+            if beam_node is not None and beam_rot is not None:
+                mid = (
+                    0.5 * (cam_pos[0] + aim_pos[0]),
+                    0.5 * (cam_pos[1] + aim_pos[1]),
+                    0.5 * (cam_pos[2] + aim_pos[2]),
+                )
+                beam_node.getField("translation").setSFVec3f(list(mid))
+                beam_node.getField("rotation").setSFRotation(list(beam_rot(cam_pos, aim_pos)))
+            d_hit = float(ground_hit(cam_pos, aim_pos))
+            if cam_def.startswith("FINISH_CAM"):
+                look_ahead = d_hit
+            dx = aim_pos[0] - cam_pos[0]
+            dy = aim_pos[1] - cam_pos[1]
+            dz = aim_pos[2] - cam_pos[2]
+            extra = ""
+            if cam_def.startswith("FINISH_CAM"):
+                v_cruise = float(mathkit["cruise_v"]())
+                t_mark = mathkit["t_mark"](d_hit, v_cruise)
+                d_stop = float(mathkit["d_stop"](v_cruise))
+                t_coast = None if t_mark is None else max(0.0, (d_hit - d_stop) / v_cruise)
+                extra = (
+                    f" D={d_hit:.2f}m (v={v_cruise:.2f} m/s  t_mark={t_mark:.2f}s  "
+                    f"d_stop={d_stop:.2f}m  coast={t_coast:.2f}s)"
+                )
+            print(
+                f"Look-down aimed {cam_def} → {aim_def} "
+                f"look=({dx:.2f},{dy:.2f},{dz:.2f}){extra}"
+            )
+        except Exception as exc:
+            print(f"Look-down aim failed for {cam_def}: {exc}")
+    return look_ahead
+
+
+def _write_bgra_bmp(path: str, buf: bytes | bytearray, width: int, height: int) -> None:
+    """Uncompressed 24-bit BMP, top-down-ish via flipped rows. No extra deps."""
+    w = int(width)
+    h = int(height)
+    row_b = (w * 3 + 3) & ~3
+    pixels = bytearray(row_b * h)
+    src = memoryview(buf)
+    for y in range(h):
+        # BMP is bottom-up
+        dest_y = h - 1 - y
+        for x in range(w):
+            s = (y * w + x) * 4
+            d = dest_y * row_b + x * 3
+            if s + 3 <= len(src):
+                pixels[d] = src[s]
+                pixels[d + 1] = src[s + 1]
+                pixels[d + 2] = src[s + 2]
+    pixel_off = 54
+    size = pixel_off + len(pixels)
+    hdr = bytearray(54)
+    hdr[0:2] = b"BM"
+    hdr[2:6] = size.to_bytes(4, "little")
+    hdr[10:14] = pixel_off.to_bytes(4, "little")
+    hdr[14:18] = (40).to_bytes(4, "little")
+    hdr[18:22] = w.to_bytes(4, "little", signed=True)
+    hdr[22:26] = h.to_bytes(4, "little", signed=True)
+    hdr[26:28] = (1).to_bytes(2, "little")
+    hdr[28:30] = (24).to_bytes(2, "little")
+    with open(path, "wb") as fh:
+        fh.write(hdr)
+        fh.write(pixels)
+
+
+def _set_fov_wire(robot: Robot, coord_def: str, pts: list) -> None:
+    """Push apex+4 corners into an IndexedLineSet Coordinate."""
+    try:
+        node = robot.getFromDef(coord_def)
+    except Exception:
+        node = None
+    if node is None:
+        print(f"FOV wire {coord_def} missing")
+        return
+    try:
+        field = node.getField("point")
+        for i, p in enumerate(pts):
+            field.setMFVec3f(i, [float(p[0]), float(p[1]), float(p[2])])
+    except Exception as exc:
+        print(f"FOV wire {coord_def} skip: {exc}")
+
+
+def _aim_forecast_cameras(robot: Robot, mathkit: dict | None) -> None:
+    """Point Z/W at the 2 m wall pucks and draw look beam + FOV pyramid."""
+    if not mathkit or Supervisor is None or not isinstance(robot, Supervisor):
+        print("Forecast aim skipped — Supervisor or math unavailable")
+        return
+    look_at = mathkit["look_at"]
+    beam_rot = mathkit["beam_rot"]
+    roll_fn = mathkit.get("roll_cam")
+    roll_rad = mathkit.get("forecast_roll", 0.0)
+    fov_fn = mathkit.get("fov_pyramid")
+    for cam_def, aim_def, beam_def, fov_def in _FORECAST_PAIRS:
+        try:
+            cam_node = robot.getFromDef(cam_def)
+            aim_node = robot.getFromDef(aim_def)
+            beam_node = robot.getFromDef(beam_def)
+        except Exception as exc:
+            print(f"Forecast aim: missing {cam_def}/{aim_def}: {exc}")
+            continue
+        if cam_node is None or aim_node is None:
+            print(f"Forecast aim: DEF {cam_def} or {aim_def} not found")
+            continue
+        try:
+            cam_pos = tuple(cam_node.getField("translation").getSFVec3f())
+            aim_pos = tuple(aim_node.getField("translation").getSFVec3f())
+            lock = _FORECAST_LOCK.get(cam_def)
+            if lock is not None:
+                rot = tuple(lock)
+                cam_node.getField("rotation").setSFRotation(list(rot))
+            else:
+                # Wire stays on the puck. Camera rotation is Daniel's.
+                rot = look_at(cam_pos, aim_pos)
+                print(
+                    f"Forecast {cam_def} UNLOCKED — frame it to the wire, "
+                    "then DUMP_CAM"
+                )
+            if beam_node is not None and beam_rot is not None:
+                mid = (
+                    0.5 * (cam_pos[0] + aim_pos[0]),
+                    0.5 * (cam_pos[1] + aim_pos[1]),
+                    0.5 * (cam_pos[2] + aim_pos[2]),
+                )
+                beam_node.getField("translation").setSFVec3f(list(mid))
+                beam_node.getField("rotation").setSFRotation(
+                    list(beam_rot(cam_pos, aim_pos))
+                )
+            fov_rad = 0.85
+            try:
+                fov_rad = float(cam_node.getField("fieldOfView").getSFFloat())
+            except Exception:
+                pass
+            if fov_fn is not None:
+                pts = fov_fn(cam_pos, rot, fov_rad, 64, 64, 2.0)
+                if len(pts) >= 5:
+                    _set_fov_wire(robot, fov_def, pts)
+            dx = aim_pos[0] - cam_pos[0]
+            dy = aim_pos[1] - cam_pos[1]
+            dz = aim_pos[2] - cam_pos[2]
+            deg = fov_rad * 180.0 / 3.141592653589793
+            print(
+                f"Forecast aimed {cam_def} → {aim_def} "
+                f"look=({dx:.2f},{dy:.2f},{dz:.2f}) FOV={deg:.1f}deg "
+                f"roll={float(roll_rad)*180.0/3.141592653589793:.0f}deg"
+            )
+        except Exception as exc:
+            print(f"Forecast aim failed for {cam_def}: {exc}")
+
+
+def _run_lookdown_interlock(cams: dict, classify_fn) -> str:
+    """Classify what finish_cam actually sees. Save a still for the inbox."""
+    rgb = _camera_mean_rgb(cams.get("finish_cam"))
+    label = "unknown"
+    if classify_fn is not None:
+        try:
+            label = str(classify_fn(rgb))
+        except Exception:
+            label = "unknown"
+    print(
+        f"Look-down interlock: {label.upper()}  "
+        f"meanRGB=({rgb[0]:.2f},{rgb[1]:.2f},{rgb[2]:.2f})"
+    )
+    for key in ("line_left", "line_right", "forecast_z", "forecast_w"):
+        eye = _camera_mean_rgb(cams.get(key))
+        tag = ""
+        if classify_fn is not None:
+            try:
+                tag = f" {classify_fn(eye)}"
+            except Exception:
+                tag = ""
+        print(
+            f"  {key}{tag} meanRGB=({eye[0]:.2f},{eye[1]:.2f},{eye[2]:.2f})"
+        )
+    for key, fname in (
+        ("finish_cam", "lookdown-cam.png"),
+        ("line_left", "line-left.png"),
+        ("line_right", "line-right.png"),
+        ("forecast_z", "forecast-z.png"),
+        ("forecast_w", "forecast-w.png"),
+    ):
+        cam = cams.get(key)
+        if cam is None:
+            continue
+        try:
+            path = os.path.join(_LOOKDOWN_SNAP_DIR, fname)
+            cam.saveImage(path, 90)
+            print(f"Look-down snapshot {key} → {path}")
+        except Exception as exc:
+            print(f"Look-down snapshot {key} skipped: {exc}")
+    return label
+
+
+def _revert_line_cams_identity(robot: Robot) -> None:
+    """Undo a drunk line-cam aim. Identity = look −Z / down on the stripe."""
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        return
+    for cam_def in ("LINE_CAM_L", "LINE_CAM_R"):
+        try:
+            node = robot.getFromDef(cam_def)
+        except Exception:
+            node = None
+        if node is None:
+            continue
+        try:
+            node.getField("rotation").setSFRotation(list(_LINE_CAM_IDENTITY))
+            print(f"Line-cam {cam_def} reverted to identity (aim failed interlock)")
+        except Exception as exc:
+            print(f"Line-cam {cam_def} identity revert skipped: {exc}")
+
+
+def _run_preview_interlock(cams: dict, robot: Robot) -> dict:
+    """Far sliver must be dirt ahead, not sky or the robot.
+
+    Aim is already pointed at YELLOW_AIM (2 m). This only *measures*
+    whether that pose is useful. Broken dirt box → revert identity.
+    Far sliver sky / no range → keep the forward view, drop preview.
+    """
+    out = {
+        "aim_ok": False,
+        "preview_ok": False,
+        "range_m": None,
+        "left": None,
+        "right": None,
+    }
+    try:
+        from src.lane_keep import (
+            band_mean_rgb,
+            band_sky_frac,
+            classify_view,
+            dirt_band_ok,
+            preview_band_ok,
+            preview_look_ahead_m,
+            yellow_far_band,
+            yellow_far_offset,
+            yellow_look_band,
+        )
+    except Exception as exc:
+        print(f"Preview interlock skipped — lane_keep helpers ({exc})")
+        return out
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        print("Preview interlock skipped — not a Supervisor")
+        return out
+    reports = {}
+    for key, cam_def in (("left", "LINE_CAM_L"), ("right", "LINE_CAM_R")):
+        cam = cams.get(f"line_{key}")
+        try:
+            node = robot.getFromDef(cam_def)
+        except Exception:
+            node = None
+        if cam is None or node is None:
+            print(f"Preview interlock {key}: missing cam/node")
+            reports[key] = {"dirt_ok": False, "far_ok": False}
+            continue
+        try:
+            image = cam.getImage()
+            w = int(cam.getWidth())
+            h = int(cam.getHeight())
+            fov = float(cam.getFov())
+            pos = tuple(node.getField("translation").getSFVec3f())
+            rot = tuple(node.getField("rotation").getSFRotation())
+        except Exception as exc:
+            print(f"Preview interlock {key}: read failed ({exc})")
+            reports[key] = {"dirt_ok": False, "far_ok": False}
+            continue
+        if not image or w < 2 or h < 2:
+            reports[key] = {"dirt_ok": False, "far_ok": False}
+            continue
+        y0, y1 = yellow_look_band(h)
+        fy0, fy1 = yellow_far_band(h)
+        dirt_label = classify_view(band_mean_rgb(image, w, h, y0, y1))
+        far_label = classify_view(band_mean_rgb(image, w, h, fy0, fy1))
+        dirt_sky = band_sky_frac(image, w, h, y0, y1)
+        far_sky = band_sky_frac(image, w, h, fy0, fy1)
+        dirt_ok = dirt_band_ok(image, w, h)
+        rng = preview_look_ahead_m(pos, rot, h, fov)
+        off = yellow_far_offset(image, w, h)
+        # Identity eyes often have no meter range (look is not +X). If
+        # the far sliver still sees paint, that is the second reading.
+        far_ok = bool(preview_band_ok(image, w, h) and (rng is not None or off is not None))
+        reports[key] = {
+            "dirt_ok": dirt_ok,
+            "far_ok": far_ok,
+            "dirt_label": dirt_label,
+            "far_label": far_label,
+            "dirt_sky": round(dirt_sky, 3),
+            "far_sky": round(far_sky, 3),
+            "range_m": None if rng is None else round(float(rng), 3),
+            "far_offset": None if off is None else round(float(off), 3),
+            "far_rows": (fy0, fy1),
+        }
+        print(
+            f"Preview interlock {key}: dirt={dirt_label} sky={dirt_sky:.2f} "
+            f"far={far_label} far_sky={far_sky:.2f} range={rng} "
+            f"off={off} rows={fy0}-{fy1} "
+            f"{'OK' if dirt_ok and far_ok else 'FAIL'}"
+        )
+    out["left"] = reports.get("left")
+    out["right"] = reports.get("right")
+    aim_ok = bool(
+        reports.get("left", {}).get("dirt_ok")
+        and reports.get("right", {}).get("dirt_ok")
+    )
+    preview_ok = bool(
+        aim_ok
+        and (
+            reports.get("left", {}).get("far_ok")
+            or reports.get("right", {}).get("far_ok")
+        )
+    )
+    ranges = [
+        reports[k]["range_m"]
+        for k in ("left", "right")
+        if reports.get(k) and reports[k].get("range_m") is not None
+    ]
+    out["aim_ok"] = aim_ok
+    out["preview_ok"] = preview_ok
+    out["range_m"] = None if not ranges else sum(ranges) / len(ranges)
+    if not aim_ok:
+        print(
+            "Preview DISABLED — dirt box is not ground/yellow. "
+            "Reverting line cams to identity (the 90° roll trap)."
+        )
+        _revert_line_cams_identity(robot)
+    elif not preview_ok:
+        print(
+            "Preview DISABLED — far sliver has no paint and no 0.4–4 m floor hit. "
+            "Planner uses error-now only."
+        )
+    elif out["range_m"] is None:
+        print(
+            "Preview ENABLED  image-far (no meter range, t_fallback=2.0s) "
+            "— identity eyes, dirt sliver still has paint"
+        )
+    else:
+        print(
+            f"Preview ENABLED  look-ahead={out['range_m']:.2f}m "
+            "(far dirt just under horizon)"
+        )
+    return out
 
 
 _DUMP_CAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DUMP_CAM")
@@ -1284,6 +2078,21 @@ def _maybe_dump_viewpoint(robot: Robot) -> None:
         )
     except Exception as exc:
         print(f"VIEWPOINT dump failed: {exc}")
+    for cam_def in ("FORECAST_CAM_Z", "FORECAST_CAM_W"):
+        try:
+            node = robot.getFromDef(cam_def)
+            if node is None:
+                print(f"{cam_def} COPY: missing")
+                continue
+            t = node.getField("translation").getSFVec3f()
+            r = node.getField("rotation").getSFRotation()
+            print(
+                f"{cam_def} COPY "
+                f"translation {t[0]:.5f} {t[1]:.5f} {t[2]:.5f} "
+                f"rotation {r[0]:.6f} {r[1]:.6f} {r[2]:.6f} {r[3]:.6f}"
+            )
+        except Exception as exc:
+            print(f"{cam_def} COPY failed: {exc}")
 
 
 def _run_loop(robot: Robot, opts: dict) -> None:
@@ -1332,10 +2141,28 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             "Pitch-hold ON (BNO085-class IMU) "
             f"kp={balance_cfg['kp_pitch']} kd={balance_cfg['kd_pitch_rate']}"
         )
-    lane_keep_fn, yellow_fn, red_fn, peak_fn = _load_lane_keep()
+    (
+        lane_keep_fn,
+        yellow_fn,
+        red_fn,
+        peak_fn,
+        offset_fn,
+        band_fn,
+        col_fn,
+        curve_fn,
+        fill_fn,
+    ) = _load_lane_keep()
     lane_keep_on = False
+    both_eyes_seen = False
     last_lane_sig = ""
-    lane_eyes = {"left_yellow": 0.0, "right_yellow": 0.0, "finish_red": 0.0}
+    lane_eyes = {
+        "left_yellow": 0.0,
+        "right_yellow": 0.0,
+        "left_offset": None,
+        "right_offset": None,
+        "finish_red": 0.0,
+        "finish_red_row": None,
+    }
     yaw_rate = 0.0
     # Pose residual window — catches "look away 3s" ultra-slow drift GPS rate misses
     pose_anchor_xy: tuple[float, float] | None = None
@@ -1357,6 +2184,93 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     was_abs_active = False
 
     _apply_follow_camera(robot)
+    lookdown_math = _load_lookdown_math()
+    steer_filter = None
+    gap_planner = None
+    try:
+        from src.lane_keep import (
+            GapPlanner as _GapPlanner,
+            SteerFilter as _SteerFilter,
+        )
+
+        steer_filter = _SteerFilter()
+        gap_planner = _GapPlanner()
+    except Exception:
+        steer_filter = None
+        gap_planner = None
+    pixel_fn = None
+    ground_fn = None
+    corridor_watch = None
+    forecast_lookout = None
+    try:
+        from src.lane_keep import (
+            CorridorWatch as _CorridorWatch,
+            ForecastLookout as _ForecastLookout,
+            pixel_to_ground_m as _pixel_to_ground_m,
+            yellow_ahead_pixel as _yellow_ahead_pixel,
+        )
+
+        pixel_fn = _yellow_ahead_pixel
+        ground_fn = _pixel_to_ground_m
+        corridor_watch = _CorridorWatch()
+        forecast_lookout = _ForecastLookout()
+    except Exception:
+        pixel_fn = None
+        ground_fn = None
+        corridor_watch = None
+        forecast_lookout = None
+    look_ahead_m = _aim_lookdown_cameras(robot, lookdown_math)
+    _aim_forecast_cameras(robot, lookdown_math)
+    eye_huds = _label_eye_huds(robot, cams)
+    classify_fn = None if not lookdown_math else lookdown_math["classify"]
+    mark_stop = lookdown_math["tracker_cls"]() if lookdown_math else None
+    lookdown_view = "pending"
+    preview_state = {"aim_ok": False, "preview_ok": False, "range_m": None}
+    preview_checked = False
+    far_fn = None
+    preview_range_fn = None
+    t_mark_fn = None
+    forecast_hit_fn = None
+    try:
+        from src.lane_keep import (
+            preview_look_ahead_m as _preview_look_ahead_m,
+            time_to_mark_s as _time_to_mark_s,
+            yellow_far_offset as _yellow_far_offset,
+            forecast_wall_hit as _forecast_wall_hit,
+        )
+
+        far_fn = _yellow_far_offset
+        preview_range_fn = _preview_look_ahead_m
+        t_mark_fn = _time_to_mark_s
+        forecast_hit_fn = _forecast_wall_hit
+    except Exception:
+        far_fn = None
+        preview_range_fn = None
+        t_mark_fn = None
+        forecast_hit_fn = None
+    mark_plan = {"phase": "seek", "remaining_m": None, "t_to_mark_s": None}
+    finish_cam_node = None
+    line_cam_l_node = None
+    line_cam_r_node = None
+    forecast_z_node = None
+    forecast_w_node = None
+    if Supervisor is not None and isinstance(robot, Supervisor):
+        try:
+            finish_cam_node = robot.getFromDef("FINISH_CAM")
+        except Exception:
+            finish_cam_node = None
+        try:
+            line_cam_l_node = robot.getFromDef("LINE_CAM_L")
+            line_cam_r_node = robot.getFromDef("LINE_CAM_R")
+        except Exception:
+            line_cam_l_node = None
+            line_cam_r_node = None
+        try:
+            forecast_z_node = robot.getFromDef("FORECAST_CAM_Z")
+            forecast_w_node = robot.getFromDef("FORECAST_CAM_W")
+        except Exception:
+            forecast_z_node = None
+            forecast_w_node = None
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
     print("Teleop: Arrow keys or I/J/K/L — Space = stop. Click the FLOOR (not the robot)")
@@ -1371,6 +2285,24 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            if tick == 25 and lookdown_view == "pending":
+                lookdown_view = _run_lookdown_interlock(cams, classify_fn)
+                preview_state = _run_preview_interlock(cams, robot)
+                preview_checked = True
+                if not preview_state.get("aim_ok"):
+                    for key, fname in (
+                        ("line_left", "line-left-identity.png"),
+                        ("line_right", "line-right-identity.png"),
+                    ):
+                        cam = cams.get(key)
+                        if cam is None:
+                            continue
+                        try:
+                            path = os.path.join(_LOOKDOWN_SNAP_DIR, fname)
+                            cam.saveImage(path, 90)
+                            print(f"Identity snapshot {key} → {path}")
+                        except Exception as exc:
+                            print(f"Identity snapshot {key} skipped: {exc}")
             if tick % 8 == 0:
                 _maybe_dump_viewpoint(robot)
             if park_holdoff_s > 0.0:
@@ -1511,7 +2443,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     got_new_stop = stop_epoch > last_stop_epoch
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
+                    was_lane = lane_keep_on
                     lane_keep_on = bool(api_cmd.get("lane_keep"))
+                    if mark_stop is not None and was_lane != lane_keep_on:
+                        mark_stop.reset()
+                        mark_plan = {"phase": "seek", "remaining_m": None, "t_to_mark_s": None}
+                    if lane_keep_on and not was_lane:
+                        both_eyes_seen = False
+                        if corridor_watch is not None:
+                            corridor_watch.reset()
+                        if forecast_lookout is not None:
+                            forecast_lookout.reset()
+                        if gap_planner is not None:
+                            gap_planner.reset()
 
                     if got_new_stop:
                         last_stop_epoch = stop_epoch
@@ -1584,7 +2528,74 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                                 last_api_sig = ""
 
             if yellow_fn and red_fn and peak_fn:
-                lane_eyes = _read_lane_eyes(cams, yellow_fn, red_fn, peak_fn)
+                lane_eyes = _read_lane_eyes(
+                    cams,
+                    yellow_fn,
+                    red_fn,
+                    peak_fn,
+                    offset_fn,
+                    curve_fn,
+                    fill_fn,
+                    far_fn,
+                )
+                if (
+                    float(lane_eyes.get("left_yellow") or 0.0) >= 0.12
+                    and float(lane_eyes.get("right_yellow") or 0.0) >= 0.12
+                ):
+                    both_eyes_seen = True
+                lane_eyes["left_y_m"] = _yellow_ground_y(
+                    cams.get("line_left"), line_cam_l_node, pixel_fn, ground_fn
+                )
+                lane_eyes["right_y_m"] = _yellow_ground_y(
+                    cams.get("line_right"), line_cam_r_node, pixel_fn, ground_fn
+                )
+                z_hit = w_hit = None
+                if forecast_hit_fn is not None:
+                    xy = gps_xy
+                    yaw = prev_yaw
+                    for label, cam, node in (
+                        ("z", cams.get("forecast_z"), forecast_z_node),
+                        ("w", cams.get("forecast_w"), forecast_w_node),
+                    ):
+                        if cam is None or node is None:
+                            continue
+                        try:
+                            img = cam.getImage()
+                            hit = forecast_hit_fn(
+                                img,
+                                int(cam.getWidth()),
+                                int(cam.getHeight()),
+                                tuple(node.getField("translation").getSFVec3f()),
+                                tuple(node.getField("rotation").getSFRotation()),
+                                float(cam.getFov()),
+                                robot_xy=xy,
+                                yaw_rad=yaw,
+                            )
+                        except Exception:
+                            hit = None
+                        if label == "z":
+                            z_hit = hit
+                        else:
+                            w_hit = hit
+                z_y = None if not z_hit else z_hit.get("y_m")
+                w_y = None if not w_hit else w_hit.get("y_m")
+                aheads = []
+                if z_hit and z_hit.get("ahead_m") is not None:
+                    aheads.append(float(z_hit["ahead_m"]))
+                if w_hit and w_hit.get("ahead_m") is not None:
+                    aheads.append(float(w_hit["ahead_m"]))
+                live_range = None if not aheads else sum(aheads) / len(aheads)
+                forecast_ok = z_y is not None or w_y is not None
+                lane_eyes["z_y_m"] = None if z_y is None else round(float(z_y), 3)
+                lane_eyes["w_y_m"] = None if w_y is None else round(float(w_y), 3)
+                lane_eyes["forecast_ok"] = forecast_ok
+                # HUD / log only. Forecast hits are 12 cm of floor, not preview.
+                lane_eyes["preview_ok"] = bool(preview_state.get("preview_ok"))
+                t_ahead = None
+                if lane_eyes.get("preview_ok") and float(speed_m_s) >= 0.05:
+                    t_ahead = 2.0
+                lane_eyes["t_ahead"] = t_ahead
+                lane_eyes["preview_range_m"] = live_range
 
             if (
                 lane_keep_on
@@ -1593,13 +2604,128 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 and not user_driving
                 and park_holdoff_s <= 0.0
             ):
+                if mark_stop is not None:
+                    measured = None
+                    row = lane_eyes.get("finish_red_row")
+                    eye = cams.get("finish_cam")
+                    if (
+                        lookdown_math
+                        and finish_cam_node is not None
+                        and row is not None
+                        and eye is not None
+                        and lane_eyes["finish_red"] >= 0.28
+                    ):
+                        try:
+                            cam_pos = tuple(finish_cam_node.getField("translation").getSFVec3f())
+                            cam_rot = tuple(finish_cam_node.getField("rotation").getSFRotation())
+                            measured = lookdown_math["row_range"](
+                                cam_pos,
+                                cam_rot,
+                                float(row),
+                                int(eye.getHeight()),
+                                float(eye.getFov()),
+                            )
+                        except Exception:
+                            measured = None
+                    gx = 0.0
+                    try:
+                        gx = float(gps.getValues()[0])
+                    except Exception:
+                        gx = 0.0
+                    # Magenta pucks / desert dirt can score "red" far from the stripe.
+                    near_finish = gx >= 21.0
+                    saw_red = bool(lane_eyes["finish_red"] >= 0.28 and near_finish)
+                    mark_plan = mark_stop.step(
+                        saw_red,
+                        look_ahead_m,
+                        speed_m_s,
+                        dt,
+                        measured_range_m=measured,
+                    )
+                gx = 0.0
+                try:
+                    gx = float(gps.getValues()[0])
+                except Exception:
+                    gx = 0.0
+                finish_red = (
+                    lane_eyes["finish_red"] if gx >= 21.0 else 0.0
+                )
+                watch_plan = None
+                if corridor_watch is not None:
+                    watch_plan = corridor_watch.step(
+                        lane_eyes.get("left_y_m"),
+                        lane_eyes.get("right_y_m"),
+                        lane_eyes.get("steer"),
+                        dt,
+                    )
                 lk = lane_keep_fn(
                     lane_eyes["left_yellow"],
                     lane_eyes["right_yellow"],
-                    lane_eyes["finish_red"],
+                    finish_red,
+                    mark_plan=mark_plan,
+                    k_steer=3.2,
+                    left_offset=lane_eyes.get("left_offset"),
+                    right_offset=lane_eyes.get("right_offset"),
+                    left_curve=lane_eyes.get("left_curve"),
+                    right_curve=lane_eyes.get("right_curve"),
+                    left_fill=lane_eyes.get("left_fill"),
+                    right_fill=lane_eyes.get("right_fill"),
+                    left_y_m=lane_eyes.get("left_y_m"),
+                    right_y_m=lane_eyes.get("right_y_m"),
+                    left_far_offset=lane_eyes.get("left_far_offset"),
+                    right_far_offset=lane_eyes.get("right_far_offset"),
+                    t_ahead=lane_eyes.get("t_ahead"),
+                    preview_ok=bool(lane_eyes.get("preview_ok")),
+                    allow_one_eye=both_eyes_seen,
+                    steer_filter=steer_filter,
+                    planner=gap_planner,
+                    watch_plan=watch_plan,
+                    lookout=forecast_lookout,
+                    z_fill=lane_eyes.get("z_fill"),
+                    w_fill=lane_eyes.get("w_fill"),
+                    dt=dt,
                 )
+                lane_eyes["steer"] = lk.get("steer")
+                lane_eyes["phase"] = lk.get("phase")
+                lane_eyes["left_pressure"] = lk.get("left_pressure")
+                lane_eyes["right_pressure"] = lk.get("right_pressure")
                 if lk["brake"]:
-                    print("Lane-keep: red finish — ABS")
+                    rem = lk.get("remaining_m")
+                    if lk.get("phase") == "watch" or "watch" in str(
+                        lk.get("reason") or ""
+                    ):
+                        print(
+                            "Lane-keep: geometry watch — stop "
+                            f"{lk.get('reason')} "
+                            f"yLm={lane_eyes.get('left_y_m')} "
+                            f"yRm={lane_eyes.get('right_y_m')}"
+                        )
+                    elif lk.get("phase") == "lookout" or "lookout" in str(
+                        lk.get("reason") or ""
+                    ):
+                        print(
+                            "Lane-keep: lookout — paint gone ahead "
+                            f"zF={lane_eyes.get('z_fill')} "
+                            f"wF={lane_eyes.get('w_fill')} "
+                            f"yL={lane_eyes['left_yellow']:.2f} "
+                            f"yR={lane_eyes['right_yellow']:.2f} "
+                            f"v={speed_m_s:.2f}"
+                        )
+                    elif lk.get("phase") == "lost" or "lost paint" in str(
+                        lk.get("reason") or ""
+                    ):
+                        print(
+                            "Lane-keep: lost paint — stop "
+                            f"x~ GPS yL={lane_eyes['left_yellow']:.2f} "
+                            f"yR={lane_eyes['right_yellow']:.2f} "
+                            f"v={speed_m_s:.2f}"
+                        )
+                    else:
+                        print(
+                            "Lane-keep: red mark — ABS to stop on line "
+                            f"D={look_ahead_m:.2f}m rem={rem} "
+                            f"row={lane_eyes.get('finish_red_row')} v={speed_m_s:.2f}"
+                        )
                     abs_brake.request(
                         forward_m_s,
                         speed_m_s,
@@ -1621,19 +2747,50 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     drive_grace_s = max(drive_grace_s, 1.0)
                     sig = (
                         f"{lk['left']:.1f}:{lk['right']:.1f}:"
-                        f"{lane_eyes['left_yellow']:.2f}:{lane_eyes['right_yellow']:.2f}"
+                        f"{lane_eyes['left_yellow']:.2f}:{lane_eyes['right_yellow']:.2f}:"
+                        f"{lane_eyes.get('left_offset')}:{lane_eyes.get('right_offset')}:"
+                        f"{lk.get('phase')}:{lk.get('remaining_m')}"
                     )
                     if sig != last_lane_sig:
                         last_lane_sig = sig
                         mx = _camera_max_rgb(cams.get("finish_cam"))
+                        rem = lk.get("remaining_m")
                         print(
                             "Lane-keep "
                             f"L={lk['left']:.2f} R={lk['right']:.2f} "
+                            f"steer={lk.get('steer')} "
                             f"yL={lane_eyes['left_yellow']:.2f} "
                             f"yR={lane_eyes['right_yellow']:.2f} "
+                            f"oL={lane_eyes.get('left_offset')} "
+                            f"oR={lane_eyes.get('right_offset')} "
+                            f"cL={lane_eyes.get('left_curve')} "
+                            f"cR={lane_eyes.get('right_curve')} "
+                            f"pL={lk.get('left_pressure')} "
+                            f"pR={lk.get('right_pressure')} "
+                            f"yLm={lane_eyes.get('left_y_m')} "
+                            f"yRm={lane_eyes.get('right_y_m')} "
+                            f"mode={lk.get('plan_mode')} "
+                            f"rate={lk.get('plan_rate')} "
+                            f"fL={lane_eyes.get('left_fill')} "
+                            f"fR={lane_eyes.get('right_fill')} "
+                            f"foL={lane_eyes.get('left_far_offset')} "
+                            f"foR={lane_eyes.get('right_far_offset')} "
+                            f"z={lane_eyes.get('z_offset')} "
+                            f"w={lane_eyes.get('w_offset')} "
+                            f"zYm={lane_eyes.get('z_y_m')} "
+                            f"wYm={lane_eyes.get('w_y_m')} "
+                            f"fwd={int(bool(lane_eyes.get('forecast_ok')))} "
+                            f"prev={int(bool(lk.get('preview_ok')))} "
+                            f"eA={lk.get('err_ahead')} "
+                            f"tA={lk.get('t_ahead')} "
                             f"red={lane_eyes['finish_red']:.2f} "
+                            f"phase={lk.get('phase')} rem={rem} "
+                            f"D={look_ahead_m:.2f} "
                             f"navRGB=({mx[0]:.2f},{mx[1]:.2f},{mx[2]:.2f})"
                         )
+
+            if yellow_fn and red_fn and peak_fn:
+                _paint_eye_huds(eye_huds, lane_eyes, band_fn, col_fn)
 
             if stop_pressed:
                 print("Keyboard stop — ABS braking")
@@ -2119,7 +3276,24 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "lane_keep": lane_keep_on,
                         "left_yellow": lane_eyes.get("left_yellow"),
                         "right_yellow": lane_eyes.get("right_yellow"),
+                        "left_offset": lane_eyes.get("left_offset"),
+                        "right_offset": lane_eyes.get("right_offset"),
+                        "left_y_m": lane_eyes.get("left_y_m"),
+                        "right_y_m": lane_eyes.get("right_y_m"),
+                        "left_fill": lane_eyes.get("left_fill"),
+                        "right_fill": lane_eyes.get("right_fill"),
+                        "z_fill": lane_eyes.get("z_fill"),
+                        "w_fill": lane_eyes.get("w_fill"),
+                        "lane_phase": lane_eyes.get("phase"),
+                        "steer": lane_eyes.get("steer"),
                         "finish_red": lane_eyes.get("finish_red"),
+                        "lookdown_view": lookdown_view,
+                        "look_ahead_m": round(look_ahead_m, 3),
+                        "finish_red_row": lane_eyes.get("finish_red_row"),
+                        "mark_remaining_m": None
+                        if mark_plan.get("remaining_m") is None
+                        else round(float(mark_plan["remaining_m"]), 3),
+                        "mark_phase": mark_plan.get("phase"),
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -2127,6 +3301,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "wheels": wheel_sensors,
                     },
                 )
+                if lane_keep_on:
+                    _log_steer_action(payload.get("pose") or {}, lane_eyes)
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0

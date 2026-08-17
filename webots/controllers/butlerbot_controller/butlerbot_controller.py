@@ -712,6 +712,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         preview_range_fn = None
         t_mark_fn = None
         forecast_hit_fn = None
+    # Last Z/W fills + hits. Refreshed every 8 steps (~10 Hz); lookout
+    # still steps at 8 ms on these cached fills.
+    zw_cache = {
+        "z_fill": None,
+        "w_fill": None,
+        "z_offset": None,
+        "w_offset": None,
+        "z_hit": None,
+        "w_hit": None,
+    }
     mark_plan = {"phase": "seek", "remaining_m": None, "t_to_mark_s": None}
     finish_cam_node = None
     line_cam_l_node = None
@@ -992,6 +1002,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                                 last_api_sig = ""
 
             if yellow_fn and red_fn and peak_fn:
+                scan_zw = tick % 8 == 0
                 lane_eyes = _read_lane_eyes(
                     cams,
                     yellow_fn,
@@ -1001,7 +1012,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     curve_fn,
                     fill_fn,
                     far_fn,
+                    scan_forecast=scan_zw,
                 )
+                if scan_zw:
+                    zw_cache["z_fill"] = lane_eyes.get("z_fill")
+                    zw_cache["w_fill"] = lane_eyes.get("w_fill")
+                    zw_cache["z_offset"] = lane_eyes.get("z_offset")
+                    zw_cache["w_offset"] = lane_eyes.get("w_offset")
+                else:
+                    lane_eyes["z_fill"] = zw_cache["z_fill"]
+                    lane_eyes["w_fill"] = zw_cache["w_fill"]
+                    lane_eyes["z_offset"] = zw_cache["z_offset"]
+                    lane_eyes["w_offset"] = zw_cache["w_offset"]
                 if (
                     float(lane_eyes.get("left_yellow") or 0.0) >= 0.12
                     and float(lane_eyes.get("right_yellow") or 0.0) >= 0.12
@@ -1014,7 +1036,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     cams.get("line_right"), line_cam_r_node, pixel_fn, ground_fn
                 )
                 z_hit = w_hit = None
-                if forecast_hit_fn is not None:
+                if forecast_hit_fn is not None and scan_zw:
                     xy = gps_xy
                     yaw = prev_yaw
                     for label, cam, node in (
@@ -1041,6 +1063,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             z_hit = hit
                         else:
                             w_hit = hit
+                    zw_cache["z_hit"] = z_hit
+                    zw_cache["w_hit"] = w_hit
+                else:
+                    z_hit = zw_cache["z_hit"]
+                    w_hit = zw_cache["w_hit"]
                 z_y = None if not z_hit else z_hit.get("y_m")
                 w_y = None if not w_hit else w_hit.get("y_m")
                 aheads = []
@@ -1253,7 +1280,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"navRGB=({mx[0]:.2f},{mx[1]:.2f},{mx[2]:.2f})"
                         )
 
-            if yellow_fn and red_fn and peak_fn:
+            if yellow_fn and red_fn and peak_fn and tick % 4 == 0:
                 _paint_eye_huds(eye_huds, lane_eyes, band_fn, col_fn)
 
             if stop_pressed:
@@ -1687,14 +1714,23 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     },
                     "both_locked": wheels_both_locked,
                 }
+                try:
+                    sim_t = float(robot.getTime())
+                except Exception:
+                    sim_t = 0.0
+                odo_v = 0.5 * (float(left_wv) + float(right_wv)) * WHEEL_RADIUS_M
+                cmd_v = 0.5 * (float(left_v) + float(right_v)) * WHEEL_RADIUS_M
                 control_diag = {
                     "schema": "butlerbot_control_diag_v1",
+                    "sim_time_s": round(sim_t, 4),
                     "hub_left_rad_s": round(left_wv, 4),
                     "hub_right_rad_s": round(right_wv, 4),
                     "hub_diff_rad_s": round(abs(left_wv - right_wv), 4),
                     "yaw_rate_rad_s": round(yaw_rate, 4),
                     "gps_speed_m_s": round(raw_speed_m_s, 4),
                     "gps_forward_m_s": round(raw_forward_m_s, 4),
+                    "odo_speed_m_s": round(odo_v, 4),
+                    "cmd_speed_m_s": round(cmd_v, 4),
                     "cmd_left": round(left_v, 3),
                     "cmd_right": round(right_v, 3),
                     "cmd_source": (

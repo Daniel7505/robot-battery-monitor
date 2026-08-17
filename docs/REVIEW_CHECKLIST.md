@@ -20,11 +20,12 @@ Credit matters: this system was **co-built**. Daniel directed goals and rejected
 ## 0) Where to start (order)
 
 1. **This file** (`docs/REVIEW_CHECKLIST.md`) — do / don’t fence  
-2. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — system map  
-3. [`docs/STABILITY.md`](STABILITY.md) — residual spin / stop lessons  
-4. [`docs/TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md) — power feed contract  
-5. Root [`README.md`](../README.md) — code tour + boot path  
-6. Then code (prefer pure math + bridge before god files)
+2. [`docs/LANE_KEEP_CLOSED_2026-08-17.md`](LANE_KEEP_CLOSED_2026-08-17.md) — do not retry A/D/H/H2/I  
+3. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — system map  
+4. [`docs/STABILITY.md`](STABILITY.md) — residual spin / stop lessons  
+5. [`docs/TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md) — power feed contract  
+6. Root [`README.md`](../README.md) — code tour + boot path  
+7. Then code (prefer pure math + bridge before god files)
 
 **Wrong tree warning:** ignore Desktop copies named like `robot-battery-monitor-main` unless they match GitHub `main`. Only the path above (or a fresh clone of GitHub) is canonical.
 
@@ -94,6 +95,10 @@ If you ship a meaningful arc, **add a short line** under [Credits & lineage](#7-
 | **Don’t** “fix” physics with dashboard-only checks | Twin truth is multi-sensor + eyes |
 | **Don’t** commit Webots `.jpg` dumps / polluted worlds / secrets | Hygiene |
 | **Don’t** work in a stale Desktop zip clone | Wrong code, wrong conclusions |
+| **Don’t retry closed lane-keep knobs** (A/D/H/H2/I, preview-off, Z/W meters as steer) | Measured and closed 2026-08-17 — see [`LANE_KEEP_CLOSED_2026-08-17.md`](LANE_KEEP_CLOSED_2026-08-17.md) |
+| **Don’t raise cruise** until first-lobe ≤ 14 cm and ≥ 60 % @ 5 cm | Molasses is realtime ~0.2, not ω |
+| **Don’t remount / look-at LINE_CAM** | Identity lock; look-at rolled 90° |
+| **Don’t put Z/W meters on the wheel** | 12 cm of floor, wrecked the S |
 
 ### Explicit “do not touch without tests + live twin check”
 
@@ -173,6 +178,7 @@ No micro-opts unless correctness/demo reliability. Do not edit until ranked.
 
 | Date | Model / person | What changed |
 |------|----------------|--------------|
+| 2026-08-17 | Grok Build 4.6 + Grok Web + Daniel | A-winner freeze (`kahead=0.22`, release 4.0). Clock H/H2 (HUD every 4, Z/W every 8). I near-pref **reverted**. Closed-experiment log: `docs/LANE_KEEP_CLOSED_2026-08-17.md`. |
 | _(template)_ | e.g. Grok 4.6 Build | e.g. Ranked audit; extracted X from dashboard |
 
 ---
@@ -192,6 +198,7 @@ Build in short arcs when needed. Prefer clear handoffs over giant unsupervised r
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Maps and sequences |
 | [STABILITY.md](STABILITY.md) | Stop / residual spin |
 | [TWIN_POWER_BRIDGE.md](TWIN_POWER_BRIDGE.md) | Power feed contract |
+| [LANE_KEEP_CLOSED_2026-08-17.md](LANE_KEEP_CLOSED_2026-08-17.md) | Closed A/D/H/H2/I — do not retry |
 | [V1_WHEELED_ENERGY_BASELINE.md](V1_WHEELED_ENERGY_BASELINE.md) | Energy baseline notes |
 | [HARDWARE_PROFILE.md](HARDWARE_PROFILE.md) | Hardware profile notes |
 | [README.md](../README.md) | Boot, tour, prerequisites |

@@ -237,8 +237,13 @@ def _read_lane_eyes(
     curve_fn=None,
     fill_fn=None,
     far_fn=None,
+    scan_forecast: bool = True,
 ) -> dict:
-    """Peak color scores so a thin paint stripe still registers."""
+    """Peak color scores so a thin paint stripe still registers.
+
+    L/R yellow + near/far bands always run. Forecast Z/W full-frame
+    offset/fill is optional so the 8 ms loop can refresh them at ~10 Hz.
+    """
     ly = _camera_peak_score(cams.get("line_left"), yellow_fn, peak_fn)
     ry = _camera_peak_score(cams.get("line_right"), yellow_fn, peak_fn)
     lo = _line_offset(cams.get("line_left"), offset_fn)
@@ -249,10 +254,12 @@ def _read_lane_eyes(
     rf = _line_offset(cams.get("line_right"), fill_fn)
     lfo = _line_offset(cams.get("line_left"), far_fn)
     rfo = _line_offset(cams.get("line_right"), far_fn)
-    zo = _line_offset(cams.get("forecast_z"), offset_fn)
-    wo = _line_offset(cams.get("forecast_w"), offset_fn)
-    zf = _line_offset(cams.get("forecast_z"), fill_fn)
-    wf = _line_offset(cams.get("forecast_w"), fill_fn)
+    zo = wo = zf = wf = None
+    if scan_forecast:
+        zo = _line_offset(cams.get("forecast_z"), offset_fn)
+        wo = _line_offset(cams.get("forecast_w"), offset_fn)
+        zf = _line_offset(cams.get("forecast_z"), fill_fn)
+        wf = _line_offset(cams.get("forecast_w"), fill_fn)
     fr_l, row_l = _camera_peak_score_and_row(cams.get("finish_cam"), red_fn, peak_fn)
     fr_r, row_r = _camera_peak_score_and_row(cams.get("finish_cam_r"), red_fn, peak_fn)
     if fr_r > fr_l:

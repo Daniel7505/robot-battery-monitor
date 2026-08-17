@@ -65,6 +65,12 @@ WALL_COMFORT_M = 0.45
 LANE_WIDTH_MIN_M = 0.70
 LANE_WIDTH_MAX_M = 2.10
 WATCH_HOLD_S = 0.20
+# Metric wall gate. Both eyes must see a real corridor, not tile speckle.
+METRIC_WALL_MIN_M = 0.15
+METRIC_WALL_MAX_M = 1.20
+# Frozen spawn meters (~0) must not mute a sliding picture.
+METRIC_PICTURE_DISAGREE = 0.15
+METRIC_CT_QUIET_M = 0.04
 
 
 def yellow_score(rgb: tuple[float, float, float]) -> float:
@@ -1028,6 +1034,8 @@ def lane_keep_command(
     lookout: ForecastLookout | None = None,
     z_fill: float | None = None,
     w_fill: float | None = None,
+    left_wall_dist_m: float | None = None,
+    right_wall_dist_m: float | None = None,
     dt: float = 0.008,
 ) -> dict:
     """Return wheel cmds. Every frame's picture counts.
@@ -1110,6 +1118,24 @@ def lane_keep_command(
         ):
             raw_steer = max(-1.0, min(1.0, float(raw_steer) + ONE_EYE_STEER))
             left_p = max(left_p, ONE_EYE_STEER)
+    metric_ct = metric_ct_from_walls(left_wall_dist_m, right_wall_dist_m)
+    metric_ok = metric_walls_plausible(left_wall_dist_m, right_wall_dist_m)
+    if (
+        metric_ok
+        and metric_ct is not None
+        and picture_steer is not None
+        and abs(float(metric_ct)) < METRIC_CT_QUIET_M
+        and abs(float(picture_steer)) >= METRIC_PICTURE_DISAGREE
+    ):
+        # Meters look spawned-centered. Picture is sliding. Trust the image.
+        metric_ok = False
+    error_source = "picture"
+    if metric_ok and metric_ct is not None:
+        raw_steer = max(-1.0, min(1.0, float(metric_ct)))
+        error_source = "metric"
+        half = max(0.05, float(LANE_HALF_M))
+        left_p = max(0.0, (half - float(left_wall_dist_m)) / half)
+        right_p = max(0.0, (half - float(right_wall_dist_m)) / half)
     plan = None
     err_ahead = None
     t_use = None
@@ -1222,6 +1248,15 @@ def lane_keep_command(
         "t_ahead": None if t_use is None else round(float(t_use), 3),
         "z_y_m": None if z_y_m is None else round(float(z_y_m), 3),
         "w_y_m": None if w_y_m is None else round(float(w_y_m), 3),
+        "left_wall_dist_m": None
+        if left_wall_dist_m is None
+        else round(float(left_wall_dist_m), 3),
+        "right_wall_dist_m": None
+        if right_wall_dist_m is None
+        else round(float(right_wall_dist_m), 3),
+        "metric_ct": None if metric_ct is None else round(float(metric_ct), 4),
+        "metric_active": bool(error_source == "metric"),
+        "error_source": error_source,
     }
 
 
@@ -1367,6 +1402,186 @@ def yellow_best_pixel(
                 best_s = s
                 best = (float(x), float(y))
     return best
+
+
+def yellow_wall_pixel(
+    image: bytes | bytearray,
+    width: int,
+    height: int,
+    *,
+    thresh: float = 0.20,
+) -> tuple[float, float] | None:
+    """Stable peak-yellow pixel at the base of the wall.
+
+    Prefer the near / look-band contact patch. Never the far sliver.
+    """
+    ny0, ny1 = yellow_near_band(height)
+    pix = yellow_best_pixel(image, width, height, ny0, ny1, thresh=thresh)
+    if pix is not None:
+        return pix
+    return yellow_nearest_pixel(image, width, height, thresh=thresh)
+
+
+def wall_dist_from_lateral(y_m: float, *, side: str) -> float:
+    """Positive distance from robot centerline to that wall.
+
+    Left paint lives at +Y. Right paint lives at −Y.
+    """
+    y = float(y_m)
+    if side == "right":
+        return -y
+    return y
+
+
+def metric_ct_from_walls(
+    left_dist_m: float | None,
+    right_dist_m: float | None,
+) -> float | None:
+    """Signed cross-track in meters. + = left of center / steer right.
+
+    The design brief wrote (left − right) / 2. That sign is the opposite
+    of this planner (+error → +steer → right). Match the planner.
+    """
+    if left_dist_m is None or right_dist_m is None:
+        return None
+    return (float(right_dist_m) - float(left_dist_m)) / 2.0
+
+
+def metric_walls_plausible(
+    left_dist_m: float | None,
+    right_dist_m: float | None,
+) -> bool:
+    """Both walls in a real corridor. Tile / sky / wreck → False."""
+    if left_dist_m is None or right_dist_m is None:
+        return False
+    left = float(left_dist_m)
+    right = float(right_dist_m)
+    if left < METRIC_WALL_MIN_M or right < METRIC_WALL_MIN_M:
+        return False
+    if left > METRIC_WALL_MAX_M or right > METRIC_WALL_MAX_M:
+        return False
+    width = left + right
+    return LANE_WIDTH_MIN_M <= width <= LANE_WIDTH_MAX_M
+
+
+def _mat9_mul(
+    rot9: tuple[float, ...],
+    vec: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Row-major 3×3 times a column vector."""
+    r = rot9
+    return (
+        r[0] * vec[0] + r[1] * vec[1] + r[2] * vec[2],
+        r[3] * vec[0] + r[4] * vec[1] + r[5] * vec[2],
+        r[6] * vec[0] + r[7] * vec[1] + r[8] * vec[2],
+    )
+
+
+def pixel_to_ground_matrix_m(
+    cam_world: tuple[float, float, float],
+    cam_R9: tuple[float, ...],
+    col: float,
+    row: float,
+    width: int,
+    height: int,
+    fov_rad: float,
+    floor_z: float = 0.0,
+) -> tuple[float, float] | None:
+    """World (x, y) where this pixel hits the floor. Uses camera world pose."""
+    if len(cam_R9) < 9:
+        return None
+    ay = image_row_elevation_rad(row, height, fov_rad)
+    ax = image_col_azimuth_rad(col, width, fov_rad)
+    ray_cam = _norm((math.tan(ax), math.tan(ay), -1.0))
+    if ray_cam is None:
+        return None
+    ray = _mat9_mul(tuple(cam_R9[:9]), ray_cam)
+    if ray[2] >= -1e-6:
+        return None
+    t = (floor_z - float(cam_world[2])) / ray[2]
+    if t < 0.0:
+        return None
+    return (
+        float(cam_world[0]) + t * ray[0],
+        float(cam_world[1]) + t * ray[1],
+    )
+
+
+def world_hit_to_robot_m(
+    hit_xy: tuple[float, float],
+    robot_xy: tuple[float, float],
+    yaw_rad: float,
+) -> tuple[float, float]:
+    """World floor hit → robot-frame (ahead_m, lateral_m)."""
+    dx = float(hit_xy[0]) - float(robot_xy[0])
+    dy = float(hit_xy[1]) - float(robot_xy[1])
+    c = math.cos(float(yaw_rad))
+    s = math.sin(float(yaw_rad))
+    return (dx * c + dy * s, -dx * s + dy * c)
+
+
+def line_wall_hit(
+    image: bytes | bytearray,
+    width: int,
+    height: int,
+    *,
+    side: str,
+    cam_pos: tuple[float, float, float] | None = None,
+    cam_rot: tuple[float, float, float, float] | None = None,
+    fov_rad: float = 1.2,
+    robot_xy: tuple[float, float] | None = None,
+    yaw_rad: float | None = None,
+    cam_world: tuple[float, float, float] | None = None,
+    cam_R9: tuple[float, ...] | None = None,
+    thresh: float = 0.20,
+) -> dict | None:
+    """Near-band yellow pixel → robot-frame wall hit.
+
+    Prefer Supervisor world pose (cam_world + cam_R9) so ENU camera
+    axes match the picture. Field translation/rotation is the fallback.
+    """
+    pix = yellow_wall_pixel(image, width, height, thresh=thresh)
+    if pix is None:
+        return None
+    col, row = pix
+    hit_robot: tuple[float, float] | None = None
+    if cam_world is not None and cam_R9 is not None:
+        hit_w = pixel_to_ground_matrix_m(
+            cam_world, cam_R9, col, row, width, height, fov_rad
+        )
+        if hit_w is None:
+            return None
+        if robot_xy is not None and yaw_rad is not None:
+            hit_robot = world_hit_to_robot_m(hit_w, robot_xy, float(yaw_rad))
+        else:
+            hit_robot = (float(hit_w[0]), float(hit_w[1]))
+    elif cam_pos is not None and cam_rot is not None:
+        if robot_xy is not None and yaw_rad is not None:
+            hit_robot = pixel_to_ground_robot_m(
+                robot_xy,
+                float(yaw_rad),
+                cam_pos,
+                cam_rot,
+                col,
+                row,
+                width,
+                height,
+                fov_rad,
+            )
+        else:
+            hit_robot = pixel_to_ground_m(
+                cam_pos, cam_rot, col, row, width, height, fov_rad
+            )
+    if hit_robot is None:
+        return None
+    dist = wall_dist_from_lateral(hit_robot[1], side=side)
+    return {
+        "ahead_m": float(hit_robot[0]),
+        "y_m": float(hit_robot[1]),
+        "dist_m": float(dist),
+        "col": float(col),
+        "row": float(row),
+    }
 
 
 def forecast_wall_hit(

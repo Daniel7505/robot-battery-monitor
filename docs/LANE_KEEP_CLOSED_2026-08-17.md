@@ -1,5 +1,7 @@
 # Lane-keep — closed experiments (2026-08-17)
 
+Product map: [`NORTH_STAR.md`](NORTH_STAR.md). Drive cards: [`LANE_KEEP_BASELINE_2026-08-17.md`](LANE_KEEP_BASELINE_2026-08-17.md).
+
 Do **not** rerun these as “new ideas.” They were isolated, measured, and closed.
 
 Driving policy is frozen at the **A-winner** plus two free loop throttles. Reopen only if Daniel or Web explicitly names a new experiment.
@@ -13,7 +15,7 @@ Driving policy is frozen at the **A-winner** plus two free loop throttles. Reope
 | `DEFAULT_CRUISE_RAD_S` | **5.5** (0.44 m/s) | Do not raise until first-lobe ≤ 14 cm **and** ≥ 60 % @ 5 cm on a scored S |
 | Preview | **on** (`t_ahead` fallback 2.0 s) | Preview-off aborted the second lobe |
 | Z/W | **lookout only** (fill veto) | Never vote left/right; meters are 12 cm of floor |
-| LINE_CAM_L/R | identity, look −Z | Never remount / never look-at |
+| LINE_CAM_L/R | identity, look −Z, **128×128** (frozen 2026-08-17) | Never remount / never look-at. 64 is the historical champion only — see `LANE_KEEP_BASELINE_2026-08-17.md` |
 | Map (`s_track_path.csv`) | scorekeeper only | Not memory, not SLAM |
 
 Presentation / clock (keep — free, not drive policy):
@@ -57,7 +59,7 @@ Remaining tightness is the L/R planner (far-preview, grab/release), **not** anot
 
 ## Hardware / eyes still locked
 
-- LINE_CAM_L/R: `(0.30, ±0.65, 0.12)`, 64×64, FOV 1.2, look −Z
+- LINE_CAM_L/R: `(0.30, ±0.65, 0.12)`, **128×128**, FOV 1.2, look −Z
 - FORECAST_CAM_Z/W: `(0.16, ±0.06, 0.20)`, identity `0 0 1 0`, HUD stay
 - Tape in-buffer is lit gold ~(0.91, 0.59, 0.22) score ~0.53 — same family as tile. Color tweak blinds. Fill ≥ `MIN_STRIPE_FILL` 0.03 is the discriminator.
 - **Do not save the Webots world on exit.** PowerShell `;` not `&&`. No LLM in the drive loop.
@@ -65,5 +67,5 @@ Remaining tightness is the L/R planner (far-preview, grab/release), **not** anot
 ## Measure
 
 - Clocks: `python -u scripts/measure_clocks.py` (needs `control_diag.sim_time_s`)
-- Scored S: `python -u scripts/measure_s_lane_keep.py` (timeout 420 s wall)
+- Scored S: `python -u scripts/measure_s_lane_keep.py` (timeout **900 s** wall at 128)
 - Integrate rt as Δsim/Δwall. `rt=0` rows are stale twin POST, not stopped physics.

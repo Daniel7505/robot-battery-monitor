@@ -1,6 +1,8 @@
 # ButlerBot Webots Digital Twin
 
-Wheeled mobile manipulator simulation that feeds live power telemetry into the Robot Battery Monitor dashboard via **DigitalTwinBridge**.
+Wheeled mobile manipulator simulation that feeds live power telemetry into the dashboard via **DigitalTwinBridge**, and can lane-keep a painted corridor.
+
+This twin is the **evaluation harness** for the north star (parts catalog → design agent → score “can it finish the mission?”). It is not the product. See [`docs/NORTH_STAR.md`](../docs/NORTH_STAR.md).
 
 ## What’s included
 

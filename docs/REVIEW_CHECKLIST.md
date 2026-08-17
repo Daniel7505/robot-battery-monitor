@@ -19,13 +19,16 @@ Credit matters: this system was **co-built**. Daniel directed goals and rejected
 
 ## 0) Where to start (order)
 
-1. **This file** (`docs/REVIEW_CHECKLIST.md`) — do / don’t fence  
-2. [`docs/LANE_KEEP_CLOSED_2026-08-17.md`](LANE_KEEP_CLOSED_2026-08-17.md) — do not retry A/D/H/H2/I  
-3. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — system map  
-4. [`docs/STABILITY.md`](STABILITY.md) — residual spin / stop lessons  
-5. [`docs/TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md) — power feed contract  
-6. Root [`README.md`](../README.md) — code tour + boot path  
-7. Then code (prefer pure math + bridge before god files)
+1. [`docs/NORTH_STAR.md`](NORTH_STAR.md) — **what we are building** (harness vs product)  
+1b. [`docs/PARTS_CATALOG.md`](PARTS_CATALOG.md) — SQLite parts catalog (design-agent knowledge)  
+2. **This file** (`docs/REVIEW_CHECKLIST.md`) — do / don’t fence  
+3. [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](LANE_KEEP_BASELINE_2026-08-17.md) — frozen 128 drive card  
+4. [`docs/LANE_KEEP_CLOSED_2026-08-17.md`](LANE_KEEP_CLOSED_2026-08-17.md) — do not retry A/D/H/H2/I  
+5. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — system map of **today’s** stack  
+6. [`docs/STABILITY.md`](STABILITY.md) — residual spin / stop lessons  
+7. [`docs/TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md) — power feed contract  
+8. Root [`README.md`](../README.md) — code tour + boot path  
+9. Then code (prefer pure math + bridge before god files)
 
 **Wrong tree warning:** ignore Desktop copies named like `robot-battery-monitor-main` unless they match GitHub `main`. Only the path above (or a fresh clone of GitHub) is canonical.
 
@@ -33,12 +36,18 @@ Credit matters: this system was **co-built**. Daniel directed goals and rejected
 
 ## 1) What this project is (north star)
 
-A **power-aware robot stack**:
+**Full map:** [`NORTH_STAR.md`](NORTH_STAR.md). Short form:
+
+We are building an agent that **catalogs real parts**, **takes a mission**, **designs a cheap robot that can finish it**, **evaluates it in the twin**, and later **ships it to hardware**.
+
+What this repo **runs today** is the harness, not that product:
 
 - Flask / SocketIO **PMS dashboard** (channels, battery, agent, history)
-- **Webots digital twin** (ButlerBot wheeled) with teleop + ABS-style stop
+- **Webots digital twin** (ButlerBot wheeled) with teleop, ABS-style stop, and lane-keep
 - HTTP **twin bridge** (telemetry in, state/commands out, `stop_epoch`)
 - **Onboard agent** that can throttle / intervene when the operator pushes power/heat
+
+Lane-keep is “good enough” as an **A-to-B evaluation** (travel-band in sim, not docking). Highest-leverage next work is the **parts database** and **design agent**, not more drive knobs unless Daniel asks.
 
 Demo-grade + serious learning/portfolio system — **not** a production fleet stack. Optimize for **correctness of stop/power/demo path** and **clarity**, not micro-benchmarks or enterprise rewrites.
 
@@ -77,6 +86,7 @@ If you ship a meaningful arc, **add a short line** under [Credits & lineage](#7-
 | Prefer **visual still** over “idle” telemetry when they disagree | Documented failure mode |
 | Run relevant tests (`python -m pytest` or scoped files) after control/power edits | Insurance |
 | Update docs/handoff when behavior changes | Next session (human or AI) survives |
+| Ask which **NORTH_STAR** item the work serves | Parts catalog / design agent / evaluate / transfer — or stop |
 | Scope efficiency as **clarity, safety, demo reliability** first | CPU shaving is rarely the bottleneck |
 
 ---

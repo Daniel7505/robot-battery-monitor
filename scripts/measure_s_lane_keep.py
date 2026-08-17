@@ -49,6 +49,13 @@ def snap() -> dict:
         "src": d.get("cmd_source"),
         "v": float(d.get("gps_speed_m_s") or 0),
         "locks": bool(d.get("locks_engaged")),
+        "wL": None if s.get("left_wall_dist_m") is None else float(s.get("left_wall_dist_m")),
+        "wR": None if s.get("right_wall_dist_m") is None else float(s.get("right_wall_dist_m")),
+        "mCt": None if s.get("metric_ct") is None else float(s.get("metric_ct")),
+        "metric": bool(s.get("metric_active")),
+        "esrc": s.get("error_source") or "",
+        "sim": d.get("sim_time_s"),
+        "wall": time.time(),
     }
 
 
@@ -57,10 +64,12 @@ def main() -> int:
     s0 = snap()
     print(
         f"START x={s0['x']:.3f} y={s0['y']:.3f} ct={s0['ct']:.3f} "
-        f"red={s0['red']:.3f} locks={s0['locks']}"
+        f"red={s0['red']:.3f} locks={s0['locks']} "
+        f"wL={s0['wL']} wR={s0['wR']} mCt={s0['mCt']} src={s0['esrc']}"
     )
     req("/api/twin/command", "POST", {"lane_keep": True, "source": "s_lane_keep"})
-    print("LANE KEEP ARMED  finish_x=", FINISH_X_M, "timeout_s=420")
+    timeout_s = 900.0
+    print("LANE KEEP ARMED  finish_x=", FINISH_X_M, "timeout_s=", int(timeout_s))
     t0 = time.time()
     seen_coast = False
     seen_brake = False
@@ -69,10 +78,32 @@ def main() -> int:
     abort_lost = False
     last_print = -1
     max_abs_ct = abs(s0["ct"])
-    while time.time() - t0 < 420:
+    metric_on = 0
+    metric_off = 0
+    n_samp = 0
+    n_5 = 0
+    n_10 = 0
+    first_lobe_peak = 0.0
+    crest_15 = None
+    while time.time() - t0 < timeout_s:
         s = snap()
         t = time.time() - t0
         max_abs_ct = max(max_abs_ct, abs(s["ct"]))
+        if 3.0 <= s["x"] <= 12.0:
+            first_lobe_peak = max(first_lobe_peak, abs(s["ct"]))
+        if 14.8 <= s["x"] <= 15.8:
+            if crest_15 is None or abs(s["x"] - 15.3) < abs(crest_15["x"] - 15.3):
+                crest_15 = dict(s)
+        if s["x"] >= 1.0:
+            n_samp += 1
+            if abs(s["ct"]) <= 0.05:
+                n_5 += 1
+            if abs(s["ct"]) <= 0.10:
+                n_10 += 1
+        if s.get("metric"):
+            metric_on += 1
+        else:
+            metric_off += 1
         near_finish = s["x"] >= FINISH_X_M - 3.5
         mark_owns = s["phase"] in ("coast", "brake") or near_finish
         if (
@@ -141,9 +172,12 @@ def main() -> int:
                 break
         if int(t) != last_print and int(t) % 10 == 0:
             last_print = int(t)
+            fl = "None" if s["fL"] is None else f"{s['fL']:.3f}"
+            fr = "None" if s["fR"] is None else f"{s['fR']:.3f}"
             print(
                 f"  t={t:5.1f}s x={s['x']:.2f} y={s['y']:.2f} ct={s['ct']:+.3f} "
-                f"yL={s['yL']:.2f} yR={s['yR']:.2f} red={s['red']:.2f} "
+                f"yL={s['yL']:.2f} yR={s['yR']:.2f} fL={fl} fR={fr} "
+                f"red={s['red']:.2f} msrc={s['esrc']} "
                 f"phase={s['phase']} src={s['src']}"
             )
         if seen_brake and s["locks"] and s["v"] < 0.03 and s["x"] > FINISH_X_M - 3.0:
@@ -158,13 +192,40 @@ def main() -> int:
     in_lane = max_abs_ct < 0.70
     on_line = err < 0.40 and abs(end["y"]) < 0.35
     print("==== RESULT ====")
+    pct5 = 0.0 if n_samp <= 0 else 100.0 * n_5 / n_samp
+    pct10 = 0.0 if n_samp <= 0 else 100.0 * n_10 / n_samp
     print(
         f"end x={end['x']:.3f} y={end['y']:.3f} |x-finish|={err:.3f} "
         f"ct={end['ct']:.3f} max|ct|={max_abs_ct:.3f} locks={end['locks']}"
     )
     print(
+        f"share @5cm={pct5:.0f}% @10cm={pct10:.0f}% "
+        f"({n_5}/{n_samp} , {n_10}/{n_samp})"
+    )
+    print(f"first_lobe_peak={first_lobe_peak:.3f}")
+    if crest_15 is not None:
+        print(
+            f"crest_x15.3 x={crest_15['x']:.3f} y={crest_15['y']:.3f} "
+            f"ct={crest_15['ct']:+.3f} yL={crest_15['yL']:.2f} "
+            f"yR={crest_15['yR']:.2f} fL={crest_15['fL']} fR={crest_15['fR']}"
+        )
+    if s0.get("sim") is not None and end.get("sim") is not None:
+        dsim = float(end["sim"]) - float(s0["sim"])
+        dwall = float(end["wall"]) - float(s0["wall"])
+        rt = None if dwall <= 1e-6 else dsim / dwall
+        print(
+            f"INTEGRATED dsim={dsim:.3f} dwall={dwall:.3f} "
+            f"rt={rt if rt is None else f'{rt:.3f}'}"
+        )
+    metric_n = metric_on + metric_off
+    metric_pct = 0.0 if metric_n <= 0 else 100.0 * metric_on / metric_n
+    print(
         f"coast_seen={seen_coast} brake_seen={seen_brake} "
         f"lost_paint_abort={abort_lost} elapsed={time.time()-t0:.1f}s"
+    )
+    print(
+        f"metric_active={metric_on}/{metric_n} ({metric_pct:.0f}%) "
+        f"picture_fallback={metric_off}"
     )
     if abort_lost:
         print("LOST_PAINT_ABORT LEFT_LANE NOT_ON_LINE")

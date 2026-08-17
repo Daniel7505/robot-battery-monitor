@@ -91,6 +91,14 @@ def main() -> int:
         f"POST x={end['x']:.3f} y={end['y']:.3f} sim={end['sim']} "
         f"v_gps={end['v_gps']} v_odo={end['v_odo']}"
     )
+    if s0["sim"] is not None and end["sim"] is not None:
+        dsim = float(end["sim"]) - float(s0["sim"])
+        dwall = float(end["wall"]) - float(s0["wall"])
+        rt = None if dwall <= 1e-6 else dsim / dwall
+        print(
+            f"INTEGRATED dsim={dsim:.3f} dwall={dwall:.3f} "
+            f"rt={rt if rt is None else f'{rt:.3f}'}"
+        )
     return 0
 
 

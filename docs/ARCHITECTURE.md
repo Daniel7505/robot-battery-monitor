@@ -1,7 +1,7 @@
 # Architecture diagrams — Robot Battery Monitor / ButlerBot
 
 High-level maps for **first-time professional visitors** (and future maintainers).  
-These diagrams describe **what the repo actually does today**, not every long-term north-star idea.
+These diagrams describe **what the repo actually does today**. The long-term product (parts catalog → design agent → twin eval → real hardware) lives in [`NORTH_STAR.md`](NORTH_STAR.md). Lane-keep is the evaluation harness, not the end product.
 
 | Diagram | Type | Best question it answers |
 |---------|------|---------------------------|
@@ -14,6 +14,7 @@ These diagrams describe **what the repo actually does today**, not every long-te
 
 Related deep dives:
 
+- **North star (what we are building):** [`NORTH_STAR.md`](NORTH_STAR.md)
 - **AI / cold review fence (start here if you will edit):** [`REVIEW_CHECKLIST.md`](REVIEW_CHECKLIST.md)
 - Twin power contract: [`TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md)
 - Residual spin / stop reliability: [`STABILITY.md`](STABILITY.md)

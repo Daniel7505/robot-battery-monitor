@@ -42,6 +42,12 @@ from src.lane_keep import (
     rotate_bgra_90_cw,
     forecast_gap_error,
     forecast_wall_hit,
+    line_wall_hit,
+    metric_ct_from_walls,
+    metric_walls_plausible,
+    yellow_wall_pixel,
+    PLANNER_KAHEAD,
+    DEFAULT_STEER_RELEASE_PER_S,
     roll_camera_sf,
     FORECAST_IMAGE_ROLL_RAD,
     mean_rgb_bgra,
@@ -973,3 +979,141 @@ def test_lane_keep_drops_ahead_when_preview_is_rejected():
     assert abs(float(off.get("steer") or 0.0)) < 0.05
     assert on["preview_ok"] is True
     assert on["steer"] is not None and on["steer"] < -0.08
+
+
+def test_frozen_knobs_are_the_week_freeze():
+    assert PLANNER_KAHEAD == 0.22
+    assert DEFAULT_STEER_RELEASE_PER_S == 4.0
+
+
+def test_metric_ct_positive_when_left_wall_is_closer():
+    """Robot left of center → +ct → steer right."""
+    assert metric_ct_from_walls(0.65, 0.65) == 0.0
+    ct = metric_ct_from_walls(0.40, 0.80)
+    assert ct is not None and ct > 0.15
+    assert metric_ct_from_walls(None, 0.65) is None
+
+
+def test_metric_walls_plausible_rejects_wreck_and_sky():
+    assert metric_walls_plausible(0.65, 0.65) is True
+    assert metric_walls_plausible(0.05, 0.65) is False
+    assert metric_walls_plausible(0.65, 2.0) is False
+    assert metric_walls_plausible(None, 0.65) is False
+
+
+def test_yellow_wall_pixel_prefers_the_near_band():
+    w, h = 32, 32
+    img = bytearray(w * h * 4)
+    for y in range(h):
+        for x in range(w):
+            o = (y * w + x) * 4
+            img[o : o + 4] = bytes((140, 140, 140, 255))
+    ny0, ny1 = yellow_near_band(h)
+    y0, _y1 = yellow_look_band(h)
+    # Far-ish look-band paint on the left, near-band paint on the right.
+    for y in range(y0, ny0):
+        for x in range(4, 8):
+            o = (y * w + x) * 4
+            img[o : o + 4] = bytes((50, 240, 240, 255))
+    for y in range(ny0, ny1):
+        for x in range(22, 26):
+            o = (y * w + x) * 4
+            img[o : o + 4] = bytes((50, 240, 240, 255))
+    pix = yellow_wall_pixel(img, w, h)
+    assert pix is not None
+    col, row = pix
+    assert ny0 <= row < ny1
+    assert col >= 20
+
+
+def test_line_wall_hit_identity_is_about_a_half_lane():
+    """Nadir math on a cam bolted over the stripe → ~0.65 m."""
+    w = h = 32
+    img = _bgra_bar(w, h, 14, 18)
+    hit = line_wall_hit(
+        img,
+        w,
+        h,
+        side="left",
+        cam_pos=(0.30, 0.65, 0.12),
+        cam_rot=(0.0, 1.0, 0.0, 0.0),
+        fov_rad=1.2,
+    )
+    assert hit is not None
+    assert 0.45 <= hit["dist_m"] <= 0.85
+
+
+def test_metric_path_steers_right_when_left_wall_is_close():
+    p = GapPlanner(sample_s=0.01, kp=1.0, kd=0.0, kahead=0.22)
+    cmd = lane_keep_command(
+        0.5,
+        0.5,
+        0.0,
+        left_offset=0.0,
+        right_offset=0.0,
+        left_fill=0.08,
+        right_fill=0.08,
+        left_wall_dist_m=0.35,
+        right_wall_dist_m=0.85,
+        planner=p,
+        dt=0.08,
+    )
+    assert cmd["metric_active"] is True
+    assert cmd["error_source"] == "metric"
+    assert cmd["steer"] > 0.10
+    assert cmd["left"] > cmd["right"]
+
+
+def test_metric_falls_back_when_meters_are_implausible():
+    cmd = lane_keep_command(
+        0.5,
+        0.5,
+        0.0,
+        left_offset=-0.40,
+        right_offset=-0.40,
+        left_fill=0.08,
+        right_fill=0.08,
+        left_wall_dist_m=0.05,
+        right_wall_dist_m=0.65,
+    )
+    assert cmd["metric_active"] is False
+    assert cmd["error_source"] == "picture"
+    assert cmd["steer"] is not None and cmd["steer"] < -0.2
+
+
+def test_metric_falls_back_when_frozen_meters_disagree_with_picture():
+    """Spawn-like 0.65/0.65 must not mute a sliding picture."""
+    cmd = lane_keep_command(
+        0.5,
+        0.5,
+        0.0,
+        left_offset=-0.40,
+        right_offset=-0.40,
+        left_fill=0.08,
+        right_fill=0.08,
+        left_wall_dist_m=0.65,
+        right_wall_dist_m=0.65,
+    )
+    assert cmd["metric_active"] is False
+    assert cmd["error_source"] == "picture"
+    assert cmd["steer"] is not None and cmd["steer"] < -0.2
+
+
+def test_zw_meters_still_do_not_steer():
+    p = GapPlanner(sample_s=0.01, kp=1.0, kd=0.0, kahead=0.22)
+    cmd = lane_keep_command(
+        0.5,
+        0.5,
+        0.0,
+        left_offset=0.0,
+        right_offset=0.0,
+        left_fill=0.08,
+        right_fill=0.08,
+        z_y_m=0.30,
+        w_y_m=-0.65,
+        t_ahead=1.5,
+        planner=p,
+        dt=0.02,
+    )
+    assert cmd["err_ahead"] is None
+    assert abs(float(cmd["steer"] or 0.0)) < 0.05

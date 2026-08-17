@@ -211,6 +211,68 @@ def _forecast_offset(cam: Camera | None, offset_fn) -> float | None:
         return None
 
 
+def _supervisor_cam_pose(node) -> tuple[tuple[float, float, float] | None, tuple[float, ...] | None]:
+    """World pose from Supervisor. Matches the picture, including ENU axes."""
+    if node is None:
+        return None, None
+    try:
+        pos = tuple(node.getPosition())
+        rot = tuple(node.getOrientation())
+    except Exception:
+        return None, None
+    if len(pos) < 3 or len(rot) < 9:
+        return None, None
+    return (float(pos[0]), float(pos[1]), float(pos[2])), tuple(float(v) for v in rot[:9])
+
+
+def _line_wall_from_cam(
+    cam: Camera | None,
+    node,
+    side: str,
+    robot_xy: tuple[float, float] | None,
+    yaw_rad: float | None,
+    hit_fn,
+) -> dict | None:
+    """Near-band yellow → robot-frame wall hit. None if no paint / no floor."""
+    if cam is None or hit_fn is None:
+        return None
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+        fov = float(cam.getFov())
+    except Exception:
+        return None
+    if not image or w < 2 or h < 2:
+        return None
+    cam_world, cam_R9 = _supervisor_cam_pose(node)
+    cam_pos = cam_rot = None
+    if cam_world is None or cam_R9 is None:
+        if node is None:
+            return None
+        try:
+            cam_pos = tuple(node.getField("translation").getSFVec3f())
+            cam_rot = tuple(node.getField("rotation").getSFRotation())
+        except Exception:
+            return None
+    try:
+        return hit_fn(
+            image,
+            w,
+            h,
+            side=side,
+            cam_pos=cam_pos,
+            cam_rot=cam_rot,
+            fov_rad=fov,
+            robot_xy=robot_xy,
+            yaw_rad=yaw_rad,
+            cam_world=cam_world,
+            cam_R9=cam_R9,
+        )
+    except Exception:
+        return None
+
+
 def _line_offset(cam: Camera | None, offset_fn) -> float | None:
     if cam is None or offset_fn is None:
         return None
@@ -678,7 +740,249 @@ def _run_preview_interlock(cams: dict, robot: Robot) -> dict:
     return out
 
 
-_DUMP_CAM = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DUMP_CAM")
+_CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
+_DUMP_CAM = os.path.join(_CONTROLLER_DIR, "DUMP_CAM")
+_SIDELOOK_ON = os.path.join(_CONTROLLER_DIR, "SIDELOOK_ON")
+_SIDELOOK_DIAG = os.path.join(_CONTROLLER_DIR, "SIDELOOK_DIAG")
+# Modest yaw written in butlerbot.wbt. Left +0.30, right −0.30 about Z.
+_SIDE_CAM_YAW_RAD = 0.30
+
+
+def _sidelook_enabled() -> bool:
+    """Kill switch: delete SIDELOOK_ON beside this controller."""
+    return os.path.isfile(_SIDELOOK_ON)
+
+
+def _sidelook_diag_requested() -> bool:
+    return os.path.isfile(_SIDELOOK_DIAG)
+
+
+def _consume_sidelook_diag_flag() -> None:
+    try:
+        os.remove(_SIDELOOK_DIAG)
+    except OSError:
+        pass
+
+
+def _sample_wall_pair(
+    cams: dict,
+    left_cam_key: str,
+    right_cam_key: str,
+    left_node,
+    right_node,
+    robot_xy,
+    yaw_rad,
+    hit_fn,
+) -> dict:
+    """Identity or experimental pair → wall dists + metric_ct."""
+    lh = _line_wall_from_cam(
+        cams.get(left_cam_key), left_node, "left", robot_xy, yaw_rad, hit_fn
+    )
+    rh = _line_wall_from_cam(
+        cams.get(right_cam_key), right_node, "right", robot_xy, yaw_rad, hit_fn
+    )
+    left_d = None if not lh else float(lh["dist_m"])
+    right_d = None if not rh else float(rh["dist_m"])
+    ct = None
+    if left_d is not None and right_d is not None:
+        ct = (right_d - left_d) / 2.0
+    ok = False
+    try:
+        from src.lane_keep import metric_walls_plausible as _ok
+
+        ok = bool(_ok(left_d, right_d))
+    except Exception:
+        ok = False
+    return {
+        "left": None if left_d is None else round(left_d, 3),
+        "right": None if right_d is None else round(right_d, 3),
+        "ct": None if ct is None else round(ct, 4),
+        "ok": ok,
+        "l_col": None if not lh else lh.get("col"),
+        "r_col": None if not rh else rh.get("col"),
+    }
+
+
+def _run_sidelook_offset_diag(
+    robot: Robot,
+    timestep: int,
+    cams: dict,
+    motors: dict,
+    line_l_node,
+    line_r_node,
+    side_l_node,
+    side_r_node,
+    hit_fn,
+    gps=None,
+) -> list[dict]:
+    """Pin the body at y offsets. Observation only. Restores spawn.
+
+    Does not touch LINE_CAM rotation. Does not save the world.
+    """
+    rows: list[dict] = []
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        print("SIDELOOK DIAG skipped — not a Supervisor")
+        return rows
+    if hit_fn is None:
+        print("SIDELOOK DIAG skipped — no line_wall_hit")
+        return rows
+    try:
+        body = robot.getSelf()
+        trans_f = body.getField("translation")
+        rot_f = body.getField("rotation")
+    except Exception as exc:
+        print(f"SIDELOOK DIAG skipped — body ({exc})")
+        return rows
+    hold_spawn = [0.0, 0.0, 0.0]
+    hold_rot = [0.0, 0.0, 1.0, 0.0]
+    stations = (
+        ("center", 0.0),
+        ("left_+0.20", 0.20),
+        ("right_-0.20", -0.20),
+        ("restore", 0.0),
+    )
+    print(
+        "SIDELOOK DIAG — pin y offsets, no look-at, wheels zero. "
+        f"yaw=±{_SIDE_CAM_YAW_RAD:.2f} rad"
+    )
+    for tag, y_off in stations:
+        for _w in ("left_wheel", "right_wheel"):
+            motor = motors.get(_w)
+            if motor is None:
+                continue
+            try:
+                motor.setPosition(float("inf"))
+                motor.setVelocity(0.0)
+            except Exception:
+                pass
+        hold = [hold_spawn[0], float(y_off), hold_spawn[2]]
+        for _ in range(20):
+            try:
+                trans_f.setSFVec3f(list(hold))
+                rot_f.setSFRotation(list(hold_rot))
+            except Exception:
+                pass
+            if robot.step(timestep) == -1:
+                return rows
+        gps_xy = None
+        if gps is not None:
+            try:
+                g = gps.getValues()
+                gps_xy = (float(g[0]), float(g[1]))
+            except Exception:
+                gps_xy = None
+        ident = _sample_wall_pair(
+            cams,
+            "line_left",
+            "line_right",
+            line_l_node,
+            line_r_node,
+            gps_xy or (0.0, float(y_off)),
+            0.0,
+            hit_fn,
+        )
+        exp = _sample_wall_pair(
+            cams,
+            "line_side_l",
+            "line_side_r",
+            side_l_node,
+            side_r_node,
+            gps_xy or (0.0, float(y_off)),
+            0.0,
+            hit_fn,
+        )
+        gx = None if gps_xy is None else round(gps_xy[0], 3)
+        gy = None if gps_xy is None else round(gps_xy[1], 3)
+        row = {
+            "tag": tag,
+            "pin_y": y_off,
+            "gps_x": gx,
+            "gps_y": gy,
+            "id_L": ident["left"],
+            "id_R": ident["right"],
+            "id_ct": ident["ct"],
+            "exp_L": exp["left"],
+            "exp_R": exp["right"],
+            "exp_ct": exp["ct"],
+            "exp_ok": exp["ok"],
+        }
+        rows.append(row)
+        print(
+            "SIDELOOK DIAG "
+            f"{tag:12s} pin_y={y_off:+.2f} gps=({gx},{gy}) "
+            f"id L/R/ct={ident['left']}/{ident['right']}/{ident['ct']} "
+            f"exp L/R/ct={exp['left']}/{exp['right']}/{exp['ct']} "
+            f"ok={int(bool(exp['ok']))}"
+        )
+        for key, fname in (
+            ("line_side_l", f"side-left-{tag}.png"),
+            ("line_side_r", f"side-right-{tag}.png"),
+        ):
+            cam = cams.get(key)
+            if cam is None:
+                continue
+            try:
+                path = os.path.join(_LOOKDOWN_SNAP_DIR, fname)
+                cam.saveImage(path, 90)
+                print(f"SIDELOOK snapshot {key} → {path}")
+            except Exception as exc:
+                print(f"SIDELOOK snapshot {key} skipped: {exc}")
+    try:
+        trans_f.setSFVec3f(list(hold_spawn))
+        rot_f.setSFRotation(list(hold_rot))
+    except Exception:
+        pass
+    _write_sidelook_diag_report(rows)
+    return rows
+
+
+def _write_sidelook_diag_report(rows: list[dict]) -> None:
+    path = os.path.join(_LOOKDOWN_SNAP_DIR, "sidelook-diag-2026-08-17.md")
+    try:
+        lines = [
+            "# SIDELOOK offset diagnostic",
+            "",
+            "Observation only. Production LINE_CAM_* identity, not on the wheel.",
+            "Experimental SIDE_CAM_* yaw ±0.30 rad about Z. No look-at.",
+            "",
+            "| station | pin y | GPS y | id L | id R | id ct | exp L | exp R | exp ct | exp ok |",
+            "|:--------|------:|------:|-----:|-----:|------:|------:|------:|-------:|:------:|",
+        ]
+        for r in rows:
+            lines.append(
+                f"| {r['tag']} | {r['pin_y']:+.2f} | {r['gps_y']} | "
+                f"{r['id_L']} | {r['id_R']} | {r['id_ct']} | "
+                f"{r['exp_L']} | {r['exp_R']} | {r['exp_ct']} | "
+                f"{r['exp_ok']} |"
+            )
+        lines.append("")
+        if len(rows) >= 3:
+            c = next((r for r in rows if r["tag"] == "center"), None)
+            L = next((r for r in rows if r["tag"] == "left_+0.20"), None)
+            R = next((r for r in rows if r["tag"] == "right_-0.20"), None)
+            if c and L and R and c["exp_ct"] is not None and L["exp_ct"] is not None:
+                dL = float(L["exp_ct"]) - float(c["exp_ct"])
+                dR = (
+                    None
+                    if R["exp_ct"] is None
+                    else float(R["exp_ct"]) - float(c["exp_ct"])
+                )
+                moved = abs(dL) >= 0.04 or (dR is not None and abs(dR) >= 0.04)
+                lines.append(
+                    f"Experimental ct change vs center: left pin {dL:+.3f} m, "
+                    f"right pin {dR if dR is None else f'{dR:+.3f}'} m."
+                )
+                lines.append(
+                    "Verdict: **moved with lateral offset**."
+                    if moved
+                    else "Verdict: **still flat** — modest yaw did not give a usable tape."
+                )
+        lines.append("")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print(f"SIDELOOK DIAG report → {path}")
+    except Exception as exc:
+        print(f"SIDELOOK DIAG report skipped: {exc}")
 
 
 def _maybe_dump_viewpoint(robot: Robot) -> None:

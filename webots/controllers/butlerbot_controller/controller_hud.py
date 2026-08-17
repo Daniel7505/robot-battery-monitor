@@ -307,7 +307,12 @@ def _paint_eye_huds(
                     disp.setColor(0xFFFFFF)
                     disp.drawLine(fcol, y0, fcol, y1 - 1)
             disp.setColor(int(handle["color"]))
-            disp.drawText(str(handle["text"]), 2, 1)
+            label = str(handle["text"])
+            if handle.get("offset_key") == "left_offset":
+                label = "L M" if lane_eyes.get("metric_active") else "L P"
+            elif handle.get("offset_key") == "right_offset":
+                label = "R M" if lane_eyes.get("metric_active") else "R P"
+            disp.drawText(label, 2, 1)
         except Exception:
             continue
 

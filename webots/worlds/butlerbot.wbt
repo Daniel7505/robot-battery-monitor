@@ -3071,18 +3071,40 @@ Robot {
     }
     # Yellow edge eyes sit over each stripe and look *along* it.
     # Aim pucks are ~2 m ahead — a near-floor look-at rolls the image 90
-    # (up ≈ look). Overlay: L line / mid finish / R line. 64x64 = brain buffer.
+    # (up ≈ look). Overlay: L line / mid finish / R line. Brain 128x128 (frozen 2026-08-17).
     DEF LINE_CAM_L Camera {
       translation 0.30 0.65 0.12
       name "line_left"
-      width 64
-      height 64
+      width 128
+      height 128
       fieldOfView 1.2
       near 0.03
     }
     DEF LINE_CAM_R Camera {
       translation 0.30 -0.65 0.12
       name "line_right"
+      width 128
+      height 128
+      fieldOfView 1.2
+      near 0.03
+    }
+    # Experimental side-look pair. Same mounts as LINE_CAM_*. Modest yaw
+    # about Z (~17°) so they look more across the corridor. Explicit
+    # numbers — no Supervisor look-at. Production LINE_CAM_* stay identity.
+    # Kill: delete controller SIDELOOK_ON (or these two nodes).
+    DEF SIDE_CAM_L Camera {
+      translation 0.30 0.65 0.12
+      rotation 0 0 1 0.30
+      name "line_side_l"
+      width 64
+      height 64
+      fieldOfView 1.2
+      near 0.03
+    }
+    DEF SIDE_CAM_R Camera {
+      translation 0.30 -0.65 0.12
+      rotation 0 0 1 -0.30
+      name "line_side_r"
       width 64
       height 64
       fieldOfView 1.2

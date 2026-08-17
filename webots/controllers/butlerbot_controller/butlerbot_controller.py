@@ -141,12 +141,17 @@ from controller_eyes import (
     _aim_forecast_cameras,
     _aim_lookdown_cameras,
     _camera_max_rgb,
+    _consume_sidelook_diag_flag,
     _load_lookdown_math,
     _maybe_dump_viewpoint,
     _read_lane_eyes,
     _revert_line_cams_identity,
     _run_lookdown_interlock,
     _run_preview_interlock,
+    _run_sidelook_offset_diag,
+    _sample_wall_pair,
+    _sidelook_diag_requested,
+    _sidelook_enabled,
     _yellow_ground_y,
     _LOOKDOWN_SNAP_DIR,
 )
@@ -408,14 +413,21 @@ def _log_steer_action(pose: dict, lane_eyes: dict) -> None:
             new = not os.path.isfile(_STEER_LOG)
             with open(_STEER_LOG, "a", encoding="ascii") as fh:
                 if new:
-                    fh.write("unix_s,x_m,y_m,steer,oL,oR,yL,yR,red\n")
+                    fh.write(
+                        "unix_s,x_m,y_m,steer,oL,oR,yL,yR,red,"
+                        "lDist,rDist,mCt,src\n"
+                    )
             _steer_log_ready = True
         with open(_STEER_LOG, "a", encoding="ascii") as fh:
             fh.write(
                 f"{time.time():.3f},{x},{y},{float(steer):.4f},"
                 f"{lane_eyes.get('left_offset')},{lane_eyes.get('right_offset')},"
                 f"{lane_eyes.get('left_yellow')},{lane_eyes.get('right_yellow')},"
-                f"{lane_eyes.get('finish_red')}\n"
+                f"{lane_eyes.get('finish_red')},"
+                f"{lane_eyes.get('left_wall_dist_m')},"
+                f"{lane_eyes.get('right_wall_dist_m')},"
+                f"{lane_eyes.get('metric_ct')},"
+                f"{lane_eyes.get('error_source')}\n"
             )
     except OSError:
         pass
@@ -553,6 +565,21 @@ def _init_devices(
         cams[name] = cam
         if cam is None:
             print(f"WARNING: camera '{name}' not found — lane-keep eye missing")
+    if _sidelook_enabled():
+        for name in ("line_side_l", "line_side_r"):
+            cam = None
+            try:
+                cam = robot.getDevice(name)
+                if cam is not None:
+                    cam.enable(timestep)
+            except Exception:
+                cam = None
+            cams[name] = cam
+            if cam is None:
+                print(f"WARNING: experimental camera '{name}' missing")
+        print("SIDELOOK experiment ON — observation only, not on the wheel")
+    else:
+        print("SIDELOOK experiment OFF — delete/create SIDELOOK_ON to toggle")
 
     return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
 
@@ -695,23 +722,32 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     preview_range_fn = None
     t_mark_fn = None
     forecast_hit_fn = None
+    line_wall_fn = None
+    metric_ok_fn = None
+    metric_logged = False
     try:
         from src.lane_keep import (
             preview_look_ahead_m as _preview_look_ahead_m,
             time_to_mark_s as _time_to_mark_s,
             yellow_far_offset as _yellow_far_offset,
             forecast_wall_hit as _forecast_wall_hit,
+            line_wall_hit as _line_wall_hit,
+            metric_walls_plausible as _metric_ok,
         )
 
         far_fn = _yellow_far_offset
         preview_range_fn = _preview_look_ahead_m
         t_mark_fn = _time_to_mark_s
         forecast_hit_fn = _forecast_wall_hit
+        line_wall_fn = _line_wall_hit
+        metric_ok_fn = _metric_ok
     except Exception:
         far_fn = None
         preview_range_fn = None
         t_mark_fn = None
         forecast_hit_fn = None
+        line_wall_fn = None
+        metric_ok_fn = None
     # Last Z/W fills + hits. Refreshed every 8 steps (~10 Hz); lookout
     # still steps at 8 ms on these cached fills.
     zw_cache = {
@@ -726,8 +762,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     finish_cam_node = None
     line_cam_l_node = None
     line_cam_r_node = None
+    side_cam_l_node = None
+    side_cam_r_node = None
     forecast_z_node = None
     forecast_w_node = None
+    sidelook_on = _sidelook_enabled()
+    sidelook_diag_done = False
     if Supervisor is not None and isinstance(robot, Supervisor):
         try:
             finish_cam_node = robot.getFromDef("FINISH_CAM")
@@ -739,6 +779,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         except Exception:
             line_cam_l_node = None
             line_cam_r_node = None
+        if sidelook_on:
+            try:
+                side_cam_l_node = robot.getFromDef("SIDE_CAM_L")
+                side_cam_r_node = robot.getFromDef("SIDE_CAM_R")
+            except Exception:
+                side_cam_l_node = None
+                side_cam_r_node = None
         try:
             forecast_z_node = robot.getFromDef("FORECAST_CAM_Z")
             forecast_w_node = robot.getFromDef("FORECAST_CAM_W")
@@ -763,6 +810,25 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 lookdown_view = _run_lookdown_interlock(cams, classify_fn)
                 preview_state = _run_preview_interlock(cams, robot)
                 preview_checked = True
+                if (
+                    sidelook_on
+                    and not sidelook_diag_done
+                    and _sidelook_diag_requested()
+                ):
+                    _run_sidelook_offset_diag(
+                        robot,
+                        timestep,
+                        cams,
+                        motors,
+                        line_cam_l_node,
+                        line_cam_r_node,
+                        side_cam_l_node,
+                        side_cam_r_node,
+                        line_wall_fn,
+                        gps,
+                    )
+                    _consume_sidelook_diag_flag()
+                    sidelook_diag_done = True
                 if not preview_state.get("aim_ok"):
                     for key, fname in (
                         ("line_left", "line-left-identity.png"),
@@ -1035,6 +1101,57 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 lane_eyes["right_y_m"] = _yellow_ground_y(
                     cams.get("line_right"), line_cam_r_node, pixel_fn, ground_fn
                 )
+                ident = _sample_wall_pair(
+                    cams,
+                    "line_left",
+                    "line_right",
+                    line_cam_l_node,
+                    line_cam_r_node,
+                    gps_xy,
+                    prev_yaw,
+                    line_wall_fn,
+                )
+                lane_eyes["left_wall_dist_m"] = ident["left"]
+                lane_eyes["right_wall_dist_m"] = ident["right"]
+                lane_eyes["metric_ct"] = ident["ct"]
+                lane_eyes["left_wall_col"] = ident["l_col"]
+                lane_eyes["right_wall_col"] = ident["r_col"]
+                exp = {
+                    "left": None,
+                    "right": None,
+                    "ct": None,
+                    "ok": False,
+                }
+                if sidelook_on:
+                    exp = _sample_wall_pair(
+                        cams,
+                        "line_side_l",
+                        "line_side_r",
+                        side_cam_l_node,
+                        side_cam_r_node,
+                        gps_xy,
+                        prev_yaw,
+                        line_wall_fn,
+                    )
+                lane_eyes["exp_left_wall_dist_m"] = exp["left"]
+                lane_eyes["exp_right_wall_dist_m"] = exp["right"]
+                lane_eyes["exp_metric_ct"] = exp["ct"]
+                lane_eyes["exp_metric_ok"] = bool(exp["ok"])
+                # Production stays on picture-wins. Experimental is log-only.
+                lane_eyes["metric_active"] = False
+                lane_eyes["error_source"] = "picture"
+                if not metric_logged and (
+                    ident["left"] is not None
+                    or exp["left"] is not None
+                ):
+                    metric_logged = True
+                    print(
+                        "Metric walls id "
+                        f"L={ident['left']} R={ident['right']} ct={ident['ct']} "
+                        f"| exp L={exp['left']} R={exp['right']} "
+                        f"ct={exp['ct']} ok={int(bool(exp['ok']))} "
+                        "(exp observation only)"
+                    )
                 z_hit = w_hit = None
                 if forecast_hit_fn is not None and scan_zw:
                     xy = gps_xy
@@ -1180,6 +1297,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 lane_eyes["phase"] = lk.get("phase")
                 lane_eyes["left_pressure"] = lk.get("left_pressure")
                 lane_eyes["right_pressure"] = lk.get("right_pressure")
+                lane_eyes["metric_ct"] = lk.get("metric_ct")
+                lane_eyes["metric_active"] = lk.get("metric_active")
+                lane_eyes["error_source"] = lk.get("error_source")
                 if lk["brake"]:
                     rem = lk.get("remaining_m")
                     if lk.get("phase") == "watch" or "watch" in str(
@@ -1260,6 +1380,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"pR={lk.get('right_pressure')} "
                             f"yLm={lane_eyes.get('left_y_m')} "
                             f"yRm={lane_eyes.get('right_y_m')} "
+                            f"idL={lane_eyes.get('left_wall_dist_m')} "
+                            f"idR={lane_eyes.get('right_wall_dist_m')} "
+                            f"idCt={lane_eyes.get('metric_ct')} "
+                            f"expL={lane_eyes.get('exp_left_wall_dist_m')} "
+                            f"expR={lane_eyes.get('exp_right_wall_dist_m')} "
+                            f"expCt={lane_eyes.get('exp_metric_ct')} "
+                            f"src={lk.get('error_source')} "
                             f"mode={lk.get('plan_mode')} "
                             f"rate={lk.get('plan_rate')} "
                             f"fL={lane_eyes.get('left_fill')} "
@@ -1780,6 +1907,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "right_offset": lane_eyes.get("right_offset"),
                         "left_y_m": lane_eyes.get("left_y_m"),
                         "right_y_m": lane_eyes.get("right_y_m"),
+                        "left_wall_dist_m": lane_eyes.get("left_wall_dist_m"),
+                        "right_wall_dist_m": lane_eyes.get("right_wall_dist_m"),
+                        "metric_ct": lane_eyes.get("metric_ct"),
+                        "metric_active": False,
+                        "error_source": "picture",
+                        "exp_left_wall_dist_m": lane_eyes.get("exp_left_wall_dist_m"),
+                        "exp_right_wall_dist_m": lane_eyes.get("exp_right_wall_dist_m"),
+                        "exp_metric_ct": lane_eyes.get("exp_metric_ct"),
+                        "exp_metric_ok": lane_eyes.get("exp_metric_ok"),
                         "left_fill": lane_eyes.get("left_fill"),
                         "right_fill": lane_eyes.get("right_fill"),
                         "z_fill": lane_eyes.get("z_fill"),

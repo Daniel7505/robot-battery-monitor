@@ -1,34 +1,34 @@
 # Robot Battery Monitor
 
-**Co-built with Grok Build 4.5** · Owner: [Daniel7505](https://github.com/Daniel7505) · Kickoff: Grok Web ~4.4–4.5  
-**AI / human review fence:** [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)
+**Co-built with Grok Build** · Owner: [Daniel7505](https://github.com/Daniel7505) · Kickoff: Grok Web  
+**North star:** [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) · **Review fence:** [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)
 
-A simple web app that watches how much power a robot uses and how much battery is left.
+The repo name is leftover. **What we are building:** an onboard agent that catalogs real purchasable parts, takes a mission, designs the cheapest robot that can finish it, evaluates that design in a Webots twin, and later transfers it to hardware.
 
-Think of it like a car dashboard, but for a robot. It tracks power for different body parts (legs, arms, torso, computer) and shows everything on a live web page that updates every few seconds.
+What you can run *today* is the **scaffolding** — a power-aware dashboard plus a wheeled ButlerBot twin that can follow a painted S and park on a red mark. That drive stack is the evaluation harness (“can this config go A to B?”), not the product.
 
-You do not need a real robot to try it. The app can run with fake (simulated) data, or in a more advanced ROS2 mode that mimics how a real robot would send data.
+Standing map: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md). Drive baseline: [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md).
+
+You do not need a real robot to try the harness. The app runs on simulated data, a Webots twin, or a ROS2-mock path.
 
 ---
 
-## What does this project do?
+## What does this project do today?
 
-In plain terms:
+The live demo is still a robot “car dashboard”:
 
-- Shows the main battery level (as a percentage)
-- Shows how many watts each part of the robot is using right now
-- Warns you if power draw is too high, battery is low, or something looks unsafe
-- Groups parts into bigger categories (locomotion, arms, torso, compute, and the power system)
-- Estimates how long the battery might last
-- Saves history to a database so you can look back later
+- Main battery level (percentage) and watts per body part (legs, arms, torso, compute, cooling)
+- Warnings when draw, pack, or heat look unsafe
+- How long the pack might last; history in Postgres
+- Webots twin: teleop, ABS stop, and **lane-keep** on a painted corridor (travel-band, not docking-grade)
 
-Good for learning, testing, and eventually connecting to real robot hardware.
+**Next harness work:** parts catalog (`python -m src.parts_db`) and a thin design agent (`python -m src.design_agent`). Twin eval of those BOMs is not wired yet. No more lane-keep knobs unless asked.
 
 ---
 
 ## Architecture (high level — start here for reviews)
 
-**Future AI models / cold reviewers:** read **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) first** — ownership, do/don’t fence, blast-radius list, and credits (Grok Build 4.5 majority builder; Grok Web ~4.4–4.5 kickoff). Then architecture.
+**Future AI models / cold reviewers:** read **[`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)** then **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)** — what we are actually building, ownership, do/don’t fence, blast-radius list, and credits. Then architecture.
 
 If you want to understand **how the system fits together** before reading code, open:
 
@@ -67,8 +67,12 @@ If you are opening this repo cold (code review, portfolio, or family showcase), 
 
 | Start here | Why |
 |------------|-----|
+| [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) | **What we are building** — harness vs product, next work |
 | [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) | **AI + human review fence** — do/don’t, stop/power sacred list, credits |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams (pyramid, layers, sequences) |
+| [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md) | Frozen drive card + historical 64 champion |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams of **today’s** stack (pyramid, layers, sequences) |
+| [`docs/PARTS_CATALOG.md`](docs/PARTS_CATALOG.md) | Design-agent SQLite catalog (`src/parts_db.py`) |
+| [`docs/DESIGN_AGENT.md`](docs/DESIGN_AGENT.md) | Thin BOM proposer (`src/design_agent.py`) |
 | `src/__init__.py` | Package map of the whole PMS |
 | `run_dashboard.py` | Process boot: DB → hardware → Flask dashboard |
 | `src/dashboard.py` | Operator UI + REST twin APIs + SocketIO broadcast |

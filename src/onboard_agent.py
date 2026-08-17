@@ -936,6 +936,16 @@ class OnboardAgent:
                 if sense.get("right_y_m") is None
                 else float(sense.get("right_y_m"))
             ),
+            left_wall_dist_m=(
+                None
+                if sense.get("left_wall_dist_m") is None
+                else float(sense.get("left_wall_dist_m"))
+            ),
+            right_wall_dist_m=(
+                None
+                if sense.get("right_wall_dist_m") is None
+                else float(sense.get("right_wall_dist_m"))
+            ),
         )
         live = cmd.get("steer") if cmd.get("steer") is not None else steer
         if cmd["brake"]:

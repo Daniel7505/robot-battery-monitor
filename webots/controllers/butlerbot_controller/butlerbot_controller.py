@@ -144,6 +144,7 @@ from controller_eyes import (
     _run_lookdown_interlock,
     _run_preview_interlock,
     _yellow_ground_y,
+    _LOOKDOWN_SNAP_DIR,
 )
 from controller_wheels import (
     MAX_JOINT_V,
@@ -172,6 +173,7 @@ from controller_wheels import (
     _safe_imu_pitch,
     _safe_imu_roll,
     _wheel_rad_s,
+    _WHEEL_LOCK_POS,
     bind_teleop as _bind_wheels_teleop,
 )
 
@@ -474,6 +476,83 @@ def _apply_follow_camera(robot: Robot) -> None:
         )
     except Exception as exc:
         print(f"Follow-cam reset skipped: {exc}")
+
+
+def _init_devices(
+    robot: Robot, timestep: int
+) -> tuple:
+    """Enable motors, encoders, GPS, head GPS, IMU, keyboard, and optional HUD."""
+    motors: dict[str, Motor] = {}
+    sensors: dict[str, PositionSensor] = {}
+    for name in MOTOR_NAMES:
+        motor = robot.getDevice(name)
+        motors[name] = motor
+        motor.setPosition(float("inf"))
+        motor.setVelocity(0.0)
+        if hasattr(motor, "enableTorqueFeedback"):
+            try:
+                motor.enableTorqueFeedback(timestep)
+            except Exception:
+                pass
+    for name in SENSOR_NAMES:
+        sensor = robot.getDevice(name)
+        sensors[name] = sensor
+        sensor.enable(timestep)
+
+    gps: GPS = robot.getDevice("gps")
+    gps.enable(timestep)
+    gps_head = None
+    try:
+        gps_head = robot.getDevice("gps_head")
+        if gps_head is not None:
+            gps_head.enable(timestep)
+    except Exception:
+        gps_head = None
+    imu: InertialUnit = robot.getDevice("imu")
+    imu.enable(timestep)
+
+    keyboard: Keyboard | None = None
+    if hasattr(robot, "getKeyboard"):
+        keyboard = robot.getKeyboard()
+    else:
+        try:
+            keyboard = robot.getDevice("keyboard")
+        except Exception:
+            keyboard = None
+    if keyboard is not None:
+        keyboard.enable(timestep)
+    else:
+        print("WARNING: Keyboard device unavailable — WASD teleop disabled")
+
+    hud: Display | None = None
+    try:
+        hud = robot.getDevice("hud")
+    except Exception:
+        hud = None
+
+    cams: dict[str, Camera | None] = {}
+    for name in (
+        "line_left",
+        "line_right",
+        "finish_cam",
+        "finish_cam_r",
+        "forecast_z",
+        "forecast_w",
+    ):
+        cam = None
+        try:
+            cam = robot.getDevice(name)
+            if cam is not None:
+                cam.enable(timestep)
+        except Exception:
+            cam = None
+        cams[name] = cam
+        if cam is None:
+            print(f"WARNING: camera '{name}' not found — lane-keep eye missing")
+
+    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
+
+
 def _run_loop(robot: Robot, opts: dict) -> None:
     """Main digital-twin control loop (one Webots step per iteration).
 

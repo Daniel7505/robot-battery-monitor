@@ -73,10 +73,22 @@ def main() -> int:
         s = snap()
         t = time.time() - t0
         max_abs_ct = max(max_abs_ct, abs(s["ct"]))
-        if s.get("lane") in ("lookout", "lost", "watch") and s["x"] > 2.0 and not seen_brake:
+        near_finish = s["x"] >= FINISH_X_M - 3.5
+        mark_owns = s["phase"] in ("coast", "brake") or near_finish
+        if (
+            s.get("lane") in ("lookout", "lost", "watch")
+            and s["x"] > 2.0
+            and not seen_brake
+            and not mark_owns
+        ):
             abort_lost = True
+            tag = {
+                "lookout": "LOOKOUT_ABORT",
+                "lost": "FILL_LOST_ABORT",
+                "watch": "WATCH_ABORT",
+            }.get(str(s.get("lane")), "LOST_PAINT_ABORT")
             print(
-                f"  LOOKOUT_ABORT t={t:.1f}s x={s['x']:.3f} y={s['y']:.3f} "
+                f"  {tag} t={t:.1f}s x={s['x']:.3f} y={s['y']:.3f} "
                 f"ct={s['ct']:.3f} lane={s.get('lane')} "
                 f"yL={s['yL']:.2f} yR={s['yR']:.2f}  SIM FINISHED"
             )
@@ -113,6 +125,7 @@ def main() -> int:
             and s["x"] > 2.0
             and s["red"] < 0.28
             and not seen_brake
+            and not mark_owns
         ):
             if lost_since is None:
                 lost_since = time.time()

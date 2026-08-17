@@ -7,7 +7,7 @@ Wheeled mobile manipulator simulation that feeds live power telemetry into the R
 | Path | Description |
 |------|-------------|
 | `worlds/butlerbot.wbt` | World + ButlerBot robot (wheeled base, torso, dual arms) |
-| `controllers/butlerbot_controller/` | Python controller + twin HTTP publisher |
+| `controllers/butlerbot_controller/` | Orchestrator + siblings (hud / keys / eyes / wheels) + twin HTTP publisher |
 | `../scripts/launch_webots_twin.ps1` | Windows launcher (dashboard + Webots) |
 | `../scripts/launch_webots_twin.sh` | Linux/macOS launcher |
 
@@ -73,6 +73,20 @@ Webots ButlerBot controller
   "locomotion": {"gait": "walk", "speed_m_s": 0.32, "phase": "walk_transit"}
 }
 ```
+
+## Controller layout (2026-08-17)
+
+`butlerbot_controller.py` is the orchestrator (`_run_loop`). Domain code lives beside it:
+
+| Module | Owns |
+|--------|------|
+| `controller_hud.py` | Display gauges + camera overlays |
+| `controller_keys.py` | Keyboard teleop |
+| `controller_eyes.py` | Cameras, aim, LINE_CAM identity (never look-at) |
+| `controller_wheels.py` | ABS, residual-spin, soft-grip |
+| `twin_publisher.py` | `POST /api/twin/telemetry` |
+
+Do not re-merge these. Residual-spin history (NaN `setPosition`, GPS-only idle, dual-hub hard-zero) is documented on `controller_wheels`. Lane-keep **policy** stays in `src/lane_keep.py`.
 
 ## Controller options
 

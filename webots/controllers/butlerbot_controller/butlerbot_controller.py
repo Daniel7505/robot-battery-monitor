@@ -22,14 +22,18 @@ Why click the **floor**, not the robot:
   often steals focus from the world view so keys never reach this controller.
   Click empty floor (or the view background) so Keyboard events fire.
 
-Residual spin / ABS design notes (read before changing brake code):
+This file is the **orchestrator** (``_run_loop`` + device init + publish).
+Siblings in this folder (2026-08-17 split, do not re-merge):
 
-* GPS reports translation only — pure in-place yaw shows ~0 m/s while a hub
-  still spins on camera. Stops therefore require **finite wheel encoders**,
-  **dual-hub hard-zero**, and **IMU yaw-rate** quiescence — not GPS alone.
-* ``setPosition(NaN)`` freewheels a hub; locks use only finite encoder angles.
-* ``stop_epoch`` from the dashboard ensures a stop is not missed if wheel
-  commands already read as zero on the next poll.
+* ``controller_hud.py`` — Display gauges + eye overlays
+* ``controller_keys.py`` — keyboard teleop
+* ``controller_eyes.py`` — cameras, aim, LINE_CAM identity lock
+* ``controller_wheels.py`` — ABS / residual-spin / soft-grip
+* ``twin_publisher.py`` — telemetry HTTP
+
+Residual spin / ABS notes live on ``controller_wheels`` (read before
+changing brake code): GPS is translation-only; never ``setPosition(NaN)``;
+dual-hub hard-zero + IMU yaw-rate; ``stop_epoch`` from the dashboard.
 """
 
 from __future__ import annotations

@@ -67,12 +67,13 @@ if (-not $WebotsExe) {
 
 Write-Host "Webots: $WebotsExe" -ForegroundColor Green
 
-# One instance only — stale Webots processes fight over the world / controller
-$existing = Get-Process -Name "webots" -ErrorAction SilentlyContinue
+# One instance only — stale Webots processes fight over the world / controller.
+# Windows leaves webots-bin / webotsw alive if we only kill webots.exe.
+$existing = Get-Process -Name "webots","webots-bin","webotsw" -ErrorAction SilentlyContinue
 if ($existing) {
     Write-Host "Closing $($existing.Count) existing Webots process(es)..." -ForegroundColor Yellow
     $existing | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 }
 
 $env:TWIN_DASHBOARD_URL = $DashboardUrl

@@ -164,15 +164,37 @@ def _init_devices(
     return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
 
 
+def _scale_bgra_nn(
+    raw: bytes | bytearray,
+    src_w: int,
+    src_h: int,
+    dst_w: int,
+    dst_h: int,
+) -> bytes:
+    """Nearest-neighbor scale. Display overlay is bigger than the 64×64 eye."""
+    if src_w == dst_w and src_h == dst_h:
+        return bytes(raw)
+    src = memoryview(raw)
+    out = bytearray(dst_w * dst_h * 4)
+    for y in range(dst_h):
+        sy = (y * src_h) // dst_h
+        for x in range(dst_w):
+            sx = (x * src_w) // dst_w
+            si = (sy * src_w + sx) * 4
+            di = (y * dst_w + x) * 4
+            out[di : di + 4] = src[si : si + 4]
+    return bytes(out)
+
+
 def _label_eye_huds(robot: Robot, cams: dict) -> list[dict]:
-    """Attach overlays to the live camera buffers. Returns handles for paint."""
+    """Attach overlays to the live camera buffers. Returns handles for paint.
+
+    Left-shoulder only for now. L/R/RED/Z/W devices stay in the world,
+    they are just not painted.
+    """
     specs = (
-        ("hud_left", "line_left", 0xFFE000, "L", "left_offset", False),
-        ("hud_red", "finish_cam", 0xFF40A0, "RED", None, False),
-        ("hud_right", "line_right", 0xFFE000, "R", "right_offset", False),
-        # Full frame — do not black out the top. Daniel needs the whole FOV.
-        ("hud_z", "forecast_z", 0xFF8800, "Z", "z_offset", True),
-        ("hud_w", "forecast_w", 0x22DD55, "W", "w_offset", True),
+        ("hud_nadir", "nadir_left", 0x66EEFF, "L SHOULDER", None, True),
+        ("hud_nadir_r", "nadir_right", 0xFFAA66, "R SHOULDER", None, True),
     )
     handles: list[dict] = []
     for dname, cname, color, text, offset_key, full_frame in specs:
@@ -235,6 +257,10 @@ def _paint_eye_huds(
             if cam is not None:
                 raw = cam.getImage()
                 if raw:
+                    cw = int(cam.getWidth())
+                    ch = int(cam.getHeight())
+                    if cw != w or ch != h:
+                        raw = _scale_bgra_nn(raw, cw, ch, w, h)
                     ref = disp.imageNew(raw, Display.BGRA, w, h)
                     disp.imagePaste(ref, 0, 0, False)
                     disp.imageDelete(ref)
@@ -313,6 +339,38 @@ def _paint_eye_huds(
             elif handle.get("offset_key") == "right_offset":
                 label = "R M" if lane_eyes.get("metric_active") else "R P"
             disp.drawText(label, 2, 1)
+            if handle.get("text") in ("L SHOULDER", "R SHOULDER"):
+                right = handle.get("text") == "R SHOULDER"
+                px = lane_eyes.get("nadir_r_gap_px" if right else "nadir_gap_px")
+                ny = lane_eyes.get(
+                    "nadir_r_lateral_m" if right else "nadir_lateral_m"
+                )
+                disp.drawText(
+                    "—" if px is None else f"{int(px)} px",
+                    2,
+                    16,
+                )
+                disp.drawText(
+                    "—" if ny is None else f"{float(ny)*100:.0f} cm",
+                    2,
+                    31,
+                )
+                tw = int(disp.getWidth())
+                cam_w = 64
+                tape = lane_eyes.get(
+                    "nadir_r_tape_col" if right else "nadir_tape_col"
+                )
+                wheel = lane_eyes.get(
+                    "nadir_r_wheel_col" if right else "nadir_wheel_col"
+                )
+                if tape is not None:
+                    x = int(round(float(tape) * tw / cam_w))
+                    disp.setColor(0xFFE000)
+                    disp.drawLine(x, 0, x, h - 1)
+                if wheel is not None:
+                    x = int(round(float(wheel) * tw / cam_w))
+                    disp.setColor(0xFFFFFF)
+                    disp.drawLine(x, 0, x, h - 1)
         except Exception:
             continue
 

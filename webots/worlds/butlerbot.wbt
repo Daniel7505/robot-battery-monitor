@@ -15,13 +15,15 @@ WorldInfo {
     ContactProperties {
       material1 "drive_wheel"
       material2 "default"
+      # μ=80 + frictionRotation 1 1 + no slip made yaw impossible:
+      # motors commanded 3.2/1.0, both hubs sat at ~1.9, heading 0.
       coulombFriction [
-        80
+        8
       ]
       forceDependentSlip [
-        0
+        0.01
       ]
-      frictionRotation 1 1
+      frictionRotation 0 0
       bounce 0
       softCFM 1e-6
       softERP 0.7
@@ -3088,6 +3090,92 @@ Robot {
       fieldOfView 1.2
       near 0.03
     }
+    # Left shoulder nadir. Daniel mouse-framed 2026-08-25 (DUMP_CAM).
+    # VIEWPOINT COPY position 0.01042 0.41808 0.72919
+    # orientation 0.006250 0.999953 -0.007464 1.394247
+    # One still: drive wheel + left yellow. Observation only.
+    DEF NADIR_BOOM_L Transform {
+      translation 0.00521 0.26904 0.57460
+      rotation 1 0 0 -0.767
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.43
+            radius 0.012
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF NADIR_BOX_L Transform {
+      translation 0.01042 0.41808 0.72919
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.05 0.05 0.05
+          }
+        }
+      ]
+    }
+    DEF NADIR_CAM_L Camera {
+      translation 0.01042 0.41808 0.72919
+      rotation 0.006250 0.999953 -0.007464 1.394247
+      name "nadir_left"
+      width 64
+      height 64
+      fieldOfView 1.2
+      near 0.03
+    }
+    # Right shoulder: Y-mirror of the left boom/box. Same look-down as left
+    # (Daniel framed left; if this picture is wrong, stop — he frames it).
+    DEF NADIR_BOOM_R Transform {
+      translation 0.00521 -0.26904 0.57460
+      rotation 1 0 0 0.767
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.43
+            radius 0.012
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF NADIR_BOX_R Transform {
+      translation 0.01042 -0.41808 0.72919
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.05 0.05 0.05
+          }
+        }
+      ]
+    }
+    DEF NADIR_CAM_R Camera {
+      translation -0.06996 -0.40669 0.79456
+      rotation -0.001250 0.999998 0.001668 1.286252
+      name "nadir_right"
+      width 64
+      height 64
+      fieldOfView 1.2
+      near 0.03
+    }
     # Experimental side-look pair. Same mounts as LINE_CAM_*. Modest yaw
     # about Z (~17°) so they look more across the corridor. Explicit
     # numbers — no Supervisor look-at. Production LINE_CAM_* stay identity.
@@ -3198,21 +3286,17 @@ Robot {
       fieldOfView 0.9
       near 0.05
     }
-    # Labeled overlays = same buffer the controller scores (Daniel sketch).
-    DEF HUD_LEFT Display {
-      name "hud_left"
-      width 64
-      height 64
+    # Unused L/R/RED displays removed from the robot so they do not
+    # occupy overlay slots. Shoulder HUDs only.
+    DEF HUD_NADIR Display {
+      name "hud_nadir"
+      width 256
+      height 256
     }
-    DEF HUD_RED Display {
-      name "hud_red"
-      width 64
-      height 40
-    }
-    DEF HUD_RIGHT Display {
-      name "hud_right"
-      width 64
-      height 64
+    DEF HUD_NADIR_R Display {
+      name "hud_nadir_r"
+      width 256
+      height 256
     }
     # Magenta aim pucks: 1 m forward on the floor. Body-relative. Not paint.
     DEF LOOKDOWN_AIM_L Transform {
@@ -3422,16 +3506,7 @@ Robot {
         ]
       }
     }
-    DEF HUD_Z Display {
-      name "hud_z"
-      width 64
-      height 64
-    }
-    DEF HUD_W Display {
-      name "hud_w"
-      width 64
-      height 64
-    }
+    # hud_z / hud_w removed — forecast cameras are off.
     GPS {
       name "gps"
       accuracy 0
@@ -3441,6 +3516,16 @@ Robot {
       name "imu"
     }
   ]
+  # Physics with no boundingObject is ignored by Webots. Pelvis box sits
+  # above the tires so it does not fight the floor.
+  boundingObject Pose {
+    translation 0 0 0.20
+    children [
+      Box {
+        size 0.18 0.11 0.07
+      }
+    ]
+  }
   physics Physics {
     density -1
     # Chassis class mass from hardware profile (geometry.chassis_mass_kg ≈ 3.2)

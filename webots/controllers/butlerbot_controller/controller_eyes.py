@@ -273,6 +273,43 @@ def _line_wall_from_cam(
         return None
 
 
+def _nadir_lateral_from_cam(
+    cam: Camera | None,
+    node,
+    robot_xy: tuple[float, float] | None,
+    yaw_rad: float | None,
+    nadir_fn,
+    *,
+    side: str = "left",
+) -> dict | None:
+    """Yellow-ruler: tape inner edge → drive wheel. Observation only.
+
+    nadir_fn is nadir_wheel_to_tape (pixel count × 6 cm / stripe_px).
+    31 px is a left-eye spawn reading, not a frozen value.
+    """
+    del node, robot_xy, yaw_rad
+    if cam is None or nadir_fn is None:
+        return None
+    try:
+        image = cam.getImage()
+        w = int(cam.getWidth())
+        h = int(cam.getHeight())
+    except Exception:
+        return None
+    if not image or w < 4 or h < 4:
+        return None
+    try:
+        hit = nadir_fn(image, w, h, side=side)
+    except Exception:
+        return None
+    if not hit:
+        return None
+    out = dict(hit)
+    if out.get("m") is not None:
+        out["m"] = round(float(out["m"]), 4)
+    return out
+
+
 def _line_offset(cam: Camera | None, offset_fn) -> float | None:
     if cam is None or offset_fn is None:
         return None
@@ -578,6 +615,8 @@ def _run_lookdown_interlock(cams: dict, classify_fn) -> str:
         ("line_right", "line-right.png"),
         ("forecast_z", "forecast-z.png"),
         ("forecast_w", "forecast-w.png"),
+        ("nadir_left", "butlerbot\\images\\nadir-left-live.png"),
+        ("nadir_right", "butlerbot\\images\\nadir-right-live.png"),
     ):
         cam = cams.get(key)
         if cam is None:
@@ -744,8 +783,18 @@ _CONTROLLER_DIR = os.path.dirname(os.path.abspath(__file__))
 _DUMP_CAM = os.path.join(_CONTROLLER_DIR, "DUMP_CAM")
 _SIDELOOK_ON = os.path.join(_CONTROLLER_DIR, "SIDELOOK_ON")
 _SIDELOOK_DIAG = os.path.join(_CONTROLLER_DIR, "SIDELOOK_DIAG")
+_NADIR_SHOVE_DIAG = os.path.join(_CONTROLLER_DIR, "NADIR_SHOVE_DIAG")
 # Modest yaw written in butlerbot.wbt. Left +0.30, right −0.30 about Z.
 _SIDE_CAM_YAW_RAD = 0.30
+_NADIR_NOTES_DIR = os.path.join(
+    os.path.expanduser("~"),
+    "OneDrive",
+    "Desktop",
+    "Grok Workspace",
+    "butlerbot",
+)
+_NADIR_SNAP_DIR = os.path.join(_NADIR_NOTES_DIR, "images")
+_NADIR_REPORT = os.path.join(_NADIR_NOTES_DIR, "notes", "nadir-shove-2026-08-25.md")
 
 
 def _sidelook_enabled() -> bool:
@@ -760,6 +809,17 @@ def _sidelook_diag_requested() -> bool:
 def _consume_sidelook_diag_flag() -> None:
     try:
         os.remove(_SIDELOOK_DIAG)
+    except OSError:
+        pass
+
+
+def _nadir_shove_requested() -> bool:
+    return os.path.isfile(_NADIR_SHOVE_DIAG)
+
+
+def _consume_nadir_shove_flag() -> None:
+    try:
+        os.remove(_NADIR_SHOVE_DIAG)
     except OSError:
         pass
 
@@ -985,6 +1045,168 @@ def _write_sidelook_diag_report(rows: list[dict]) -> None:
         print(f"SIDELOOK DIAG report skipped: {exc}")
 
 
+def _run_nadir_shove_diag(
+    robot: Robot,
+    timestep: int,
+    cams: dict,
+    motors: dict,
+    nadir_node,
+    nadir_fn,
+    gps=None,
+) -> list[dict]:
+    """Park and pin +20 cm. Left nadir only. Not on the wheel. Restores spawn."""
+    rows: list[dict] = []
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        print("NADIR SHOVE skipped — not a Supervisor")
+        return rows
+    if nadir_fn is None or nadir_node is None:
+        print("NADIR SHOVE skipped — no nadir cam/math")
+        return rows
+    try:
+        body = robot.getSelf()
+        trans_f = body.getField("translation")
+        rot_f = body.getField("rotation")
+    except Exception as exc:
+        print(f"NADIR SHOVE skipped — body ({exc})")
+        return rows
+    hold_spawn = [0.0, 0.0, 0.0]
+    hold_rot = [0.0, 0.0, 1.0, 0.0]
+    stations = (
+        ("center", 0.0),
+        ("left_+0.20", 0.20),
+        ("right_-0.20", -0.20),
+        ("restore", 0.0),
+    )
+    print("NADIR SHOVE — pin y=0, +0.20 (left tape), −0.20 (right tape)")
+    os.makedirs(_NADIR_SNAP_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(_NADIR_REPORT), exist_ok=True)
+    for tag, y_off in stations:
+        for _w in ("left_wheel", "right_wheel"):
+            motor = motors.get(_w)
+            if motor is None:
+                continue
+            try:
+                motor.setPosition(float("inf"))
+                motor.setVelocity(0.0)
+            except Exception:
+                pass
+        hold = [hold_spawn[0], float(y_off), hold_spawn[2]]
+        for _ in range(20):
+            try:
+                trans_f.setSFVec3f(list(hold))
+                rot_f.setSFRotation(list(hold_rot))
+            except Exception:
+                pass
+            if robot.step(timestep) == -1:
+                return rows
+        gps_xy = None
+        if gps is not None:
+            try:
+                g = gps.getValues()
+                gps_xy = (float(g[0]), float(g[1]))
+            except Exception:
+                gps_xy = None
+        hit_l = _nadir_lateral_from_cam(
+            cams.get("nadir_left"),
+            nadir_node,
+            gps_xy or (0.0, float(y_off)),
+            0.0,
+            nadir_fn,
+            side="left",
+        )
+        hit_r = _nadir_lateral_from_cam(
+            cams.get("nadir_right"),
+            None,
+            gps_xy or (0.0, float(y_off)),
+            0.0,
+            nadir_fn,
+            side="right",
+        )
+        gx = None if gps_xy is None else round(gps_xy[0], 3)
+        gy = None if gps_xy is None else round(gps_xy[1], 3)
+        row = {
+            "tag": tag,
+            "pin_y": y_off,
+            "gps_x": gx,
+            "gps_y": gy,
+            "gap_l": None if not hit_l else hit_l.get("gap_px"),
+            "m_l": None if not hit_l else hit_l.get("m"),
+            "gap_r": None if not hit_r else hit_r.get("gap_px"),
+            "m_r": None if not hit_r else hit_r.get("m"),
+            "nadir_y": None if not hit_l else hit_l.get("m"),
+            "gap_px": None if not hit_l else hit_l.get("gap_px"),
+        }
+        rows.append(row)
+        print(
+            "NADIR SHOVE "
+            f"{tag:12s} pin_y={y_off:+.2f} gps=({gx},{gy}) "
+            f"L={row.get('gap_l')} px / {row.get('m_l')} m  "
+            f"R={row.get('gap_r')} px / {row.get('m_r')} m"
+        )
+        for key, prefix in (("nadir_left", "nadir-left"), ("nadir_right", "nadir-right")):
+            cam = cams.get(key)
+            if cam is None:
+                continue
+            try:
+                path = os.path.join(_NADIR_SNAP_DIR, f"{prefix}-{tag}.png")
+                cam.saveImage(path, 90)
+                print(f"NADIR snapshot → {path}")
+            except Exception as exc:
+                print(f"NADIR snapshot skipped: {exc}")
+    try:
+        trans_f.setSFVec3f(list(hold_spawn))
+        rot_f.setSFRotation(list(hold_rot))
+    except Exception:
+        pass
+    _write_nadir_shove_report(rows)
+    return rows
+
+
+def _write_nadir_shove_report(rows: list[dict]) -> None:
+    try:
+        lines = [
+            "# Left nadir 20 cm shove (live)",
+            "",
+            "Observation only. LINE_CAM identity locked. Not on the wheel.",
+            "Pin +Y = left tape, −Y = right tape. Ruler = gap_px × (6 cm / stripe_px).",
+            "Truthsayer = that side's gap shrinks ~20 cm; the other side grows.",
+            "",
+            "| station | pin y | GPS y | L px | L m | R px | R m |",
+            "|:--------|------:|------:|-----:|----:|-----:|----:|",
+        ]
+        for r in rows:
+            lines.append(
+                f"| {r['tag']} | {r['pin_y']:+.2f} | {r['gps_y']} | "
+                f"{r.get('gap_l')} | {r.get('m_l')} | {r.get('gap_r')} | {r.get('m_r')} |"
+            )
+        lines.append("")
+        c = next((r for r in rows if r["tag"] == "center"), None)
+        L = next((r for r in rows if r["tag"] == "left_+0.20"), None)
+        R = next((r for r in rows if r["tag"] == "right_-0.20"), None)
+        bits = []
+        if c and L and c.get("m_l") is not None and L.get("m_l") is not None:
+            d = float(L["m_l"]) - float(c["m_l"])
+            lines.append(f"Δ L meters on +0.20 shove = {d:+.4f} m")
+            bits.append(abs(abs(d) - 0.20) <= 0.08)
+        if c and R and c.get("m_r") is not None and R.get("m_r") is not None:
+            d = float(R["m_r"]) - float(c["m_r"])
+            lines.append(f"Δ R meters on −0.20 shove = {d:+.4f} m")
+            bits.append(abs(abs(d) - 0.20) <= 0.08)
+        if bits and all(bits):
+            verdict = "TRUTHSAYER — L and R yellow-rulers track a 20 cm shove"
+        elif bits:
+            verdict = "partial — one eye tracked, check the table"
+        else:
+            verdict = "unvalidated: missing readings"
+        lines.append(f"Verdict: **{verdict}**.")
+        lines.append("")
+        with open(_NADIR_REPORT, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print(f"NADIR SHOVE report → {_NADIR_REPORT}")
+    except Exception as exc:
+        print(f"NADIR SHOVE report skipped: {exc}")
+
+
 def _maybe_dump_viewpoint(robot: Robot) -> None:
     """If DUMP_CAM exists beside this controller, print live viewpoint and remove it."""
     if not os.path.isfile(_DUMP_CAM):
@@ -1012,7 +1234,12 @@ def _maybe_dump_viewpoint(robot: Robot) -> None:
         )
     except Exception as exc:
         print(f"VIEWPOINT dump failed: {exc}")
-    for cam_def in ("FORECAST_CAM_Z", "FORECAST_CAM_W"):
+    for cam_def in (
+        "FORECAST_CAM_Z",
+        "FORECAST_CAM_W",
+        "NADIR_CAM_L",
+        "NADIR_CAM_R",
+    ):
         try:
             node = robot.getFromDef(cam_def)
             if node is None:

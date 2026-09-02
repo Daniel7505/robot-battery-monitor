@@ -141,6 +141,7 @@ from controller_eyes import (
     _aim_forecast_cameras,
     _aim_lookdown_cameras,
     _camera_max_rgb,
+    _consume_nadir_shove_flag,
     _consume_sidelook_diag_flag,
     _load_lookdown_math,
     _maybe_dump_viewpoint,
@@ -148,7 +149,10 @@ from controller_eyes import (
     _revert_line_cams_identity,
     _run_lookdown_interlock,
     _run_preview_interlock,
+    _run_nadir_shove_diag,
     _run_sidelook_offset_diag,
+    _nadir_lateral_from_cam,
+    _nadir_shove_requested,
     _sample_wall_pair,
     _sidelook_diag_requested,
     _sidelook_enabled,
@@ -447,6 +451,19 @@ _CAM_EYE = (-3.18573, -0.03020, 3.54536)
 _CAM_LOOK = (0.0, 0.0, 0.55)
 _CAM_FOV = 0.85
 _CAM_ORIENTATION = (-0.001250, 0.999989, 0.004550, 0.536256)
+# Back / eye-level, for checking shoulder-boom placement vs Daniel's sketch.
+_BACK_EYE = (-1.70, 0.0, 0.55)
+_BACK_ORIENTATION = (0.0, 1.0, 0.0, -1.5708)
+_BACK_FOV = 0.90
+_NADIR_PLACE_CHECK = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "NADIR_PLACE_CHECK"
+)
+_NADIR_STEER_ON = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "NADIR_STEER_ON"
+)
+_FIRST_LOBE_X_M = None  # full S this sitting; was 8.0 for the plant probe
+_FINISH_X_M = 24.5
+_NADIR_CRUISE = 5.5  # 0.44 m/s — old picture-wins champ speed; nadir cleared 3.7 cm at 2.5
 
 
 def _apply_follow_camera(robot: Robot) -> None:
@@ -492,6 +509,38 @@ def _apply_follow_camera(robot: Robot) -> None:
         )
     except Exception as exc:
         print(f"Follow-cam reset skipped: {exc}")
+
+
+def _apply_back_eye_view(robot: Robot) -> None:
+    """Stand behind the robot at eye level. For shoulder-boom placement checks."""
+    if Supervisor is None or not isinstance(robot, Supervisor):
+        return
+    try:
+        vp = robot.getFromDef("VIEWPOINT")
+    except Exception:
+        vp = None
+    if vp is None:
+        return
+    try:
+        field = vp.getField
+        follow = field("follow")
+        if follow:
+            follow.setSFString("")
+        pos = field("position")
+        if pos:
+            pos.setSFVec3f(list(_BACK_EYE))
+        ori = field("orientation")
+        if ori:
+            ori.setSFRotation(list(_BACK_ORIENTATION))
+        fov = field("fieldOfView")
+        if fov:
+            fov.setSFFloat(_BACK_FOV)
+        print(
+            "Viewpoint: back/eye-level for nadir place-check "
+            f"eye={_BACK_EYE}"
+        )
+    except Exception as exc:
+        print(f"Back-eye view skipped: {exc}")
 
 
 def _init_devices(
@@ -554,17 +603,21 @@ def _init_devices(
         "finish_cam_r",
         "forecast_z",
         "forecast_w",
+        "nadir_left",
+        "nadir_right",
     ):
         cam = None
         try:
             cam = robot.getDevice(name)
-            if cam is not None:
-                cam.enable(timestep)
         except Exception:
             cam = None
-        cams[name] = cam
-        if cam is None:
+        # Shoulder nadirs only. Enabling the rest is the 0.08× molasses.
+        if cam is not None and name in ("nadir_left", "nadir_right"):
+            cam.enable(timestep)
+        cams[name] = cam if name in ("nadir_left", "nadir_right") else None
+        if name in ("nadir_left", "nadir_right") and cams[name] is None:
             print(f"WARNING: camera '{name}' not found — lane-keep eye missing")
+    print("NADIR EYES ONLY — line/finish/forecast cameras not enabled")
     if _sidelook_enabled():
         for name in ("line_side_l", "line_side_r"):
             cam = None
@@ -578,8 +631,6 @@ def _init_devices(
             if cam is None:
                 print(f"WARNING: experimental camera '{name}' missing")
         print("SIDELOOK experiment ON — observation only, not on the wheel")
-    else:
-        print("SIDELOOK experiment OFF — delete/create SIDELOOK_ON to toggle")
 
     return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
 
@@ -676,10 +727,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     lookdown_math = _load_lookdown_math()
     steer_filter = None
     gap_planner = None
+    _track_ct = None
     try:
         from src.lane_keep import (
             GapPlanner as _GapPlanner,
             SteerFilter as _SteerFilter,
+            track_cross_track_m as _track_ct,
         )
 
         steer_filter = _SteerFilter()
@@ -687,6 +740,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     except Exception:
         steer_filter = None
         gap_planner = None
+        _track_ct = None
     pixel_fn = None
     ground_fn = None
     corridor_watch = None
@@ -708,10 +762,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         ground_fn = None
         corridor_watch = None
         forecast_lookout = None
-    look_ahead_m = _aim_lookdown_cameras(robot, lookdown_math)
-    _aim_forecast_cameras(robot, lookdown_math)
-    # Identity lock stays visible here. Implementation lives in controller_eyes.
-    _revert_line_cams_identity(robot)
+    look_ahead_m = 1.09
+    # Skip look-down / forecast / LINE_CAM aim — those cameras are off.
     eye_huds = _label_eye_huds(robot, cams)
     classify_fn = None if not lookdown_math else lookdown_math["classify"]
     mark_stop = lookdown_math["tracker_cls"]() if lookdown_math else None
@@ -723,8 +775,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     t_mark_fn = None
     forecast_hit_fn = None
     line_wall_fn = None
+    nadir_fn = None
+    nadir_guard = None
     metric_ok_fn = None
     metric_logged = False
+    nadir_logged = False
     try:
         from src.lane_keep import (
             preview_look_ahead_m as _preview_look_ahead_m,
@@ -733,6 +788,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             forecast_wall_hit as _forecast_wall_hit,
             line_wall_hit as _line_wall_hit,
             metric_walls_plausible as _metric_ok,
+            nadir_wheel_to_tape as _nadir_wheel_to_tape,
+            NadirGuard as _NadirGuard,
         )
 
         far_fn = _yellow_far_offset
@@ -741,6 +798,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         forecast_hit_fn = _forecast_wall_hit
         line_wall_fn = _line_wall_hit
         metric_ok_fn = _metric_ok
+        nadir_fn = _nadir_wheel_to_tape
+        nadir_guard = _NadirGuard()
     except Exception:
         far_fn = None
         preview_range_fn = None
@@ -748,6 +807,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         forecast_hit_fn = None
         line_wall_fn = None
         metric_ok_fn = None
+        nadir_fn = None
+        nadir_guard = None
+    nadir_steer_wanted = os.path.isfile(_NADIR_STEER_ON)
+    nadir_lobe_done = False
     # Last Z/W fills + hits. Refreshed every 8 steps (~10 Hz); lookout
     # still steps at 8 ms on these cached fills.
     zw_cache = {
@@ -764,10 +827,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     line_cam_r_node = None
     side_cam_l_node = None
     side_cam_r_node = None
+    nadir_cam_l_node = None
     forecast_z_node = None
     forecast_w_node = None
     sidelook_on = _sidelook_enabled()
     sidelook_diag_done = False
+    nadir_shove_done = False
     if Supervisor is not None and isinstance(robot, Supervisor):
         try:
             finish_cam_node = robot.getFromDef("FINISH_CAM")
@@ -786,6 +851,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             except Exception:
                 side_cam_l_node = None
                 side_cam_r_node = None
+        try:
+            nadir_cam_l_node = robot.getFromDef("NADIR_CAM_L")
+        except Exception:
+            nadir_cam_l_node = None
         try:
             forecast_z_node = robot.getFromDef("FORECAST_CAM_Z")
             forecast_w_node = robot.getFromDef("FORECAST_CAM_W")
@@ -806,9 +875,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            if tick == 5 and nadir_steer_wanted and not lane_keep_on:
+                lane_keep_on = True
+                print(
+                    "NADIR STEER ON — pixel fan vs 32/29, "
+                    f"cruise={_NADIR_CRUISE} rad/s ({_NADIR_CRUISE * 0.08:.2f} m/s), "
+                    f"v-scale={max(1.0, min(2.2, (_NADIR_CRUISE * 0.08) / 0.21)):.2f}, "
+                    f"full S to x={_FINISH_X_M} m. Two shoulder cams only."
+                )
             if tick == 25 and lookdown_view == "pending":
-                lookdown_view = _run_lookdown_interlock(cams, classify_fn)
-                preview_state = _run_preview_interlock(cams, robot)
+                lookdown_view = "nadir_only"
                 preview_checked = True
                 if (
                     sidelook_on
@@ -829,6 +905,51 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     )
                     _consume_sidelook_diag_flag()
                     sidelook_diag_done = True
+                if os.path.isfile(_NADIR_PLACE_CHECK):
+                    cam = cams.get("nadir_left")
+                    if cam is not None:
+                        try:
+                            path = os.path.join(
+                                _LOOKDOWN_SNAP_DIR,
+                                "butlerbot",
+                                "images",
+                                "nadir-left-place-check.png",
+                            )
+                            os.makedirs(os.path.dirname(path), exist_ok=True)
+                            cam.saveImage(path, 90)
+                            print(f"NADIR place-check snapshot → {path}")
+                        except Exception as exc:
+                            print(f"NADIR place-check snapshot skipped: {exc}")
+                    try:
+                        os.remove(_NADIR_PLACE_CHECK)
+                    except OSError:
+                        pass
+                if not nadir_shove_done and _nadir_shove_requested():
+                    _run_nadir_shove_diag(
+                        robot,
+                        timestep,
+                        cams,
+                        motors,
+                        nadir_cam_l_node,
+                        nadir_fn,
+                        gps,
+                    )
+                    _consume_nadir_shove_flag()
+                    nadir_shove_done = True
+                    if nadir_steer_wanted:
+                        lane_keep_on = True
+                        print(
+                            "NADIR STEER ON — pixel fan vs 32/29, "
+                            f"cruise={_NADIR_CRUISE} rad/s, full S to "
+                            f"x={_FINISH_X_M} m. Picture-wins is not on the wheel."
+                        )
+                elif nadir_steer_wanted and not lane_keep_on:
+                    lane_keep_on = True
+                    print(
+                        "NADIR STEER ON — pixel fan vs 32/29, "
+                        f"cruise={_NADIR_CRUISE} rad/s, full S to "
+                        f"x={_FINISH_X_M} m. Picture-wins is not on the wheel."
+                    )
                 if not preview_state.get("aim_ok"):
                     for key, fname in (
                         ("line_left", "line-left-identity.png"),
@@ -984,7 +1105,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
                     was_lane = lane_keep_on
-                    lane_keep_on = bool(api_cmd.get("lane_keep"))
+                    if nadir_steer_wanted and not nadir_lobe_done:
+                        lane_keep_on = True
+                    else:
+                        lane_keep_on = bool(api_cmd.get("lane_keep"))
                     if mark_stop is not None and was_lane != lane_keep_on:
                         mark_stop.reset()
                         mark_plan = {"phase": "seek", "remaining_m": None, "t_to_mark_s": None}
@@ -1137,9 +1261,63 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 lane_eyes["exp_right_wall_dist_m"] = exp["right"]
                 lane_eyes["exp_metric_ct"] = exp["ct"]
                 lane_eyes["exp_metric_ok"] = bool(exp["ok"])
-                # Production stays on picture-wins. Experimental is log-only.
+                nadir_hit = _nadir_lateral_from_cam(
+                    cams.get("nadir_left"),
+                    nadir_cam_l_node,
+                    gps_xy,
+                    prev_yaw,
+                    nadir_fn,
+                    side="left",
+                )
+                nadir_r = _nadir_lateral_from_cam(
+                    cams.get("nadir_right"),
+                    None,
+                    gps_xy,
+                    prev_yaw,
+                    nadir_fn,
+                    side="right",
+                )
+                if nadir_hit:
+                    lane_eyes["nadir_lateral_m"] = nadir_hit.get("m")
+                    lane_eyes["nadir_gap_px"] = nadir_hit.get("gap_px")
+                    lane_eyes["nadir_ahead_px"] = nadir_hit.get("gap_ahead_px")
+                    lane_eyes["nadir_stripe_px"] = nadir_hit.get("stripe_px")
+                    lane_eyes["nadir_tape_col"] = nadir_hit.get("tape_col")
+                    lane_eyes["nadir_wheel_col"] = nadir_hit.get("wheel_col")
+                else:
+                    lane_eyes["nadir_lateral_m"] = None
+                    lane_eyes["nadir_gap_px"] = None
+                    lane_eyes["nadir_ahead_px"] = None
+                if nadir_r:
+                    lane_eyes["nadir_r_lateral_m"] = nadir_r.get("m")
+                    lane_eyes["nadir_r_gap_px"] = nadir_r.get("gap_px")
+                    lane_eyes["nadir_r_ahead_px"] = nadir_r.get("gap_ahead_px")
+                    lane_eyes["nadir_r_stripe_px"] = nadir_r.get("stripe_px")
+                    lane_eyes["nadir_r_tape_col"] = nadir_r.get("tape_col")
+                    lane_eyes["nadir_r_wheel_col"] = nadir_r.get("wheel_col")
+                else:
+                    lane_eyes["nadir_r_lateral_m"] = None
+                    lane_eyes["nadir_r_gap_px"] = None
+                    lane_eyes["nadir_r_ahead_px"] = None
+                # Production stays on picture-wins. Nadir is log-only
+                # until the 20 cm shove probe validates live.
                 lane_eyes["metric_active"] = False
                 lane_eyes["error_source"] = "picture"
+                if not nadir_logged and (nadir_hit or nadir_r):
+                    nadir_logged = True
+                    print(
+                        "Nadir L "
+                        f"{None if not nadir_hit else nadir_hit.get('gap_px')} px / "
+                        f"{None if not nadir_hit else nadir_hit.get('m')} m "
+                        f"(stripe {None if not nadir_hit else nadir_hit.get('stripe_px')} px = 6 cm)"
+                    )
+                    print(
+                        "Nadir R "
+                        f"{None if not nadir_r else nadir_r.get('gap_px')} px / "
+                        f"{None if not nadir_r else nadir_r.get('m')} m "
+                        f"(stripe {None if not nadir_r else nadir_r.get('stripe_px')} px = 6 cm; "
+                        "observation, not on the wheel)"
+                    )
                 if not metric_logged and (
                     ident["left"] is not None
                     or exp["left"] is not None
@@ -1243,13 +1421,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     # Magenta pucks / desert dirt can score "red" far from the stripe.
                     near_finish = gx >= 21.0
                     saw_red = bool(lane_eyes["finish_red"] >= 0.28 and near_finish)
-                    mark_plan = mark_stop.step(
+                    stepped = mark_stop.step(
                         saw_red,
                         look_ahead_m,
                         speed_m_s,
                         dt,
                         measured_range_m=measured,
                     )
+                    if stepped:
+                        mark_plan = stepped
                 gx = 0.0
                 try:
                     gx = float(gps.getValues()[0])
@@ -1271,7 +1451,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     lane_eyes["right_yellow"],
                     finish_red,
                     mark_plan=mark_plan,
-                    k_steer=3.2,
+                    cruise=_NADIR_CRUISE if nadir_steer_wanted else 5.5,
+                    k_steer=2.0 if nadir_steer_wanted else 3.2,
                     left_offset=lane_eyes.get("left_offset"),
                     right_offset=lane_eyes.get("right_offset"),
                     left_curve=lane_eyes.get("left_curve"),
@@ -1286,13 +1467,39 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     preview_ok=bool(lane_eyes.get("preview_ok")),
                     allow_one_eye=both_eyes_seen,
                     steer_filter=steer_filter,
-                    planner=gap_planner,
-                    watch_plan=watch_plan,
-                    lookout=forecast_lookout,
+                    planner=None if nadir_steer_wanted else gap_planner,
+                    watch_plan=None if nadir_steer_wanted else watch_plan,
+                    lookout=None if nadir_steer_wanted else forecast_lookout,
                     z_fill=lane_eyes.get("z_fill"),
                     w_fill=lane_eyes.get("w_fill"),
+                    left_gap_px=lane_eyes.get("nadir_gap_px"),
+                    right_gap_px=lane_eyes.get("nadir_r_gap_px"),
+                    left_ahead_px=lane_eyes.get("nadir_ahead_px"),
+                    right_ahead_px=lane_eyes.get("nadir_r_ahead_px"),
+                    nadir_guard=nadir_guard,
+                    nadir_primary=bool(nadir_steer_wanted),
                     dt=dt,
                 )
+                if (
+                    nadir_steer_wanted
+                    and gps_xy is not None
+                    and float(gps_xy[0]) >= _FINISH_X_M
+                ):
+                    if not nadir_lobe_done:
+                        nadir_lobe_done = True
+                        print(
+                            f"FULL S DONE at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
+                            "stopping. Nadir was on the wheel."
+                        )
+                    lane_keep_on = False
+                    lk = {
+                        "left": 0.0,
+                        "right": 0.0,
+                        "brake": True,
+                        "steer": 0.0,
+                        "phase": "first_lobe_done",
+                        "error_source": "nadir",
+                    }
                 lane_eyes["steer"] = lk.get("steer")
                 lane_eyes["phase"] = lk.get("phase")
                 lane_eyes["left_pressure"] = lk.get("left_pressure")
@@ -1358,53 +1565,25 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     drive_grace_s = max(drive_grace_s, 1.0)
                     sig = (
                         f"{lk['left']:.1f}:{lk['right']:.1f}:"
-                        f"{lane_eyes['left_yellow']:.2f}:{lane_eyes['right_yellow']:.2f}:"
-                        f"{lane_eyes.get('left_offset')}:{lane_eyes.get('right_offset')}:"
+                        f"{lk.get('steer')}:"
+                        f"{lane_eyes.get('nadir_gap_px')}:"
+                        f"{lane_eyes.get('nadir_r_gap_px')}:"
+                        f"{lane_eyes.get('nadir_ahead_px')}:"
+                        f"{lane_eyes.get('nadir_r_ahead_px')}:"
                         f"{lk.get('phase')}:{lk.get('remaining_m')}"
                     )
                     if sig != last_lane_sig:
                         last_lane_sig = sig
-                        mx = _camera_max_rgb(cams.get("finish_cam"))
-                        rem = lk.get("remaining_m")
                         print(
                             "Lane-keep "
                             f"L={lk['left']:.2f} R={lk['right']:.2f} "
                             f"steer={lk.get('steer')} "
-                            f"yL={lane_eyes['left_yellow']:.2f} "
-                            f"yR={lane_eyes['right_yellow']:.2f} "
-                            f"oL={lane_eyes.get('left_offset')} "
-                            f"oR={lane_eyes.get('right_offset')} "
-                            f"cL={lane_eyes.get('left_curve')} "
-                            f"cR={lane_eyes.get('right_curve')} "
-                            f"pL={lk.get('left_pressure')} "
-                            f"pR={lk.get('right_pressure')} "
-                            f"yLm={lane_eyes.get('left_y_m')} "
-                            f"yRm={lane_eyes.get('right_y_m')} "
-                            f"idL={lane_eyes.get('left_wall_dist_m')} "
-                            f"idR={lane_eyes.get('right_wall_dist_m')} "
-                            f"idCt={lane_eyes.get('metric_ct')} "
-                            f"expL={lane_eyes.get('exp_left_wall_dist_m')} "
-                            f"expR={lane_eyes.get('exp_right_wall_dist_m')} "
-                            f"expCt={lane_eyes.get('exp_metric_ct')} "
+                            f"nL={lane_eyes.get('nadir_gap_px')} "
+                            f"nR={lane_eyes.get('nadir_r_gap_px')} "
+                            f"aL={lane_eyes.get('nadir_ahead_px')} "
+                            f"aR={lane_eyes.get('nadir_r_ahead_px')} "
                             f"src={lk.get('error_source')} "
-                            f"mode={lk.get('plan_mode')} "
-                            f"rate={lk.get('plan_rate')} "
-                            f"fL={lane_eyes.get('left_fill')} "
-                            f"fR={lane_eyes.get('right_fill')} "
-                            f"foL={lane_eyes.get('left_far_offset')} "
-                            f"foR={lane_eyes.get('right_far_offset')} "
-                            f"z={lane_eyes.get('z_offset')} "
-                            f"w={lane_eyes.get('w_offset')} "
-                            f"zYm={lane_eyes.get('z_y_m')} "
-                            f"wYm={lane_eyes.get('w_y_m')} "
-                            f"fwd={int(bool(lane_eyes.get('forecast_ok')))} "
-                            f"prev={int(bool(lk.get('preview_ok')))} "
-                            f"eA={lk.get('err_ahead')} "
-                            f"tA={lk.get('t_ahead')} "
-                            f"red={lane_eyes['finish_red']:.2f} "
-                            f"phase={lk.get('phase')} rem={rem} "
-                            f"D={look_ahead_m:.2f} "
-                            f"navRGB=({mx[0]:.2f},{mx[1]:.2f},{mx[2]:.2f})"
+                            f"phase={lk.get('phase')}"
                         )
 
             if yellow_fn and red_fn and peak_fn and tick % 4 == 0:
@@ -1684,13 +1863,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     _set_drive(motors, left_v, right_v, 1.0)
                 else:
                     _apply_wheel_command(motors, sensors, left_v, right_v, throttle_factor)
-                # Soft no-slip coupling while intentionally driving (not during ABS)
+                # Straight: blend v=ωr. Split: lock ω_z to the commanded
+                # differential. Sticky drive-wheel contact (μ=80, no slip)
+                # otherwise holds heading 0 and both hubs sit on min(cmd).
+                _split = abs(left_v - right_v) > 0.2
                 _apply_soft_grip(
                     robot,
-                    left_wv=left_wv,
-                    right_wv=right_wv,
+                    left_wv=left_v,
+                    right_wv=right_v,
                     imu=imu,
-                    gain=SOFT_GRIP_GAIN,
+                    gain=1.0 if _split else SOFT_GRIP_GAIN,
+                    yaw_lock=_split,
                 )
 
             if user_driving:
@@ -1720,9 +1903,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         if throttle_factor < 0.995
                         else ""
                     )
+                    ct_s = ""
+                    if _track_ct is not None and gps_xy is not None:
+                        try:
+                            ct_s = f" ct={_track_ct(gps_xy[0], gps_xy[1]):+.3f}"
+                        except Exception:
+                            ct_s = ""
                     print(
                         f"Driving L={left_v:.1f} R={right_v:.1f} "
+                        f"hub={left_wv:.1f}/{right_wv:.1f} "
+                        f"hdg={_imu_yaw(imu):.3f} "
                         f"@ {_format_pose(gps)} "
+                        f"{ct_s} "
                         f"gps={avg_body:.2f} odo={odo_v:.2f} m/s"
                         f"{throttle_note}"
                     )
@@ -1916,6 +2108,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "exp_right_wall_dist_m": lane_eyes.get("exp_right_wall_dist_m"),
                         "exp_metric_ct": lane_eyes.get("exp_metric_ct"),
                         "exp_metric_ok": lane_eyes.get("exp_metric_ok"),
+                        "nadir_lateral_m": lane_eyes.get("nadir_lateral_m"),
                         "left_fill": lane_eyes.get("left_fill"),
                         "right_fill": lane_eyes.get("right_fill"),
                         "z_fill": lane_eyes.get("z_fill"),
@@ -1927,9 +2120,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "look_ahead_m": round(look_ahead_m, 3),
                         "finish_red_row": lane_eyes.get("finish_red_row"),
                         "mark_remaining_m": None
-                        if mark_plan.get("remaining_m") is None
+                        if not mark_plan or mark_plan.get("remaining_m") is None
                         else round(float(mark_plan["remaining_m"]), 3),
-                        "mark_phase": mark_plan.get("phase"),
+                        "mark_phase": None if not mark_plan else mark_plan.get("phase"),
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,

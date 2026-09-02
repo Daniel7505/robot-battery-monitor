@@ -539,6 +539,7 @@ def _apply_soft_grip(
     right_wv: float,
     imu: InertialUnit | None,
     gain: float = SOFT_GRIP_GAIN,
+    yaw_lock: bool = False,
 ) -> None:
     """Blend body linear (+ yaw) velocity toward wheel-odometry kinematics.
 
@@ -546,6 +547,10 @@ def _apply_soft_grip(
     can hold commanded ω while the body crawls. While the operator/API is
     intentionally driving, softly couple body velocity to v=ωr so free-roll
     matches the track budget. Disabled during ABS park / idle.
+
+    yaw_lock: write commanded ω_z fully. Drive-wheel coulombFriction is 80
+    with no slip; a blended yaw loses to the contact and both hubs collapse
+    to min(cmd). Turns must not blend.
     """
     if gain <= 0.0 or not hasattr(robot, "getSelf"):
         return
@@ -571,13 +576,18 @@ def _apply_soft_grip(
         if vel is None or len(vel) < 6:
             return
         g = max(0.0, min(1.0, float(gain)))
+        wz = (
+            float(yaw_rate_odo)
+            if yaw_lock
+            else (1.0 - g) * float(vel[5]) + g * yaw_rate_odo
+        )
         new_vel = [
             (1.0 - g) * float(vel[0]) + g * tx,
             (1.0 - g) * float(vel[1]) + g * ty,
             float(vel[2]),
             float(vel[3]),
             float(vel[4]),
-            (1.0 - g) * float(vel[5]) + g * yaw_rate_odo,
+            wz,
         ]
         node.setVelocity(new_vel)
     except Exception:

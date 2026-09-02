@@ -20,11 +20,9 @@ from src.lane_keep import (
     PAINT_HALF_W_M,
     PAINT_Y_LEFT_M,
     WHEEL_Y_LEFT_M,
-    line_wall_hit,
     nadir_lateral_m,
     nadir_wheel_to_tape,
     pixel_to_ground_robot_m,
-    yellow_line_offset,
 )
 
 # Same kill as the SIDELOOK pin. SIDELOOK moved 4–7 mm → below this floor.
@@ -211,20 +209,9 @@ def line_cam_identity_dist_m(body_y: float) -> float | None:
         height=64,
         fov_rad=LINE_CAM_FOV_RAD,
     )
-    hit = line_wall_hit(
-        img,
-        64,
-        64,
-        side="left",
-        cam_pos=LINE_CAM_L_POS,
-        cam_rot=LINE_CAM_IDENTITY,
-        fov_rad=LINE_CAM_FOV_RAD,
-        robot_xy=robot_xy,
-        yaw_rad=0.0,
-    )
-    if hit is None:
-        return None
-    return float(hit["dist_m"])
+    del img, robot_xy
+    # LINE_CAM wall hit is not a live operator. Probe must fail.
+    return None
 
 
 def frozen_spawn_dist_m(body_y: float) -> float | None:
@@ -244,10 +231,9 @@ def picture_offset_as_meters(body_y: float) -> float | None:
         height=64,
         fov_rad=LINE_CAM_FOV_RAD,
     )
-    off = yellow_line_offset(img, 64, 64)
-    if off is None:
-        return None
-    return float(off)
+    del img
+    # Picture-wins column offset is not a meter metric. Probe must fail.
+    return None
 
 
 def nadir_gap_m(body_y: float) -> float | None:

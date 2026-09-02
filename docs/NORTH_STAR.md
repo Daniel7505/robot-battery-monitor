@@ -28,7 +28,7 @@ The 2026-09-02 nadir lap (full S, IN_LANE on the red, max **3.2 cm** at 0.44 m/s
 | 64×64 vs 128×128 | 64 is fast and coarse. 128 cut first-lobe peak to 15.7 cm and dropped whole-lap realtime to ~0.09–0.13. |
 | Real cameras will be far higher res | **Cannot** scan every pixel every 8 ms in the final system. |
 | Compute is a design cost | A high-res camera that forces the loop to 5 Hz is a bad part for many missions. |
-| Drive policy (this phase) | **Shoulder nadir on the wheel.** Fight 32/29 px + ahead-row HOLD, cruise 5.5 (0.44 m/s), v-scale 2.10, steer cap 0.55. LINE_CAM / forecast / finish cameras exist in the world and are **not enabled**. This S is closed — no more knobs on it. |
+| Drive policy (this phase) | **Shoulder nadir on the wheel.** Fight 32/29 px + ahead-row HOLD, cruise 5.5 (0.44 m/s), v-scale 2.10, steer cap 0.55. LINE / SIDE / FINISH / Z/W cameras and aim pucks were **removed** from `butlerbot.wbt` 2026-09-02. This S is closed — no more knobs on it. |
 
 Details: [`LANE_KEEP_BASELINE_2026-08-17.md`](LANE_KEEP_BASELINE_2026-08-17.md), [`LANE_KEEP_CLOSED_2026-08-17.md`](LANE_KEEP_CLOSED_2026-08-17.md).
 

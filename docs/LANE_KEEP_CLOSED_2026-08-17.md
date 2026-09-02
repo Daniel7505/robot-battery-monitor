@@ -1,5 +1,9 @@
 # Lane-keep — closed experiments (2026-08-17)
 
+**Historical.** This is the picture-wins / LINE_CAM 128 freeze. It is **not** the live operator.
+
+Live law (2026-09-02): shoulder nadir, fight 32/29 + ahead HOLD, cruise 5.5, v-scale 2.10. Champ **3.2 cm** on the red. See [`NORTH_STAR.md`](NORTH_STAR.md).
+
 Product map: [`NORTH_STAR.md`](NORTH_STAR.md). Drive cards: [`LANE_KEEP_BASELINE_2026-08-17.md`](LANE_KEEP_BASELINE_2026-08-17.md).
 
 Do **not** rerun these as “new ideas.” They were isolated, measured, and closed.

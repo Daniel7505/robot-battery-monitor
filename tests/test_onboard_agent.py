@@ -286,7 +286,7 @@ def test_lane_keep_rule_logs_when_armed():
     assert agent.status_dict(result)["intervening"] is False
 
 
-def test_lane_keep_lost_paint_is_not_red():
+def test_lane_keep_nadir_stop_is_not_red():
     agent = OnboardAgent()
     result = agent.evaluate(
         battery_pct=94,
@@ -304,11 +304,11 @@ def test_lane_keep_lost_paint_is_not_red():
         },
     )
     msgs = " ".join((r.message or "") for r in result.recommendations).lower()
-    assert "lost paint" in msgs
+    assert "nadir" in msgs
     assert "red" not in msgs
 
 
-def test_lane_keep_red_is_not_silent():
+def test_lane_keep_without_nadir_gaps_is_nadir_stop():
     agent = OnboardAgent()
     result = agent.evaluate(
         battery_pct=94,
@@ -322,10 +322,12 @@ def test_lane_keep_red_is_not_silent():
             "phase": "teleop",
             "source": "webots",
             "lane_keep": True,
-            "lane_sensors": {"left_yellow": 0.0, "right_yellow": 0.0, "finish_red": 0.8},
+            "lane_sensors": {"finish_red": 0.8},
         },
     )
-    assert any("red" in (r.message or "").lower() for r in result.recommendations)
+    msgs = " ".join((r.message or "") for r in result.recommendations).lower()
+    assert "nadir" in msgs
+    assert "red" not in msgs
 
 
 def test_status_dict_includes_log():

@@ -84,7 +84,7 @@ Webots ButlerBot controller
 |--------|------|
 | `controller_hud.py` | Display gauges + camera overlays |
 | `controller_keys.py` | Keyboard teleop |
-| `controller_eyes.py` | Cameras, aim, LINE_CAM identity (never look-at) |
+| `controller_eyes.py` | Shoulder nadir harvest only |
 | `controller_wheels.py` | ABS, residual-spin, soft-grip |
 | `twin_publisher.py` | `POST /api/twin/telemetry` |
 

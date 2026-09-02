@@ -1,20 +1,22 @@
-"""Nadir-only lane keep — 2026-09-02 test swap.
+"""Nadir-only lane keep.
 
-Shoulder cameras looking down, pixel gap, 6 cm stripe scale, steer.
-Choir (picture-wins, wall bounce, LINE_CAM, forecast, planner) is stashed
-at archives/lane_keep_choir_2026-09-02.py. Restore that file to undo.
+Shoulder cameras looking down. Pixel gap vs 32/29, ahead HOLD vs 32/26,
+6 cm stripe scale, v-scaled P/HOLD, steer.
 
-Other cameras may still exist in the world. They are not on the wheel.
+Choir (picture-wins, wall bounce, LINE_CAM, forecast, planner stubs) is
+archived at archives/lane_keep_stubs_2026-09-02.py. Restore that file
+to undo.
+
+Unprojection helpers stay because the 20 cm shove probe uses them.
+They do not steer.
 """
 
 from __future__ import annotations
 
 import math
 
-# Nadir cruise. Controller may still pass this explicitly.
 DEFAULT_CRUISE_RAD_S = 5.5
 DEFAULT_K_STEER = 2.0
-DEFAULT_STEER_DEADBAND = 0.01
 DEFAULT_STEER_SLEW_PER_S = 12.0
 DEFAULT_STEER_RELEASE_PER_S = 4.0
 DEFAULT_TURN_SLOW = 0.24
@@ -31,7 +33,6 @@ NADIR_MOUNT_ROT = (0.0, 0.0, 1.0, -math.pi / 2.0)
 NADIR_IMAGE = 64
 NADIR_FOV_RAD = 1.2
 NADIR_AXLE_AHEAD_M = 0.0
-NADIR_SPAWN_GAP_PX = 31
 
 NADIR_BASE_L_PX = 32
 NADIR_BASE_R_PX = 29
@@ -43,36 +44,9 @@ NADIR_K_PX = 0.03
 NADIR_K_HOLD = 0.03
 NADIR_KD_PX = 0.12
 NADIR_STEER_CAP = 0.55
-# Spatial curve κ = ω/v. Same pixel yank at 2× speed is half the curve
-# unless P/HOLD scale with v. D already grows with pixel rate — do not
-# scale D. Cap keeps a hairpin from visiting the desert.
 NADIR_V_REF_M_S = 0.21
 NADIR_V_SCALE_MAX = 2.2
 
-SKY_RGB = (0.72, 0.76, 0.82)
-FLOOR_RGB = (0.55, 0.56, 0.58)
-FORECAST_IMAGE_ROLL_RAD = 0.0
-PLANNER_KAHEAD = 0.0
-DEFAULT_ABS_DECEL_M_S2 = 2.5
-MIN_STOP_DISTANCE_M = 0.06
-DEFAULT_RED_THRESH = 0.99  # red cam is off this test
-LOST_PAINT_YELLOW = 0.12
-MIN_STRIPE_FILL = 0.03
-DEFAULT_PREVIEW_GAIN = 0.0
-PREVIEW_SKY_FRAC = 0.80
-PREVIEW_RANGE_MIN_M = 0.40
-PREVIEW_RANGE_MAX_M = 4.00
-PREVIEW_FALLBACK_T_S = 2.0
-PLANNER_AHEAD_REF_S = 2.0
-DEFAULT_WALL_COMFORT = 0.16
-DEFAULT_WALL_PREVIEW = 0.55
-DEFAULT_WALL_CONTACT = 0.45
-DEFAULT_FILL_COMFORT = 0.08
-DEFAULT_FILL_GAIN = 8.0
-DEFAULT_WALL_HIT = 0.18
-WALL_COMFORT_M = 0.45
-
-# Same S as scripts/s_track.py. GPS y vs world 0 is not "off center."
 _TRACK_START_M = 3.0
 _TRACK_LOBE_M = 9.0
 _TRACK_AMP_M = 1.0
@@ -124,11 +98,6 @@ def yellow_score(rgb: tuple[float, float, float]) -> float:
     return max(0.0, min(1.0, (r + g) * 0.5 - b))
 
 
-def red_score(rgb: tuple[float, float, float]) -> float:
-    r, g, b = rgb
-    return max(0.0, min(1.0, r - max(g, b)))
-
-
 def _nadir_fan_err(
     left_px: int | None,
     right_px: int | None,
@@ -166,11 +135,7 @@ def steer_from_nadir_gaps(
     ahead_r: int = NADIR_AHEAD_R_PX,
     cruise: float | None = None,
 ) -> tuple[float | None, float]:
-    """Fight axle gaps back to 32/29. Forward rows add HOLD. +steer = yaw right.
-
-    P/HOLD scale with v/v_ref so curvature holds when cruise rises.
-    D is not scaled. Result still clipped to NADIR_STEER_CAP.
-    """
+    """Fight axle gaps back to 32/29. Forward rows add HOLD. +steer = yaw right."""
     err = _nadir_fan_err(
         left_px, right_px, base_l=base_l, base_r=base_r, deadband=NADIR_PX_DEADBAND
     )
@@ -424,76 +389,19 @@ def nadir_wheel_to_tape(
 
 
 def lane_keep_command(
-    left_yellow: float = 0.0,
-    right_yellow: float = 0.0,
-    finish_red: float = 0.0,
-    *,
+    *_unused,
     cruise: float = DEFAULT_CRUISE_RAD_S,
     k_steer: float = DEFAULT_K_STEER,
-    red_thresh: float = DEFAULT_RED_THRESH,
-    mark_plan: dict | None = None,
-    left_offset: float | None = None,
-    right_offset: float | None = None,
-    left_curve: float | None = None,
-    right_curve: float | None = None,
-    left_fill: float | None = None,
-    right_fill: float | None = None,
-    left_y_m: float | None = None,
-    right_y_m: float | None = None,
-    left_far_offset: float | None = None,
-    right_far_offset: float | None = None,
-    z_y_m: float | None = None,
-    w_y_m: float | None = None,
-    t_ahead: float | None = None,
-    preview_ok: bool = False,
-    allow_one_eye: bool = False,
     steer_filter: SteerFilter | None = None,
-    planner=None,
-    watch_plan: dict | None = None,
-    lookout=None,
-    z_fill: float | None = None,
-    w_fill: float | None = None,
-    left_wall_dist_m: float | None = None,
-    right_wall_dist_m: float | None = None,
     left_gap_px: int | None = None,
     right_gap_px: int | None = None,
     left_ahead_px: int | None = None,
     right_ahead_px: int | None = None,
     nadir_guard: NadirGuard | None = None,
-    nadir_primary: bool = True,
     dt: float = 0.008,
+    **_ignored,
 ) -> dict:
-    """Shoulder nadir only. Extra kwargs are accepted and ignored."""
-    del (
-        left_yellow,
-        right_yellow,
-        finish_red,
-        red_thresh,
-        mark_plan,
-        left_offset,
-        right_offset,
-        left_curve,
-        right_curve,
-        left_fill,
-        right_fill,
-        left_y_m,
-        right_y_m,
-        left_far_offset,
-        right_far_offset,
-        z_y_m,
-        w_y_m,
-        t_ahead,
-        preview_ok,
-        allow_one_eye,
-        planner,
-        watch_plan,
-        lookout,
-        z_fill,
-        w_fill,
-        left_wall_dist_m,
-        right_wall_dist_m,
-        nadir_primary,
-    )
+    """Shoulder nadir only. Extra args are ignored; they do not steer."""
     lost = left_gap_px is None and right_gap_px is None
     halt = None
     if nadir_guard is not None:
@@ -508,18 +416,8 @@ def lane_keep_command(
             "error": 0.0,
             "steer": 0.0,
             "reason": f"nadir — {halt.get('reason') or 'stop'}",
-            "remaining_m": None,
             "phase": "nadir_stop",
             "error_source": "nadir",
-            "left_pressure": 0.0,
-            "right_pressure": 0.0,
-            "metric_ct": None,
-            "metric_active": False,
-            "preview_ok": False,
-            "err_ahead": None,
-            "t_ahead": None,
-            "plan_mode": None,
-            "plan_rate": None,
         }
     last = None if nadir_guard is None else nadir_guard.last_err
     raw, err_px = steer_from_nadir_gaps(
@@ -537,35 +435,19 @@ def lane_keep_command(
         raw = 0.0
     steer = steer_filter.step(raw, dt) if steer_filter is not None else raw
     left, right = wheels_from_steer(float(steer), cruise=cruise, k_steer=k_steer)
-    left_p = 0.0
-    right_p = 0.0
-    if left_gap_px is not None:
-        left_p = max(0.0, (NADIR_BASE_L_PX - float(left_gap_px)) / 20.0)
-    if right_gap_px is not None:
-        right_p = max(0.0, (NADIR_BASE_R_PX - float(right_gap_px)) / 20.0)
     return {
         "left": round(left, 3),
         "right": round(right, 3),
         "brake": False,
         "error": round(float(steer), 4),
         "steer": round(float(steer), 4),
-        "left_pressure": round(float(left_p), 4),
-        "right_pressure": round(float(right_p), 4),
         "reason": "nadir keep",
-        "remaining_m": None,
         "phase": "seek",
-        "plan_mode": None,
-        "plan_rate": None,
-        "preview_ok": False,
-        "err_ahead": None,
-        "t_ahead": None,
-        "metric_ct": None,
-        "metric_active": False,
         "error_source": "nadir",
     }
 
 
-# --- boot helpers (aim / interlock). Not on the wheel. ---
+# --- Unprojection for the 20 cm shove probe. Not on the wheel. ---
 
 
 def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
@@ -587,12 +469,6 @@ def _norm(v: tuple[float, float, float]) -> tuple[float, float, float] | None:
     return (v[0] / n, v[1] / n, v[2] / n)
 
 
-def _sub(
-    a: tuple[float, float, float], b: tuple[float, float, float]
-) -> tuple[float, float, float]:
-    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
-
-
 def apply_sf_rotation(
     rot: tuple[float, float, float, float],
     vec: tuple[float, float, float],
@@ -610,182 +486,16 @@ def apply_sf_rotation(
     )
 
 
-def rotation_matrix_to_sf(columns_xyz: tuple) -> tuple[float, float, float, float]:
-    x, y, z = columns_xyz
-    r00, r01, r02 = x[0], y[0], z[0]
-    r10, r11, r12 = x[1], y[1], z[1]
-    r20, r21, r22 = x[2], y[2], z[2]
-    trace = r00 + r11 + r22
-    cos_a = max(-1.0, min(1.0, (trace - 1.0) * 0.5))
-    angle = math.acos(cos_a)
-    if angle < 1e-8:
-        return (0.0, 1.0, 0.0, 0.0)
-    ax = r21 - r12
-    ay = r02 - r20
-    az = r10 - r01
-    axis = _norm((ax, ay, az))
-    if axis is None:
-        return (0.0, 1.0, 0.0, math.pi)
-    return (axis[0], axis[1], axis[2], angle)
-
-
-def _basis_from_z(
-    z_axis: tuple[float, float, float],
-    up: tuple[float, float, float],
-) -> tuple | None:
-    z = _norm(z_axis)
-    if z is None:
-        return None
-    up_n = _norm(up) or (0.0, 0.0, 1.0)
-    if abs(_dot(z, up_n)) > 0.98:
-        up_n = (1.0, 0.0, 0.0) if abs(z[0]) < 0.9 else (0.0, 1.0, 0.0)
-    x = _norm(_cross(up_n, z))
-    if x is None:
-        x = _norm(_cross((0.0, 1.0, 0.0), z))
-    if x is None:
-        return None
-    y = _cross(z, x)
-    return (x, y, z)
-
-
-def look_at_sf_rotation(
-    cam_pos: tuple[float, float, float],
-    target_pos: tuple[float, float, float],
-    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
-) -> tuple[float, float, float, float]:
-    z_axis = _sub(cam_pos, target_pos)
-    basis = _basis_from_z(z_axis, up)
-    if basis is None:
-        return (0.0, 1.0, 0.0, 0.0)
-    return rotation_matrix_to_sf(basis)
-
-
-def beam_sf_rotation(
-    from_pos: tuple[float, float, float],
-    to_pos: tuple[float, float, float],
-) -> tuple[float, float, float, float]:
-    z_axis = _sub(to_pos, from_pos)
-    basis = _basis_from_z(z_axis, (0.0, 1.0, 0.0))
-    if basis is None:
-        return (0.0, 1.0, 0.0, 0.0)
-    return rotation_matrix_to_sf(basis)
-
-
-def camera_fov_pyramid(
-    cam_pos: tuple[float, float, float],
-    cam_rot: tuple[float, float, float, float],
-    fov_rad: float,
-    width: int,
-    height: int,
-    dist_m: float,
-) -> list[tuple[float, float, float]]:
-    aspect = float(max(1, int(width))) / float(max(1, int(height)))
-    half_v = 0.5 * float(fov_rad)
-    half_h = math.atan(math.tan(half_v) * aspect)
-    dist = max(0.1, float(dist_m))
-    corners = (
-        (math.tan(half_h), math.tan(half_v), -1.0),
-        (-math.tan(half_h), math.tan(half_v), -1.0),
-        (-math.tan(half_h), -math.tan(half_v), -1.0),
-        (math.tan(half_h), -math.tan(half_v), -1.0),
-    )
-    pts: list[tuple[float, float, float]] = [
-        (float(cam_pos[0]), float(cam_pos[1]), float(cam_pos[2]))
-    ]
-    for c in corners:
-        n = _norm(c)
-        if n is None:
-            continue
-        w = apply_sf_rotation(cam_rot, n)
-        pts.append(
-            (
-                cam_pos[0] + w[0] * dist,
-                cam_pos[1] + w[1] * dist,
-                cam_pos[2] + w[2] * dist,
-            )
-        )
-    return pts
-
-
-def roll_camera_sf(
-    rot: tuple[float, float, float, float],
-    angle_rad: float,
-) -> tuple[float, float, float, float]:
-    local = (0.0, 0.0, 1.0, float(angle_rad))
-    x = apply_sf_rotation(rot, apply_sf_rotation(local, (1.0, 0.0, 0.0)))
-    y = apply_sf_rotation(rot, apply_sf_rotation(local, (0.0, 1.0, 0.0)))
-    z = apply_sf_rotation(rot, apply_sf_rotation(local, (0.0, 0.0, 1.0)))
-    return rotation_matrix_to_sf((x, y, z))
-
-
-def rotate_bgra_90_cw(
-    image: bytes | bytearray, width: int, height: int
-) -> tuple[bytearray, int, int]:
-    w = int(width)
-    h = int(height)
-    nw, nh = h, w
-    src = memoryview(image)
-    out = bytearray(nw * nh * 4)
-    for r in range(h):
-        for c in range(w):
-            nc = h - 1 - r
-            nr = c
-            s = (r * w + c) * 4
-            d = (nr * nw + nc) * 4
-            if s + 4 <= len(src) and d + 4 <= len(out):
-                out[d : d + 4] = src[s : s + 4]
-    return out, nw, nh
-
-
-def rgb_distance(
-    a: tuple[float, float, float], b: tuple[float, float, float]
-) -> float:
-    return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
-
-
-def classify_view(
-    rgb: tuple[float, float, float],
-    *,
-    yellow: float | None = None,
-    red: float | None = None,
-) -> str:
-    r, g, b = rgb
-    red_v = red_score(rgb) if red is None else float(red)
-    yellow_v = yellow_score(rgb) if yellow is None else float(yellow)
-    if red_v >= 0.28:
-        return "red"
-    if yellow_v >= 0.15:
-        return "yellow"
-    d_sky = rgb_distance(rgb, SKY_RGB)
-    d_floor = rgb_distance(rgb, FLOOR_RGB)
-    if d_sky < 0.08 and d_sky <= d_floor:
-        return "sky"
-    if d_floor < 0.18:
-        return "ground"
-    if b > 0.65 and b >= r - 0.02 and b >= g - 0.02:
-        return "sky"
-    return "ground"
-
-
-def ground_hit_ahead_m(
-    cam_pos: tuple[float, float, float],
-    target_pos: tuple[float, float, float],
-    floor_z: float = 0.0,
-) -> float:
-    dx = target_pos[0] - cam_pos[0]
-    dz = target_pos[2] - cam_pos[2]
-    if abs(dz) < 1e-9:
-        return max(0.0, float(target_pos[0]))
-    s = (floor_z - cam_pos[2]) / dz
-    if s < 0.0:
-        return 0.0
-    return max(0.0, cam_pos[0] + s * dx)
-
-
 def image_row_elevation_rad(row: float, height: int, fov_rad: float) -> float:
     h = max(1, int(height))
     ny = (float(row) + 0.5) / h
     return (0.5 - ny) * float(fov_rad)
+
+
+def image_col_azimuth_rad(col: float, width: int, fov_rad: float) -> float:
+    w = max(1, int(width))
+    nx = (float(col) + 0.5) / w
+    return (nx - 0.5) * float(fov_rad)
 
 
 def image_row_to_ground_ahead_m(
@@ -829,219 +539,6 @@ def nadir_axle_row(
             best_err = err
             best_row = row
     return best_row
-
-
-def cruise_speed_m_s(wheel_rad_s: float = DEFAULT_CRUISE_RAD_S) -> float:
-    return abs(float(wheel_rad_s)) * WHEEL_RADIUS_M
-
-
-def stopping_distance_m(
-    speed_m_s: float, decel_m_s2: float = DEFAULT_ABS_DECEL_M_S2
-) -> float:
-    v = max(0.0, float(speed_m_s))
-    a = max(0.1, float(decel_m_s2))
-    return max(MIN_STOP_DISTANCE_M, (v * v) / (2.0 * a))
-
-
-def time_to_mark_s(look_ahead_m: float, speed_m_s: float) -> float | None:
-    v = float(speed_m_s)
-    if v <= 0.05:
-        return None
-    return max(0.0, float(look_ahead_m) / v)
-
-
-class MarkStopTracker:
-    """Red-mark tracker stub. Off the wheel this test."""
-
-    def reset(self) -> None:
-        return None
-
-    def step(self, *args, **kwargs):
-        return None
-
-
-class GapPlanner:
-    def reset(self) -> None:
-        return None
-
-    def step(self, raw_steer, dt=0.008, **kwargs):
-        return {"desired_steer": raw_steer, "mode": None, "rate": 0.0}
-
-
-class CorridorWatch:
-    def reset(self) -> None:
-        return None
-
-    def step(self, *args, **kwargs):
-        return None
-
-
-class ForecastLookout:
-    def reset(self) -> None:
-        return None
-
-    def step(self, *args, **kwargs):
-        return {"abort": False, "reason": ""}
-
-
-def yellow_horizon_row(height: int) -> int:
-    return max(1, (int(height) * 2) // 5)
-
-
-def yellow_look_band(height: int) -> tuple[int, int]:
-    h = int(height)
-    if h <= 20:
-        return 0, h
-    return max(1, h // 2), max(h // 2 + 1, (h * 13) // 16)
-
-
-def yellow_far_band(height: int) -> tuple[int, int]:
-    y0, y1 = yellow_look_band(height)
-    mid = (y0 + y1) // 2
-    return y0, mid
-
-
-def yellow_near_band(height: int) -> tuple[int, int]:
-    y0, y1 = yellow_look_band(height)
-    mid = (y0 + y1) // 2
-    return mid, y1
-
-
-def yellow_look_split(height: int) -> int:
-    y0, y1 = yellow_look_band(height)
-    return (y0 + y1) // 2
-
-
-def offset_to_column(offset: float, width: int) -> int:
-    w = max(1, int(width))
-    x = 0.5 + 0.5 * max(-1.0, min(1.0, float(offset)))
-    return max(0, min(w - 1, int(x * w)))
-
-
-def yellow_band_fill(*args, **kwargs) -> float:
-    return 0.0
-
-
-def yellow_near_fill(*args, **kwargs) -> float:
-    return 0.0
-
-
-def yellow_nearest_pixel(*args, **kwargs):
-    return None
-
-
-def yellow_ahead_pixel(*args, **kwargs):
-    return None
-
-
-def yellow_line_offset(*args, **kwargs):
-    return None
-
-
-def yellow_far_offset(*args, **kwargs):
-    return None
-
-
-def yellow_near_offset(*args, **kwargs):
-    return None
-
-
-def yellow_line_curve(*args, **kwargs):
-    return None
-
-
-def band_mean_rgb(*args, **kwargs) -> tuple[float, float, float]:
-    return (0.5, 0.5, 0.5)
-
-
-def band_sky_frac(*args, **kwargs) -> float:
-    return 0.0
-
-
-def preview_band_ok(*args, **kwargs) -> bool:
-    return False
-
-
-def dirt_band_ok(*args, **kwargs) -> bool:
-    return True
-
-
-def preview_look_ahead_m(*args, **kwargs):
-    return None
-
-
-def preview_ahead_weight(*args, **kwargs) -> float:
-    return 0.0
-
-
-def wall_pressure(*args, **kwargs) -> float:
-    return 0.0
-
-
-def steer_from_walls(*args, **kwargs):
-    return None
-
-
-def steer_from_offsets(*args, **kwargs):
-    return None
-
-
-def steer_from_ranges(*args, **kwargs):
-    return None
-
-
-def mean_rgb_bgra(image: bytes | bytearray, width: int, height: int) -> tuple[float, float, float]:
-    n = max(1, int(width) * int(height))
-    rs = gs = bs = 0
-    buf = memoryview(image)
-    pixels = min(n, len(buf) // 4)
-    for i in range(pixels):
-        o = i * 4
-        bs += buf[o]
-        gs += buf[o + 1]
-        rs += buf[o + 2]
-    if pixels <= 0:
-        return (0.0, 0.0, 0.0)
-    s = 1.0 / (255.0 * pixels)
-    return (rs * s, gs * s, bs * s)
-
-
-def peak_score_bgra(
-    image: bytes | bytearray,
-    width: int,
-    height: int,
-    score_fn,
-    *,
-    y0: int | None = None,
-    y1: int | None = None,
-) -> float:
-    return 0.0
-
-
-def metric_walls_plausible(*args, **kwargs) -> bool:
-    return False
-
-
-def metric_ct_from_walls(*args, **kwargs):
-    return None
-
-
-def line_wall_hit(*args, **kwargs):
-    return None
-
-
-def forecast_wall_hit(*args, **kwargs):
-    return None
-
-
-def forecast_gap_error(*args, **kwargs):
-    return None
-
-
-def image_col_azimuth_rad(col: float, width: int, fov_rad: float) -> float:
-    w = max(1, int(width))
-    nx = (float(col) + 0.5) / w
-    return (nx - 0.5) * float(fov_rad)
 
 
 def pixel_to_ground_m(
@@ -1195,10 +692,6 @@ def yellow_best_pixel(
     return best
 
 
-def yellow_wall_pixel(*args, **kwargs):
-    return None
-
-
 def nadir_lateral_m(
     image: bytes | bytearray,
     width: int,
@@ -1273,9 +766,3 @@ def nadir_lateral_m(
         return float(hit[1])
     ys.sort()
     return ys[len(ys) // 2]
-
-
-def wall_dist_from_lateral(y_m: float, *, side: str) -> float:
-    if str(side).lower().startswith("l"):
-        return float(PAINT_Y_LEFT_M) - float(y_m)
-    return float(y_m) - (-float(PAINT_Y_LEFT_M))

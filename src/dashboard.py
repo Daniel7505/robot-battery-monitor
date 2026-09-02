@@ -316,7 +316,7 @@ HTML_TEMPLATE = '''
     <div class="live-controls">
         <button type="button" id="pause-resume-btn" class="pause-btn live">⏸ Pause Live Updates</button>
         <button type="button" id="view-mode-btn" class="view-mode-btn">Show Engineering Details</button>
-        <button type="button" id="demo-btn" class="demo-btn">▶ Launch Demo</button>
+        <button type="button" id="demo-btn" class="demo-btn" title="PMS scripted loop — not the Webots S">▶ Launch Demo (PMS script)</button>
         <span class="pause-hint" id="pause-hint">Operator view — essentials only. Toggle for full PMS/LRU/forecast panels.</span>
     </div>
     <div id="pause-banner" class="pause-banner" style="display:none">
@@ -389,11 +389,11 @@ HTML_TEMPLATE = '''
             <button type="button" id="teleop-stop-btn" class="teleop-test-btn">■ Stop</button>
             <button type="button" id="lane-keep-btn" class="teleop-test-btn">◎ Lane keep</button>
         </div>
-        <p class="teleop-hint" id="lane-keep-status">Lane keep off — agent will use the yellow edges and brake on the red mark.</p>
+        <p class="teleop-hint" id="lane-keep-status">Lane keep off — shoulder nadir (32/29), GPS stop at 24.5 m.</p>
         <div class="steer-tool" id="steer-tool">
             <div class="steer-tool-title">Steer (virtual wheel) — intensity + GPS</div>
             <div class="steer-bar"><div class="steer-center"></div><div id="steer-needle" class="steer-needle" style="left:50%"></div></div>
-            <div id="steer-readout">steer — · oL — · oR — · pose —</div>
+            <div id="steer-readout">steer — · nL — · nR — · pose —</div>
             <div id="steer-action-log" class="steer-action-log">Waiting for lane-keep steer samples…</div>
         </div>
         <p class="teleop-hint">Webots steals WASD for the camera — use <strong>Arrow keys</strong> or <strong>I/J/K/L</strong> in the 3D view, or drive from here via the twin API.</p>
@@ -446,7 +446,7 @@ HTML_TEMPLATE = '''
             <button type="button" id="sim-start-btn">Start Loop</button>
             <button type="button" id="sim-stop-btn">Stop Loop</button>
         </div>
-        <div id="sim-meta" class="sim-meta">Standby → Wheeled Transit → Patrol → Manipulate → Idle</div>
+        <div id="sim-meta" class="sim-meta">PMS script (not Webots): Standby → Transit → Patrol → Manipulate → Idle</div>
         <div id="sim-timeline" class="sim-timeline"></div>
     </div>
 
@@ -508,7 +508,7 @@ HTML_TEMPLATE = '''
         <span id="twin-badge" class="twin-badge">—</span>
         <span id="twin-source-badge" class="twin-badge" style="margin-left:4px">—</span>
         <div id="twin-meta" style="color:#8ab;margin-top:6px;font-size:0.85em">—</div>
-        <div id="twin-flow" style="color:#678;font-size:0.8em;margin-top:4px">ButlerBot (wheeled): standby → drive → patrol → manipulate → idle</div>
+        <div id="twin-flow" style="color:#678;font-size:0.8em;margin-top:4px">Live eval is Webots (nadir S). Scripted PMS loop is engineering-only.</div>
         <div class="twin-endpoints">
             <code>POST /api/twin/telemetry</code> — ingest from Webots/PyBullet/custom script<br>
             <code>GET /api/twin/state</code> — export PMS state &nbsp;|&nbsp;
@@ -742,22 +742,22 @@ HTML_TEMPLATE = '''
         const lkStatus = document.getElementById('lane-keep-status');
         const lkBtn = document.getElementById('lane-keep-btn');
         if (lkStatus) {
-            const yL = tc && tc.left_yellow != null ? Number(tc.left_yellow).toFixed(2) : '—';
-            const yR = tc && tc.right_yellow != null ? Number(tc.right_yellow).toFixed(2) : '—';
-            const red = tc && tc.finish_red != null ? Number(tc.finish_red).toFixed(2) : '—';
+            const nL = tc && tc.nadir_gap_px != null ? String(tc.nadir_gap_px) : '—';
+            const nR = tc && tc.nadir_r_gap_px != null ? String(tc.nadir_r_gap_px) : '—';
+            const src = (tc && tc.error_source) || 'nadir';
             const armed = !!(tc && tc.lane_keep);
             laneKeepArmed = armed;
             if (lkBtn) lkBtn.innerText = armed ? '◎ Lane keep ON' : '◎ Lane keep';
             lkStatus.innerText = armed
-                ? `Lane keep ON — yellow L ${yL} / R ${yR} · red ${red}`
-                : `Lane keep off — yellow L ${yL} / R ${yR} · red ${red}`;
+                ? `Lane keep ON — nadir nL ${nL} / nR ${nR} px · src=${src}`
+                : `Lane keep off — nadir nL ${nL} / nR ${nR} px · src=${src}`;
         }
         const steer = tc && tc.steer != null ? Number(tc.steer) : null;
-        const oL = tc && tc.left_offset != null ? Number(tc.left_offset) : null;
-        const oR = tc && tc.right_offset != null ? Number(tc.right_offset) : null;
+        const nL = tc && tc.nadir_gap_px != null ? Number(tc.nadir_gap_px) : null;
+        const nR = tc && tc.nadir_r_gap_px != null ? Number(tc.nadir_r_gap_px) : null;
         const sTxt = (steer == null || Number.isNaN(steer)) ? '—' : steer.toFixed(3);
-        const lTxt = oL == null || Number.isNaN(oL) ? '—' : oL.toFixed(3);
-        const rTxt = oR == null || Number.isNaN(oR) ? '—' : oR.toFixed(3);
+        const lTxt = nL == null || Number.isNaN(nL) ? '—' : String(nL);
+        const rTxt = nR == null || Number.isNaN(nR) ? '—' : String(nR);
         const needle = document.getElementById('steer-needle');
         const readout = document.getElementById('steer-readout');
         if (needle && steer != null && !Number.isNaN(steer)) {
@@ -765,7 +765,7 @@ HTML_TEMPLATE = '''
             needle.style.left = pct + '%';
         }
         if (readout) {
-            readout.innerText = `steer ${sTxt} · oL ${lTxt} · oR ${rTxt} · pose ${pose}`;
+            readout.innerText = `steer ${sTxt} · nL ${lTxt} · nR ${rTxt} · pose ${pose}`;
         }
         if (tc && tc.lane_keep && steer != null && !Number.isNaN(steer) && tc.pose) {
             const key = sTxt + '|' + (tc.pose.x_m ?? '') + '|' + (tc.pose.y_m ?? '');
@@ -777,7 +777,7 @@ HTML_TEMPLATE = '''
                 steerActionLog.unshift(
                     `${ts}  ${side}  steer=${steer.toFixed(3)}  `
                     + `gps=(${Number(tc.pose.x_m || 0).toFixed(2)}, ${Number(tc.pose.y_m || 0).toFixed(2)})  `
-                    + `oL=${oL == null ? '—' : oL.toFixed(2)} oR=${oR == null ? '—' : oR.toFixed(2)}`
+                    + `nL=${nL == null ? '—' : nL} nR=${nR == null ? '—' : nR}`
                 );
                 if (steerActionLog.length > 40) steerActionLog.pop();
                 const logEl = document.getElementById('steer-action-log');
@@ -1096,7 +1096,7 @@ HTML_TEMPLATE = '''
                 if (data.ok) {
                     laneKeepArmed = next;
                     hint.innerText = next
-                        ? 'Lane keep armed — agent driving from yellow/red cameras'
+                        ? 'Lane keep armed — shoulder nadir on the wheel'
                         : 'Lane keep off';
                     const btn = document.getElementById('lane-keep-btn');
                     btn.innerText = next ? '◎ Lane keep ON' : '◎ Lane keep';

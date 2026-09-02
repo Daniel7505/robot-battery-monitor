@@ -906,56 +906,29 @@ class OnboardAgent:
         if not ctx.lane_keep_armed:
             return []
         sense = ctx.lane_sensors or {}
-        left_y = float(sense.get("left_yellow") or 0.0)
-        right_y = float(sense.get("right_yellow") or 0.0)
-        finish = float(sense.get("finish_red") or 0.0)
         steer = sense.get("steer")
-        o_l = sense.get("left_offset")
-        o_r = sense.get("right_offset")
         x_m = sense.get("x_m")
         y_m = sense.get("y_m")
         where = ""
         if x_m is not None and y_m is not None:
             where = f" @ ({float(x_m):.2f}, {float(y_m):.2f})"
         cmd = lane_keep_command(
-            left_y,
-            right_y,
-            finish,
             cruise=float(cfg.get("lane_keep_cruise", 5.5)),
             k_steer=float(cfg.get("lane_keep_k_steer", 2.4)),
-            red_thresh=float(cfg.get("lane_keep_red_thresh", 0.28)),
-            left_offset=None if o_l is None else float(o_l),
-            right_offset=None if o_r is None else float(o_r),
-            left_y_m=(
-                None
-                if sense.get("left_y_m") is None
-                else float(sense.get("left_y_m"))
-            ),
-            right_y_m=(
-                None
-                if sense.get("right_y_m") is None
-                else float(sense.get("right_y_m"))
-            ),
-            left_wall_dist_m=(
-                None
-                if sense.get("left_wall_dist_m") is None
-                else float(sense.get("left_wall_dist_m"))
-            ),
-            right_wall_dist_m=(
-                None
-                if sense.get("right_wall_dist_m") is None
-                else float(sense.get("right_wall_dist_m"))
-            ),
+            left_gap_px=sense.get("nadir_gap_px"),
+            right_gap_px=sense.get("nadir_r_gap_px"),
+            left_ahead_px=sense.get("nadir_ahead_px"),
+            right_ahead_px=sense.get("nadir_r_ahead_px"),
         )
         live = cmd.get("steer") if cmd.get("steer") is not None else steer
         if cmd["brake"]:
             why = str(cmd.get("reason") or "")
-            lost = "lost paint" in why
+            nadir_stop = "nadir" in why or "eyes gone" in why
             watched = "watch" in why
             if watched:
                 label = "geometry watch — stop"
-            elif lost:
-                label = "lost paint, stop"
+            elif nadir_stop:
+                label = "nadir stop"
             else:
                 label = "red mark, ABS"
             return [

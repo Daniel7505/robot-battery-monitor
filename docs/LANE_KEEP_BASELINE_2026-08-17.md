@@ -1,9 +1,13 @@
 # Lane-keep baselines (locked 2026-08-17)
 
-Daniel + Web: **freeze 128×128 as the working baseline.**  
-This file is the **drive scorecard** book. Product direction lives in [`NORTH_STAR.md`](NORTH_STAR.md) — lane-keep is the evaluation harness, not the end product.
+**Historical.** Picture-wins / LINE_CAM 128 scorecard. **Not** the live operator.
 
-## Working baseline — 128×128 (now)
+Live law (2026-09-02): two shoulder nadirs, fight 32/29 + ahead HOLD 32/26, cruise 5.5 (0.44 m/s), v-scale 2.10. Full S champ **3.2 cm**, parked on the red. World cameras besides those nadirs were removed 2026-09-02. See [`NORTH_STAR.md`](NORTH_STAR.md).
+
+Daniel + Web (then): freeze 128×128 as the working baseline.  
+This file is the **old drive scorecard** book. Product direction lives in [`NORTH_STAR.md`](NORTH_STAR.md).
+
+## Working baseline — 128×128 (then)
 
 What we run. First-lobe reliability over pure 5 cm share.
 

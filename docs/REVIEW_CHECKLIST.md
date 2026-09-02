@@ -191,6 +191,7 @@ No micro-opts unless correctness/demo reliability. Do not edit until ranked.
 | 2026-08-17 | Grok Build 4.6 + Grok Web + Daniel | A-winner freeze (`kahead=0.22`, release 4.0). Clock H/H2 (HUD every 4, Z/W every 8). I near-pref **reverted**. Closed-experiment log: `docs/LANE_KEEP_CLOSED_2026-08-17.md`. |
 | 2026-08-25 | Grok Build 4.6 + Daniel | Drawing-2 left nadir + 20 cm shove probe (`src/metric_probe.py`). LINE_CAM identity locked. Nadir **not on the wheel**. |
 | 2026-09-02 | Grok Build 4.6 + Daniel | Nadir-only `lane_keep.py`. Full S champ: max ct **3.2 cm** at 0.44 m/s, parked on red. v-scale 2.10. This S closed. |
+| 2026-09-02 | Grok Build 4.6 + Daniel | Choir cleanup: thin controller / `lane_keep` / HUD / eyes. Repeatable 3.2 cm ties. Unused LINE/SIDE/FINISH/Z/W + pucks removed from `butlerbot.wbt`. August 128 docs marked historical. |
 | _(template)_ | e.g. Grok 4.6 Build | e.g. Ranked audit; extracted X from dashboard |
 
 ---

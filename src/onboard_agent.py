@@ -930,7 +930,7 @@ class OnboardAgent:
             elif nadir_stop:
                 label = "nadir stop"
             else:
-                label = "red mark, ABS"
+                label = "lane-keep stop"
             return [
                 AgentRecommendation(
                     action="safety_alert",

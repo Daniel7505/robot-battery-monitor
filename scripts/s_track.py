@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 
 START_STRAIGHT_M = 3.0
-LOBE_M = 9.0
+LOBE_M = 5.0
 AMP_M = 1.0
 # −1 = first lobe goes south (−Y). Same difficulty, opposite of the scored S.
 SIGN = -1.0
@@ -18,7 +18,7 @@ FINISH_STRAIGHT_M = 3.5
 HALF_WIDTH_M = 0.65
 SEG_M = 0.38
 PAINT_Z = 0.008
-FINISH_X_M = START_STRAIGHT_M + 2 * LOBE_M + FINISH_STRAIGHT_M  # 24.5
+FINISH_X_M = START_STRAIGHT_M + 2 * LOBE_M + FINISH_STRAIGHT_M  # 16.5
 
 
 def centerline(x: float) -> tuple[float, float]:
@@ -108,8 +108,8 @@ def emit_vrml() -> str:
     chunks = [
         "# =============================================================================\n",
         "# Gentle S-curve track (visual only - no boundingObject)\n",
-        f"# Start (0,0)  first lobe SIGN={SIGN:g}  finish straight 21-{FINISH_X_M:g}\n",
-        f"# Amplitude {AMP_M:g} m  min radius ~4.1 m  last {FINISH_STRAIGHT_M:g} m straight for red-eye\n",
+        f"# Start (0,0)  first lobe SIGN={SIGN:g}  finish {FINISH_X_M:g}\n",
+        f"# Amplitude {AMP_M:g} m  min radius ~1.9 m  last {FINISH_STRAIGHT_M:g} m straight\n",
         "# Same yellow / red recipe as the old straight. Edges follow path normals.\n",
         "# =============================================================================\n\n",
         "# START line (green)\n",
@@ -128,7 +128,7 @@ def emit_vrml() -> str:
         chunks.append(_box(rx, ry, PAINT_Z, th, SEG_M, 0.06, 0.01, "yellow"))
         x += 0.34
     chunks.append("\n# Centerline ticks (human range posts)\n")
-    for tx in (3.0, 7.5, 12.0, 16.5, 21.0):
+    for tx in (3.0, 5.5, 8.0, 10.5, 13.0):
         y, th = centerline(tx)
         chunks.append(_box(tx, y, 0.01, th, 0.04, 0.45, 0.01, "tick"))
     return "".join(chunks)

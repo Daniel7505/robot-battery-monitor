@@ -19,8 +19,9 @@ This is the orchestration hub for one telemetry tick (default TICK_SECONDS = 3s)
 
 When a Webots (or other) digital twin is active, channel draws and optionally
 battery SOC come from the twin PowerFeed; the internal SimulationDriver is
-paused for task advancement. When the twin is idle, SimulationDriver drives
-the Idle → Transit → Patrol → High Load mission loop.
+paused for task advancement. When the twin is idle, SimulationDriver is the
+**PMS script** (Idle → Transit → Patrol → High Load) for the dashboard —
+not the Webots robot. Eval is the S in Webots.
 
 Thread safety
 -------------
@@ -431,12 +432,14 @@ class ROS2BatterySource(RealHardwareSource):
                 "gait": gait,
                 "source": tel.source,
                 "lane_sensors": {
-                    "left_yellow": sensors.get("left_yellow"),
-                    "right_yellow": sensors.get("right_yellow"),
-                    "left_offset": sensors.get("left_offset"),
-                    "right_offset": sensors.get("right_offset"),
+                    "nadir_gap_px": sensors.get("nadir_gap_px"),
+                    "nadir_r_gap_px": sensors.get("nadir_r_gap_px"),
+                    "nadir_ahead_px": sensors.get("nadir_ahead_px"),
+                    "nadir_r_ahead_px": sensors.get("nadir_r_ahead_px"),
+                    "nadir_lateral_m": sensors.get("nadir_lateral_m"),
+                    "nadir_r_lateral_m": sensors.get("nadir_r_lateral_m"),
                     "steer": sensors.get("steer"),
-                    "finish_red": sensors.get("finish_red"),
+                    "error_source": sensors.get("error_source"),
                     "x_m": pose.get("x_m"),
                     "y_m": pose.get("y_m"),
                 },

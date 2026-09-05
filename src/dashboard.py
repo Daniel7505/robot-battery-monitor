@@ -595,12 +595,10 @@ HTML_TEMPLATE = '''
         <tr><th>Channel</th><th>Current Draw</th><th>Battery %</th></tr>
     </table>
 
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <script>
-    const socket = io({
-        transports: ['websocket', 'polling'],
-        reconnection: true
-    });
+    // Do not put cdn.socket.io in front of this script. A blocked CDN
+    // froze the whole page on AWAITING TWIN. Live paint is GET /api/live.
+    const socket = { on() {}, emit() {} };
 
     let analyticsHours = 1;
     let lastActionLogSig = '';
@@ -1134,9 +1132,9 @@ HTML_TEMPLATE = '''
         }
     });
 
-    socket.on('battery_update', function(data) {
-        if (livePaused) return;
-        console.log('[WebSocket] Received:', data);
+    function applyLivePayload(data) {
+        if (!data || livePaused) return;
+        console.log('[live]', data.timestamp, data.twin && data.twin.active_source);
 
         // Update Main Battery
         document.getElementById('main-battery').innerText = data.main_battery || '--';
@@ -1605,9 +1603,25 @@ HTML_TEMPLATE = '''
                 `;
             });
         }
-    });
+    }
 
+    socket.on('battery_update', function(data) {
+        applyLivePayload(data);
+    });
     socket.on('connect_error', (err) => console.error('Connection error:', err));
+
+    function pullLive() {
+        if (livePaused) return;
+        fetch('/api/live')
+            .then(r => r.json())
+            .then(function (data) {
+                try { applyLivePayload(data); }
+                catch (err) { console.warn('live paint', err); }
+            })
+            .catch(err => console.warn('live poll failed', err));
+    }
+    pullLive();
+    setInterval(pullLive, 1000);
 </script>
 </body>
 </html>
@@ -1681,7 +1695,7 @@ def api_demo_launch_webots():
 
 @app.route('/api/simulation/<action>', methods=['POST'])
 def api_simulation(action):
-    """Start/stop the internal mission script driver (not Webots itself).
+    """Start/stop the PMS mission script (Idle→Patrol). Not the Webots S.
 
     ``action`` is ``start`` or ``stop``. Only available when the hardware
     backend exposes simulation controls.
@@ -1861,6 +1875,12 @@ def api_measurements_create():
     if new_id is None:
         return jsonify({"ok": False, "error": "DB write failed"}), 500
     return jsonify({"ok": True, "id": new_id})
+
+
+@app.route('/api/live')
+def api_live():
+    """Same envelope as SocketIO ``battery_update``. HTTP poll fallback."""
+    return jsonify(_build_battery_payload())
 
 
 @app.route('/api/data')
@@ -2068,7 +2088,10 @@ def _build_battery_payload():
     return {
         "main_battery": 85,
         "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "channels": []
+        "channels": [],
+        "twin": {},
+        "twin_control": {},
+        "agent": {},
     }
 
 

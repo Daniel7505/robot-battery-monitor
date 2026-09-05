@@ -1,6 +1,6 @@
 """Nadir-only lane keep.
 
-Shoulder cameras looking down. Pixel gap vs 32/29, ahead HOLD vs 32/26,
+Shoulder cameras looking down. Pixel gap vs 33/33 (128×128 remount), ahead HOLD vs 33/33,
 6 cm stripe scale, v-scaled P/HOLD, steer.
 
 Choir (picture-wins, wall bounce, LINE_CAM, forecast, planner stubs) is
@@ -28,16 +28,18 @@ WHEEL_Y_LEFT_M = 0.17
 PAINT_Y_LEFT_M = 0.65
 PAINT_HALF_W_M = 0.03
 
+# Unprojection / 20 cm shove still uses the old look-down shoulder.
+# Live left eye pose is in butlerbot.wbt (Daniel 2026-09-04 remount).
 NADIR_MOUNT_POS = (0.01042, 0.41808, 0.72919)
 NADIR_MOUNT_ROT = (0.0, 0.0, 1.0, -math.pi / 2.0)
 NADIR_IMAGE = 64
 NADIR_FOV_RAD = 1.2
 NADIR_AXLE_AHEAD_M = 0.0
 
-NADIR_BASE_L_PX = 32
-NADIR_BASE_R_PX = 29
-NADIR_AHEAD_L_PX = 32
-NADIR_AHEAD_R_PX = 26
+NADIR_BASE_L_PX = 33
+NADIR_BASE_R_PX = 33
+NADIR_AHEAD_L_PX = 33
+NADIR_AHEAD_R_PX = 33
 NADIR_PX_DEADBAND = 2
 NADIR_AHEAD_DEADBAND = 1
 NADIR_K_PX = 0.03
@@ -48,10 +50,10 @@ NADIR_V_REF_M_S = 0.21
 NADIR_V_SCALE_MAX = 2.2
 
 _TRACK_START_M = 3.0
-_TRACK_LOBE_M = 9.0
+_TRACK_LOBE_M = 5.0
 _TRACK_AMP_M = 1.0
 _TRACK_SIGN = -1.0
-FINISH_X_M = 24.5
+FINISH_X_M = 16.5
 
 
 def track_centerline(x: float) -> tuple[float, float]:
@@ -135,7 +137,7 @@ def steer_from_nadir_gaps(
     ahead_r: int = NADIR_AHEAD_R_PX,
     cruise: float | None = None,
 ) -> tuple[float | None, float]:
-    """Fight axle gaps back to 32/29. Forward rows add HOLD. +steer = yaw right."""
+    """Fight axle gaps back to left/right bases. Forward rows add HOLD. +steer = yaw right."""
     err = _nadir_fan_err(
         left_px, right_px, base_l=base_l, base_r=base_r, deadband=NADIR_PX_DEADBAND
     )
@@ -301,6 +303,29 @@ def _longest_run(cols: list[int]) -> tuple[int, int] | None:
     return best
 
 
+def stripe_m_per_px(stripe_px: float) -> float | None:
+    """Local stretch: 6 cm of tape / pixels on this row.
+
+    Pan the camera up-track and the same tape is fewer pixels at the top
+    of the frame. ``m_per_px`` grows with row. Do not reuse the axle
+    stripe for the far band.
+    """
+    s = float(stripe_px)
+    if s < 1.0:
+        return None
+    return STRIPE_W_M / s
+
+
+def _median_int(vals: list[int]) -> int:
+    vals = sorted(vals)
+    return int(vals[len(vals) // 2])
+
+
+def _median_float(vals: list[float]) -> float:
+    vals = sorted(vals)
+    return float(vals[len(vals) // 2])
+
+
 def nadir_wheel_to_tape(
     image: bytes | bytearray,
     width: int,
@@ -309,7 +334,12 @@ def nadir_wheel_to_tape(
     side: str = "left",
     thresh: float = 0.22,
 ) -> dict | None:
-    """Yellow ribbon = 6 cm. Gap from inner tape edge to that side's wheel."""
+    """Yellow ribbon = 6 cm. Gap from inner tape edge to that side's wheel.
+
+    Each row uses its own stripe width as the scale. Pixel counts still
+    steer (left/right bases). Per-row meters are for ahead speed later — they do
+    not vote on the wheel.
+    """
     w = int(width)
     h = int(height)
     if w < 4 or h < 4 or not image:
@@ -319,6 +349,11 @@ def nadir_wheel_to_tape(
     ahead_gaps: list[int] = []
     axle_gaps: list[int] = []
     stripes: list[int] = []
+    ahead_stripes: list[int] = []
+    axle_stripes: list[int] = []
+    gap_m_all: list[float] = []
+    ahead_m: list[float] = []
+    axle_m: list[float] = []
     tape_cols: list[int] = []
     wheel_cols: list[int] = []
     for row in range(h):
@@ -336,7 +371,10 @@ def nadir_wheel_to_tape(
         if run is None:
             continue
         stripe = run[1] - run[0] + 1
-        if stripe < 2 or stripe > 12:
+        if stripe < 2 or stripe > 24:
+            continue
+        scale = stripe_m_per_px(stripe)
+        if scale is None:
             continue
         if right:
             dark = [c for c in dcols if c < run[0] - 1]
@@ -356,35 +394,45 @@ def nadir_wheel_to_tape(
             gap = wheel - tape_inner
         if gap < 2:
             continue
+        gm = float(gap) * scale
         gaps.append(gap)
         stripes.append(stripe)
+        gap_m_all.append(gm)
         tape_cols.append(tape_inner)
         wheel_cols.append(wheel)
         if row < h // 2:
             ahead_gaps.append(gap)
+            ahead_stripes.append(stripe)
+            ahead_m.append(gm)
         if (h // 2 - 6) <= row < (h // 2 + 6):
             axle_gaps.append(gap)
+            axle_stripes.append(stripe)
+            axle_m.append(gm)
     if not gaps or not stripes:
         return None
-    gaps.sort()
-    stripes.sort()
-    gap_px = gaps[len(gaps) // 2]
-    stripe_px = stripes[len(stripes) // 2]
+    gap_px = _median_int(gaps)
+    stripe_px = _median_int(stripes)
     if stripe_px < 1:
         return None
-    m = float(gap_px) * (STRIPE_W_M / float(stripe_px))
-    tape_cols.sort()
-    wheel_cols.sort()
-    ahead_gaps.sort()
-    axle_gaps.sort()
+    m = _median_float(axle_m) if axle_m else _median_float(gap_m_all)
     return {
         "gap_px": int(gap_px),
-        "gap_ahead_px": None if not ahead_gaps else int(ahead_gaps[len(ahead_gaps) // 2]),
-        "gap_axle_px": None if not axle_gaps else int(axle_gaps[len(axle_gaps) // 2]),
+        "gap_ahead_px": None if not ahead_gaps else _median_int(ahead_gaps),
+        "gap_axle_px": None if not axle_gaps else _median_int(axle_gaps),
         "stripe_px": int(stripe_px),
+        "stripe_px_ahead": None if not ahead_stripes else _median_int(ahead_stripes),
+        "stripe_px_axle": None if not axle_stripes else _median_int(axle_stripes),
         "m": m,
-        "tape_col": int(tape_cols[len(tape_cols) // 2]),
-        "wheel_col": int(wheel_cols[len(wheel_cols) // 2]),
+        "m_ahead": None if not ahead_m else _median_float(ahead_m),
+        "m_axle": None if not axle_m else _median_float(axle_m),
+        "m_per_px_ahead": (
+            None if not ahead_stripes else stripe_m_per_px(_median_int(ahead_stripes))
+        ),
+        "m_per_px_axle": (
+            None if not axle_stripes else stripe_m_per_px(_median_int(axle_stripes))
+        ),
+        "tape_col": _median_int(tape_cols),
+        "wheel_col": _median_int(wheel_cols),
     }
 
 

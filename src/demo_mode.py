@@ -1,11 +1,9 @@
 """
-One-click demo mode — UI highlight state + optional Webots launch on host.
+Dashboard demo flag + optional host Webots launch.
 
-Role
-----
-Gives the dashboard a "demo is active" flag (timestamps, messages) and, when
-running on Windows outside Docker, can spawn ``scripts/launch_webots_twin.ps1``
-to open the ButlerBot Webots world pointed at this dashboard URL.
+Not a second robot. The button is labeled **PMS script / Launch Demo**.
+Webots is the eval; this module only sets a UI flag and may spawn
+``scripts/launch_webots_twin.ps1`` on Windows outside Docker.
 
 Invariants
 ----------

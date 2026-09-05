@@ -3,16 +3,8 @@ import time
 from src.twin import DigitalTwinBridge, get_twin_bridge, reset_twin_bridge
 from src.twin.butlerbot import BUTLERBOT_WALKING_FLOW, butlerbot_telemetry_step
 from src.twin.adapters import get_adapter
-from src.digital_twin import DigitalTwinInterface, get_twin_interface, reset_twin_interface
 from src.hardware import reset_hardware_source
 from src.hardware_ros2 import ROS2BatterySource
-
-
-def test_backward_compat_aliases():
-    reset_twin_bridge()
-    assert DigitalTwinInterface is DigitalTwinBridge
-    assert get_twin_interface() is get_twin_bridge()
-    reset_twin_interface()
 
 
 def test_bridge_schema_documents_contract():

@@ -1,6 +1,10 @@
 """20 cm shove probe: old LINE_CAM proxy is dead; drawing-2 nadir is not."""
 
 from src.lane_keep import (
+    NADIR_AHEAD_L_PX,
+    NADIR_AHEAD_R_PX,
+    NADIR_BASE_L_PX,
+    NADIR_BASE_R_PX,
     NADIR_FOV_RAD,
     NADIR_MOUNT_POS,
     NADIR_MOUNT_ROT,
@@ -122,10 +126,10 @@ def test_right_yellow_ruler_counts_wheel_left_of_tape():
     assert abs(hit["m"] - (32 * 0.06 / 4)) < 1e-9
 
 
-def test_nadir_fan_fights_32_and_29_not_the_average():
-    s0, err0 = steer_from_nadir_gaps(32, 29)
+def test_nadir_fan_fights_bases_not_the_average():
+    s0, err0 = steer_from_nadir_gaps(NADIR_BASE_L_PX, NADIR_BASE_R_PX)
     assert s0 == 0.0 and err0 == 0.0
-    s_right, err_r = steer_from_nadir_gaps(19, 42)
+    s_right, err_r = steer_from_nadir_gaps(10, 42)
     assert s_right is not None and s_right > 0.1
     s_left, err_l = steer_from_nadir_gaps(45, 16)
     assert s_left is not None and s_left < -0.1
@@ -133,11 +137,19 @@ def test_nadir_fan_fights_32_and_29_not_the_average():
 
 
 def test_nadir_hold_yaws_when_axle_is_still_centered():
-    """Forward-row walk must command before the axle gap leaves 32/29."""
-    s0, err0 = steer_from_nadir_gaps(32, 29, left_ahead_px=32, right_ahead_px=26)
+    """Forward-row walk must command before the axle gap leaves the bases."""
+    s0, err0 = steer_from_nadir_gaps(
+        NADIR_BASE_L_PX,
+        NADIR_BASE_R_PX,
+        left_ahead_px=NADIR_AHEAD_L_PX,
+        right_ahead_px=NADIR_AHEAD_R_PX,
+    )
     assert s0 == 0.0 and err0 == 0.0
     s_hold, err = steer_from_nadir_gaps(
-        32, 29, left_ahead_px=24, right_ahead_px=34
+        NADIR_BASE_L_PX,
+        NADIR_BASE_R_PX,
+        left_ahead_px=NADIR_AHEAD_L_PX - 8,
+        right_ahead_px=NADIR_AHEAD_R_PX + 8,
     )
     assert err == 0.0
     assert s_hold is not None and s_hold > 0.1
@@ -145,8 +157,8 @@ def test_nadir_hold_yaws_when_axle_is_still_centered():
 
 def test_nadir_fan_scales_p_with_cruise_not_d():
     """Same pixel error: faster cruise → stronger P, still under the cap."""
-    slow, _ = steer_from_nadir_gaps(24, 37, cruise=2.5)
-    fast, _ = steer_from_nadir_gaps(24, 37, cruise=5.5)
+    slow, _ = steer_from_nadir_gaps(10, 37, cruise=2.5)
+    fast, _ = steer_from_nadir_gaps(10, 37, cruise=5.5)
     assert slow is not None and fast is not None
     assert fast > slow
     assert fast <= 0.55

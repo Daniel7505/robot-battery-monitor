@@ -1,5 +1,8 @@
 """
-ButlerBot simulation driver — scripted mission loop for internal (non-twin) runs.
+PMS scripted mission loop for internal (no-twin) dashboard runs.
+
+Not the Webots robot. Eval is the S in Webots. Dashboard **Start Loop**
+is this script. Parked random-channel sim: ``archives/simulator_legacy_2026-09-04.py``.
 
 Role in the system
 ------------------

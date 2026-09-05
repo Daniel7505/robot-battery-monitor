@@ -393,11 +393,12 @@ _CAM_ORIENTATION = (-0.001250, 0.999989, 0.004550, 0.536256)
 _NADIR_PLACE_CHECK = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "NADIR_PLACE_CHECK"
 )
-_NADIR_STEER_ON = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "NADIR_STEER_ON"
-)
-_FINISH_X_M = 24.5
+_FINISH_X_M = 16.5
 _NADIR_CRUISE = 5.5
+# Physics / robot.step stay at basicTimeStep (8 ms). Nadir Camera.enable
+# is the OpenGL pass. Fair trade: 128×128 @ 320 ms (~3 Hz, ~14 cm at
+# 0.44 m/s). Harvest only on a new frame. Next sitting: 640 ms.
+_NADIR_CAM_PERIOD_MS = 320
 _NADIR_SNAP_DIR = os.path.join(
     os.path.expanduser("~"), "OneDrive", "Desktop", "Grok Workspace"
 )
@@ -493,6 +494,8 @@ def _init_devices(
         hud = None
 
     cams: dict[str, Camera | None] = {}
+    cam_period = max(int(timestep), int(_NADIR_CAM_PERIOD_MS))
+    cam_period = int(round(cam_period / timestep) * timestep)
     for name in ("nadir_left", "nadir_right"):
         cam = None
         try:
@@ -500,13 +503,17 @@ def _init_devices(
         except Exception:
             cam = None
         if cam is not None:
-            cam.enable(timestep)
+            cam.enable(cam_period)
         cams[name] = cam
         if cam is None:
             print(f"WARNING: camera '{name}' not found — lane-keep eye missing")
-    print("NADIR EYES ONLY — line/finish/forecast/sidelook not enabled")
+    print(
+        "NADIR EYES ONLY — line/finish/forecast/sidelook not enabled. "
+        f"Camera {128}×{128} sample {cam_period} ms, physics {timestep} ms, "
+        f"harvest every {max(1, cam_period // timestep)} ticks."
+    )
 
-    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams
+    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period
 
 
 def _empty_lane_eyes() -> dict:
@@ -560,7 +567,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
-    motors, sensors, gps, gps_head, imu, keyboard, hud, cams = _init_devices(robot, timestep)
+    motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period = _init_devices(
+        robot, timestep
+    )
+    harvest_every = max(1, int(cam_period) // max(1, int(timestep)))
+    last_harvest_tick = -harvest_every
     speed_estimator = SpeedEstimator()
     key_tracker = KeyTracker()
     abs_brake = AbsBrakeController()
@@ -620,7 +631,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     steer_filter = None if steer_filter_cls is None else steer_filter_cls()
     nadir_guard = None if nadir_guard_cls is None else nadir_guard_cls()
     eye_huds = _label_eye_huds(robot, cams)
-    nadir_steer_wanted = os.path.isfile(_NADIR_STEER_ON)
     nadir_lobe_done = False
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
@@ -636,14 +646,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
-            if tick == 5 and nadir_steer_wanted and not lane_keep_on:
+            if tick == 5 and not lane_keep_on:
                 lane_keep_on = True
                 v_scale = max(1.0, min(2.2, (_NADIR_CRUISE * 0.08) / 0.21))
                 print(
-                    "NADIR STEER ON — pixel fan vs 32/29, "
+                    "NADIR STEER ON — pixel fan vs 33/33, "
                     f"cruise={_NADIR_CRUISE} rad/s ({_NADIR_CRUISE * 0.08:.2f} m/s), "
                     f"v-scale={v_scale:.2f}, "
-                    f"full S to x={_FINISH_X_M} m. Two shoulder cams on the wheel."
+                    f"full S to x={_FINISH_X_M} m GPS. Two shoulder cams on the wheel."
                 )
             if tick == 25 and os.path.isfile(_NADIR_PLACE_CHECK):
                 cam = cams.get("nadir_left")
@@ -786,7 +796,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     got_new_stop = stop_epoch > last_stop_epoch
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
-                    if nadir_steer_wanted and not nadir_lobe_done:
+                    if not nadir_lobe_done:
                         lane_keep_on = True
                     else:
                         lane_keep_on = bool(api_cmd.get("lane_keep"))
@@ -858,8 +868,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             if api_source != "stop":
                                 last_api_sig = ""
 
-            if nadir_fn is not None:
+            harvest_now = tick - last_harvest_tick >= harvest_every
+            if nadir_fn is not None and harvest_now:
                 lane_eyes = _harvest_nadir(cams, nadir_fn, gps_xy, prev_yaw)
+                last_harvest_tick = tick
                 if not nadir_logged and (
                     lane_eyes.get("nadir_gap_px") is not None
                     or lane_eyes.get("nadir_r_gap_px") is not None
@@ -898,16 +910,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     nadir_primary=True,
                     dt=dt,
                 )
-                if (
-                    nadir_steer_wanted
-                    and gps_xy is not None
-                    and float(gps_xy[0]) >= _FINISH_X_M
-                ):
+                if gps_xy is not None and float(gps_xy[0]) >= _FINISH_X_M:
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
                         print(
                             f"FULL S DONE at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
-                            "stopping. Nadir was on the wheel."
+                            "GPS finish, not a red camera. Nadir was on the wheel."
                         )
                     lane_keep_on = False
                     lk = {
@@ -971,7 +979,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"phase={lk.get('phase')}"
                         )
 
-            if tick % 4 == 0:
+            if harvest_now:
                 _paint_eye_huds(eye_huds, lane_eyes)
 
             if stop_pressed:

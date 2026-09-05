@@ -107,10 +107,22 @@ def test_broadcast_payload_matches_frontend_expectations(clean_database):
 
     # channels should be a list
     assert isinstance(payload["channels"], list)
-
-    # If there are channels, each should have these keys
     for ch in payload["channels"]:
         assert "id" in ch
         assert "name" in ch
         assert "draw" in ch
         assert "battery" in ch
+
+
+def test_api_live_matches_battery_payload(clean_database):
+    from src.dashboard import app
+
+    with app.test_client() as client:
+        resp = client.get("/api/live")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "main_battery" in data
+    assert "timestamp" in data
+    assert "channels" in data
+    assert "twin_control" in data
+    assert isinstance(data["channels"], list)

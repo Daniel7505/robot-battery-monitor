@@ -192,6 +192,11 @@ def _paint_eye_huds(handles: list[dict], lane_eyes: dict) -> None:
             disp.drawText("—" if px is None else f"{int(px)} px", 2, 16)
             disp.drawText("—" if ny is None else f"{float(ny)*100:.0f} cm", 2, 31)
             cam_w = 64
+            if cam is not None:
+                try:
+                    cam_w = max(1, int(cam.getWidth()))
+                except Exception:
+                    cam_w = 64
             tape = lane_eyes.get("nadir_r_tape_col" if right else "nadir_tape_col")
             wheel = lane_eyes.get("nadir_r_wheel_col" if right else "nadir_wheel_col")
             if tape is not None:

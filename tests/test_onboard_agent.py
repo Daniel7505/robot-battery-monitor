@@ -279,7 +279,7 @@ def test_lane_keep_rule_logs_when_armed():
             "gait": "drive",
             "source": "webots",
             "lane_keep": True,
-            "lane_sensors": {"left_yellow": 0.6, "right_yellow": 0.0, "finish_red": 0.0},
+            "lane_sensors": {"nadir_gap_px": 32, "nadir_r_gap_px": 29},
         },
     )
     assert "lane_keep" in result.rules_fired
@@ -300,7 +300,7 @@ def test_lane_keep_nadir_stop_is_not_red():
             "phase": "teleop",
             "source": "webots",
             "lane_keep": True,
-            "lane_sensors": {"left_yellow": 0.0, "right_yellow": 0.0, "finish_red": 0.0},
+            "lane_sensors": {"nadir_gap_px": None, "nadir_r_gap_px": None},
         },
     )
     msgs = " ".join((r.message or "") for r in result.recommendations).lower()
@@ -322,7 +322,7 @@ def test_lane_keep_without_nadir_gaps_is_nadir_stop():
             "phase": "teleop",
             "source": "webots",
             "lane_keep": True,
-            "lane_sensors": {"finish_red": 0.8},
+            "lane_sensors": {},
         },
     )
     msgs = " ".join((r.message or "") for r in result.recommendations).lower()

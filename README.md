@@ -5,7 +5,7 @@
 
 The repo name is leftover. **What we are building:** an onboard agent that catalogs real purchasable parts, takes a mission, designs the cheapest robot that can finish it, evaluates that design in a Webots twin, and later transfers it to hardware.
 
-What you can run *today* is the **scaffolding** — a power-aware dashboard plus a wheeled ButlerBot twin that can follow a painted S and park on a red mark. That drive stack is the evaluation harness (“can this config go A to B?”), not the product.
+What you can run *today* is the **scaffolding** — a power-aware dashboard plus a wheeled ButlerBot twin that can follow a painted S and park at GPS finish ``x=24.5`` m. That drive stack is the evaluation harness (“can this config go A to B?”), not the product.
 
 Standing map: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md). Drive baseline: [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md).
 

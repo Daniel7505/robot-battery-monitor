@@ -101,8 +101,8 @@ Floor {
 
 # =============================================================================
 # Gentle S-curve track (visual only - no boundingObject)
-# Start (0,0)  first lobe SIGN=-1  finish straight 21-24.5
-# Amplitude 1 m  min radius ~4.1 m  last 3.5 m straight for red-eye
+# Start (0,0)  first lobe SIGN=-1  finish 16.5
+# Amplitude 1 m  min radius ~1.9 m  last 3.5 m straight
 # Same yellow / red recipe as the old straight. Edges follow path normals.
 # =============================================================================
 
@@ -124,9 +124,9 @@ Transform {
     }
   ]
 }
-# FINISH line (red) - GPS (24.5, 0)
+# FINISH line (red) - GPS (16.5, 0)
 Transform {
-  translation 24.5000 0.0000 0.015
+  translation 16.5000 0.0000 0.015
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -433,8 +433,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.0695 0.6495 0.008
-  rotation 0 0 1 -0.01462
+  translation 3.0907 0.6479 0.008
+  rotation 0 0 1 -0.04729
   children [
     Shape {
         appearance PBRAppearance {
@@ -449,8 +449,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.0505 -0.6504 0.008
-  rotation 0 0 1 -0.01462
+  translation 3.0293 -0.6507 0.008
+  rotation 0 0 1 -0.04729
   children [
     Shape {
         appearance PBRAppearance {
@@ -465,8 +465,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.4623 0.6276 0.008
-  rotation 0 0 1 -0.09592
+  translation 3.5883 0.5603 0.008
+  rotation 0 0 1 -0.29393
   children [
     Shape {
         appearance PBRAppearance {
@@ -481,8 +481,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.3377 -0.6664 0.008
-  rotation 0 0 1 -0.09592
+  translation 3.2117 -0.6840 0.008
+  rotation 0 0 1 -0.29393
   children [
     Shape {
         appearance PBRAppearance {
@@ -497,8 +497,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.8504 0.5753 0.008
-  rotation 0 0 1 -0.17074
+  translation 4.0324 0.3795 0.008
+  rotation 0 0 1 -0.46655
   children [
     Shape {
         appearance PBRAppearance {
@@ -513,8 +513,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.6296 -0.7058 0.008
-  rotation 0 0 1 -0.17074
+  translation 3.4476 -0.7816 0.008
+  rotation 0 0 1 -0.46655
   children [
     Shape {
         appearance PBRAppearance {
@@ -529,8 +529,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.2311 0.4967 0.008
-  rotation 0 0 1 -0.23455
+  translation 4.4201 0.1599 0.008
+  rotation 0 0 1 -0.55068
   children [
     Shape {
         appearance PBRAppearance {
@@ -545,8 +545,8 @@ Transform {
   ]
 }
 Transform {
-  translation 3.9289 -0.7677 0.008
-  rotation 0 0 1 -0.23455
+  translation 3.7399 -0.9479 0.008
+  rotation 0 0 1 -0.55068
   children [
     Shape {
         appearance PBRAppearance {
@@ -561,8 +561,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.6022 0.3977 0.008
-  rotation 0 0 1 -0.28418
+  translation 4.7601 -0.0521 0.008
+  rotation 0 0 1 -0.55068
   children [
     Shape {
         appearance PBRAppearance {
@@ -577,8 +577,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.2378 -0.8501 0.008
-  rotation 0 0 1 -0.28418
+  translation 4.0799 -1.1599 0.008
+  rotation 0 0 1 -0.55068
   children [
     Shape {
         appearance PBRAppearance {
@@ -593,8 +593,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.9630 0.2852 0.008
-  rotation 0 0 1 -0.31770
+  translation 5.0524 -0.2184 0.008
+  rotation 0 0 1 -0.46655
   children [
     Shape {
         appearance PBRAppearance {
@@ -609,8 +609,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.5570 -0.9497 0.008
-  rotation 0 0 1 -0.31770
+  translation 4.4676 -1.3795 0.008
+  rotation 0 0 1 -0.46655
   children [
     Shape {
         appearance PBRAppearance {
@@ -625,8 +625,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.3132 0.1663 0.008
-  rotation 0 0 1 -0.33414
+  translation 5.2883 -0.3160 0.008
+  rotation 0 0 1 -0.29393
   children [
     Shape {
         appearance PBRAppearance {
@@ -641,8 +641,8 @@ Transform {
   ]
 }
 Transform {
-  translation 4.8868 -1.0618 0.008
-  rotation 0 0 1 -0.33414
+  translation 4.9117 -1.5603 0.008
+  rotation 0 0 1 -0.29393
   children [
     Shape {
         appearance PBRAppearance {
@@ -657,8 +657,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.6525 0.0481 0.008
-  rotation 0 0 1 -0.33311
+  translation 5.4707 -0.3493 0.008
+  rotation 0 0 1 -0.04729
   children [
     Shape {
         appearance PBRAppearance {
@@ -673,8 +673,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.2275 -1.1804 0.008
-  rotation 0 0 1 -0.33311
+  translation 5.4093 -1.6479 0.008
+  rotation 0 0 1 -0.04729
   children [
     Shape {
         appearance PBRAppearance {
@@ -689,8 +689,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.9812 -0.0627 0.008
-  rotation 0 0 1 -0.31463
+  translation 5.6424 -0.3341 0.008
+  rotation 0 0 1 0.21325
   children [
     Shape {
         appearance PBRAppearance {
@@ -705,8 +705,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.5788 -1.2989 0.008
-  rotation 0 0 1 -0.31463
+  translation 5.9176 -1.6046 0.008
+  rotation 0 0 1 0.21325
   children [
     Shape {
         appearance PBRAppearance {
@@ -721,8 +721,8 @@ Transform {
   ]
 }
 Transform {
-  translation 6.2991 -0.1605 0.008
-  rotation 0 0 1 -0.27915
+  translation 5.8575 -0.2611 0.008
+  rotation 0 0 1 0.41575
   children [
     Shape {
         appearance PBRAppearance {
@@ -737,8 +737,8 @@ Transform {
   ]
 }
 Transform {
-  translation 5.9409 -1.4102 0.008
-  rotation 0 0 1 -0.27915
+  translation 6.3825 -1.4504 0.008
+  rotation 0 0 1 0.41575
   children [
     Shape {
         appearance PBRAppearance {
@@ -753,8 +753,8 @@ Transform {
   ]
 }
 Transform {
-  translation 6.6068 -0.2407 0.008
-  rotation 0 0 1 -0.22773
+  translation 6.1309 -0.1177 0.008
+  rotation 0 0 1 0.53085
   children [
     Shape {
         appearance PBRAppearance {
@@ -769,8 +769,8 @@ Transform {
   ]
 }
 Transform {
-  translation 6.3132 -1.5071 0.008
-  rotation 0 0 1 -0.22773
+  translation 6.7891 -1.2388 0.008
+  rotation 0 0 1 0.53085
   children [
     Shape {
         appearance PBRAppearance {
@@ -785,8 +785,8 @@ Transform {
   ]
 }
 Transform {
-  translation 6.9051 -0.3000 0.008
-  rotation 0 0 1 -0.16243
+  translation 6.4547 0.0821 0.008
+  rotation 0 0 1 0.56009
   children [
     Shape {
         appearance PBRAppearance {
@@ -801,8 +801,8 @@ Transform {
   ]
 }
 Transform {
-  translation 6.6949 -1.5829 0.008
-  rotation 0 0 1 -0.16243
+  translation 7.1453 -1.0193 0.008
+  rotation 0 0 1 0.56009
   children [
     Shape {
         appearance PBRAppearance {
@@ -817,8 +817,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.1962 -0.3367 0.008
-  rotation 0 0 1 -0.08659
+  translation 6.8249 0.3038 0.008
+  rotation 0 0 1 0.50618
   children [
     Shape {
         appearance PBRAppearance {
@@ -833,8 +833,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.0838 -1.6319 0.008
-  rotation 0 0 1 -0.08659
+  translation 7.4551 -0.8331 0.008
+  rotation 0 0 1 0.50618
   children [
     Shape {
         appearance PBRAppearance {
@@ -849,8 +849,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.4832 -0.3500 0.008
-  rotation 0 0 1 -0.00487
+  translation 7.2481 0.5042 0.008
+  rotation 0 0 1 0.36487
   children [
     Shape {
         appearance PBRAppearance {
@@ -865,8 +865,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.4768 -1.6499 0.008
-  rotation 0 0 1 -0.00487
+  translation 7.7119 -0.7102 0.008
+  rotation 0 0 1 0.36487
   children [
     Shape {
         appearance PBRAppearance {
@@ -881,8 +881,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.7699 -0.3395 0.008
-  rotation 0 0 1 0.07718
+  translation 7.7293 0.6309 0.008
+  rotation 0 0 1 0.13999
   children [
     Shape {
         appearance PBRAppearance {
@@ -897,8 +897,8 @@ Transform {
   ]
 }
 Transform {
-  translation 7.8701 -1.6356 0.008
-  rotation 0 0 1 0.07718
+  translation 7.9107 -0.6564 0.008
+  rotation 0 0 1 0.13999
   children [
     Shape {
         appearance PBRAppearance {
@@ -913,8 +913,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.0603 -0.3055 0.008
-  rotation 0 0 1 0.15398
+  translation 8.0791 0.6550 0.008
+  rotation 0 0 1 0.12483
   children [
     Shape {
         appearance PBRAppearance {
@@ -929,8 +929,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.2597 -1.5902 0.008
-  rotation 0 0 1 0.15398
+  translation 8.2409 -0.6349 0.008
+  rotation 0 0 1 0.12483
   children [
     Shape {
         appearance PBRAppearance {
@@ -945,8 +945,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.3577 -0.2488 0.008
-  rotation 0 0 1 0.22072
+  translation 8.2748 0.7052 0.008
+  rotation 0 0 1 0.35378
   children [
     Shape {
         appearance PBRAppearance {
@@ -961,8 +961,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.6423 -1.5173 0.008
-  rotation 0 0 1 0.22072
+  translation 8.7252 -0.5143 0.008
+  rotation 0 0 1 0.35378
   children [
     Shape {
         appearance PBRAppearance {
@@ -977,8 +977,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.6642 -0.1709 0.008
-  rotation 0 0 1 0.27390
+  translation 8.5282 0.8240 0.008
+  rotation 0 0 1 0.50035
   children [
     Shape {
         appearance PBRAppearance {
@@ -993,8 +993,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.0158 -1.4225 0.008
-  rotation 0 0 1 0.27390
+  translation 9.1518 -0.3167 0.008
+  rotation 0 0 1 0.50035
   children [
     Shape {
         appearance PBRAppearance {
@@ -1009,8 +1009,8 @@ Transform {
   ]
 }
 Transform {
-  translation 8.9809 -0.0750 0.008
-  rotation 0 0 1 0.31133
+  translation 8.8351 1.0071 0.008
+  rotation 0 0 1 0.55924
   children [
     Shape {
         appearance PBRAppearance {
@@ -1025,8 +1025,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.3791 -1.3125 0.008
-  rotation 0 0 1 0.31133
+  translation 9.5249 -0.0949 0.008
+  rotation 0 0 1 0.55924
   children [
     Shape {
         appearance PBRAppearance {
@@ -1041,8 +1041,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.3082 0.0346 0.008
-  rotation 0 0 1 0.33183
+  translation 9.1887 1.2256 0.008
+  rotation 0 0 1 0.53489
   children [
     Shape {
         appearance PBRAppearance {
@@ -1057,8 +1057,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.7318 -1.1945 0.008
-  rotation 0 0 1 0.33183
+  translation 9.8513 0.1072 0.008
+  rotation 0 0 1 0.53489
   children [
     Shape {
         appearance PBRAppearance {
@@ -1073,8 +1073,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.6463 0.1522 0.008
-  rotation 0 0 1 0.33493
+  translation 9.5920 1.4390 0.008
+  rotation 0 0 1 0.42500
   children [
     Shape {
         appearance PBRAppearance {
@@ -1089,8 +1089,8 @@ Transform {
   ]
 }
 Transform {
-  translation 10.0737 -1.0755 0.008
-  rotation 0 0 1 0.33493
+  translation 10.1280 0.2547 0.008
+  rotation 0 0 1 0.42500
   children [
     Shape {
         appearance PBRAppearance {
@@ -1105,8 +1105,8 @@ Transform {
   ]
 }
 Transform {
-  translation 9.9952 0.2714 0.008
-  rotation 0 0 1 0.32053
+  translation 10.0535 1.5982 0.008
+  rotation 0 0 1 0.22730
   children [
     Shape {
         appearance PBRAppearance {
@@ -1121,8 +1121,8 @@ Transform {
   ]
 }
 Transform {
-  translation 10.4048 -0.9624 0.008
-  rotation 0 0 1 0.32053
+  translation 10.3465 0.3316 0.008
+  rotation 0 0 1 0.22730
   children [
     Shape {
         appearance PBRAppearance {
@@ -1137,8 +1137,8 @@ Transform {
   ]
 }
 Transform {
-  translation 10.3548 0.3850 0.008
-  rotation 0 0 1 0.28899
+  translation 10.5605 1.6490 0.008
+  rotation 0 0 1 -0.03156
   children [
     Shape {
         appearance PBRAppearance {
@@ -1153,8 +1153,8 @@ Transform {
   ]
 }
 Transform {
-  translation 10.7252 -0.8611 0.008
-  rotation 0 0 1 0.28899
+  translation 10.5195 0.3497 0.008
+  rotation 0 0 1 -0.03156
   children [
     Shape {
         appearance PBRAppearance {
@@ -1169,8 +1169,8 @@ Transform {
   ]
 }
 Transform {
-  translation 10.7248 0.4860 0.008
-  rotation 0 0 1 0.24118
+  translation 11.0603 1.5686 0.008
+  rotation 0 0 1 -0.28112
   children [
     Shape {
         appearance PBRAppearance {
@@ -1185,8 +1185,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.0352 -0.7764 0.008
-  rotation 0 0 1 0.24118
+  translation 10.6997 0.3196 0.008
+  rotation 0 0 1 -0.28112
   children [
     Shape {
         appearance PBRAppearance {
@@ -1201,8 +1201,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.1043 0.5673 0.008
-  rotation 0 0 1 0.17889
+  translation 11.5079 1.3917 0.008
+  rotation 0 0 1 -0.45887
   children [
     Shape {
         appearance PBRAppearance {
@@ -1217,8 +1217,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.3357 -0.7119 0.008
-  rotation 0 0 1 0.17889
+  translation 10.9321 0.2262 0.008
+  rotation 0 0 1 -0.45887
   children [
     Shape {
         appearance PBRAppearance {
@@ -1233,8 +1233,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.4918 0.6230 0.008
-  rotation 0 0 1 0.10516
+  translation 11.8987 1.1730 0.008
+  rotation 0 0 1 -0.54810
   children [
     Shape {
         appearance PBRAppearance {
@@ -1249,8 +1249,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.6282 -0.6698 0.008
-  rotation 0 0 1 0.10516
+  translation 11.2213 0.0635 0.008
+  rotation 0 0 1 -0.54810
   children [
     Shape {
         appearance PBRAppearance {
@@ -1265,8 +1265,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.8842 0.6486 0.008
-  rotation 0 0 1 0.02434
+  translation 12.2414 0.9594 0.008
+  rotation 0 0 1 -0.55296
   children [
     Shape {
         appearance PBRAppearance {
@@ -1281,8 +1281,8 @@ Transform {
   ]
 }
 Transform {
-  translation 11.9158 -0.6510 0.008
-  rotation 0 0 1 0.02434
+  translation 11.5586 -0.1468 0.008
+  rotation 0 0 1 -0.55296
   children [
     Shape {
         appearance PBRAppearance {
@@ -1297,8 +1297,8 @@ Transform {
   ]
 }
 Transform {
-  translation 12.2022 0.6559 0.008
-  rotation 0 0 1 0.05815
+  translation 12.5367 0.7896 0.008
+  rotation 0 0 1 -0.47393
   children [
     Shape {
         appearance PBRAppearance {
@@ -1313,8 +1313,8 @@ Transform {
   ]
 }
 Transform {
-  translation 12.2778 -0.6419 0.008
-  rotation 0 0 1 0.05815
+  translation 11.9433 -0.3671 0.008
+  rotation 0 0 1 -0.47393
   children [
     Shape {
         appearance PBRAppearance {
@@ -1329,8 +1329,8 @@ Transform {
   ]
 }
 Transform {
-  translation 12.4915 0.6844 0.008
-  rotation 0 0 1 0.13665
+  translation 12.7761 0.6878 0.008
+  rotation 0 0 1 -0.30647
   children [
     Shape {
         appearance PBRAppearance {
@@ -1345,8 +1345,8 @@ Transform {
   ]
 }
 Transform {
-  translation 12.6685 -0.6035 0.008
-  rotation 0 0 1 0.13665
+  translation 12.3839 -0.5517 0.008
+  rotation 0 0 1 -0.30647
   children [
     Shape {
         appearance PBRAppearance {
@@ -1361,8 +1361,8 @@ Transform {
   ]
 }
 Transform {
-  translation 12.7870 0.7359 0.008
-  rotation 0 0 1 0.20613
+  translation 12.9609 0.6512 0.008
+  rotation 0 0 1 -0.06298
   children [
     Shape {
         appearance PBRAppearance {
@@ -1377,8 +1377,8 @@ Transform {
   ]
 }
 Transform {
-  translation 13.0530 -0.5366 0.008
-  rotation 0 0 1 0.20613
+  translation 12.8791 -0.6462 0.008
+  rotation 0 0 1 -0.06298
   children [
     Shape {
         appearance PBRAppearance {
@@ -1393,743 +1393,7 @@ Transform {
   ]
 }
 Transform {
-  translation 13.0912 0.8090 0.008
-  rotation 0 0 1 0.26274
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 13.4288 -0.4464 0.008
-  rotation 0 0 1 0.26274
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 13.4054 0.9010 0.008
-  rotation 0 0 1 0.30401
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 13.7946 -0.3394 0.008
-  rotation 0 0 1 0.30401
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 13.7303 1.0079 0.008
-  rotation 0 0 1 0.32857
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.1497 -0.2226 0.008
-  rotation 0 0 1 0.32857
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.0658 1.1242 0.008
-  rotation 0 0 1 0.33577
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.4942 -0.1032 0.008
-  rotation 0 0 1 0.33577
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.4122 1.2436 0.008
-  rotation 0 0 1 0.32548
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.8278 0.0119 0.008
-  rotation 0 0 1 0.32548
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 14.7692 1.3592 0.008
-  rotation 0 0 1 0.29792
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.1508 0.1164 0.008
-  rotation 0 0 1 0.29792
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.1368 1.4637 0.008
-  rotation 0 0 1 0.25381
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.4632 0.2054 0.008
-  rotation 0 0 1 0.25381
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.5142 1.5503 0.008
-  rotation 0 0 1 0.19471
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.7658 0.2748 0.008
-  rotation 0 0 1 0.19471
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 15.9000 1.6125 0.008
-  rotation 0 0 1 0.12333
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.0600 0.3223 0.008
-  rotation 0 0 1 0.12333
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.2916 1.6454 0.008
-  rotation 0 0 1 0.04372
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.3484 0.3467 0.008
-  rotation 0 0 1 0.04372
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.6853 1.6464 0.008
-  rotation 0 0 1 -0.03889
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.6347 0.3474 0.008
-  rotation 0 0 1 -0.03889
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.0771 1.6153 0.008
-  rotation 0 0 1 -0.11883
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 16.9229 0.3244 0.008
-  rotation 0 0 1 -0.11883
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.4633 1.5547 0.008
-  rotation 0 0 1 -0.19082
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.2167 0.2783 0.008
-  rotation 0 0 1 -0.19082
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.8413 1.4694 0.008
-  rotation 0 0 1 -0.25073
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.5187 0.2100 0.008
-  rotation 0 0 1 -0.25073
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.2095 1.3657 0.008
-  rotation 0 0 1 -0.29577
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 17.8305 0.1222 0.008
-  rotation 0 0 1 -0.29577
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.5671 1.2506 0.008
-  rotation 0 0 1 -0.32433
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.1529 0.0183 0.008
-  rotation 0 0 1 -0.32433
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.9141 1.1312 0.008
-  rotation 0 0 1 -0.33565
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.4859 -0.0963 0.008
-  rotation 0 0 1 -0.33565
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.2503 1.0145 0.008
-  rotation 0 0 1 -0.32947
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 18.8297 -0.2156 0.008
-  rotation 0 0 1 -0.32947
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.5758 0.9069 0.008
-  rotation 0 0 1 -0.30593
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.1842 -0.3327 0.008
-  rotation 0 0 1 -0.30593
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.8906 0.8139 0.008
-  rotation 0 0 1 -0.26561
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.5494 -0.4405 0.008
-  rotation 0 0 1 -0.26561
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 20.1954 0.7396 0.008
-  rotation 0 0 1 -0.20985
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 19.9246 -0.5319 0.008
-  rotation 0 0 1 -0.20985
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 20.4914 0.6868 0.008
-  rotation 0 0 1 -0.14104
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 20.3086 -0.6003 0.008
-  rotation 0 0 1 -0.14104
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 20.7809 0.6569 0.008
-  rotation 0 0 1 -0.06293
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 20.6991 -0.6405 0.008
-  rotation 0 0 1 -0.06293
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 21.0800 0.6500 0.008
+  translation 13.2600 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2145,7 +1409,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.0800 -0.6500 0.008
+  translation 13.2600 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2161,7 +1425,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.4200 0.6500 0.008
+  translation 13.6000 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2177,7 +1441,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.4200 -0.6500 0.008
+  translation 13.6000 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2193,7 +1457,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.7600 0.6500 0.008
+  translation 13.9400 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2209,7 +1473,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.7600 -0.6500 0.008
+  translation 13.9400 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2225,7 +1489,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.1000 0.6500 0.008
+  translation 14.2800 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2241,7 +1505,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.1000 -0.6500 0.008
+  translation 14.2800 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2257,7 +1521,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.4400 0.6500 0.008
+  translation 14.6200 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2273,7 +1537,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.4400 -0.6500 0.008
+  translation 14.6200 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2289,7 +1553,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.7800 0.6500 0.008
+  translation 14.9600 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2305,7 +1569,7 @@ Transform {
   ]
 }
 Transform {
-  translation 22.7800 -0.6500 0.008
+  translation 14.9600 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2321,7 +1585,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.1200 0.6500 0.008
+  translation 15.3000 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2337,7 +1601,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.1200 -0.6500 0.008
+  translation 15.3000 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2353,7 +1617,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.4600 0.6500 0.008
+  translation 15.6400 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2369,7 +1633,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.4600 -0.6500 0.008
+  translation 15.6400 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2385,7 +1649,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.8000 0.6500 0.008
+  translation 15.9800 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2401,7 +1665,7 @@ Transform {
   ]
 }
 Transform {
-  translation 23.8000 -0.6500 0.008
+  translation 15.9800 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2417,7 +1681,7 @@ Transform {
   ]
 }
 Transform {
-  translation 24.1400 0.6500 0.008
+  translation 16.3200 0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2433,39 +1697,7 @@ Transform {
   ]
 }
 Transform {
-  translation 24.1400 -0.6500 0.008
-  rotation 0 0 1 0.00000
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 24.4800 0.6500 0.008
-  rotation 0 0 1 0.00000
-  children [
-    Shape {
-        appearance PBRAppearance {
-          baseColor 0.95 0.95 0.2
-          roughness 0.8
-          metalness 0
-        }
-      geometry Box {
-        size 0.380 0.060 0.010
-      }
-    }
-  ]
-}
-Transform {
-  translation 24.4800 -0.6500 0.008
+  translation 16.3200 -0.6500 0.008
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2498,7 +1730,7 @@ Transform {
   ]
 }
 Transform {
-  translation 7.5000 -1.0000 0.010
+  translation 5.5000 -1.0000 0.010
   rotation 0 0 1 -0.00000
   children [
     Shape {
@@ -2513,7 +1745,7 @@ Transform {
   ]
 }
 Transform {
-  translation 12.0000 -0.0000 0.010
+  translation 8.0000 -0.0000 0.010
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2528,7 +1760,7 @@ Transform {
   ]
 }
 Transform {
-  translation 16.5000 1.0000 0.010
+  translation 10.5000 1.0000 0.010
   rotation 0 0 1 0.00000
   children [
     Shape {
@@ -2543,7 +1775,7 @@ Transform {
   ]
 }
 Transform {
-  translation 21.0000 0.0000 0.010
+  translation 13.0000 0.0000 0.010
   rotation 0 0 1 -0.00000
   children [
     Shape {
@@ -3109,11 +2341,13 @@ Robot {
       ]
     }
     DEF NADIR_CAM_L Camera {
-      translation 0.01042 0.41808 0.72919
-      rotation 0.006250 0.999953 -0.007464 1.394247
+      # Daniel framed 2026-09-04. Box/boom still old — redraw later.
+      # ~4 m look-ahead, z ~1.31 m. Angle 1.1 after HUD tick. Do not File-Save.
+      translation -0.386826 0.504837 1.306679
+      rotation -0.00125006 0.999996 0.00256741 1.1
       name "nadir_left"
-      width 64
-      height 64
+      width 128
+      height 128
       fieldOfView 1.2
       near 0.03
     }
@@ -3151,11 +2385,12 @@ Robot {
       ]
     }
     DEF NADIR_CAM_R Camera {
-      translation -0.06996 -0.40669 0.79456
-      rotation -0.001250 0.999998 0.001668 1.286252
+      # Y-mirror of NADIR_CAM_L (Daniel 2026-09-04). Copy left + y negated.
+      translation -0.386826 -0.504837 1.306679
+      rotation -0.00125006 0.999996 0.00256741 1.1
       name "nadir_right"
-      width 64
-      height 64
+      width 128
+      height 128
       fieldOfView 1.2
       near 0.03
     }

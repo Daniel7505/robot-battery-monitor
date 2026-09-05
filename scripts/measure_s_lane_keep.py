@@ -38,9 +38,11 @@ def snap() -> dict:
         "x": x,
         "y": y,
         "ct": cross_track_m(x, y),
-        "red": float(s.get("finish_red") or 0),
-        "yL": float(s.get("left_yellow") or 0),
-        "yR": float(s.get("right_yellow") or 0),
+        "at_finish": x >= FINISH_X_M,
+        "nL": None if s.get("nadir_gap_px") is None else float(s.get("nadir_gap_px")),
+        "nR": None if s.get("nadir_r_gap_px") is None else float(s.get("nadir_r_gap_px")),
+        "yL": float(s.get("nadir_gap_px") or 0),
+        "yR": float(s.get("nadir_r_gap_px") or 0),
         "fL": None if s.get("left_fill") is None else float(s.get("left_fill")),
         "fR": None if s.get("right_fill") is None else float(s.get("right_fill")),
         "phase": s.get("mark_phase"),
@@ -64,7 +66,7 @@ def main() -> int:
     s0 = snap()
     print(
         f"START x={s0['x']:.3f} y={s0['y']:.3f} ct={s0['ct']:.3f} "
-        f"red={s0['red']:.3f} locks={s0['locks']} "
+        f"finish={int(s0['at_finish'])} locks={s0['locks']} "
         f"wL={s0['wL']} wR={s0['wR']} mCt={s0['mCt']} src={s0['esrc']}"
     )
     req("/api/twin/command", "POST", {"lane_keep": True, "source": "s_lane_keep"})
@@ -128,7 +130,7 @@ def main() -> int:
             seen_coast = True
             print(
                 f"  COAST t={t:.1f}s x={s['x']:.3f} y={s['y']:.3f} "
-                f"ct={s['ct']:.3f} red={s['red']:.3f} rem={s['rem']}"
+                f"ct={s['ct']:.3f} finish={int(s['at_finish'])} rem={s['rem']}"
             )
         if (
             (s["src"] in ("abs", "abs_park") or s["phase"] == "brake")
@@ -154,7 +156,7 @@ def main() -> int:
         elif (
             seen_yellow
             and s["x"] > 2.0
-            and s["red"] < 0.28
+            and not s["at_finish"]
             and not seen_brake
             and not mark_owns
         ):
@@ -176,8 +178,8 @@ def main() -> int:
             fr = "None" if s["fR"] is None else f"{s['fR']:.3f}"
             print(
                 f"  t={t:5.1f}s x={s['x']:.2f} y={s['y']:.2f} ct={s['ct']:+.3f} "
-                f"yL={s['yL']:.2f} yR={s['yR']:.2f} fL={fl} fR={fr} "
-                f"red={s['red']:.2f} msrc={s['esrc']} "
+                f"nL={s['nL']} nR={s['nR']} fL={fl} fR={fr} "
+                f"finish={int(s['at_finish'])} msrc={s['esrc']} "
                 f"phase={s['phase']} src={s['src']}"
             )
         if seen_brake and s["locks"] and s["v"] < 0.03 and s["x"] > FINISH_X_M - 3.0:

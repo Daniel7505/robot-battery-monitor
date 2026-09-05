@@ -23,7 +23,7 @@ def _nadir_lateral_from_cam(
     """Yellow-ruler: tape inner edge → that side's drive wheel.
 
     nadir_fn is nadir_wheel_to_tape (pixel count × 6 cm / stripe_px).
-    Live fight is 32 / 29, not a frozen 31.
+    Live fight is NADIR_BASE_L/R (33 / 33 after remount).
     """
     del node, robot_xy, yaw_rad
     if cam is None or nadir_fn is None:

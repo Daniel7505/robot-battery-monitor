@@ -791,7 +791,7 @@ HTML_TEMPLATE = '''
                 );
                 if (steerActionLog.length > 40) steerActionLog.pop();
                 const logEl = document.getElementById('steer-action-log');
-                if (logEl) logEl.innerText = steerActionLog.join('\n');
+                if (logEl) logEl.innerText = steerActionLog.join('\\n');
             }
         }
 

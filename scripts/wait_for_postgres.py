@@ -19,13 +19,17 @@ def _params() -> dict:
     url = os.getenv("DATABASE_URL")
     if url:
         return {"dsn": url}
-    return {
+    params = {
         "host": os.getenv("PGHOST", "localhost"),
         "port": int(os.getenv("PGPORT", "5432")),
         "dbname": os.getenv("PGDATABASE", "robot_battery"),
         "user": os.getenv("PGUSER", "robot"),
-        "password": os.getenv("PGPASSWORD", "robot"),
     }
+    # No hard-coded default: set PGPASSWORD (or DATABASE_URL) — see .env.example
+    password = os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD")
+    if password:
+        params["password"] = password
+    return params
 
 
 def wait_for_postgres() -> None:

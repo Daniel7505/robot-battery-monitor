@@ -22,10 +22,13 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-robot}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robot}
+      # No default password: set POSTGRES_PASSWORD in .env (see .env.example)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (cp .env.example .env)}
       POSTGRES_DB: ${POSTGRES_DB:-robot_battery}
+    # Host-only (127.0.0.1) so host-side tools (scripts/setup_postgres.py, the
+    # README "Docker just for DB" path) still work; not reachable from the LAN.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -45,8 +48,10 @@ services:
       dockerfile: Dockerfile
     container_name: robot-battery-dashboard
     restart: unless-stopped
+    # Published on host loopback only: browser + host-side Webots use
+    # http://127.0.0.1:5000; other machines on the network cannot connect.
     ports:
-      - "${DASHBOARD_PORT:-5000}:5000"
+      - "127.0.0.1:${DASHBOARD_PORT:-5000}:5000"
     volumes:
       - ./logs:/app/logs
       - ./archives:/app/archives
@@ -55,17 +60,22 @@ services:
       - .env
     environment:
       PYTHONUNBUFFERED: "1"
-      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD:-robot}@postgres:5432/${POSTGRES_DB:-robot_battery}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-robot}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-robot_battery}
       PGHOST: postgres
       PGPORT: "5432"
       PGUSER: ${POSTGRES_USER:-robot}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-robot}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB:-robot_battery}
       HARDWARE_MODE: ${HARDWARE_MODE:-real}
       HARDWARE_TYPE: ${HARDWARE_TYPE:-ros2}
       ROS2_MOCK: ${ROS2_MOCK:-true}
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Inside the container the app must listen on all interfaces so the
+      # published port reaches it; the host side is still 127.0.0.1-only.
+      DASHBOARD_HOST: 0.0.0.0
+      # Optional shared API token (empty = auth off). Read from .env.
+      RBM_API_TOKEN: ${RBM_API_TOKEN:-}
     networks:
       - robot-net
     depends_on:

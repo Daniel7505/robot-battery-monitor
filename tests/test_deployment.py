@@ -80,7 +80,11 @@ def test_docker_compose_config_valid():
         text=True,
         timeout=30,
     )
-    if result.returncode != 0 and "env file" in (result.stderr or "").lower():
+    stderr = (result.stderr or "").lower()
+    # No .env yet (fresh clone / CI): seed it from .env.example like start.sh does.
+    # Compose fails either on the missing env_file or on the required
+    # POSTGRES_PASSWORD interpolation, depending on which it checks first.
+    if result.returncode != 0 and ("env file" in stderr or "required variable" in stderr):
         example = ROOT / ".env.example"
         target = ROOT / ".env"
         if not target.exists() and example.exists():

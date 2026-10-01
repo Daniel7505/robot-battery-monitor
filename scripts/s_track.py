@@ -19,6 +19,14 @@ HALF_WIDTH_M = 0.65
 SEG_M = 0.38
 PAINT_Z = 0.008
 FINISH_X_M = START_STRAIGHT_M + 2 * LOBE_M + FINISH_STRAIGHT_M  # 16.5
+# Track history: before 2026-09-04 (commit 1ff49a5) LOBE_M was 9.0 and the
+# finish was x=24.5 m (path ~25.0 m). Steer logs with x ≈ 24 m are from that
+# older, longer S. Current double-S: finish x=16.5 m, path ~17.4 m.
+
+
+def min_radius_m() -> float:
+    """Tightest centerline radius (cosine-lobe crest/trough)."""
+    return 1.0 / ((AMP_M / 2.0) * (2.0 * math.pi / LOBE_M) ** 2)
 
 
 def centerline(x: float) -> tuple[float, float]:
@@ -109,7 +117,7 @@ def emit_vrml() -> str:
         "# =============================================================================\n",
         "# Gentle S-curve track (visual only - no boundingObject)\n",
         f"# Start (0,0)  first lobe SIGN={SIGN:g}  finish {FINISH_X_M:g}\n",
-        f"# Amplitude {AMP_M:g} m  min radius ~1.9 m  last {FINISH_STRAIGHT_M:g} m straight\n",
+        f"# Amplitude {AMP_M:g} m  min radius ~{min_radius_m():.1f} m  last {FINISH_STRAIGHT_M:g} m straight\n",
         "# Same yellow / red recipe as the old straight. Edges follow path normals.\n",
         "# =============================================================================\n\n",
         "# START line (green)\n",

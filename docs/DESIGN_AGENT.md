@@ -14,7 +14,7 @@ from src.design_agent import Mission, propose, format_report
 result = propose(
     Mission(
         name="mirrored S",
-        track_length_m=25,
+        track_length_m=17.4,  # current double-S lane path (finish x=16.5 m)
         max_cost_usd=800,
         max_mass_g=6000,
         max_minutes=5,
@@ -31,7 +31,7 @@ Each candidate has `name`, `score`, `feasible`, `bom` (line items), `totals`
 
 ```powershell
 python -m src.design_agent
-python -m src.design_agent --length 25 --max-cost 800 --max-mass 6000 --minutes 5 --prefer-low-compute
+python -m src.design_agent --length 17.4 --max-cost 800 --max-mass 6000 --minutes 5 --prefer-low-compute
 ```
 
 ## What it actually does

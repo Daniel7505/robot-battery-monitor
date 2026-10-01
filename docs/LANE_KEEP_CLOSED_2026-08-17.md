@@ -1,5 +1,7 @@
 # Lane-keep — closed experiments (2026-08-17)
 
+> **Track note (2026-10-01):** every x-coordinate in this file is from the **earlier 24.5 m S** (9 m lobes, finish x=24.5). On 2026-09-04 (`1ff49a5`) the S was tightened to 5 m lobes with the red finish at **x=16.5 m** (~17.4 m along the lane). Don't compare these numbers 1:1 with current runs.
+
 **Historical.** This is the picture-wins / LINE_CAM 128 freeze. It is **not** the live operator.
 
 Live law (2026-09-02): shoulder nadir, fight 32/29 + ahead HOLD, cruise 5.5, v-scale 2.10. Champ **3.2 cm** on the red. See [`NORTH_STAR.md`](NORTH_STAR.md).

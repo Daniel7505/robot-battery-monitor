@@ -1,5 +1,7 @@
 # Lane-keep baselines (locked 2026-08-17)
 
+> **Track note (2026-10-01):** every x-coordinate in this file is from the **earlier 24.5 m S** (9 m lobes, finish x=24.5). On 2026-09-04 (`1ff49a5`) the S was tightened to 5 m lobes with the red finish at **x=16.5 m** (~17.4 m along the lane). Don't compare these numbers 1:1 with current runs.
+
 **Historical.** Picture-wins / LINE_CAM 128 scorecard. **Not** the live operator.
 
 Live law (2026-09-02): two shoulder nadirs, fight 32/29 + ahead HOLD 32/26, cruise 5.5 (0.44 m/s), v-scale 2.10. Full S champ **3.2 cm**, parked on the red. World cameras besides those nadirs were removed 2026-09-02. See [`NORTH_STAR.md`](NORTH_STAR.md).

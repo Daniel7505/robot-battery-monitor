@@ -58,7 +58,7 @@ WorldInfo {
   info [
     "ButlerBot Neo — upright wheeled humanoid (abstract Unitree Neo proportions)"
     "Driven hip wheels + 4 catch casters; BNO085-class IMU pitch-hold (biped precursor)"
-    "TRACK (ENU): mirrored S  first lobe SOUTH  start (0,0)  finish (24.5,0)  same width"
+    "TRACK (ENU): mirrored double-S  first lobe SOUTH  start (0,0)  finish (16.5,0)  same width"
     "GPS on robot reports world translation (same frame as these markers)"
   ]
 }
@@ -102,7 +102,7 @@ Floor {
 # =============================================================================
 # Gentle S-curve track (visual only - no boundingObject)
 # Start (0,0)  first lobe SIGN=-1  finish 16.5
-# Amplitude 1 m  min radius ~1.9 m  last 3.5 m straight
+# Amplitude 1 m  min radius ~1.3 m  last 3.5 m straight
 # Same yellow / red recipe as the old straight. Edges follow path normals.
 # =============================================================================
 

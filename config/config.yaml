@@ -10,8 +10,11 @@
 
 # HTTP bind defaults for the local PMS UI (Docker maps host port separately)
 dashboard:
-  host: "127.0.0.1"
+  host: "127.0.0.1"          # DASHBOARD_HOST env overrides (Docker sets 0.0.0.0)
   port: 5000
+  # SocketIO browser origins (RBM_CORS_ORIGINS env overrides, comma list).
+  # Empty/missing → http://127.0.0.1:<port> and http://localhost:<port>.
+  cors_origins: []
   refresh_seconds: 3
 
 # Logging / archive cadence for historical battery samples
@@ -139,7 +142,8 @@ database:
   port: 5432
   name: "robot_battery"
   user: "robot"
-  password: "robot"
+  # password: read from PGPASSWORD / POSTGRES_PASSWORD (or DATABASE_URL).
+  # Dev value lives in .env.example; do not commit real passwords here.
 
 # Named power channels shown on the dashboard and allocated by the PMS
 power_channels:

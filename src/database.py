@@ -132,13 +132,22 @@ def _connection_params() -> dict:
         return {"dsn": url}
 
     db_cfg = config.get("database") or {}
-    return {
+    params = {
         "host": db_cfg.get("host", "localhost"),
         "port": db_cfg.get("port", 5432),
         "dbname": db_cfg.get("name", "robot_battery"),
         "user": db_cfg.get("user", "robot"),
-        "password": db_cfg.get("password", "robot"),
     }
+    # Password comes from the environment, never a hard-coded default. If none
+    # is set, libpq falls back to ~/.pgpass / its own PGPASSWORD handling.
+    password = (
+        os.getenv("PGPASSWORD")
+        or os.getenv("POSTGRES_PASSWORD")
+        or db_cfg.get("password")
+    )
+    if password:
+        params["password"] = password
+    return params
 
 
 def get_db_connection():

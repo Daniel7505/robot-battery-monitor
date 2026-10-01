@@ -11,13 +11,17 @@ from src.database import init_db
 
 
 def _admin_params(dbname: str = "robot_battery") -> dict:
-    return {
+    params = {
         "host": os.getenv("PGHOST", "localhost"),
         "port": int(os.getenv("PGPORT", "5432")),
         "dbname": dbname,
         "user": os.getenv("PGUSER", "robot"),
-        "password": os.getenv("PGPASSWORD", "robot"),
     }
+    # No hard-coded default: set PGPASSWORD (or DATABASE_URL) — see .env.example
+    password = os.getenv("PGPASSWORD") or os.getenv("POSTGRES_PASSWORD")
+    if password:
+        params["password"] = password
+    return params
 
 
 def ensure_database(name: str) -> None:
@@ -34,8 +38,12 @@ def ensure_database(name: str) -> None:
 if __name__ == "__main__":
     ensure_database("robot_battery")
     ensure_database("robot_battery_test")
-    os.environ.setdefault(
-        "DATABASE_URL", "postgresql://robot:robot@localhost:5432/robot_battery"
-    )
+    if not os.getenv("DATABASE_URL"):
+        p = _admin_params("robot_battery")
+        from urllib.parse import quote
+        auth = quote(p["user"]) + (f":{quote(p['password'])}" if p.get("password") else "")
+        os.environ["DATABASE_URL"] = (
+            f"postgresql://{auth}@{p['host']}:{p['port']}/robot_battery"
+        )
     init_db()
     print("PostgreSQL setup complete.")

@@ -142,9 +142,17 @@ Webots is the piece people forget when they only install Docker.
 | Real ROS 2 topics (not mock) | A **ROS 2** distro on Linux (or the compose `full` profile with `ros2-sim`); set `ROS2_MOCK=false` only if you know what you are doing |
 | Compose “full” profile | Still Docker; adds the optional ROS2 sim container — **not** a substitute for Webots |
 
+### Security defaults
+
+- The dashboard binds **127.0.0.1** when run directly (`DASHBOARD_HOST` overrides). In Docker it listens on `0.0.0.0` inside the container, but compose publishes `127.0.0.1:5000` only.
+- SocketIO accepts browsers from `http://127.0.0.1:5000` and `http://localhost:5000` (`RBM_CORS_ORIGINS` adds more, comma-separated).
+- **Optional API token:** set `RBM_API_TOKEN` in `.env` (or your shell). Then every POST/PUT/PATCH/DELETE needs the header `X-API-Token`. The Webots controller (env var, or the repo `.env`) and `scripts/*.py` (env var) send it automatically. In the browser, open `http://127.0.0.1:5000/?token=<value>` once to unlock the buttons; that sets an HttpOnly, SameSite=Strict cookie. If it is unset, writes are open and the dashboard logs a warning.
+- `/api/demo/launch-webots` only answers requests from 127.0.0.1 / ::1.
+- The Postgres password comes from `POSTGRES_PASSWORD` / `PGPASSWORD` / `DATABASE_URL`. There is no hard-coded default; `.env.example` has the dev value `robot`.
+
 ### Disk / ports / OS reality check
 
-- **Ports used:** `5000` (dashboard), `5432` (Postgres). Free them or change values in `.env`.  
+- **Ports used:** `5000` (dashboard), `5432` (Postgres), both published on **127.0.0.1 only** (not reachable from other machines). Free them or change values in `.env`.  
 - **Disk:** Docker images + Webots are the large downloads (multi‑GB combined is normal).  
 - **OS:** Developed and demoed on **Windows 10/11** with Docker Desktop; Linux/macOS work for Docker scripts; Webots is cross‑platform.  
 - **GitHub account:** only needed if you fork/push — **cloning a public repo does not require login**.
@@ -280,9 +288,11 @@ The easiest way is to use Docker for just the database:
 docker compose up -d postgres
 ```
 
-Wait about 10 seconds, then set up the database tables:
+Wait about 10 seconds, then set up the database tables (the password must match `POSTGRES_PASSWORD` in `.env`):
 
 ```
+# PowerShell:  $env:PGPASSWORD="robot"
+export PGPASSWORD=robot
 python scripts/setup_postgres.py
 ```
 

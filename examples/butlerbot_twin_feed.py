@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import argparse
 import sys
 import time
@@ -53,6 +54,10 @@ def main():
                 resp = requests.post(
                     f"{base}/api/twin/telemetry",
                     json=payload,
+                    headers=(
+                        {"X-API-Token": os.environ["RBM_API_TOKEN"]}
+                        if os.environ.get("RBM_API_TOKEN") else {}
+                    ),
                     timeout=5,
                 )
                 data = resp.json()

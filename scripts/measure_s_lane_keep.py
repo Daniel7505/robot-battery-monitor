@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import sys
 import time
@@ -18,6 +19,8 @@ BASE = "http://127.0.0.1:5000"
 def req(path: str, method: str = "GET", body: dict | None = None) -> dict:
     data = None
     headers = {}
+    if os.environ.get("RBM_API_TOKEN"):
+        headers["X-API-Token"] = os.environ["RBM_API_TOKEN"]
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"

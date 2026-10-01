@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import argparse
 import json
 import math
@@ -41,6 +42,8 @@ WHEEL_RADIUS_M = 0.08
 def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0) -> dict:
     data = None
     headers = {}
+    if os.environ.get("RBM_API_TOKEN"):
+        headers["X-API-Token"] = os.environ["RBM_API_TOKEN"]
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"

@@ -44,9 +44,21 @@ from src.database import (
 
 warnings.filterwarnings("ignore")
 
+from src import api_security
+
 app = Flask(__name__)
-# threading async_mode matches the daemon broadcaster thread below
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', logger=False, engineio_logger=False)
+# Optional RBM_API_TOKEN gate on POST/PUT/PATCH/DELETE (see src/api_security.py).
+api_security.init_app(app)
+# threading async_mode matches the daemon broadcaster thread below.
+# SocketIO only accepts browser connections from the allowlisted origins
+# (default http://127.0.0.1:<port> and http://localhost:<port>; RBM_CORS_ORIGINS).
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=api_security.allowed_origins(),
+    async_mode='threading',
+    logger=False,
+    engineio_logger=False,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +791,7 @@ HTML_TEMPLATE = '''
                 );
                 if (steerActionLog.length > 40) steerActionLog.pop();
                 const logEl = document.getElementById('steer-action-log');
-                if (logEl) logEl.innerText = steerActionLog.join('\n');
+                if (logEl) logEl.innerText = steerActionLog.join('\\n');
             }
         }
 
@@ -987,6 +999,22 @@ HTML_TEMPLATE = '''
             loadAnalytics();
         });
     });
+
+    // When RBM_API_TOKEN is set, write calls need the HttpOnly cookie that
+    // /?token=<token> sets once. Surface a 401 instead of failing silently.
+    (function () {
+        const origFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            return origFetch(input, Object.assign({ credentials: 'same-origin' }, init || {}))
+                .then(resp => {
+                    if (resp.status === 401) {
+                        const hint = document.getElementById('pause-hint');
+                        if (hint) hint.innerText = 'Controls locked: open this page once as /?token=<RBM_API_TOKEN>';
+                    }
+                    return resp;
+                });
+        };
+    })();
 
     function simControl(action) {
         fetch('/api/simulation/' + action, { method: 'POST' })
@@ -1686,6 +1714,7 @@ def api_demo_status():
 
 
 @app.route('/api/demo/launch-webots', methods=['POST'])
+@api_security.localhost_only
 def api_demo_launch_webots():
     """Activate demo mode and attempt host-side Webots launch."""
     from src.demo_mode import activate_demo, launch_webots_on_host
@@ -1947,9 +1976,18 @@ def run_dashboard():
     print("[DEBUG] WebSocket broadcaster thread started successfully")
 
     port = config.get("dashboard", "port", 5000)
-    logger.info(f"🚀 Dashboard + WebSocket started on port {port}")
-    
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    host = api_security.bind_host()
+    logger.info(f"🚀 Dashboard + WebSocket started on {host}:{port}")
+    if api_security.api_token() is None:
+        api_security._warn_once_no_token()
+
+    # allow_unsafe_werkzeug: with async_mode='threading' the Werkzeug server is
+    # the only server Flask-SocketIO can use, and it refuses to start outside
+    # debug mode without this flag. Acceptable here because it is a single-user
+    # lab tool bound to 127.0.0.1 by default (0.0.0.0 only inside Docker, where
+    # compose publishes the port on 127.0.0.1). Do not expose it to a network
+    # as-is; put a real WSGI server / reverse proxy in front first.
+    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
     
 
 

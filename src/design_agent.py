@@ -6,7 +6,7 @@ swap in a twin evaluation without changing the call shape.
 
     from src.design_agent import Mission, propose
 
-    result = propose(Mission(track_length_m=25, max_cost_usd=800))
+    result = propose(Mission(track_length_m=17.4, max_cost_usd=800))
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class Mission:
     """Operator envelope. All limits are optional except length."""
 
     name: str = "mirrored S"
-    track_length_m: float = 25.0
+    track_length_m: float = 17.4  # mirrored double-S lane path (finish x=16.5 m)
     max_mass_g: float | None = None
     max_cost_usd: float | None = None
     min_speed_m_s: float | None = None
@@ -364,7 +364,7 @@ def format_report(result: dict) -> str:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Propose robot BOMs from the parts catalog")
     p.add_argument("--name", default="mirrored S")
-    p.add_argument("--length", type=float, default=25.0, help="track length meters")
+    p.add_argument("--length", type=float, default=17.4, help="track length meters")
     p.add_argument("--max-cost", type=float, default=800.0)
     p.add_argument("--max-mass", type=float, default=6000.0, help="grams")
     p.add_argument("--minutes", type=float, default=5.0)

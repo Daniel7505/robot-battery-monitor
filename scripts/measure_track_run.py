@@ -4,15 +4,15 @@ Track run: start line → finish line with known GPS / pose coordinates.
 
 World markers (butlerbot.wbt, ENU):
   START  (green): x = 0.0 m, y = 0.0 m
-  FINISH (red):   x = 5.0 m, y = 0.0 m
-  Length along lane: 5.0 m
+  FINISH (red):   x = 16.5 m, y = 0.0 m
+  Length along lane: ~17.4 m (double-S; see webots/worlds/track_calibration.json)
   Robot GPS (Webots GPS device) reports world translation — same frame.
 
 Drive continuously (re-assert cmd) until robot GPS x >= finish - tol,
 or timeout. Compare:
   * start pose vs start line GPS
   * end pose vs finish line GPS
-  * path length vs track length (default 15 m)
+  * path length vs track length (default ~17.4 m lane path)
   * time vs free-roll budget
   * wheel odometry ∫ωr vs ground distance
   * energy: ∫total_w dt, avg/peak Legs W, battery % delta
@@ -37,9 +37,9 @@ from pathlib import Path
 # Defaults match webots/worlds/track_calibration.json and butlerbot.wbt paint
 START_X = 0.0
 START_Y = 0.0
-FINISH_X = 15.0
+FINISH_X = 16.5
 FINISH_Y = 0.0
-TRACK_LENGTH_M = 15.0
+TRACK_LENGTH_M = 17.42
 WHEEL_RADIUS_M = 0.08
 BATTERY_CAPACITY_WH = 480.0
 
@@ -170,7 +170,8 @@ def main() -> int:
     cal = load_calibration()
     start_x = float((cal.get("start") or {}).get("x_m", START_X))
     finish_x = float((cal.get("finish") or {}).get("x_m", FINISH_X))
-    track_len = float((cal.get("lane") or {}).get("length_m", TRACK_LENGTH_M))
+    lane = cal.get("lane") or {}
+    track_len = float(lane.get("length_m", lane.get("path_length_m", TRACK_LENGTH_M)))
     r = float(cal.get("wheel_radius_m", WHEEL_RADIUS_M))
     capacity_wh = float(cal.get("battery_capacity_wh", BATTERY_CAPACITY_WH))
     v_cmd = args.wheel_v * r

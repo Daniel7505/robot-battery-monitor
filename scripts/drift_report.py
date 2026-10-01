@@ -24,7 +24,11 @@ from datetime import datetime
 from pathlib import Path
 
 DEFAULT_LOG = Path.home() / "OneDrive" / "Desktop" / "Grok Workspace" / "steer-actions.csv"
-FINISH_X_M = 16.5      # end of the S corridor (matches butlerbot_controller)
+try:  # single source of truth for the track: scripts/s_track.py (generates the .wbt paint)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from s_track import FINISH_X_M  # noqa: E402  (16.5 m red finish line)
+except ImportError:  # pragma: no cover
+    FINISH_X_M = 16.5  # end of the S corridor (matches butlerbot_controller)
 RESET_DROP_M = 1.0     # x going backwards by this much = new run
 GAP_S = 30.0           # silence this long between rows = new run
 

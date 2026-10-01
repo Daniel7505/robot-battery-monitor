@@ -401,7 +401,7 @@ HTML_TEMPLATE = '''
             <button type="button" id="teleop-stop-btn" class="teleop-test-btn">■ Stop</button>
             <button type="button" id="lane-keep-btn" class="teleop-test-btn">◎ Lane keep</button>
         </div>
-        <p class="teleop-hint" id="lane-keep-status">Lane keep off — shoulder nadir (32/29), GPS stop at 24.5 m.</p>
+        <p class="teleop-hint" id="lane-keep-status">Lane keep off — shoulder nadir (32/29), GPS stop at 16.5 m.</p>
         <div class="steer-tool" id="steer-tool">
             <div class="steer-tool-title">Steer (virtual wheel) — intensity + GPS</div>
             <div class="steer-bar"><div class="steer-center"></div><div id="steer-needle" class="steer-needle" style="left:50%"></div></div>

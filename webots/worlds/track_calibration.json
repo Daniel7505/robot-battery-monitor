@@ -1,7 +1,7 @@
 {
   "schema": "butlerbot_track_v2",
   "coordinate_system": "ENU",
-  "description": "Mirrored gentle S. Start (0,0), first lobe SOUTH (−Y) 3-12 m, second NORTH (+Y) 12-21 m, finish straight 21-24.5 m. Same width and paint as the scored S.",
+  "description": "Mirrored gentle double-S. Start (0,0), first lobe SOUTH (−Y) 3-8 m, second NORTH (+Y) 8-13 m, finish straight 13-16.5 m. Same width and paint as the scored S. (Before 2026-09-04 the lobes were 9 m and the finish was x=24.5 m.)",
   "shape": "gentle_S_mirrored",
   "wheel_radius_m": 0.08,
   "battery_capacity_wh": 480.0,
@@ -14,19 +14,19 @@
   },
   "finish": {
     "name": "track_finish_line",
-    "x_m": 24.5,
+    "x_m": 16.5,
     "y_m": 0.0,
     "z_m": 0.01,
     "color": "red"
   },
   "lane": {
     "half_width_m": 0.65,
-    "path_length_m": 25.04,
+    "path_length_m": 17.42,
     "amplitude_m": 1.0,
-    "lobe_m": 9.0,
+    "lobe_m": 5.0,
     "start_straight_m": 3.0,
     "finish_straight_m": 3.5,
-    "min_radius_m": 4.1
+    "min_radius_m": 1.27
   },
   "robot_spawn": {
     "x_m": 0.0,

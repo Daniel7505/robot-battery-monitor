@@ -293,11 +293,19 @@ _ANALYTICS_VIEW_NAMES = (
 )
 
 
-def init_analytics_views() -> None:
-    """Drop and recreate all analytics views (idempotent startup)."""
-    with db_cursor() as (conn, cur):
+def init_analytics_views(cur=None) -> None:
+    """Drop and recreate all analytics views (idempotent startup).
+
+    Pass ``cur`` to run inside the caller's transaction (``init_db`` does, so the
+    views share its ``lock_timeout`` and retry); otherwise opens its own.
+    """
+    if cur is not None:
         cur.execute(_DROP_VIEWS_SQL)
         cur.execute(_ANALYTICS_VIEWS_SQL)
+    else:
+        with db_cursor() as (conn, own_cur):
+            own_cur.execute(_DROP_VIEWS_SQL)
+            own_cur.execute(_ANALYTICS_VIEWS_SQL)
     logger.info("✅ Analytics views initialized")
 
 

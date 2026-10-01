@@ -25,8 +25,14 @@ Invariants
 - Writes retry up to 3 times (transient Docker/Postgres race at startup).
 - ``db_cursor`` commits on success, rolls back on error, always closes.
 - ``archive_old_data`` deletes (does not export) rows older than the retention window;
-  directory ``logs/archives`` is reserved for future/offline dumps.
-- ``init_db`` also creates analytics views via ``src.analytics``.
+  directory ``logs/archives`` is reserved for future/offline dumps. Deletes run in
+  small committed batches under ``statement_timeout`` / ``lock_timeout`` and
+  ``client_connection_check_interval``, tagged ``application_name=rbm-retention``,
+  so a purge can never hold table locks for minutes or outlive a killed container.
+- ``init_db`` also creates analytics views via ``src.analytics``. It runs under a
+  ``lock_timeout``; on timeout it terminates stale retention deletes left by a
+  previous (killed) dashboard on the same database and retries, instead of
+  hanging container startup forever.
 """
 
 import json
@@ -36,12 +42,47 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
+import psycopg2.errors
 import psycopg2.extras
 
 from src.config import config
 from src.logger import logger
 
 ARCHIVE_DIR = "logs/archives"
+
+# --- startup lock safety (init_db) -------------------------------------------
+# How long schema DDL may wait for a table lock before we look for stale
+# retention deletes to clear. Postgres interval syntax ("5s", "500ms").
+INIT_LOCK_TIMEOUT = os.getenv("DB_INIT_LOCK_TIMEOUT", "5s")
+INIT_MAX_ATTEMPTS = int(os.getenv("DB_INIT_MAX_ATTEMPTS", "4"))
+INIT_RETRY_SLEEP_S = float(os.getenv("DB_INIT_RETRY_SLEEP_S", "1.0"))
+
+# --- retention purge bounds (archive_old_data) --------------------------------
+RETENTION_APP_NAME = "rbm-retention"
+RETENTION_TABLES = ("channel_readings", "energy_predictions", "allocation_snapshots")
+RETENTION_BATCH_ROWS = int(os.getenv("DB_RETENTION_BATCH_ROWS", "5000"))
+RETENTION_STATEMENT_TIMEOUT = os.getenv("DB_RETENTION_STATEMENT_TIMEOUT", "30s")
+RETENTION_LOCK_TIMEOUT = os.getenv("DB_RETENTION_LOCK_TIMEOUT", "5s")
+# PG14+: abort the running query if the client (e.g. a killed container) is gone.
+RETENTION_CLIENT_CHECK_INTERVAL = os.getenv("DB_RETENTION_CLIENT_CHECK", "10s")
+
+# Backends on *this* database (never our own) that are retention deletes:
+# either tagged by the current code, or the legacy unbatched statements
+# ("DELETE FROM <table> WHERE recorded_at < ...") from older images.
+_STALE_RETENTION_SQL = r"""
+SELECT pid, state, application_name,
+       EXTRACT(EPOCH FROM (now() - query_start))::int AS runtime_s,
+       left(query, 120) AS query
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND pid <> pg_backend_pid()
+  AND state IN ('active', 'idle in transaction', 'idle in transaction (aborted)')
+  AND (
+        application_name = %s
+     OR query ~* '^\s*DELETE\s+FROM\s+(allocation_snapshots|channel_readings|energy_predictions)\s+WHERE\s+(recorded_at|id)\s'
+  )
+ORDER BY query_start
+"""
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS allocation_snapshots (
@@ -80,6 +121,11 @@ CREATE INDEX IF NOT EXISTS idx_channel_readings_channel_time
     ON channel_readings (channel_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_allocation_snapshots_recorded_at
     ON allocation_snapshots (recorded_at DESC);
+-- FK lookup indexes: without these, every DELETE FROM allocation_snapshots row
+-- fires ON DELETE SET NULL as a sequential scan of the child table (retention
+-- purge goes quadratic and can run for many minutes holding locks).
+CREATE INDEX IF NOT EXISTS idx_channel_readings_snapshot_id
+    ON channel_readings (snapshot_id);
 
 CREATE TABLE IF NOT EXISTS energy_predictions (
     id SERIAL PRIMARY KEY,
@@ -98,6 +144,8 @@ CREATE TABLE IF NOT EXISTS energy_predictions (
 
 CREATE INDEX IF NOT EXISTS idx_energy_predictions_recorded_at
     ON energy_predictions (recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_energy_predictions_snapshot_id
+    ON energy_predictions (snapshot_id);
 
 -- Short-drive energy / lock measurements (agent + parts-DB foundation)
 CREATE TABLE IF NOT EXISTS drive_measurements (
@@ -174,16 +222,83 @@ def db_cursor():
         conn.close()
 
 
+def terminate_stale_retention_backends() -> list[int]:
+    """Terminate other sessions on this DB that are running retention deletes.
+
+    Scope is deliberately narrow: same database, never our own backend, only
+    sessions holding a transaction open (active / idle in transaction) whose
+    application_name is ``rbm-retention`` or whose query is a retention
+    ``DELETE FROM allocation_snapshots|channel_readings|energy_predictions``.
+    Returns the pids that were signalled. Never raises.
+    """
+    terminated: list[int] = []
+    try:
+        conn = get_db_connection()
+    except Exception as e:
+        logger.error(f"Stale-retention check: could not connect: {e}")
+        return terminated
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(_STALE_RETENTION_SQL, (RETENTION_APP_NAME,))
+            rows = cur.fetchall()
+            if not rows:
+                logger.warning("Stale-retention check: no retention deletes found holding locks")
+            for pid, state, app, runtime_s, query in rows:
+                logger.warning(
+                    f"Terminating stale retention backend pid={pid} state={state} "
+                    f"app={app!r} runtime={runtime_s}s query={query!r}"
+                )
+                cur.execute("SELECT pg_terminate_backend(%s)", (pid,))
+                ok = cur.fetchone()[0]
+                if ok:
+                    terminated.append(int(pid))
+                else:
+                    logger.error(f"pg_terminate_backend({pid}) returned false (permissions?)")
+    except Exception as e:
+        logger.error(f"Stale-retention check failed: {e}")
+    finally:
+        conn.close()
+    return terminated
+
+
 def init_db():
-    """Create tables/indexes and analytics views. Safe to call on every startup."""
+    """Create tables/indexes and analytics views. Safe to call on every startup.
+
+    Runs under ``lock_timeout`` (``DB_INIT_LOCK_TIMEOUT``, default 5s). If the DDL
+    cannot get its table locks in time — e.g. an orphaned retention DELETE from a
+    previous, killed dashboard container is still running — stale retention
+    backends are terminated and the schema step is retried (up to
+    ``DB_INIT_MAX_ATTEMPTS``). Other lock holders are left alone; we just retry.
+    """
     os.makedirs("logs", exist_ok=True)
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
-    with db_cursor() as (conn, cur):
-        cur.execute(_SCHEMA_SQL)
-
     from src.analytics import init_analytics_views
-    init_analytics_views()
+
+    for attempt in range(1, INIT_MAX_ATTEMPTS + 1):
+        try:
+            with db_cursor() as (conn, cur):
+                cur.execute("SET lock_timeout = %s", (INIT_LOCK_TIMEOUT,))
+                cur.execute(_SCHEMA_SQL)
+                init_analytics_views(cur=cur)
+            break
+        except psycopg2.errors.LockNotAvailable as e:
+            logger.warning(
+                f"Schema init waited > {INIT_LOCK_TIMEOUT} for a table lock "
+                f"(attempt {attempt}/{INIT_MAX_ATTEMPTS}): {str(e).strip()}"
+            )
+            if attempt == INIT_MAX_ATTEMPTS:
+                logger.error(
+                    "Schema init gave up: tables still locked. Check "
+                    "pg_stat_activity for the blocking session."
+                )
+                raise
+            pids = terminate_stale_retention_backends()
+            if pids:
+                logger.warning(f"Terminated stale retention backend(s) {pids}; retrying schema init")
+            time.sleep(INIT_RETRY_SLEEP_S)
+
     logger.info("✅ PostgreSQL schema initialized")
 
 
@@ -334,38 +449,86 @@ def log_power_snapshot(
                 time.sleep(0.2)
 
 
-def archive_old_data(days: int = 30):
-    """Delete readings, predictions, and snapshots older than ``days`` (UTC)."""
+def _configure_retention_session(conn) -> None:
+    """Bound a retention connection: timeouts, client-gone check, app tag."""
+    with conn.cursor() as cur:
+        cur.execute("SET application_name = %s", (RETENTION_APP_NAME,))
+        cur.execute("SET statement_timeout = %s", (RETENTION_STATEMENT_TIMEOUT,))
+        cur.execute("SET lock_timeout = %s", (RETENTION_LOCK_TIMEOUT,))
+        if getattr(conn, "server_version", 0) >= 140000:
+            cur.execute(
+                "SET client_connection_check_interval = %s",
+                (RETENTION_CLIENT_CHECK_INTERVAL,),
+            )
+    conn.commit()
+
+
+def _delete_older_than_in_batches(conn, table: str, cutoff, batch_rows: int) -> int:
+    """Delete ``table`` rows with ``recorded_at < cutoff`` in committed batches.
+
+    Each batch is its own short transaction (uses the recorded_at index), so no
+    single statement holds row/table locks for long. Returns rows deleted.
+    """
+    if table not in RETENTION_TABLES:
+        raise ValueError(f"not a retention table: {table}")
+    sql = (
+        f"DELETE FROM {table} WHERE id IN ("
+        f"SELECT id FROM {table} WHERE recorded_at < %s LIMIT %s)"
+    )
+    total = 0
+    while True:
+        with conn.cursor() as cur:
+            cur.execute(sql, (cutoff, batch_rows))
+            n = cur.rowcount
+        conn.commit()
+        total += max(n, 0)
+        if n < batch_rows:
+            return total
+
+
+def archive_old_data(days: int = 30, batch_rows: int | None = None):
+    """Delete readings, predictions, and snapshots older than ``days`` (UTC).
+
+    Bounded: batched deletes (``DB_RETENTION_BATCH_ROWS``, default 5000) with
+    ``statement_timeout`` / ``lock_timeout`` per statement, so the purge can't
+    run for minutes holding locks that block schema init on the next startup.
+    """
+    batch_rows = int(batch_rows or RETENTION_BATCH_ROWS)
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-        with db_cursor() as (conn, cur):
-            cur.execute(
-                "SELECT COUNT(*) FROM channel_readings WHERE recorded_at < %s",
-                (cutoff,),
-            )
-            count = cur.fetchone()[0]
+        conn = get_db_connection()
+        try:
+            _configure_retention_session(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT EXISTS (SELECT 1 FROM channel_readings WHERE recorded_at < %s)",
+                    (cutoff,),
+                )
+                has_old = bool(cur.fetchone()[0])
+            conn.commit()
 
-            if count == 0:
+            if not has_old:
                 logger.info(f"No data older than {days} days to archive.")
                 return
 
-            # Child tables first is unnecessary with CASCADE-friendly FKs SET NULL,
-            # but explicit deletes keep orphan cleanup predictable.
-            cur.execute(
-                "DELETE FROM channel_readings WHERE recorded_at < %s",
-                (cutoff,),
-            )
-            cur.execute(
-                "DELETE FROM energy_predictions WHERE recorded_at < %s",
-                (cutoff,),
-            )
-            cur.execute(
-                "DELETE FROM allocation_snapshots WHERE recorded_at < %s",
-                (cutoff,),
-            )
+            # Child tables first: snapshot FKs are ON DELETE SET NULL, but
+            # explicit deletes keep orphan cleanup predictable.
+            deleted = {}
+            for table in RETENTION_TABLES:
+                deleted[table] = _delete_older_than_in_batches(conn, table, cutoff, batch_rows)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
-        logger.info(f"✅ Archived {count} old channel readings (> {days} days)")
+        count = deleted["channel_readings"]
+        logger.info(
+            f"✅ Archived {count} old channel readings (> {days} days); "
+            f"predictions={deleted['energy_predictions']} "
+            f"snapshots={deleted['allocation_snapshots']}"
+        )
     except Exception as e:
         logger.error(f"Archiving failed: {e}")
 

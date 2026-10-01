@@ -31,11 +31,12 @@ def ensure_database(name: str) -> None:
         cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
         if not cur.fetchone():
             cur.execute(f'CREATE DATABASE "{name}"')
-            print(f"Created database: {name}")
+            print(f"Created database: {name}", flush=True)
     conn.close()
 
 
-if __name__ == "__main__":
+def main() -> None:
+    print("==> PostgreSQL setup: ensuring databases exist...", flush=True)
     ensure_database("robot_battery")
     ensure_database("robot_battery_test")
     if not os.getenv("DATABASE_URL"):
@@ -45,5 +46,14 @@ if __name__ == "__main__":
         os.environ["DATABASE_URL"] = (
             f"postgresql://{auth}@{p['host']}:{p['port']}/robot_battery"
         )
+    print(
+        "==> Creating schema (tables, indexes, analytics views)... "
+        "(lock waits time out and stale retention deletes are cleared)",
+        flush=True,
+    )
     init_db()
-    print("PostgreSQL setup complete.")
+    print("==> PostgreSQL setup complete.", flush=True)
+
+
+if __name__ == "__main__":
+    main()

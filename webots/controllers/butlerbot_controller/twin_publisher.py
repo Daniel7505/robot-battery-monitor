@@ -104,6 +104,45 @@ def dashboard_url() -> str:
     ).rstrip("/")
 
 
+API_TOKEN_ENV = "RBM_API_TOKEN"
+API_TOKEN_HEADER = "X-API-Token"
+# repo root: webots/controllers/butlerbot_controller/twin_publisher.py → parents[3]
+_PROJECT_ENV_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
+    ".env",
+)
+
+
+def api_token() -> str | None:
+    """Shared dashboard token: env ``RBM_API_TOKEN``, else the repo ``.env``.
+
+    The ``.env`` fallback means Webots started from a desktop shortcut (no
+    shell env) still authenticates against a Docker dashboard that reads the
+    same ``.env``. Returns None when no token is configured (auth off).
+    """
+    tok = (os.environ.get(API_TOKEN_ENV) or "").strip()
+    if tok:
+        return tok
+    try:
+        with open(_PROJECT_ENV_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith(API_TOKEN_ENV + "="):
+                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return val or None
+    except OSError:
+        pass
+    return None
+
+
+def _auth_headers(headers: dict | None = None) -> dict:
+    out = dict(headers or {})
+    tok = api_token()
+    if tok:
+        out[API_TOKEN_HEADER] = tok
+    return out
+
+
 def parse_controller_args() -> dict:
     """Read ``--dashboard-url=`` and ``--telemetry-interval=`` from Webots controllerArgs."""
     opts = {"dashboard_url": dashboard_url(), "interval_s": 0.5}
@@ -125,7 +164,7 @@ def fetch_twin_state(base_url: str | None = None) -> dict:
     """
     base = (base_url or dashboard_url()).rstrip("/")
     url = f"{base}/api/twin/state"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, headers=_auth_headers(), method="GET")
     try:
         with urllib.request.urlopen(req, timeout=2) as resp:
             return json.loads(resp.read().decode("utf-8"))
@@ -198,7 +237,7 @@ def publish_telemetry(payload: dict, base_url: str | None = None) -> dict:
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers=_auth_headers({"Content-Type": "application/json"}),
         method="POST",
     )
     try:

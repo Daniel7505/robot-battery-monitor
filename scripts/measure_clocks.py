@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import json
 import time
 import urllib.request
@@ -15,6 +16,8 @@ HOLD_S = 16.0
 def req(path: str, method: str = "GET", body: dict | None = None) -> dict:
     data = None
     headers = {}
+    if os.environ.get("RBM_API_TOKEN"):
+        headers["X-API-Token"] = os.environ["RBM_API_TOKEN"]
     if body is not None:
         data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"

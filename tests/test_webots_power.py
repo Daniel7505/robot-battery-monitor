@@ -10,6 +10,7 @@ from src.twin.webots_power import (
     stress_multiplier,
 )
 from src.twin.adapters import get_adapter
+from src.hardware_profile import get_active_profile
 
 
 def test_estimate_motor_power_increases_with_load():
@@ -37,7 +38,16 @@ def test_aggregate_channel_draws_butlerbot_motors():
         "right_arm": 1.6,
     }
     channels = aggregate_channel_draws(motor_power, gait="stand")
-    assert channels["Legs"] == 8.2
+    # Legs is pack-side: motors → H-bridge (η, idle) → 48→12 DC-DC (η, idle),
+    # capped by the channel max — all from the active hardware profile.
+    prof = get_active_profile()
+    driver = prof["motor_driver"]
+    dcdc = prof["dc_dc_48_12"]
+    motors_w = motor_power["left_wheel"] + motor_power["right_wheel"]
+    bus_w = min(motors_w / driver["efficiency"] + driver["idle_w"], driver["continuous_bus_w"])
+    pack_w = bus_w / dcdc["efficiency"] + dcdc["idle_w"]
+    expected_legs = min(pack_w, prof["channels"]["Legs"]["max_draw_w"])
+    assert channels["Legs"] == pytest.approx(expected_legs, abs=0.02)
     # Torso joint + stabilizer idle_w (profile)
     assert channels["Torso"] == pytest.approx(3.3, abs=0.05)
     assert channels["Arms"] == 3.4

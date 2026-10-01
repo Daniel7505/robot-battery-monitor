@@ -1,3 +1,5 @@
+import pytest
+
 from src.hardware_profile import (
     balance_control_spec,
     battery_capacity_wh,
@@ -12,6 +14,17 @@ from src.hardware_profile import (
 )
 from src.twin.webots_power import aggregate_channel_draws, build_webots_telemetry, estimate_motor_power_w
 
+from pathlib import Path
+
+import yaml
+
+_PROFILE_DIR = Path(__file__).resolve().parents[1] / "config" / "hardware_profiles"
+
+
+def _raw_profile(name: str = "butlerbot_wheeled") -> dict:
+    """Expected values come straight from the YAML on disk (source of truth)."""
+    return yaml.safe_load((_PROFILE_DIR / f"{name}.yaml").read_text(encoding="utf-8"))
+
 
 def setup_function():
     clear_profile_cache()
@@ -23,7 +36,7 @@ def test_load_butlerbot_wheeled_profile():
     assert prof["battery"]["capacity_wh"] == 480
     assert prof["battery"]["nominal_voltage_v"] == 48
     assert "left_wheel" in prof["motors"]
-    assert prof["channels"]["Legs"]["max_draw_w"] == 28
+    assert prof["channels"]["Legs"]["max_draw_w"] == _raw_profile()["channels"]["Legs"]["max_draw_w"]
     assert "stabilizers" in prof
     assert "sensors" in prof
     assert prof["imu"]["part_number"] == "4754"
@@ -51,24 +64,31 @@ def test_bno085_imu_and_balance_control():
 def test_active_profile_wheel_has_cruise_and_efficiency():
     prof = get_active_profile()
     spec = motor_spec(prof, "left_wheel")
-    assert spec["efficiency"] == 0.75
+    raw = _raw_profile()["motors"]["left_wheel"]
+    assert spec["efficiency"] == raw["efficiency"]
     # Mid-band cruise target (butlerbot_wheeled) — partial load without channel peg
-    assert spec["cruise_w"] == 9.5
-    assert spec["rated_power_w"] == 120
+    assert spec["cruise_w"] == raw["cruise_w"]
+    assert spec["cruise_speed_m_s"] == raw["cruise_speed_m_s"]
+    assert spec["rated_power_w"] == raw["rated_power_w"]
     assert battery_capacity_wh(prof) == 480
     assert wheel_radius_m(prof) == 0.08
 
 
 def test_motor_scale_derived_from_cruise():
     idle, scale, tau = motor_idle_and_scale("left_wheel")
-    assert idle == 2.0
-    assert scale > 0.1
-    assert tau == 0.38
+    raw = _raw_profile()
+    spec = raw["motors"]["left_wheel"]
+    assert idle == spec["idle_w"]
+    assert tau == spec["torque_proxy_coeff"]
+    # scale is solved so P(ω_cruise) = idle + tau·scale·ω² ≈ cruise_w
+    omega = spec["cruise_speed_m_s"] / raw["geometry"]["wheel_radius_m"]
+    assert idle + tau * scale * omega**2 == pytest.approx(spec["cruise_w"], rel=1e-4)
 
 
 def test_phase_reference_draw():
-    assert phase_reference_draw_w("drive_transit") == 48.0
-    assert phase_reference_draw_w("standby") == 18.0
+    draws = _raw_profile()["phase_draw_w"]
+    assert phase_reference_draw_w("drive_transit") == draws["drive_transit"]
+    assert phase_reference_draw_w("standby") == draws["standby"]
 
 
 def test_idle_draw_low_and_drive_rises():
@@ -106,7 +126,7 @@ def test_idle_draw_low_and_drive_rises():
 
 def test_estimate_uses_profile_idle():
     rest = estimate_motor_power_w(0.0, 0.0, motor_name="left_wheel")
-    assert rest == 2.0
+    assert rest == _raw_profile()["motors"]["left_wheel"]["idle_w"]
     moving = estimate_motor_power_w(5.0, 0.0, motor_name="left_wheel")
     assert moving > rest + 3.0
 

@@ -1,4 +1,8 @@
+import pytest
+
+from src.hardware_profile import battery_capacity_wh
 from src.teleop_agent import (
+    BATTERY_CAPACITY_WH,
     BATTERY_DRAIN_SCALE,
     CONTROL_SPEED_CAP_M_S,
     abs_brake_complete,
@@ -58,9 +62,13 @@ def test_brake_complete_when_slow_enough():
 
 
 def test_battery_drain_real_world_scale():
-    """40 W for 30 s on 480 Wh ≈ 0.033 Wh → ~0.0069 % (no demo accel)."""
-    drop = sum(battery_drain_pct(40.0, 0.032, drain_scale=1.0) for _ in range(int(30 / 0.032)))
-    assert 0.005 < drop < 0.02
+    """40 W for 30 s = 1200 J ≈ 0.333 Wh → 0.333/480 ≈ 0.069 % (no demo accel)."""
+    assert BATTERY_CAPACITY_WH == battery_capacity_wh()
+    dt = 0.032
+    steps = int(30 / dt)
+    drop = sum(battery_drain_pct(40.0, dt, drain_scale=1.0) for _ in range(steps))
+    expected = 40.0 * steps * dt / 3600.0 / BATTERY_CAPACITY_WH * 100.0
+    assert drop == pytest.approx(expected, rel=1e-9)
     assert BATTERY_DRAIN_SCALE == 1.0
 
 
@@ -129,5 +137,8 @@ def test_battery_drain_scales_with_draw():
     high = battery_drain_pct(80.0, 1.0)
     assert high > low * 3
     assert BATTERY_DRAIN_SCALE == 1.0
-    # Exact physics: 480 W for 1 s on 480 Wh = 0.1 %
-    assert abs(battery_drain_pct(480.0, 1.0) - 0.1) < 1e-9
+    # Exact physics: ΔE = P·dt. One pack-capacity's worth of watts for one hour
+    # drains 100 %; for one second it drains 100/3600 % (≈0.0278 % at 480 Wh).
+    cap = battery_capacity_wh()
+    assert battery_drain_pct(cap, 3600.0) == pytest.approx(100.0, rel=1e-9)
+    assert battery_drain_pct(cap, 1.0) == pytest.approx(100.0 / 3600.0, rel=1e-9)

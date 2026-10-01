@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +71,7 @@ def test_ros2_mock_env_override():
         os.environ.pop("ROS2_MOCK", None)
 
 
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not on PATH")
 def test_docker_compose_config_valid():
     result = subprocess.run(
         ["docker", "compose", "config"],

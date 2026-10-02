@@ -113,9 +113,14 @@ def _legacy_box_corners():
 
 
 def test_mesh_reproduces_old_box_paint():
-    """Every corner of the archived 105 boxes is a vertex of the new meshes (<0.2 mm)."""
+    """Bars and ticks: every archived box corner is a mesh vertex (<0.2 mm).
+
+    The yellow lane lines are now continuous ribbons (Dan 2026-10-01), so they
+    are checked separately in test_lane_lines_are_continuous_ribbons.
+    """
     import math
 
+    yellow = (0.95, 0.95, 0.2)
     meshes = _world_meshes()
     by_col = {}
     for col, pts, _ in meshes.values():
@@ -123,11 +128,31 @@ def test_mesh_reproduces_old_box_paint():
     n = 0
     worst = 0.0
     for color, corner in _legacy_box_corners():
+        if color == yellow:
+            continue
         vs = by_col[color]
         worst = max(worst, min(math.dist(corner, v) for v in vs if abs(v[0] - corner[0]) < 0.01))
         n += 1
-    assert n == 105 * 8 == sum(len(p) for _, p, _ in meshes.values())
+    assert n > 0
     assert worst < 2e-4
+
+
+def test_lane_lines_are_continuous_ribbons():
+    """Each lane line is one strip: top-face vertices march along x with no gaps,
+    and every top vertex sits half a stripe width off the exact offset curve."""
+    import math
+
+    meshes = _world_meshes()
+    for name, side in (("TRACK_LINE_L", 1.0), ("TRACK_LINE_R", -1.0)):
+        _, pts, _ = meshes[name]
+        top = max(p[2] for p in pts)
+        tops = [p for p in pts if abs(p[2] - top) < 1e-9]
+        xs = sorted({round(p[0], 4) for p in tops})
+        assert max(b - a for a, b in zip(xs, xs[1:])) < 0.06, f"{name} has a gap"
+        sm = s_track.lane_line_samples(side)
+        for p in tops[:: max(1, len(tops) // 200)]:
+            d = min(math.dist(p[:2], q[3]) for q in sm)
+            assert abs(d - s_track.LINE_W_M / 2) < 0.004, f"{name} off curve by {d}"
 
 
 def test_mesh_top_faces_point_up():
@@ -143,7 +168,8 @@ def test_mesh_top_faces_point_up():
                 assert u[0] * v[1] - u[1] * v[0] > 0, f"{name} top face winds downward"
                 n_top += 1
         assert n_top >= 1
-    assert "solid FALSE" in _world_text() and "ccw TRUE" in _world_text()
+    assert "ccw TRUE" in _world_text()
+    assert "solid" not in _world_text().split("DEF TRACK")[1].split("Robot")[0]  # not a field in R2025a IndexedFaceSet
 
 
 def test_old_boxes_archived_out_of_world():

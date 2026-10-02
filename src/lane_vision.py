@@ -489,6 +489,31 @@ def camera_model_from_device(
     return model, source
 
 
+def yaw_pitch_matrix(yaw_rad: float, pitch_rad: float):
+    """Camera rotation (robot frame) for "yaw first, then pitch": Rz(yaw) * Ry(pitch).
+
+    pitch > 0 looks down (Webots ``0 1 0 pitch``), yaw > 0 turns the view to
+    the robot's left about the vertical, so the horizon stays level (no roll).
+    """
+    cy, sy = math.cos(yaw_rad), math.sin(yaw_rad)
+    cp, sp = math.cos(pitch_rad), math.sin(pitch_rad)
+    Rz = ((cy, -sy, 0.0), (sy, cy, 0.0), (0.0, 0.0, 1.0))
+    Ry = ((cp, 0.0, sp), (0.0, 1.0, 0.0), (-sp, 0.0, cp))
+    return _mat_mul(Rz, Ry)
+
+
+def yaw_pitch_rotation(yaw_rad: float, pitch_rad: float) -> tuple[float, float, float, float]:
+    """Webots axis-angle ``rotation x y z angle`` for :func:`yaw_pitch_matrix`.
+
+    Mirror a camera across the robot's x-z plane (left <-> right shoulder) by
+    negating translation y AND the yaw; for a yawed camera that is axis
+    (-x, y, -z) with the same angle. (Pure pitch: the rotation line is unchanged.)
+    """
+    if abs(yaw_rad) < 1e-12:
+        return (0.0, 1.0, 0.0, float(pitch_rad)) if pitch_rad >= 0 else (0.0, -1.0, 0.0, -float(pitch_rad))
+    return matrix_to_axis_angle(yaw_pitch_matrix(yaw_rad, pitch_rad))
+
+
 def aim_pitch_for_reach(
     translation: tuple[float, float, float],
     fov_rad: float,
@@ -497,9 +522,13 @@ def aim_pitch_for_reach(
     far_x_m: float,
     *,
     plane_z: float = PAINT_TOP_Z_M,
+    yaw_rad: float = 0.0,
 ) -> float:
-    """Pure pitch (rotation 0 1 0 theta) that puts the top row's centre on the floor far_x_m ahead.
+    """Pitch that puts the top row's centre on the floor far_x_m ahead (robot forward x).
 
+    yaw_rad = 0: pure pitch (rotation 0 1 0 theta). Otherwise the camera is
+    yawed first, then pitched (:func:`yaw_pitch_rotation`), and far_x_m is the
+    forward (robot x) distance of that top-centre floor point.
     Uses CameraModel itself (bisection), so it matches the runtime math
     including the half-pixel centre of row 0.
     """
@@ -509,9 +538,8 @@ def aim_pitch_for_reach(
         raise ValueError("far reach must be ahead of the camera")
 
     def _top_x(p):
-        g = CameraModel("aim", translation, (0.0, 1.0, 0.0, p), width, height, fov_rad, plane_z).pixel_to_ground(
-            (width - 1) / 2.0, 0.0
-        )
+        g = CameraModel("aim", translation, yaw_pitch_rotation(yaw_rad, p), width, height, fov_rad,
+                        plane_z).pixel_to_ground((width - 1) / 2.0, 0.0)
         return math.inf if g is None else g[0]
 
     lo, hi = 0.0, math.pi / 2.0  # top_x decreases with pitch

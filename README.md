@@ -71,6 +71,8 @@ If you are opening this repo cold (code review, portfolio, or family showcase), 
 | [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) | **AI + human review fence** — do/don’t, stop/power sacred list, credits |
 | [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md) | Frozen drive card + historical 64 champion |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams of **today’s** stack (pyramid, layers, sequences) |
+| [`docs/TRACKS.md`](docs/TRACKS.md) | Waypoint track files (`tracks/*.json`), test worlds (sharp 90°, widening lane), launching a world, finish referee, offline baseline |
+| [`docs/CAMERA_YAW_STUDY.md`](docs/CAMERA_YAW_STUDY.md) | Toe-out yaw study for the box cameras (analysis only, recommendation 10°) |
 | [`docs/PARTS_CATALOG.md`](docs/PARTS_CATALOG.md) | Design-agent SQLite catalog (`src/parts_db.py`) |
 | [`docs/DESIGN_AGENT.md`](docs/DESIGN_AGENT.md) | Thin BOM proposer (`src/design_agent.py`) |
 | `src/__init__.py` | Package map of the whole PMS |

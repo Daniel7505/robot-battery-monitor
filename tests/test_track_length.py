@@ -147,12 +147,18 @@ def test_lane_lines_are_continuous_ribbons():
         _, pts, _ = meshes[name]
         top = max(p[2] for p in pts)
         tops = [p for p in pts if abs(p[2] - top) < 1e-9]
-        xs = sorted({round(p[0], 4) for p in tops})
+        xs = sorted({round(p[0], 4) for p in tops if p[0] >= 0.0})  # run-in is one straight piece
         assert max(b - a for a, b in zip(xs, xs[1:])) < 0.06, f"{name} has a gap"
-        sm = s_track.lane_line_samples(side)
+        sm = [q[3] for q in s_track.lane_line_samples(side)]
+
+        def _seg(p, a, b):
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            t = max(0.0, min(1.0, ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy)))
+            return math.hypot(p[0] - a[0] - t * vx, p[1] - a[1] - t * vy)
+
         for p in tops[:: max(1, len(tops) // 200)]:
-            d = min(math.dist(p[:2], q[3]) for q in sm)
-            assert abs(d - s_track.LINE_W_M / 2) < 0.004, f"{name} off curve by {d}"
+            d = min(_seg(p[:2], a, b) for a, b in zip(sm, sm[1:]))
+            assert abs(d - s_track.LINE_W_M / 2) < 0.001, f"{name} off curve by {d}"  # waypoint build within 1 mm
 
 
 def test_mesh_top_faces_point_up():

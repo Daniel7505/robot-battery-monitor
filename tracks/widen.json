@@ -1,0 +1,15 @@
+{
+  "name": "widen",
+  "description": "Straight lane that widens 1.30 -> 1.60 m over 2 m (x 3..5), holds 1.60 m for 2 m, narrows back to 1.30 m over 2 m (x 7..9), finish at x 11.",
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "waypoints": [
+    {"x": 0, "y": 0, "lane_width_m": 1.30},
+    {"x": 3, "y": 0, "lane_width_m": 1.30},
+    {"x": 5, "y": 0, "lane_width_m": 1.60},
+    {"x": 7, "y": 0, "lane_width_m": 1.60},
+    {"x": 9, "y": 0, "lane_width_m": 1.30},
+    {"x": 11, "y": 0, "lane_width_m": 1.30}
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tilt calculator for a Webots lane camera (pure pitch, looks along +X).
+"""Tilt calculator for a Webots lane camera (pitch, optional toe-out yaw).
 
 Given the mount translation (robot frame: x forward, y left, z up, origin on
 the floor under the drive axle), FOV and resolution, find the pitch that puts
@@ -10,9 +10,15 @@ axle, and print the Webots ``rotation`` line plus the floor coverage. Uses
     python scripts/aim_camera.py                       # left nadir, 1.96 m reach
     python scripts/aim_camera.py --mount 0.03542 0.41808 0.70419 --reach 2.2
     python scripts/aim_camera.py --box-center 0.01042 0.41808 0.72919 --box-size 0.05
+    python scripts/aim_camera.py --yaw 10            # toe the camera 10 deg outward
 
 Webots: ``rotation 0 1 0 theta`` pitches the view down by theta. Mirror a
-shoulder camera by negating translation Y only (same rotation line).
+pure-pitch shoulder camera by negating translation Y only (same rotation line).
+With ``--yaw`` the camera is yawed first, then pitched (Rz(yaw) * Ry(pitch),
+horizon level), the pitch is re-solved so the top-row centre still lands
+``--reach`` m ahead (robot x), and the mirrored camera's rotation is printed
+too: the yaw flips sign, i.e. axis (x, y, z) -> (-x, y, -z), same angle.
+``--yaw`` > 0 = toe OUT (away from the robot's centre line) for either side.
 """
 from __future__ import annotations
 
@@ -32,6 +38,7 @@ from src.lane_vision import (  # noqa: E402
     CameraModel,
     aim_pitch_for_reach,
     camera_coverage,
+    yaw_pitch_rotation,
 )
 
 DEFAULT_REACH_M = 1.96  # top row reach of the original z 1.31 m mount
@@ -69,19 +76,31 @@ def box_inside_near(cam: CameraModel, center, size, near: float) -> dict:
     return {"max_depth_m": max(depths), "near_m": near, "box_invisible": max(depths) < near}
 
 
-def aim(mount, fov, width, height, reach, *, lane_w=FALLBACK_LANE_W_M, plane_z=PAINT_TOP_Z_M) -> dict:
-    pitch = aim_pitch_for_reach(mount, fov, width, height, reach, plane_z=plane_z)
-    pitch_r = round(pitch, 4)
-    cam = CameraModel("aim", mount, (0.0, 1.0, 0.0, pitch_r), width, height, fov, plane_z)
-    cov = camera_coverage(cam)
+def _rot_line(rot) -> str:
+    x, y, z, a = rot
+    return "rotation " + " ".join(f"{v:.6g}" if abs(v) > 5e-7 else "0" for v in (x, y, z)) + f" {a:.4f}"
+
+
+def aim(mount, fov, width, height, reach, *, lane_w=FALLBACK_LANE_W_M, plane_z=PAINT_TOP_Z_M,
+        yaw_deg: float = 0.0) -> dict:
     side = 1.0 if mount[1] >= 0 else -1.0
+    yaw = math.radians(yaw_deg) * side  # toe-out: left camera turns left, right camera turns right
+    pitch = aim_pitch_for_reach(mount, fov, width, height, reach, plane_z=plane_z, yaw_rad=yaw)
+    pitch_r = round(pitch, 4)
+    rot = yaw_pitch_rotation(yaw, pitch_r)
+    rot_m = yaw_pitch_rotation(-yaw, pitch_r)
+    cam = CameraModel("aim", mount, rot, width, height, fov, plane_z)
+    cov = camera_coverage(cam)
     near_line = line_in_image(cam, side * 0.5 * lane_w)
     far_line = line_in_image(cam, -side * 0.5 * lane_w)
     return {
         "pitch_rad": pitch,
         "pitch_rad_rounded": pitch_r,
         "pitch_deg": math.degrees(pitch),
-        "rotation_line": f"rotation 0 1 0 {pitch_r}",
+        "yaw_deg": yaw_deg,
+        "rotation": rot,
+        "rotation_line": f"rotation 0 1 0 {pitch_r}" if yaw_deg == 0 else _rot_line(rot),
+        "mirror_rotation_line": f"rotation 0 1 0 {pitch_r}" if yaw_deg == 0 else _rot_line(rot_m),
         "translation_line": f"translation {mount[0]:g} {mount[1]:g} {mount[2]:g}",
         "mirror_translation_line": f"translation {mount[0]:g} {-mount[1]:g} {mount[2]:g}",
         "camera": cam,
@@ -110,19 +129,25 @@ def main(argv=None) -> int:
     ap.add_argument("--height", type=int, default=p0["height"])
     ap.add_argument("--reach", type=float, default=DEFAULT_REACH_M, help="top row floor x ahead of the axle, m")
     ap.add_argument("--lane-width", type=float, default=FALLBACK_LANE_W_M)
+    ap.add_argument("--yaw", type=float, default=0.0, help="toe-out yaw, degrees (+ = away from the centre line)")
     ap.add_argument("--near", type=float, default=0.03, help="Camera near, m (for --box-center)")
     ap.add_argument("--box-center", nargs=3, type=float, metavar=("X", "Y", "Z"))
     ap.add_argument("--box-size", nargs=3, type=float, default=[0.05, 0.05, 0.05], metavar=("SX", "SY", "SZ"))
     a = ap.parse_args(argv)
 
-    r = aim(tuple(a.mount), a.fov, a.width, a.height, a.reach, lane_w=a.lane_width)
+    r = aim(tuple(a.mount), a.fov, a.width, a.height, a.reach, lane_w=a.lane_width, yaw_deg=a.yaw)
     cov = r["coverage"]
     cam = r["camera"]
     print(f"mount {tuple(a.mount)}  fov {a.fov} rad  {a.width}x{a.height}  target top-row reach {a.reach} m")
-    print(f"pitch = {r['pitch_rad']:.5f} rad = {r['pitch_deg']:.2f} deg down")
+    print(f"pitch = {r['pitch_rad']:.5f} rad = {r['pitch_deg']:.2f} deg down"
+          + (f", toe-out yaw {a.yaw:g} deg (yaw first, then pitch)" if a.yaw else ""))
     print(f"  {r['translation_line']}")
     print(f"  {r['rotation_line']}")
-    print(f"  mirror: {r['mirror_translation_line']}  (same rotation)")
+    if a.yaw:
+        print(f"  mirror: {r['mirror_translation_line']}")
+        print(f"          {r['mirror_rotation_line']}  (yaw flipped: axis x and z negated)")
+    else:
+        print(f"  mirror: {r['mirror_translation_line']}  (same rotation)")
     lb, ll = cov["bottom_m_per_px_lat_long"]
     tb, tl = cov["top_m_per_px_lat_long"]
     print("coverage (centre column, floor x from the axle):")

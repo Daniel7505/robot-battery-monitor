@@ -46,6 +46,7 @@ class Robot:
         self.n += 1
         return -1 if self.n > self.MAX_STEPS else 0
     def getKeyboard(self): return Keyboard("kb")
+    def getWorldPath(self): return os.environ.get("FAKE_WEBOTS_WORLD", "")
     def getFromDef(self, name): return None
     def getSelf(self): return _Any("self")
     def getDevice(self, name):

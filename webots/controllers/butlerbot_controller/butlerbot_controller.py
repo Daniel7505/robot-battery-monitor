@@ -243,6 +243,38 @@ def _load_lane_keep():
         return None, None, None, None, None
 
 
+class _XFinish:
+    """Fallback referee: the original S rule (GPS x >= _FINISH_X_M)."""
+
+    name = "s"
+
+    def crossed(self, x: float, y: float) -> bool:
+        return float(x) >= _FINISH_X_M
+
+    def describe(self) -> str:
+        return f"finish x>={_FINISH_X_M:g} m (built-in S)"
+
+
+def _load_finish_referee(robot):
+    """Finish line of the loaded track (GPS referee only; never used to steer).
+
+    RBM_TRACK (track name or file) > ``# TRACK_FILE`` tag in the loaded world
+    (written by scripts/track_builder.py) > the built-in S rule.
+    """
+    world = None
+    try:
+        world = robot.getWorldPath()
+    except Exception:
+        world = None
+    try:
+        from src.track_geometry import referee_for
+
+        return referee_for(world, finish_x_m=_FINISH_X_M)
+    except Exception as exc:
+        print(f"WARNING finish referee: track not loaded ({type(exc).__name__}: {exc}) — using x>={_FINISH_X_M:g} m")
+        return _XFinish()
+
+
 def _set_drive(motors: dict[str, Motor], left_v: float, right_v: float, throttle: float) -> None:
     scale = max(0.0, min(1.0, throttle))
     for side, cmd in (("left_wheel", left_v * scale), ("right_wheel", right_v * scale)):
@@ -635,6 +667,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     elif _guard_per_frame():
         guard_kw = {"guard_new_frame": False}
         print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
+    finish_ref = _load_finish_referee(robot)
+    print(f"FINISH REFEREE {finish_ref.describe()} — GPS referee only, not used for steering")
     lane_keep_on = False
     last_lane_sig = ""
     lane_eyes = _empty_lane_eyes()
@@ -675,7 +709,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 print(
                     "ROWFIT STEER ON — fitted lane (offset/heading/curvature), "
                     "pure pursuit + curve speed governor, "
-                    f"full S to x={_FINISH_X_M} m GPS."
+                    f"to the finish ({finish_ref.describe()})."
                 )
             if tick == 5 and not lane_keep_on:
                 lane_keep_on = True
@@ -684,7 +718,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     "NADIR STEER ON — pixel fan vs 33/33, "
                     f"cruise={_NADIR_CRUISE} rad/s ({_NADIR_CRUISE * 0.08:.2f} m/s), "
                     f"v-scale={v_scale:.2f}, "
-                    f"full S to x={_FINISH_X_M} m GPS. Two shoulder cams on the wheel."
+                    f"to the finish ({finish_ref.describe()}). Two shoulder cams on the wheel."
                 )
             if tick == 25 and os.path.isfile(_NADIR_PLACE_CHECK):
                 cam = cams.get("nadir_left")
@@ -960,11 +994,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         dt=dt,
                         **guard_kw,
                     )
-                if gps_xy is not None and float(gps_xy[0]) >= _FINISH_X_M:
+                if gps_xy is not None and finish_ref.crossed(float(gps_xy[0]), float(gps_xy[1])):
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
+                        _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
                         print(
-                            f"FULL S DONE at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
+                            f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
                             "GPS finish, not a red camera. Nadir was on the wheel."
                         )
                     lane_keep_on = False

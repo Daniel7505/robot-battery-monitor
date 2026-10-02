@@ -123,6 +123,7 @@ from controller_eyes import _nadir_lateral_from_cam
 from controller_rowfit import (
     RUN_ID as _RUN_ID,
     LaneVisionLog,
+    world_check_warnings,
     RowfitRuntime,
     guard_per_frame as _guard_per_frame,
     lane_mode as _lane_mode,
@@ -672,6 +673,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
     finish_ref = _load_finish_referee(robot)
     print(f"FINISH REFEREE {finish_ref.describe()} — GPS referee only, not used for steering")
+    for _wmsg in world_check_warnings(robot, finish_ref):
+        print("!" * 78)
+        print(f"WARNING {_wmsg}")
+        print("!" * 78)
+    if lane_vision_log is not None:
+        lane_vision_log.write_run_meta(robot, finish_ref, rowfit_rt)
     lane_keep_on = False
     last_lane_sig = ""
     lane_eyes = _empty_lane_eyes()

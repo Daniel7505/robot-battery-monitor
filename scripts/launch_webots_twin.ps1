@@ -11,6 +11,8 @@
 #   the same default.
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90
+# RBM_TRACK is set from the world's "# TRACK_FILE" tag (a different RBM_TRACK
+# left in the cmd window is overridden, with a loud warning).
 # Intersections: RBM_ROUTE picks a way per junction (S,L,R), e.g.
 #   set RBM_ROUTE=L&& powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World plus
 # The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
@@ -46,9 +48,35 @@ if ((Test-Path $ProjSrc) -and -not (Test-Path $ProjDst)) {
     Write-Host "Copied HUD layout .butlerbot.wbproj -> .$WorldBase.wbproj"
 }
 
+# Track for the finish referee / ct= comes from the world's "# TRACK_FILE" tag.
+# RBM_TRACK set by hand in this cmd window (set lasts for the window) is
+# overridden when it names another track: a leftover from an earlier run.
+$TrackTag = $null
+$tagLine = Select-String -Path $WorldFile -Pattern '^# TRACK_FILE (.+)$' | Select-Object -First 1
+if ($tagLine) { $TrackTag = $tagLine.Matches[0].Groups[1].Value.Trim() }
+if ($TrackTag) {
+    $TagName = [System.IO.Path]::GetFileNameWithoutExtension($TrackTag)
+    if ($env:RBM_TRACK) {
+        $OldName = [System.IO.Path]::GetFileNameWithoutExtension(($env:RBM_TRACK -replace '\\', '/').Split('/')[-1])
+        if ($OldName -ne $TagName) {
+            Write-Host ("!" * 78) -ForegroundColor Red
+            Write-Host "WARNING: RBM_TRACK=$($env:RBM_TRACK) does not match world $WorldBase (track $TagName)." -ForegroundColor Red
+            Write-Host "         Leftover from an earlier run? Using RBM_TRACK=$TagName for this launch." -ForegroundColor Red
+            Write-Host "         Clear it in this cmd window with:  set RBM_TRACK=" -ForegroundColor Red
+            Write-Host ("!" * 78) -ForegroundColor Red
+        }
+    }
+    $env:RBM_TRACK = $TagName
+}
+# The controller checks Webots really loaded this world (a reset / reload in an
+# old Webots window keeps that window's world and environment).
+$env:RBM_WORLD_FILE = $WorldFile
+
 Write-Host "ButlerBot Webots Digital Twin" -ForegroundColor Cyan
 Write-Host "Dashboard: $DashboardUrl"
 Write-Host "World:     $WorldFile"
+Write-Host "Track:     $(if ($env:RBM_TRACK) { $env:RBM_TRACK } else { '(none: S default)' })"
+Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else { '(unset: straight if possible, else left)' })  RBM_MAX_BLIND_M=$(if ($env:RBM_MAX_BLIND_M) { $env:RBM_MAX_BLIND_M } else { '(4.0)' })"
 Write-Host ""
 
 # Soft check: controller still starts if dashboard is down; twin POSTs will fail until it is up

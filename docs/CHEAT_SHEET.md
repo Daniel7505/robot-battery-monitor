@@ -100,7 +100,7 @@ repo `.env`. A value set with `set` wins.
 | var | meaning |
 |---|---|
 | `RBM_LANE_MODE` | `rowfit` (default when unset) or `gap`, the old pixel-gap lane keep, not re-tuned for the box cameras |
-| `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value. It overrides the world's `# TRACK_FILE` tag. |
+| `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value (never steering). The launcher sets it from the world's `# TRACK_FILE` tag; a different value left in the cmd window is overridden with a loud `WARNING`, and the controller does the same. Only needed when the world has no tag. |
 | `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45` or a `.wbt` file. Same as `-World`. |
 | `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
 | `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
@@ -127,24 +127,40 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World c
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World widen
 ```
 
-Intersections. `set` lasts for that cmd window; clear with `set RBM_ROUTE=`:
+Intersections. `set` lasts for that cmd window; clear with `set RBM_ROUTE=`.
+Relaunch with the launcher for every world (it closes the old Webots): a
+reset or reload inside an old Webots window keeps that window's world and
+environment. The launcher sets `RBM_TRACK` from the world and prints the
+world, track and route; the controller prints a `!!!` `WARNING` if Webots
+loaded a different world than the launcher asked for.
 
 ```bat
-set RBM_TRACK=plus
 set RBM_ROUTE=L
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World plus
 
-set RBM_TRACK=t_end
 set RBM_ROUTE=R
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World t_end
 
-set RBM_TRACK=gap45
 set RBM_ROUTE=
 set RBM_MAX_BLIND_M=4.0
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World gap45
 ```
 
-Score runs. `--track` must match the world, and runs are split by `run_id`:
+A T-end never goes straight: `RBM_ROUTE=S` (or unset) at a T falls back to
+left, and the console says `route #1 wanted S — not offered, default L`.
+
+Per-run summary with the junction columns (track, states, junction types /
+openings, route, blind distance, cross-track error, time, exit). The track
+comes from `lane-vision-runs.csv` (written next to the log by the controller:
+world, track, route, warnings), else it is guessed; runs that replay an
+earlier run frame for frame are flagged:
+
+```bat
+python scripts\run_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv"
+python scripts\run_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv" --last 1
+```
+
+Score drift. `--track` must match the world, and runs are split by `run_id`:
 
 ```bat
 python scripts\drift_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv" --track s --last 5

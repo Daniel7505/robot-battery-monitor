@@ -376,6 +376,8 @@ class FinishReferee:
         self.track = track
         self.finish_x_m = float(finish_x_m)
         self.source = source
+        self.warning: str | None = None  # RBM_TRACK vs loaded world mismatch (referee_for)
+        self.world_path: str | None = None
 
     @property
     def name(self) -> str:
@@ -432,18 +434,41 @@ def track_file_from_world(world_path: str | None) -> str | None:
     return None
 
 
+def track_key(choice: str | None) -> str:
+    """'tracks/t_end.json' / 't_end' / 'C:\\x\\t_end.json' -> 't_end' (for comparing)."""
+    base = os.path.basename((choice or "").strip().replace("\\", "/"))
+    return base[:-5] if base.lower().endswith(".json") else base
+
+
 def referee_for(world_path: str | None = None, env: dict | None = None, finish_x_m: float = 16.5) -> FinishReferee:
-    """RBM_TRACK (name or file) > TRACK_FILE tag in the loaded world > S default."""
+    """RBM_TRACK (name or file) > TRACK_FILE tag in the loaded world > S default.
+
+    Exception: when the loaded world HAS a ``# TRACK_FILE`` tag and RBM_TRACK
+    names a different track, RBM_TRACK is almost always left over from an
+    earlier run in the same cmd window (``set`` lasts for the window). The
+    world's own track wins then and ``referee.warning`` says so loudly.
+    """
     env = os.environ if env is None else env
     choice = (env.get("RBM_TRACK") or "").strip()
     source = "RBM_TRACK"
+    tag = track_file_from_world(world_path)
+    warning = None
+    if choice and tag and track_key(choice) != track_key(tag):
+        warning = (f"RBM_TRACK={choice} does not match the loaded world {os.path.basename(world_path)} "
+                   f"(TRACK_FILE {tag}) — leftover from an earlier run? Using the world's track. "
+                   f"Clear it with: set RBM_TRACK=")
+        choice, source = tag, f"world {os.path.basename(world_path)}; RBM_TRACK={env.get('RBM_TRACK')} ignored"
     if not choice:
-        choice = track_file_from_world(world_path) or ""
+        choice = tag or ""
         source = f"world {os.path.basename(world_path)}" if choice else "default S"
     if not choice:
-        return FinishReferee(None, finish_x_m, source)
-    p = choice if os.path.isabs(choice) else os.path.join(ROOT, choice)
-    return FinishReferee(load_track(p if os.path.isfile(p) else choice), finish_x_m, source)
+        ref = FinishReferee(None, finish_x_m, source)
+    else:
+        p = choice if os.path.isabs(choice) else os.path.join(ROOT, choice)
+        ref = FinishReferee(load_track(p if os.path.isfile(p) else choice), finish_x_m, source)
+    ref.warning = warning
+    ref.world_path = world_path
+    return ref
 
 
 

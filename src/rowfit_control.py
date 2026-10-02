@@ -668,7 +668,13 @@ class RowfitController:
         known = j.straight is not None or j.kind in ("side_L", "side_R", "t_end", "dead_end")
         if not known and near > JUNCTION_DECIDE_M:
             return
-        choice, note = self.policy.choose(j.left, j.straight, j.right)
+        straight = j.straight
+        if j.kind in ("t_end", "dead_end") and straight is not False:
+            # a T-end / dead end has a line across the way ahead: never straight,
+            # whatever the openings say (RBM_ROUTE=S falls back to L, else R)
+            self._event(f"JUNCTION #{self.jn_count} {j.kind}: straight forced off (was {straight})")
+            straight = False
+        choice, note = self.policy.choose(j.left, straight, j.right)
         self.route_choice = choice or "-"
         rec = {"n": self.jn_count, "kind": j.kind, "openings": j.openings(), "choice": choice, "note": note,
                "near_m": round(near, 3), "center_m": round(float(self.jn_center_m or 0.0), 3)}

@@ -38,6 +38,10 @@ LANE_VISION_HEADER = (
 # Corner columns sit AFTER run_id, junction columns after those, so rows
 # appended to an older lane-vision.csv (old header) still line up for every
 # column the old header names.
+# One row per controller start (run_id) next to lane-vision.csv: which world /
+# track / route the run had. A side file, so lane-vision.csv keeps its header.
+RUN_META_LOG_NAME = "lane-vision-runs.csv"
+RUN_META_HEADER = "run_id,unix_s,world,track,track_source,route,max_blind_m,look_around,warnings"
 # Controller process start = run label in lane-vision.csv.
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 
@@ -80,11 +84,67 @@ def _fmt(v, nd=4) -> str:
     return str(v)
 
 
+def _world_path(robot) -> str:
+    try:
+        return str(robot.getWorldPath() or "")
+    except Exception:
+        return ""
+
+
+def world_check_warnings(robot, referee=None, env=None) -> list[str]:
+    """Loud start-up checks: the world Webots actually loaded vs what the
+    launcher asked for (RBM_WORLD_FILE, set by launch_webots_twin) and vs
+    RBM_TRACK (see ``referee_for``). A reset / reload inside an old Webots
+    window keeps that window's world AND its environment (RBM_ROUTE ...)."""
+    env = os.environ if env is None else env
+    out: list[str] = []
+    loaded = _world_path(robot)
+    want = (env.get("RBM_WORLD_FILE") or "").strip()
+    if want and loaded and os.path.basename(want).lower() != os.path.basename(loaded).lower():
+        out.append(f"Webots loaded {os.path.basename(loaded)} but the launcher asked for "
+                   f"{os.path.basename(want)} — an old Webots window / reload? Close Webots and relaunch.")
+    w = getattr(referee, "warning", None)
+    if w:
+        out.append(w)
+    return out
+
+
 class LaneVisionLog:
     def __init__(self, path: str | None = None, run_id: str = RUN_ID) -> None:
         self.path = path or os.path.join(log_dir(), LANE_VISION_LOG_NAME)
         self.run_id = run_id
         self._ready = False
+
+    @property
+    def meta_path(self) -> str:
+        return os.path.join(os.path.dirname(self.path) or ".", RUN_META_LOG_NAME)
+
+    def write_run_meta(self, robot, referee=None, rt=None, env=None) -> None:
+        """Append this run's world / track / route to lane-vision-runs.csv."""
+        env = os.environ if env is None else env
+        try:
+            world = os.path.basename(_world_path(robot))
+            track = getattr(referee, "name", "") if referee is not None and getattr(referee, "track", None) is not None else ""
+            ctl = getattr(rt, "ctl", None)
+            vals = [
+                self.run_id,
+                f"{time.time():.3f}",
+                world,
+                track,
+                str(getattr(referee, "source", "") or ""),
+                (getattr(rt, "route_text", None) if rt is not None else (env.get("RBM_ROUTE") or "")) or "",
+                _fmt(getattr(ctl, "max_blind_m", None), 2),
+                "" if ctl is None else ("1" if getattr(ctl, "look_around", True) else "0"),
+                " | ".join(world_check_warnings(robot, referee, env)),
+            ]
+            vals = ['"' + v.replace('"', "'") + '"' if ("," in v or '"' in v) else v for v in vals]
+            new = not os.path.isfile(self.meta_path) or os.path.getsize(self.meta_path) == 0
+            with open(self.meta_path, "a", encoding="utf-8") as fh:
+                if new:
+                    fh.write(RUN_META_HEADER + "\n")
+                fh.write(",".join(vals) + "\n")
+        except OSError:
+            pass
 
     def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool, yaw=None) -> None:
         try:

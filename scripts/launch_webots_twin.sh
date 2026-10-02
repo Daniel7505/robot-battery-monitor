@@ -6,7 +6,8 @@
 # Exports TWIN_DASHBOARD_URL for the controller's twin_publisher HTTP client.
 #
 # Usage: ./scripts/launch_webots_twin.sh [dashboard_url] [world]
-#   world: butlerbot (default), corner90, corner_mix, widen, or a .wbt path (RBM_WORLD too)
+#   world: butlerbot (default), corner90, corner_mix, widen, plus, t_end, gap45, or a .wbt path (RBM_WORLD too)
+#   RBM_TRACK is set from the world's # TRACK_FILE tag.
 # The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
 # =============================================================================
 
@@ -25,9 +26,23 @@ if [ -z "$WORLD" ]; then
   exit 1
 fi
 
+# Track for the finish referee from the world's "# TRACK_FILE" tag; a different
+# RBM_TRACK left in the shell is a leftover from an earlier run: override it.
+TAG="$(sed -n 's/^# TRACK_FILE \(.*\)$/\1/p' "$WORLD" | head -n 1 | tr -d '\r')"
+if [ -n "$TAG" ]; then
+  TAG_NAME="$(basename "$TAG" .json)"
+  if [ -n "${RBM_TRACK:-}" ] && [ "$(basename "${RBM_TRACK//\\//}" .json)" != "$TAG_NAME" ]; then
+    echo "WARNING: RBM_TRACK=$RBM_TRACK does not match world $(basename "$WORLD") (track $TAG_NAME) — using $TAG_NAME" >&2
+  fi
+  export RBM_TRACK="$TAG_NAME"
+fi
+export RBM_WORLD_FILE="$WORLD"
+
 echo "ButlerBot Webots Digital Twin"
 echo "Dashboard: $DASHBOARD_URL"
 echo "World:     $WORLD"
+echo "Track:     ${RBM_TRACK:-(none: S default)}"
+echo "Route:     RBM_ROUTE=${RBM_ROUTE:-(unset)}  RBM_MAX_BLIND_M=${RBM_MAX_BLIND_M:-(4.0)}"
 echo ""
 
 if curl -sf "$DASHBOARD_URL/api/twin/schema" >/dev/null 2>&1; then

@@ -1,0 +1,39 @@
+{
+  "name": "gap25",
+  "description": "Large crossing: 4 m, then a 2.5 m wide crossing road (a plaza: the lane lines stop for 2.5 m; the far side is beyond the 1.96 m camera reach when the gap is wider than that), 4 m more. Dan's large-intersection / limited look-ahead case.",
+  "lane_width_m": 1.3,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "waypoints": [
+    [
+      0,
+      0
+    ],
+    [
+      10.5,
+      0
+    ]
+  ],
+  "exit": "east",
+  "roads": [
+    {
+      "name": "plaza",
+      "waypoints": [
+        [
+          5.25,
+          -4
+        ],
+        [
+          5.25,
+          4
+        ]
+      ],
+      "lane_width_m": 2.5
+    }
+  ],
+  "routes": {
+    "S": "east",
+    "default": "east"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "t_end",
+  "description": "T junction where the lane ends: 4 m, then a crossing road (left or right only; straight is blocked by its far line).",
+  "lane_width_m": 1.3,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "waypoints": [
+    [
+      0,
+      0
+    ],
+    [
+      4,
+      0
+    ]
+  ],
+  "exit": null,
+  "roads": [
+    {
+      "name": "cross",
+      "waypoints": [
+        [
+          4,
+          -4
+        ],
+        [
+          4,
+          4
+        ]
+      ],
+      "exit_start": "south",
+      "exit_end": "north"
+    }
+  ],
+  "routes": {
+    "L": "north",
+    "R": "south",
+    "S": "north",
+    "default": "north"
+  }
+}

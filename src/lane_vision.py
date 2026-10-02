@@ -739,27 +739,26 @@ def _row_runs_ground(cam: CameraModel, mask, w: int, row: int):
     return out
 
 
-def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | None = None,
-                *, stripe_w: float = STRIPE_W_M) -> list[CornerCue]:
-    """Lines in one camera that 'widen, then disappear' (see module notes).
+def trace_lines(cam: CameraModel, mask, width: int | None = None, height: int | None = None,
+                *, stripe_w: float = STRIPE_W_M):
+    """Follow every lane line up the image (near -> far).
 
-    Each line is followed from the bottom row upward (nearest run to the
-    column extrapolated from its last rows). The first row whose run is
-    >= CORNER_WIDE_FACTOR x the line's measured stripe width, reached within
-    CORNER_RAMP_MAX_M of a normal-width row, is the crossbar. The smear side
-    gives the turn direction; the band where the line would continue is
-    checked for yellow in the farther rows.
+    Returns ``(rows, tracks, used)``: ``rows[r]`` = that row's yellow runs with
+    ground widths (:func:`_row_runs_ground`); each track is a dict with its
+    normal-width rows (``cols``, ``widths``, ground ``pts``), ``first_x`` /
+    ``last_x`` / ``last_y`` and how it ended (``end``): ``"wide"`` (crossbar row
+    in ``wide``), ``"gap"`` (no paint where it would continue), ``"edge"`` (left
+    the picture sideways) or ``"top"`` (still going at the top row). ``used``
+    = {row: set(run indexes claimed by a track)}.
     """
     w = int(width or cam.width)
     h = int(height or cam.height)
-    if not mask or w < 4 or h < 4:
-        return []
     rows = {r: _row_runs_ground(cam, mask, w, r) for r in range(h)}
     tracks: list[dict] = []
-    done: list[dict] = []
+    used_all: dict[int, set] = {}
     for r in range(h - 1, -1, -1):
         runs = rows[r]
-        used = set()
+        used = used_all.setdefault(r, set())
         for t in tracks:
             if t["state"] != "on":
                 continue
@@ -770,6 +769,7 @@ def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | 
                 pred = c1 + slope * (r - r1)
             else:
                 pred = cols[-1][1]
+            t["pred"] = pred
             tol = 3.0 + 0.6 * t["px"]
             best = None
             for i, run in enumerate(runs):
@@ -782,6 +782,7 @@ def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | 
                 t["gap"] += 1
                 if t["gap"] > 3:
                     t["state"] = "ended"
+                    t["end"] = "edge" if (t["edge_touch"] or pred < 1.0 or pred > w - 2.0) else "gap"
                 continue
             i = best[1]
             used.add(i)
@@ -794,20 +795,76 @@ def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | 
                 t["px"] = b - a + 1
                 t["last_x"] = gx
                 t["last_y"] = 0.5 * (ya + yb)
+                t["pts"].append((gx, 0.5 * (ya + yb)))
+                t["edge_touch"] = a == 0 or b == w - 1
             elif gw >= max(CORNER_WIDE_FACTOR * ref, CORNER_WIDE_MIN_M):
                 t["state"] = "wide"
+                t["end"] = "wide"
                 t["wide"] = (r, a, b, gw, ya, yb, pred)
-                done.append(t)
             else:
                 t["ramp_rows"] += 1  # widening, keep following its centre
                 t["cols"].append((r, pred))
         for i, run in enumerate(runs):
-            if i in used or len(tracks) >= 6:
+            if i in used or len(tracks) >= 8:
                 continue
             a, b, cm, gw, ya, yb, gx = run
             if gw <= CORNER_NORMAL_FACTOR * stripe_w and a > 0 and b < w - 1:
+                used.add(i)
                 tracks.append({"state": "on", "cols": [(r, cm)], "widths": [gw], "px": b - a + 1, "gap": 0,
-                               "ramp_rows": 0, "last_x": gx, "last_y": 0.5 * (ya + yb)})
+                               "ramp_rows": 0, "last_x": gx, "last_y": 0.5 * (ya + yb), "first_x": gx,
+                               "first_row": r, "pts": [(gx, 0.5 * (ya + yb))], "edge_touch": False,
+                               "end": None, "cam": cam.name})
+    for t in tracks:
+        if t["state"] == "on":
+            t["end"] = "top"
+    return rows, tracks, used_all
+
+
+BAR_FILTER_MIN_M = 0.20  # free row run this wide (ground) = a line across the view
+
+
+def _drop_bar_points(pts, traced):
+    """Drop fit points that lie on a free wide run (a road line running across).
+
+    At a crossing the far side's lines run across the view; their row runs are
+    wide and claimed by no lane line (:func:`trace_lines`), and their column
+    runs give points all along them. Only used while a junction is near (the
+    controller sets ``LaneTracker.bar_filter_frames``)."""
+    rows, _tracks, used = traced
+    bad: dict[int, list] = {}
+    for r, runs in rows.items():
+        for i, (a, b, _cm, gw, *_rest) in enumerate(runs):
+            if gw >= BAR_FILTER_MIN_M and i not in used.get(r, ()):
+                bad.setdefault(r, []).append((a - 1.0, b + 1.0))
+    if not bad:
+        return pts
+    out = []
+    for p in pts:
+        spans = bad.get(int(round(p.row)))
+        if spans and any(a <= p.col <= b for a, b in spans):
+            continue
+        out.append(p)
+    return out
+
+
+def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | None = None,
+                *, stripe_w: float = STRIPE_W_M, traced=None) -> list[CornerCue]:
+    """Lines in one camera that 'widen, then disappear' (see module notes).
+
+    Each line is followed from the bottom row upward (nearest run to the
+    column extrapolated from its last rows). The first row whose run is
+    >= CORNER_WIDE_FACTOR x the line's measured stripe width, reached within
+    CORNER_RAMP_MAX_M of a normal-width row, is the crossbar. The smear side
+    gives the turn direction; the band where the line would continue is
+    checked for yellow in the farther rows. ``traced``: a :func:`trace_lines`
+    result to reuse.
+    """
+    w = int(width or cam.width)
+    h = int(height or cam.height)
+    if not mask or w < 4 or h < 4:
+        return []
+    rows, tracks, _used = traced if traced is not None else trace_lines(cam, mask, w, h, stripe_w=stripe_w)
+    done = [t for t in tracks if t["end"] == "wide"]
     cues: list[CornerCue] = []
     for t in done:
         if len(t["widths"]) < CORNER_MIN_LINE_ROWS:
@@ -849,9 +906,11 @@ def corner_cues(cam: CameraModel, mask, width: int | None = None, height: int | 
                 c0, c1 = int(max(0, pred - half_px)), int(min(w - 1, pred + half_px))
                 band += sum(mask[q * w + c0: q * w + c1 + 1])
             empty = band <= CORNER_EMPTY_MAX_PX
-        cues.append(CornerCue(cam=cam.name, direction=direction, role=role,
-                              x_m=near_edge[0] + 0.5 * stripe_w, line_y_m=yl, wide_m=gw, stripe_m=ref,
-                              ramp_m=ramp, empty_beyond=empty, row=r, col=pred))
+        cue = CornerCue(cam=cam.name, direction=direction, role=role,
+                        x_m=near_edge[0] + 0.5 * stripe_w, line_y_m=yl, wide_m=gw, stripe_m=ref,
+                        ramp_m=ramp, empty_beyond=empty, row=r, col=pred)
+        t["cue"] = cue
+        cues.append(cue)
     return cues
 
 
@@ -958,6 +1017,8 @@ class LaneEstimate:
     near_curvature_1pm: float = 0.0
     pixels: dict = field(default_factory=dict)  # cam -> [(col,row,side)] for the HUD
     corner: "CornerEstimate | None" = None  # sharp-corner cue this frame (LaneTracker)
+    junction: "object | None" = None  # src.junction_vision.Junction this frame (LaneTracker)
+    view: "dict | None" = None  # src.junction_vision.yellow_view: nearest yellow ahead / left / right / bar
     # Plausibility gate (LaneTracker): a rejected fit comes back valid=False,
     # held=True, carrying the last good lane moved by odometry/IMU, and the
     # reason. The rejected fit's own numbers are kept in ``rejected``.
@@ -1160,6 +1221,12 @@ class LaneTracker:
         self._corner_track: tuple[int, float, int] | None = None  # (dir, distance, frames)
         self.relax_frames = 0  # gate relaxed (jump / vanish / short-view checks off) this many frames
         self.settle_frames = 0  # jump limits widened this many frames (post-pivot settling)
+        from src.junction_vision import JunctionTracker
+
+        self.junction = None  # this frame's junction classification (src.junction_vision.Junction)
+        self.view: dict | None = None
+        self.bar_filter_frames = 0  # drop points on lines running ACROSS the view (junction / crossing)
+        self._junction_track = JunctionTracker()
 
     def reset(self) -> None:
         self.prior_near = None
@@ -1174,6 +1241,8 @@ class LaneTracker:
         self._corner_track = None
         self.relax_frames = 0
         self.settle_frames = 0
+        self.junction = None
+        self._junction_track.reset()
 
     def begin_settle(self, frames: int = GATE_SETTLE_FRAMES) -> None:
         """Widen the jump checks for ``frames`` frames (the new lane is settling)."""
@@ -1193,6 +1262,8 @@ class LaneTracker:
         self.short_holds = 0
         self.corner = None
         self._corner_track = None
+        self.junction = None
+        self._junction_track.reset()
         self.relax_frames = int(relax_frames)
 
     def _update_corner(self, cues: list[CornerCue], dx_m: float) -> CornerEstimate | None:
@@ -1212,6 +1283,19 @@ class LaneTracker:
             direction=d, distance_m=dist, confidence=conf, frames=frames, cams=cams,
             clip_x_m=dist - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M, cues=used,
         )
+
+    def _update_junction(self, per_cam, dx_m: float):
+        from src.junction_vision import classify_junction, yellow_view
+
+        try:
+            self.view = yellow_view(per_cam)
+            j = classify_junction(per_cam, self.lane_w or FALLBACK_LANE_W_M)
+        except Exception:  # never let the classifier take the lane fit down
+            if os.environ.get("RBM_JUNCTION_STRICT"):
+                raise
+            j = None
+        self.junction = self._junction_track.update(j, dx_m)
+        return self.junction
 
     def _predict(self, dx: float, dyaw: float) -> None:
         """Move the priors into the new robot frame (odometry dx, IMU dyaw)."""
@@ -1233,15 +1317,33 @@ class LaneTracker:
         self._predict(float(dx_m), float(dyaw_rad))
         pts: list[LinePoint] = []
         cues: list[CornerCue] = []
+        per_cam = []
         for name, cam in self.cams.items():
             item = images.get(name)
             if not item or not item[0]:
                 continue
             w, h = int(item[1] or cam.width), int(item[2] or cam.height)
             mask = yellow_mask(item[0], w, h, YELLOW_THRESH, self.yellow_mode)
-            pts.extend(detect_points(cam, None, w, h, yellow_mode=self.yellow_mode, mask=mask))
-            cues.extend(corner_cues(cam, mask, w, h))
+            cam_pts = detect_points(cam, None, w, h, yellow_mode=self.yellow_mode, mask=mask)
+            if w >= 4 and h >= 4:
+                traced = trace_lines(cam, mask, w, h)
+                if self.bar_filter_frames > 0:
+                    cam_pts = _drop_bar_points(cam_pts, traced)
+            pts.extend(cam_pts)
+            if w >= 4 and h >= 4:
+                cc = corner_cues(cam, mask, w, h, traced=traced)
+                cues.extend(cc)
+                per_cam.append((cam, traced, cc))
         corner = self._update_corner(cues, float(dx_m))
+        junction = self._update_junction(per_cam, float(dx_m))
+        if junction is not None and not junction.kind.startswith(("corner", "opening")):
+            lim = junction.near_m - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M
+            if junction.kind in ("side_L", "side_R"):
+                left = junction.kind == "side_L"
+                hi = (junction.far_m + CORNER_CLIP_MARGIN_M) if junction.far_m is not None else 1e9
+                pts = [p for p in pts if not ((p.y > 0.0) == left and lim <= p.x <= hi)]
+            else:
+                pts = [p for p in pts if p.x < lim]
         if corner is not None:
             # The lane ends at the crossbar: fit only what is before it, so the
             # turning paint neither bends the fit nor trips the jump gate.
@@ -1253,6 +1355,10 @@ class LaneTracker:
         self.corner = corner
         est = self.fit_points_gated(pts, dx_m=float(dx_m))
         est.corner = corner
+        est.junction = junction
+        est.view = self.view
+        if self.bar_filter_frames > 0:
+            self.bar_filter_frames -= 1
         if self.relax_frames > 0:
             self.relax_frames -= 1
             if self.relax_frames == 0:

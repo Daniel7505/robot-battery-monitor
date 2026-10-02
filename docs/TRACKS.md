@@ -52,6 +52,47 @@ Code:
 * `src/track_geometry.py`: load, offset curves, centre-line sampler (`project` → arc length, signed lateral, heading), finish referee.
 * `scripts/track_builder.py`: meshes and the world.
 
+## Intersections (road networks)
+
+A track file with `roads` is a small road graph. `waypoints` stays the main
+road (the robot starts on its first waypoint, facing the second); each entry
+of `roads` is another road with its own waypoints and lane width. Roads join
+wherever their carriageways overlap. Painting rule, the same for every
+junction shape: a road's lane lines are painted everywhere EXCEPT inside
+another road's carriageway, so at a crossing the lines have gaps exactly
+where the other road joins and the line ends meet at right angles.
+
+```json
+{
+  "name": "plus",
+  "lane_width_m": 1.30,
+  "waypoints": [[0, 0], [8, 0]],
+  "exit": "east",
+  "roads": [{"name": "cross", "waypoints": [[4, -4], [4, 4]], "exit_start": "south", "exit_end": "north"}],
+  "routes": {"S": "east", "L": "north", "R": "south", "default": "east"}
+}
+```
+
+* `exit`: name of the main road's end as an exit (`null` = the main road ends
+  in the junction, as in `t_end`).
+* `roads[].exit_start` / `exit_end`: exits at that road's ends; a road end
+  without one gets no run-out paint (a branch's start inside the junction, a
+  plaza with no exits).
+* Every exit gets a red bar `TRACK_EXIT_<NAME>` and is a finish line for the
+  GPS referee, which prints which exit was crossed.
+* `routes` (optional, for the sim and tests): which exit each `RBM_ROUTE`
+  choice should end at.
+* Old single-road files are unchanged (no `roads` = `TrackGeometry`).
+* The world block has one `TRACK_LINES` Shape with all pieces, `TRACK_START`,
+  and the exit bars.
+
+| track | layout | world |
+|---|---|---|
+| `plus` | 4 m, a 1.30 m road crosses, 4 m on. Exits east (S), north (L), south (R) | `butlerbot_plus.wbt` |
+| `t_end` | 4 m, the lane ends at a crossing road: L (north) or R (south) only | `butlerbot_t_end.wbt` |
+| `t_left` / `t_right` | 4 m, a branch opens left / right, the lane carries on 4 m | sim only |
+| `gap15` … `gap45` | 4 m, a crossing 1.5 / 2.5 / 3.5 / 4.5 m wide (a plaza, no exits), 4 m on | `butlerbot_gap45.wbt` |
+
 ## Paint a world
 
 ```
@@ -80,6 +121,7 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World c
 * `-World` takes:
   * `butlerbot` (default, the S)
   * `corner90`, `corner_mix`, `widen`
+  * `plus`, `t_end`, `gap45` (intersections)
   * a file name such as `butlerbot_corner90.wbt`
   * a path
 * `set RBM_WORLD=corner90` before the command does the same.

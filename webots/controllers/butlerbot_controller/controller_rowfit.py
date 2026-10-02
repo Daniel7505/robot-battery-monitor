@@ -32,10 +32,16 @@ LANE_VISION_LOG_NAME = "lane-vision.csv"
 LANE_VISION_HEADER = (
     "unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
     "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
-    "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg"
+    "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
+    "junction_type,junction_m,openings,route_choice,blind_m"
 )
-# Corner columns sit AFTER run_id so rows appended to an older lane-vision.csv
-# (old header) still line up for every column the old header names.
+# Corner columns sit AFTER run_id, junction columns after those, so rows
+# appended to an older lane-vision.csv (old header) still line up for every
+# column the old header names.
+# One row per controller start (run_id) next to lane-vision.csv: which world /
+# track / route the run had. A side file, so lane-vision.csv keeps its header.
+RUN_META_LOG_NAME = "lane-vision-runs.csv"
+RUN_META_HEADER = "run_id,unix_s,world,track,track_source,route,max_blind_m,look_around,warnings"
 # Controller process start = run label in lane-vision.csv.
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 
@@ -78,11 +84,67 @@ def _fmt(v, nd=4) -> str:
     return str(v)
 
 
+def _world_path(robot) -> str:
+    try:
+        return str(robot.getWorldPath() or "")
+    except Exception:
+        return ""
+
+
+def world_check_warnings(robot, referee=None, env=None) -> list[str]:
+    """Loud start-up checks: the world Webots actually loaded vs what the
+    launcher asked for (RBM_WORLD_FILE, set by launch_webots_twin) and vs
+    RBM_TRACK (see ``referee_for``). A reset / reload inside an old Webots
+    window keeps that window's world AND its environment (RBM_ROUTE ...)."""
+    env = os.environ if env is None else env
+    out: list[str] = []
+    loaded = _world_path(robot)
+    want = (env.get("RBM_WORLD_FILE") or "").strip()
+    if want and loaded and os.path.basename(want).lower() != os.path.basename(loaded).lower():
+        out.append(f"Webots loaded {os.path.basename(loaded)} but the launcher asked for "
+                   f"{os.path.basename(want)} — an old Webots window / reload? Close Webots and relaunch.")
+    w = getattr(referee, "warning", None)
+    if w:
+        out.append(w)
+    return out
+
+
 class LaneVisionLog:
     def __init__(self, path: str | None = None, run_id: str = RUN_ID) -> None:
         self.path = path or os.path.join(log_dir(), LANE_VISION_LOG_NAME)
         self.run_id = run_id
         self._ready = False
+
+    @property
+    def meta_path(self) -> str:
+        return os.path.join(os.path.dirname(self.path) or ".", RUN_META_LOG_NAME)
+
+    def write_run_meta(self, robot, referee=None, rt=None, env=None) -> None:
+        """Append this run's world / track / route to lane-vision-runs.csv."""
+        env = os.environ if env is None else env
+        try:
+            world = os.path.basename(_world_path(robot))
+            track = getattr(referee, "name", "") if referee is not None and getattr(referee, "track", None) is not None else ""
+            ctl = getattr(rt, "ctl", None)
+            vals = [
+                self.run_id,
+                f"{time.time():.3f}",
+                world,
+                track,
+                str(getattr(referee, "source", "") or ""),
+                (getattr(rt, "route_text", None) if rt is not None else (env.get("RBM_ROUTE") or "")) or "",
+                _fmt(getattr(ctl, "max_blind_m", None), 2),
+                "" if ctl is None else ("1" if getattr(ctl, "look_around", True) else "0"),
+                " | ".join(world_check_warnings(robot, referee, env)),
+            ]
+            vals = ['"' + v.replace('"', "'") + '"' if ("," in v or '"' in v) else v for v in vals]
+            new = not os.path.isfile(self.meta_path) or os.path.getsize(self.meta_path) == 0
+            with open(self.meta_path, "a", encoding="utf-8") as fh:
+                if new:
+                    fh.write(RUN_META_HEADER + "\n")
+                fh.write(",".join(vals) + "\n")
+        except OSError:
+            pass
 
     def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool, yaw=None) -> None:
         try:
@@ -115,6 +177,11 @@ class LaneVisionLog:
                 _fmt(cmd.get("corner_conf"), 2),
                 _fmt(None if yaw is None else math.degrees(float(yaw)), 2),
                 _fmt(cmd.get("yaw_target_deg"), 2),
+                str(cmd.get("junction_type") or ""),
+                _fmt(cmd.get("junction_m"), 3),
+                str(cmd.get("openings") or ""),
+                str(cmd.get("route_choice") or ""),
+                _fmt(cmd.get("blind_m"), 3),
             ]
             with open(self.path, "a", encoding="ascii") as fh:
                 fh.write(",".join(vals) + "\n")
@@ -143,6 +210,35 @@ class RowfitRuntime:
         self._frame_t: float | None = None
         self.frame_dt = 0.32
         self.frames = 0
+        self.route_text, self.route_warnings = "", []
+        self.configure_route()
+
+    def configure_route(self) -> None:
+        """RBM_ROUTE (junction choices, e.g. S,L,R), RBM_MAX_BLIND_M (default 4.0),
+        RBM_LOOK_AROUND (default on) from the process env or the repo .env."""
+        from src.route_policy import parse_route
+        from src.rowfit_control import MAX_BLIND_M
+
+        raw = (project_env("RBM_ROUTE", "") or "").strip()
+        route, warn = parse_route(raw)
+        mb_raw = (project_env("RBM_MAX_BLIND_M", "") or "").strip()
+        try:
+            mb = float(mb_raw) if mb_raw else MAX_BLIND_M
+            if mb <= 0:
+                raise ValueError
+        except ValueError:
+            warn.append(f"RBM_MAX_BLIND_M={mb_raw!r} not a positive number — using {MAX_BLIND_M:g}")
+            mb = MAX_BLIND_M
+        la = (project_env("RBM_LOOK_AROUND", "1") or "1").strip().lower() not in ("0", "false", "no", "off")
+        self.ctl.set_route(route, max_blind_m=mb, look_around=la)
+        self.route_text = raw
+        self.route_warnings = warn
+
+    def route_line(self) -> str:
+        c = self.ctl
+        src = f"RBM_ROUTE={self.route_text}" if self.route_text else "RBM_ROUTE unset"
+        return (f"ROUTE {src} -> {c.policy.describe()}; max blind {c.max_blind_m:.2f} m (RBM_MAX_BLIND_M), "
+                f"look-around {'on' if c.look_around else 'off'}")
 
     def bind_cameras(self, robot, cams: dict, *, log=print) -> list[str]:
         """Rebuild the camera models from the live robot and re-derive the look-ahead window.
@@ -271,6 +367,8 @@ class RowfitRuntime:
         side = "L" if c.corner_dir > 0 else "R"
         if c.state == "CORNER_APPROACH":
             rem = c.remaining_m if c.remaining_m is not None else 0.0
+            if c.turn_src != "corner":
+                return f"TURN {side} {c.route_choice} pv{rem:+.2f}"
             return f"CORNER {side} {c.corner_dist_m or 0:.2f}m pv{rem:+.2f}"
         if c.state == "PIVOT":
             yaw = self._frame_yaw
@@ -280,10 +378,21 @@ class RowfitRuntime:
             return f"PIVOT {side}"
         if c.state == "REACQUIRE":
             return f"REACQUIRE {c.reacq_ok}/3"
+        if c.state == "JUNCTION_APPROACH" and c.junction is not None:
+            return f"JCT {c.junction.kind} {c.jn_center_m or 0:.2f}m {c.junction.openings().replace(' ', '')}"
+        if c.state == "GAP_CROSS":
+            return f"GAP {c.route_choice or 'S'} blind {c.blind_m:.2f}/{c.max_blind_m:.1f}m"
+        if c.state == "LOOK_AROUND":
+            return f"LOOK {min(c.look_i + 1, 3)}/3"
+        if c.state == "STOPPED":
+            return "STOPPED no lane"
         est = self.est
         corner = getattr(est, "corner", None) if est is not None else None
         if corner is not None:
             return f"LANE cue {corner.side[0].upper()} {corner.distance_m:.2f}m c{corner.confidence:.1f}"
+        j = getattr(est, "junction", None) if est is not None else None
+        if j is not None:
+            return f"LANE {j.kind} {j.near_m:.2f}m {j.openings().replace(' ', '')}"
         return "LANE"
 
     def fill_eyes(self, lane_eyes: dict) -> None:

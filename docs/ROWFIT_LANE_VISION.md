@@ -31,6 +31,22 @@ Offline closed-loop check: `python scripts/rowfit_sim.py`.
    The last row is not something we calibrated. It falls out of the model,
    and it matches what the earlier review measured on real frames.
 
+   The axis convention matches Dan's 2026-09-16 Webots drills, which are now
+   tests:
+   * identity rotation shows the horizon,
+   * `0 1 0 1.5708` looks straight down,
+   * `0 1 0 0.8958` with FOV 1.35 at 1.3 m puts nadir on the last row and far ground at ~5.8 m.
+
+   `fieldOfView` is the horizontal angle (same as vertical for these square
+   128×128 images). The Robot node's rotation is identity and the cameras are
+   its direct children, so the camera pose is the robot-frame pose.
+
+   ButlerBot's 1.1 rad tilt + 0.6 rad half-FOV is past vertical, so the
+   bottom rows look slightly backward. That's different from the drill's
+   "nadir on last row" pattern. **Please confirm with a Webots snapshot**
+   (`NADIR_PLACE_CHECK`): the axle (x = 0) should be about row 80 of 128 (the left line at the axle at about col 53), and
+   the 6 cm stripe ~5 px wide at the bottom.
+
 2. **Find the paint.** The yellow test is the same one the gap mode uses
    (`yellow_score ≥ 0.22`). The scan runs along every image row *and* every
    column. For each yellow run, its two edges are mapped to the floor and the

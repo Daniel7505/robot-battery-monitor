@@ -246,3 +246,51 @@ def test_predict_model_straight_lane():
     a0, psi, k = predict_model((0.1, 0.0, 0.0), 0.0, 0.1)
     assert psi == pytest.approx(-0.1, abs=1e-6)
     assert signed_lateral(0.0, 0.0, a0, psi, k) == pytest.approx(-0.1, abs=1e-3)
+
+
+# ------------------------------------------------ Webots convention (owner drills)
+
+
+def test_owner_drill_identity_rotation_sees_horizon():
+    # 2026-09-16 drill: identity rotation showed the horizon (looks along +X)
+    from src.lane_vision import CameraModel
+
+    cam = CameraModel("drill", (0, 0, 1.3), (0, 0, 1, 0), 128, 128, 1.35, plane_z=0.0)
+    dx, dy, dz = cam.ray(cam.cx, cam.cy)
+    assert dx > 0 and abs(dz) < 1e-9 and abs(dy) < 1e-9
+    assert cam.pixel_to_ground(cam.cx, 0) is None  # top half = sky
+
+
+def test_owner_drill_pitch_90_looks_straight_down():
+    from src.lane_vision import CameraModel
+
+    cam = CameraModel("drill", (0, 0, 1.3), (0, 1, 0, 1.5708), 128, 128, 1.35, plane_z=0.0)
+    x, y = cam.pixel_to_ground(cam.cx, cam.cy)
+    assert abs(x) < 1e-3 and abs(y) < 1e-3
+
+
+def test_owner_drill_nadir_on_last_row():
+    # verified S-line drill: h 1.3 m, rotation 0 1 0 0.8958 (= pi/2 - FOV/2),
+    # FOV 1.35 -> bottom row straight down, far ground ~5.8 m
+    from src.lane_vision import CameraModel
+
+    cam = CameraModel("drill", (0, 0, 1.3), (0, 1, 0, 0.8958), 128, 128, 1.35, plane_z=0.0)
+    assert abs(cam.pixel_to_ground(cam.cx, 127)[0]) < 0.02
+    assert cam.pixel_to_ground(cam.cx, 0)[0] == pytest.approx(5.8, abs=0.15)
+
+
+def test_butlerbot_nadir_rows_under_this_convention():
+    # ButlerBot nadirs: Robot node rotation is identity (cameras are its
+    # direct children), camera rotation ~ (0 1 0 1.1) -> 63 deg down, FOV 1.2.
+    import re
+    from pathlib import Path
+
+    wbt = (Path(__file__).resolve().parent.parent / "webots/worlds/butlerbot.wbt").read_text()
+    robot = wbt[wbt.index("Robot {"):]
+    rot = [float(v) for v in re.search(r"(?m)^\s*rotation\s+([-0-9. ]+)$", robot).group(1).split()]
+    assert rot[3] == 0.0  # angle 0 = identity whatever the axis
+    cov = camera_coverage(NADIR_LEFT_CAM)
+    # bottom row ray is 1.1 + 0.597 rad down = past vertical -> lands behind the camera
+    h = NADIR_LEFT_POSE["translation"][2] - 0.013
+    assert cov["bottom_row_x_m"] == pytest.approx(-0.3868 + h / math.tan(1.1 + 0.5965), abs=0.01)
+    assert cov["top_row_x_m"] == pytest.approx(-0.3868 + h / math.tan(1.1 - 0.5965), abs=0.02)

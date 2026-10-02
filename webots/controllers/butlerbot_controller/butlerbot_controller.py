@@ -120,6 +120,14 @@ from controller_keys import (
     bind_teleop as _bind_keys_teleop,
 )
 from controller_eyes import _nadir_lateral_from_cam
+from controller_rowfit import (
+    RUN_ID as _RUN_ID,
+    LaneVisionLog,
+    RowfitRuntime,
+    guard_per_frame as _guard_per_frame,
+    lane_mode as _lane_mode,
+    log_dir as _log_dir,
+)
 from controller_wheels import (
     MAX_JOINT_V,
     MAX_WHEEL_V,
@@ -339,13 +347,10 @@ def _merge_throttle(local: float, remote: float | None) -> float:
     return min(local, float(remote))
 
 
-_STEER_LOG = os.path.join(
-    os.path.expanduser("~"),
-    "OneDrive",
-    "Desktop",
-    "Grok Workspace",
-    "steer-actions.csv",
-)
+# Default folder unchanged (~/OneDrive/Desktop/Grok Workspace); RBM_LOG_DIR overrides.
+_STEER_LOG = os.path.join(_log_dir(), "steer-actions.csv")
+# RBM_LANE_MODE=rowfit (env or repo .env) -> lane_vision row fit; default 'gap'.
+_LANE_MODE = _lane_mode()
 _steer_log_ready = False
 _steer_log_key = ""
 
@@ -612,6 +617,23 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         steer_filter_cls,
         _track_ct,
     ) = _load_lane_keep()
+    rowfit_rt = None
+    lane_vision_log = None
+    guard_kw: dict = {}
+    if _LANE_MODE == "rowfit":
+        try:
+            rowfit_rt = RowfitRuntime()
+            lane_vision_log = LaneVisionLog()
+            print(
+                f"LANE MODE rowfit (run_id {_RUN_ID}) — lane_vision fit, "
+                f"log → {lane_vision_log.path}"
+            )
+        except Exception as exc:
+            rowfit_rt = None
+            print(f"WARNING: rowfit not loaded ({exc}) — falling back to gap lane keep")
+    elif _guard_per_frame():
+        guard_kw = {"guard_new_frame": False}
+        print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
     lane_keep_on = False
     last_lane_sig = ""
     lane_eyes = _empty_lane_eyes()
@@ -631,6 +653,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     steer_filter = None if steer_filter_cls is None else steer_filter_cls()
     nadir_guard = None if nadir_guard_cls is None else nadir_guard_cls()
     eye_huds = _label_eye_huds(robot, cams)
+    if rowfit_rt is not None:
+        for msg in rowfit_rt.check_cameras(cams):
+            print(f"WARNING rowfit camera model: {msg}")
     nadir_lobe_done = False
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
@@ -646,6 +671,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            if tick == 5 and not lane_keep_on and rowfit_rt is not None:
+                lane_keep_on = True
+                print(
+                    "ROWFIT STEER ON — fitted lane (offset/heading/curvature), "
+                    "pure pursuit + curve speed governor, "
+                    f"full S to x={_FINISH_X_M} m GPS."
+                )
             if tick == 5 and not lane_keep_on:
                 lane_keep_on = True
                 v_scale = max(1.0, min(2.2, (_NADIR_CRUISE * 0.08) / 0.21))
@@ -692,6 +724,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
             gps_xy = _gps_xy(gps)
+            if rowfit_rt is not None:
+                rowfit_rt.odometry(left_wv_early, right_wv_early, dt, WHEEL_RADIUS_M)
 
             hubs_locked = (
                 abs(left_wv_early) < STOP_WHEEL_RAD_S
@@ -869,7 +903,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                                 last_api_sig = ""
 
             harvest_now = tick - last_harvest_tick >= harvest_every
-            if nadir_fn is not None and harvest_now:
+            if rowfit_rt is not None and harvest_now:
+                lane_eyes = _empty_lane_eyes()
+                try:
+                    _sim_t = float(robot.getTime())
+                except Exception:
+                    _sim_t = None
+                rowfit_rt.harvest(cams, yaw=prev_yaw, sim_t=_sim_t)
+                rowfit_rt.fill_eyes(lane_eyes)
+                last_harvest_tick = tick
+            elif nadir_fn is not None and harvest_now:
                 lane_eyes = _harvest_nadir(cams, nadir_fn, gps_xy, prev_yaw)
                 last_harvest_tick = tick
                 if not nadir_logged and (
@@ -898,18 +941,26 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 and not user_driving
                 and park_holdoff_s <= 0.0
             ):
-                lk = lane_keep_fn(
-                    cruise=_NADIR_CRUISE,
-                    k_steer=2.0,
-                    steer_filter=steer_filter,
-                    left_gap_px=lane_eyes.get("nadir_gap_px"),
-                    right_gap_px=lane_eyes.get("nadir_r_gap_px"),
-                    left_ahead_px=lane_eyes.get("nadir_ahead_px"),
-                    right_ahead_px=lane_eyes.get("nadir_r_ahead_px"),
-                    nadir_guard=nadir_guard,
-                    nadir_primary=True,
-                    dt=dt,
-                )
+                rowfit_new = False
+                if rowfit_rt is not None:
+                    rowfit_new = rowfit_rt._has_pending
+                    lk = rowfit_rt.command(dt)
+                else:
+                    if guard_kw:
+                        guard_kw["guard_new_frame"] = bool(harvest_now)
+                    lk = lane_keep_fn(
+                        cruise=_NADIR_CRUISE,
+                        k_steer=2.0,
+                        steer_filter=steer_filter,
+                        left_gap_px=lane_eyes.get("nadir_gap_px"),
+                        right_gap_px=lane_eyes.get("nadir_r_gap_px"),
+                        left_ahead_px=lane_eyes.get("nadir_ahead_px"),
+                        right_ahead_px=lane_eyes.get("nadir_r_ahead_px"),
+                        nadir_guard=nadir_guard,
+                        nadir_primary=True,
+                        dt=dt,
+                        **guard_kw,
+                    )
                 if gps_xy is not None and float(gps_xy[0]) >= _FINISH_X_M:
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
@@ -929,9 +980,31 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 lane_eyes["steer"] = lk.get("steer")
                 lane_eyes["phase"] = lk.get("phase")
                 lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+                if rowfit_rt is not None and rowfit_new:
+                    if lane_vision_log is not None:
+                        lane_vision_log.write(
+                            x_m=None if gps_xy is None else round(float(gps_xy[0]), 3),
+                            y_m=None if gps_xy is None else round(float(gps_xy[1]), 3),
+                            mode="rowfit",
+                            est=rowfit_rt.est,
+                            cmd=lk,
+                            new_frame=True,
+                        )
+                    _e = rowfit_rt.est
+                    if rowfit_rt.frames % 3 == 1 and _e is not None:
+                        print(
+                            "Rowfit "
+                            f"L={lk['left']:.2f} R={lk['right']:.2f} steer={lk.get('steer')} "
+                            f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} "
+                            f"k={_e.curvature_1pm:+.2f} conf={_e.confidence:.2f} "
+                            f"nL={_e.n_left} nR={_e.n_right} "
+                            f"v*={lk.get('target_speed')} phase={lk.get('phase')}"
+                            if _e.valid
+                            else f"Rowfit no lane (frame {rowfit_rt.frames}) phase={lk.get('phase')}"
+                        )
                 if lk["brake"]:
                     print(
-                        "Lane-keep: nadir stop "
+                        f"Lane-keep: {lk.get('error_source') or 'nadir'} stop "
                         f"{lk.get('reason')} "
                         f"nL={lane_eyes.get('nadir_gap_px')} "
                         f"nR={lane_eyes.get('nadir_r_gap_px')} "
@@ -965,7 +1038,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         f"{lane_eyes.get('nadir_r_ahead_px')}:"
                         f"{lk.get('phase')}"
                     )
-                    if sig != last_lane_sig:
+                    if sig != last_lane_sig and rowfit_rt is None:
                         last_lane_sig = sig
                         print(
                             "Lane-keep "
@@ -1471,6 +1544,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 )
                 if lane_keep_on:
                     _log_steer_action(payload.get("pose") or {}, lane_eyes)
+                    if lane_vision_log is not None and rowfit_rt is not None:
+                        _pose = payload.get("pose") or {}
+                        lane_vision_log.write(
+                            x_m=_pose.get("x_m"),
+                            y_m=_pose.get("y_m"),
+                            mode="rowfit",
+                            est=rowfit_rt.est,
+                            cmd={
+                                "steer": lane_eyes.get("steer"),
+                                "target_speed": rowfit_rt.ctl.target_speed,
+                            },
+                            new_frame=False,
+                        )
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0

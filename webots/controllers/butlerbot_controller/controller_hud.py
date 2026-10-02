@@ -152,6 +152,7 @@ def _label_eye_huds(robot: Robot, cams: dict) -> list[dict]:
                     "color": int(color),
                     "text": text,
                     "right": bool(right),
+                    "cname": cname,
                 }
             )
             print(f"HUD {dname} ← {cname} labeled {text}")
@@ -187,6 +188,9 @@ def _paint_eye_huds(handles: list[dict], lane_eyes: dict) -> None:
             disp.drawRectangle(0, 0, max(1, w - 1), max(1, h - 1))
             disp.drawText(str(handle["text"]), 2, 1)
             right = bool(handle.get("right"))
+            if lane_eyes.get("rowfit_text") is not None:
+                _paint_rowfit_overlay(disp, handle, lane_eyes, w, h)
+                continue
             px = lane_eyes.get("nadir_r_gap_px" if right else "nadir_gap_px")
             ny = lane_eyes.get("nadir_r_lateral_m" if right else "nadir_lateral_m")
             disp.drawText("—" if px is None else f"{int(px)} px", 2, 16)
@@ -209,3 +213,25 @@ def _paint_eye_huds(handles: list[dict], lane_eyes: dict) -> None:
                 disp.drawLine(x, 0, x, h - 1)
         except Exception:
             continue
+
+
+def _paint_rowfit_overlay(disp, handle: dict, lane_eyes: dict, w: int, h: int) -> None:
+    """RBM_LANE_MODE=rowfit only: fitted stripe points + lane numbers."""
+    cam = handle.get("cam")
+    cam_w, cam_h = 128, 128
+    if cam is not None:
+        try:
+            cam_w = max(1, int(cam.getWidth()))
+            cam_h = max(1, int(cam.getHeight()))
+        except Exception:
+            pass
+    pts = (lane_eyes.get("rowfit_px") or {}).get(handle.get("cname"), [])
+    step = max(1, len(pts) // 160)
+    for col, row, side in pts[::step]:
+        disp.setColor(0x00FF66 if side > 0 else 0xFF44FF)
+        x = int(round((float(col) + 0.5) * w / cam_w))
+        y = int(round((float(row) + 0.5) * h / cam_h))
+        disp.fillRectangle(max(0, x - 1), max(0, y - 1), 3, 3)
+    disp.setColor(int(handle["color"]))
+    for i, line in enumerate(lane_eyes.get("rowfit_text") or []):
+        disp.drawText(str(line)[:30], 2, 16 + 15 * i)

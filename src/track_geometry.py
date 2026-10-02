@@ -115,10 +115,14 @@ def track_path(name_or_path: str) -> str:
     raise FileNotFoundError(f"track {name_or_path!r} not found (looked in {TRACKS_DIR})")
 
 
-def load_track(name_or_path: str) -> "TrackGeometry":
+def load_track(name_or_path: str):
+    """A :class:`TrackGeometry`, or a :class:`TrackNetwork` when the file has ``roads``."""
     p = track_path(name_or_path)
     with open(p, encoding="utf-8") as fh:
-        return TrackGeometry(spec_from_dict(json.load(fh), p))
+        d = json.load(fh)
+    if d.get("roads"):
+        return TrackNetwork.from_dict(d, p)
+    return TrackGeometry(spec_from_dict(d, p))
 
 
 # --------------------------------------------------------------------------
@@ -322,7 +326,12 @@ class TrackGeometry:
                 lat = (vx * (y - py) - vy * (x - px)) / L
                 best = (d, i, self._cum[i] + tc * L, lat, math.atan2(vy, vx))
         d, i, s, lat, hd = best
-        return {"s_m": s, "lateral_m": lat, "dist_m": d, "heading_rad": hd, "index": i}
+        return {"s_m": s, "lateral_m": lat, "dist_m": d, "heading_rad": hd, "index": i,
+                "width_m": self.width_at_s(s)}
+
+    def paint_lines(self) -> list:
+        """Stripe-centre polylines of all painted lane lines (with run-in / run-out)."""
+        return [self.lane_line(+1.0), self.lane_line(-1.0)]
 
     # --- referee --------------------------------------------------------------
     @property
@@ -390,9 +399,20 @@ class FinishReferee:
         self._hint = pr["index"]
         return float(pr["lateral_m"])
 
+    def exit_name(self, x: float, y: float) -> str | None:
+        """Which exit was crossed (intersection tracks), else None."""
+        if self.track is None or not hasattr(self.track, "exit_crossed"):
+            return None
+        return self.track.exit_crossed(float(x), float(y))
+
     def describe(self) -> str:
         if self.track is None:
             return f"finish x>={self.finish_x_m:g} m ({self.source})"
+        if hasattr(self.track, "exits"):
+            ex = ", ".join(f"{e.name} ({e.xy[0]:g}, {e.xy[1]:g}) {math.degrees(e.heading):+.0f}deg"
+                           for e in self.track.exits)
+            return (f"track {self.name}: intersection network, {len(self.track.roads)} roads, "
+                    f"exits {ex or 'none'} ({self.source})")
         fx, fy = self.track.finish_xy
         return (f"track {self.name}: finish ({fx:g}, {fy:g}) heading "
                 f"{math.degrees(self.track.finish_heading):+.0f}deg, {self.track.length_m:.2f} m ({self.source})")
@@ -424,3 +444,252 @@ def referee_for(world_path: str | None = None, env: dict | None = None, finish_x
         return FinishReferee(None, finish_x_m, source)
     p = choice if os.path.isabs(choice) else os.path.join(ROOT, choice)
     return FinishReferee(load_track(p if os.path.isfile(p) else choice), finish_x_m, source)
+
+
+
+# --------------------------------------------------------------------------
+# Track networks: intersections (several roads, lines with gaps)
+# --------------------------------------------------------------------------
+#
+# A track file with ``roads`` is a small road graph. ``waypoints`` is the main
+# road (the robot starts on its first waypoint, facing the second). Each entry
+# of ``roads`` is another road with its own waypoints / lane width; it joins
+# the network wherever its carriageway overlaps another road's (a crossing, a
+# T, a branch). Painting rule, the same for every junction shape: a road's
+# lane lines are painted everywhere EXCEPT inside another road's carriageway
+# (|offset| < w/2 - stripe/2 from its centre line, its own ends included).
+# So at a crossing the lines have gaps exactly where the other road joins,
+# and the line ends meet at clean right angles.
+#
+# Exits are where a run may finish: the main road's end (``"exit": "east"``,
+# ``null`` for none) and each road's ``exit_start`` / ``exit_end``. Each exit
+# gets a red bar and is a finish line for the GPS referee. ``routes`` (optional)
+# maps an RBM_ROUTE string to the exit it should reach; only the offline sim
+# and tests read it.
+
+
+def _poly_dist(poly, x, y) -> float:
+    """Distance from (x, y) to a polyline, clamped to its ends."""
+    best = 1e18
+    for (x0, y0), (x1, y1) in zip(poly, poly[1:]):
+        vx, vy = x1 - x0, y1 - y0
+        L2 = vx * vx + vy * vy
+        t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((x - x0) * vx + (y - y0) * vy) / L2))
+        best = min(best, math.hypot(x - x0 - t * vx, y - y0 - t * vy))
+    return best
+
+
+def _simplify_idx(pts, tol: float) -> list[int]:
+    """Douglas-Peucker: indexes of ``pts`` to keep (straight runs -> their ends)."""
+    n = len(pts)
+    if n <= 2:
+        return list(range(n))
+    keep = {0, n - 1}
+    stack = [(0, n - 1)]
+    while stack:
+        a, b = stack.pop()
+        (ax, ay), (bx, by) = pts[a], pts[b]
+        dx, dy = bx - ax, by - ay
+        L = math.hypot(dx, dy) or 1e-12
+        far, fi = -1.0, None
+        for i in range(a + 1, b):
+            d = abs((pts[i][0] - ax) * dy - (pts[i][1] - ay) * dx) / L
+            if d > far:
+                far, fi = d, i
+        if fi is not None and far > tol:
+            keep.add(fi)
+            stack.append((a, fi))
+            stack.append((fi, b))
+    return sorted(keep)
+
+
+def _densify_pair(c, le, re_, step):
+    """Densify three paired polylines in lockstep (same subdivisions per span)."""
+    oc, ol, orr = [c[0]], [le[0]], [re_[0]]
+    for i in range(len(c) - 1):
+        L = max(math.hypot(c[i + 1][0] - c[i][0], c[i + 1][1] - c[i][1]),
+                math.hypot(le[i + 1][0] - le[i][0], le[i + 1][1] - le[i][1]),
+                math.hypot(re_[i + 1][0] - re_[i][0], re_[i + 1][1] - re_[i][1]))
+        if L < 1e-12:
+            continue
+        n = max(1, int(math.ceil(L / step)))
+        for k in range(1, n + 1):
+            t = k / n
+            oc.append((c[i][0] + t * (c[i + 1][0] - c[i][0]), c[i][1] + t * (c[i + 1][1] - c[i][1])))
+            ol.append((le[i][0] + t * (le[i + 1][0] - le[i][0]), le[i][1] + t * (le[i + 1][1] - le[i][1])))
+            orr.append((re_[i][0] + t * (re_[i + 1][0] - re_[i][0]), re_[i][1] + t * (re_[i + 1][1] - re_[i][1])))
+    return oc, ol, orr
+
+
+@dataclass
+class Exit:
+    name: str
+    xy: tuple
+    heading: float  # outward driving direction (rad)
+    width_m: float
+    road: int
+
+
+class TrackNetwork:
+    """Several roads; same query interface as :class:`TrackGeometry` (project,
+    crossed_finish, width, start / finish) plus ``paint_segments`` with gaps."""
+
+    CUT_STEP_M = 0.01
+
+    def __init__(self, name: str, roads: list, exits: list, *, description: str = "", path=None,
+                 routes: dict | None = None, start_bar: bool = True, stripe_w_m: float = DEFAULT_STRIPE_W_M):
+        self.roads = roads  # [TrackGeometry], roads[0] = main road
+        self.exits = exits
+        self.routes = dict(routes or {})
+        self.main = roads[0]
+        self.spec = self.main.spec  # name / widths / bars of the main road
+        self.spec.name = name
+        self.spec.description = description
+        self.spec.path = path
+        self.name = name
+        self.start_bar = start_bar
+        self.stripe_w_m = stripe_w_m
+        self.length_m = self.main.length_m
+        self._segments = None
+
+    # --- construction -------------------------------------------------------
+    @classmethod
+    def from_dict(cls, d: dict, path: str | None = None) -> "TrackNetwork":
+        lane_w = d.get("lane_width_m", DEFAULT_LANE_W_M)
+        stripe = d.get("stripe_width_m", DEFAULT_STRIPE_W_M)
+        main_exit = d.get("exit", "finish")
+        main = dict(d)
+        main.pop("roads", None)
+        main["finish_bar"] = False  # bars are drawn per exit below
+        main["start_bar"] = False
+        if main_exit is None:
+            main["paint_after_finish_m"] = 0.0
+        name = str(d.get("name") or (os.path.splitext(os.path.basename(path))[0] if path else "network"))
+        roads = [TrackGeometry(spec_from_dict(main, path))]
+        exits = []
+        if main_exit is not None:
+            g = roads[0]
+            exits.append(Exit(str(main_exit), tuple(g.finish_xy), g.finish_heading, g.spec.widths[-1], 0))
+        for k, r in enumerate(d["roads"], start=1):
+            rd = {"waypoints": r["waypoints"], "lane_width_m": r.get("lane_width_m", lane_w),
+                  "stripe_width_m": stripe, "start_bar": False, "finish_bar": False,
+                  "paint_before_start_m": r.get("paint_before_start_m", 0.5 if r.get("exit_start") else 0.0),
+                  "paint_after_finish_m": r.get("paint_after_finish_m", 0.5 if r.get("exit_end") else 0.0),
+                  "name": r.get("name", f"road{k}")}
+            g = TrackGeometry(spec_from_dict(rd, path))
+            roads.append(g)
+            if r.get("exit_start"):
+                exits.append(Exit(str(r["exit_start"]), tuple(g.start_xy), g.start_heading + math.pi,
+                                  g.spec.widths[0], k))
+            if r.get("exit_end"):
+                exits.append(Exit(str(r["exit_end"]), tuple(g.finish_xy), g.finish_heading, g.spec.widths[-1], k))
+        net = cls(name, roads, exits, description=str(d.get("description", "")), path=path,
+                  routes=d.get("routes"), start_bar=bool(d.get("start_bar", True)), stripe_w_m=float(stripe))
+        net.spec.start_bar = net.start_bar
+        return net
+
+    def _inside_other(self, k: int, x: float, y: float) -> bool:
+        h = self.stripe_w_m / 2.0
+        for j, g in enumerate(self.roads):
+            if j == k:
+                continue
+            pr = g.project(x, y)
+            w = g.width_at_s(max(0.0, min(g.length_m, pr["s_m"])))
+            if _poly_dist(g.centerline, x, y) < w / 2.0 - h:
+                return True
+        return False
+
+    def paint_segments(self) -> list:
+        """[(centre, left_edge, right_edge)] stripe pieces after cutting the gaps."""
+        if self._segments is not None:
+            return self._segments
+        out = []
+        h = self.stripe_w_m / 2.0
+        for k, g in enumerate(self.roads):
+            for side in (1.0, -1.0):
+                c = g.offset_curve(0.5 * side, 0.0, True)
+                le = g.offset_curve(0.5 * side, +h, True)
+                re_ = g.offset_curve(0.5 * side, -h, True)
+                c, le, re_ = _densify_pair(c, le, re_, self.CUT_STEP_M)
+                keep = [not self._inside_other(k, *p) for p in c]
+                run = None
+                for i, ok in enumerate(keep):
+                    if ok and run is None:
+                        run = i
+                    if (not ok or i == len(keep) - 1) and run is not None:
+                        end = i if ok else i - 1
+                        if end > run:
+                            idx = _simplify_idx(c[run:end + 1], 0.0005)
+                            out.append(tuple([q[run:end + 1][j] for j in idx] for q in (c, le, re_)))
+                        run = None
+        self._segments = out
+        return out
+
+    def paint_lines(self) -> list:
+        return [seg[0] for seg in self.paint_segments()]
+
+    # --- queries (TrackGeometry interface) ----------------------------------
+    def project(self, x: float, y: float, hint=None, window: int = 200) -> dict:
+        """Nearest road's projection (s / index are on that road; ``road`` says which)."""
+        best = None
+        for k, g in enumerate(self.roads):
+            d = _poly_dist(g.centerline, x, y)
+            if best is None or d < best[0] - 1e-9:
+                best = (d, k)
+        g = self.roads[best[1]]
+        pr = g.project(x, y)
+        pr["road"] = best[1]
+        pr["width_m"] = g.width_at_s(max(0.0, min(g.length_m, pr["s_m"])))
+        if best[1] != 0:
+            pr["index"] = None  # hints are per road
+        return pr
+
+    def width_at_s(self, s: float) -> float:
+        return self.main.width_at_s(s)
+
+    def dense_centerline(self, step: float = 0.04, extend_before: float = 0.0, extend_after: float = 0.0) -> list:
+        return self.main.dense_centerline(step, extend_before, extend_after)
+
+    @property
+    def start_xy(self):
+        return self.main.start_xy
+
+    @property
+    def start_heading(self) -> float:
+        return self.main.start_heading
+
+    @property
+    def finish_xy(self):
+        return self.exits[0].xy if self.exits else self.main.finish_xy
+
+    @property
+    def finish_heading(self) -> float:
+        return self.exits[0].heading if self.exits else self.main.finish_heading
+
+    def exit_crossed(self, x: float, y: float, tol_m: float = 0.0):
+        """Name of the exit line the point is past (within its lane width), else None."""
+        for e in self.exits:
+            ux, uy = math.cos(e.heading), math.sin(e.heading)
+            dx, dy = x - e.xy[0], y - e.xy[1]
+            along, side = dx * ux + dy * uy, -dx * uy + dy * ux
+            if along >= -tol_m and abs(side) <= e.width_m and along < 3.0:
+                return e.name
+        return None
+
+    def crossed_finish(self, x: float, y: float, tol_m: float = 0.0):
+        return self.exit_crossed(x, y, tol_m)
+
+    def past_finish_m(self, x: float, y: float) -> tuple[float, float]:
+        e = self.exits[0]
+        ux, uy = math.cos(e.heading), math.sin(e.heading)
+        dx, dy = x - e.xy[0], y - e.xy[1]
+        return (dx * ux + dy * uy, -dx * uy + dy * ux)
+
+    def bars(self) -> list:
+        """[(name, color, xy, heading, width)] start bar + one red bar per exit."""
+        out = []
+        if self.start_bar:
+            out.append(("TRACK_START", "green", self.start_xy, self.start_heading, self.main.spec.widths[0]))
+        for e in self.exits:
+            out.append((f"TRACK_EXIT_{e.name.upper()}", "red", e.xy, e.heading, e.width_m))
+        return out

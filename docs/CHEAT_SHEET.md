@@ -45,6 +45,13 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
       paint beyond it.
     * The outer line's cue is required. It must persist for 2 frames.
     * Output: `est.corner` (side, distance, conf).
+  * **Junction classifier** (`src/junction_vision.py`, same line tracer):
+    per side BEND_OUT (opening) / BEND_IN (corner) / END (gap) / CONT, plus
+    far bars and resumed lines → `est.junction`: `t_end`, `plus`, `side_L/R`,
+    `gap_straight`, `lane_lost`, `dead_end` (and `corner_L/R`), with
+    openings L/S/R (`S?` = far side beyond the 1.96 m reach), near / centre
+    distance, conf, 2-frame persistence. `est.view` = nearest yellow
+    ahead/left/right.
   * Post-pivot: `begin_reacquire` relaxes the gate for 6 frames. Then
     `begin_settle` widens the jump limits for 5 frames. The controller calls
     it again on REACQUIRE → LANE.
@@ -55,6 +62,11 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     * It stops at the pivot point: outer line − lane width / 2.
     * It pivots in place on IMU yaw to ±90° (±1°, ≤ 0.9 rad/s).
     * It re-acquires slowly. If there is still no lane it brakes.
+  * Intersections (`src/route_policy.py`): `LANE → JUNCTION_APPROACH`, then
+    a turn (CORNER_APPROACH/PIVOT at the junction centre), straight on past a
+    side branch, or `GAP_CROSS` (blind 0.15 m/s on IMU heading, up to
+    `RBM_MAX_BLIND_M`) → REACQUIRE. Nothing by then: `LOOK_AROUND` (+90°, −90°,
+    0°) and `STOPPED`. Route = `RBM_ROUTE`, default straight-else-left.
 * **Controller glue** (`webots/controllers/butlerbot_controller/`):
   * `controller_rowfit.py`: `RowfitRuntime` and the `LaneVisionLog` writer.
   * `controller_hud.py`: shoulder HUDs (state line, fit dots, crossbar bar).
@@ -65,6 +77,9 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     per-waypoint lane width, 6 cm stripe, bars.
   * Tracks: `s`, `corner90`, `corner_mix`, `widen`. Sim-only:
     `corner90_right`, `corner90_wide`.
+  * Intersection tracks (a road graph: `roads`, `exit`s, `routes`; lines are
+    cut where another road joins): `plus`, `t_end`, `t_left`, `t_right`,
+    `gap15`, `gap25`, `gap35`, `gap45` (crossing 1.5–4.5 m wide).
   * Geometry is in `src/track_geometry.py`: exact mitred and filleted offsets,
     `project()` sampler, `FinishReferee` with `crossed()` and `cross_track()`.
   * `scripts/track_builder.py <track> --world <wbt>` writes the floor paint.
@@ -72,6 +87,8 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
 * **Worlds** (`webots/worlds/`). All share the same Robot block.
   * `butlerbot.wbt`: the 16.5 m S.
   * `butlerbot_corner90.wbt`, `butlerbot_corner_mix.wbt`, `butlerbot_widen.wbt`.
+  * `butlerbot_plus.wbt`, `butlerbot_t_end.wbt`, `butlerbot_gap45.wbt`
+    (intersections; the referee reports which exit was crossed).
 * **Offline sim.** `scripts/rowfit_sim.py`: kinematic diff-drive, the same
   camera model and tracker, a simulated IMU, and pivots.
 
@@ -84,7 +101,10 @@ repo `.env`. A value set with `set` wins.
 |---|---|
 | `RBM_LANE_MODE` | `rowfit` (default when unset) or `gap`, the old pixel-gap lane keep, not re-tuned for the box cameras |
 | `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value. It overrides the world's `# TRACK_FILE` tag. |
-| `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen` or a `.wbt` file. Same as `-World`. |
+| `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45` or a `.wbt` file. Same as `-World`. |
+| `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
+| `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
+| `RBM_LOOK_AROUND` | `0` = after the max blind distance just stop (no +90/−90 look-around). Default on. |
 | `RBM_LOG_DIR` | Folder for `lane-vision.csv` and `steer-actions.csv`. Default: `%USERPROFILE%\OneDrive\Desktop\Grok Workspace` |
 | `RBM_NADIR_GUARD_PER_FRAME` | `1` = gap-mode NadirGuard counts per camera frame (opt-in; gap mode only) |
 
@@ -107,6 +127,23 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World c
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World widen
 ```
 
+Intersections. `set` lasts for that cmd window; clear with `set RBM_ROUTE=`:
+
+```bat
+set RBM_TRACK=plus
+set RBM_ROUTE=L
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World plus
+
+set RBM_TRACK=t_end
+set RBM_ROUTE=R
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World t_end
+
+set RBM_TRACK=gap45
+set RBM_ROUTE=
+set RBM_MAX_BLIND_M=4.0
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World gap45
+```
+
 Score runs. `--track` must match the world, and runs are split by `run_id`:
 
 ```bat
@@ -120,6 +157,9 @@ Offline sim:
 python scripts\rowfit_sim.py corner90 corner_mix corner90_right corner90_wide s widen turn90 --table
 python scripts\rowfit_sim.py corner90 --turn-eff 0.8 --imu-drift 0.5 --table
 python scripts\rowfit_sim.py corner90 --no-corners --table
+python scripts\rowfit_sim.py plus --route L --table
+python scripts\rowfit_sim.py gap45 --max-blind 2.0
+python scripts\intersection_matrix.py
 ```
 
 Tests (CI runs the same `pytest`; the docker test skips without docker):
@@ -184,8 +224,11 @@ See `docs/RUN_HISTORY.md`.
 * **Gap mode:** retire it, or re-tune it for the box view.
 * **Track importer from Paint, Unity or CAD.** It only needs to write the
   `tracks/*.json` format.
-* **Intersections and T-junctions.** The corner fusion already rejects
-  opposite smears (a bar across the lane). Real junction logic is still open.
+* **Intersections, next steps.** Built (see the Intersections section of
+  `docs/ROWFIT_LANE_VISION.md`; the large-intersection / limited look-ahead
+  case is Dan's). Open: oblique (non-90°) branches, back-to-back junctions,
+  heading correction while blind (a drifting gyro limits the widest plaza),
+  wide T junctions in a test course, a world for `t_left` / `t_right`.
 * **Bot-body reference in the frame.** Use the robot's own visible parts
   (front caster or wheel corner) as an in-image calibration reference.
 * **480 Wh hardcode.** `BATTERY_CAPACITY_WH = 480.0` at

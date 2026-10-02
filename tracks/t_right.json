@@ -1,0 +1,41 @@
+{
+  "name": "t_right",
+  "description": "T with straight-or-turn: 4 m, a branch opens on the RIGHT (gap in the right line), the lane continues straight 4 m.",
+  "lane_width_m": 1.3,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "waypoints": [
+    [
+      0,
+      0
+    ],
+    [
+      8,
+      0
+    ]
+  ],
+  "exit": "east",
+  "roads": [
+    {
+      "name": "branch",
+      "waypoints": [
+        [
+          4,
+          0
+        ],
+        [
+          4,
+          -4
+        ]
+      ],
+      "exit_end": "south"
+    }
+  ],
+  "routes": {
+    "S": "east",
+    "R": "south",
+    "L": "east",
+    "default": "east"
+  }
+}

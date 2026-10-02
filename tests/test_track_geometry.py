@@ -24,7 +24,8 @@ from src.track_geometry import (  # noqa: E402
 
 WORLDS = ROOT / "webots" / "worlds"
 NEW_WORLDS = {"corner90": "butlerbot_corner90.wbt", "corner_mix": "butlerbot_corner_mix.wbt",
-              "widen": "butlerbot_widen.wbt"}
+              "widen": "butlerbot_widen.wbt", "plus": "butlerbot_plus.wbt", "t_end": "butlerbot_t_end.wbt",
+              "gap45": "butlerbot_gap45.wbt"}
 
 
 def _geom(wps, **kw):

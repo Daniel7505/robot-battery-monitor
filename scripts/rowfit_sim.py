@@ -127,7 +127,22 @@ def track_geometry(name: str):
 
 
 def track_course(geom):
-    """Painted lines (dense, with run-in / run-out), bars and scoring centre line."""
+    """Painted lines (dense, with run-in / run-out), bars and scoring centre line.
+
+    For a TrackNetwork (intersections) ``left`` is the list of ALL painted
+    line pieces and ``right`` is empty."""
+    from src.track_geometry import TrackNetwork
+
+    if isinstance(geom, TrackNetwork):
+        lines = [_densify(p) for p in geom.paint_lines()]
+        bars = []
+        for _n, color, xy, th, w in geom.bars():
+            h = 0.5 * (w + 0.10)
+            nx, ny = -math.sin(th), math.cos(th)
+            bars.append(([(xy[0] - h * nx, xy[1] - h * ny), (xy[0] + h * nx, xy[1] + h * ny)], 0.08,
+                         GREEN_BAR if color == "green" else RED_BAR))
+        centre = geom.dense_centerline(0.04, extend_before=2.0)
+        return centre, lines, [], bars
     sp = geom.spec
     left = _densify(geom.lane_line(+1.0))
     right = _densify(geom.lane_line(-1.0))
@@ -188,12 +203,15 @@ def _path_curvature(poly):
 
 def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0,
         cams=None, yellow_mode=None, start_x=0.0, turn_eff=1.0, imu_noise_deg=0.0, imu_drift_dps=0.0,
-        corners=True, log=None):
+        corners=True, log=None, route=None, max_blind=None, look_around=True):
     """Closed loop on one course. ``turn_eff`` scales the realised yaw rate
     (tyre scrub in a pivot: the wheels ask for more turn than the body makes);
     the IMU reads the true yaw plus ``imu_drift_dps`` drift and white noise.
     ``corners=False`` runs without the IMU in the controller (no pivots:
-    the old brake-at-the-corner behaviour)."""
+    the old brake-at-the-corner behaviour). ``route``: RBM_ROUTE-style
+    choices ("S,L"), ``max_blind``: RBM_MAX_BLIND_M. On an intersection
+    course (TrackNetwork) the result has ``exit`` (which exit was crossed),
+    ``expected_exit`` (the course's ``routes`` entry) and ``ok``."""
     stop_x, bars = None, []
     geom = track_geometry(name)
     if geom is not None:
@@ -206,6 +224,7 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         centre = course(name)
         left = offset_polyline(centre, half_w)
         right = offset_polyline(centre, -half_w)
+    polys = (list(left) + list(right)) if (left and isinstance(left[0], list)) else [left, right]
     curv = _path_curvature(centre)
     yaw_tail = []  # (x, yaw_rate) near the finish
     n_held = 0
@@ -221,6 +240,10 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
     ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(c) for c in cams.values()])
     ctl = RowfitController(ld_min=ld_min, ld_max=ld_max)
     ctl.tracker = tracker
+    ctl.set_route(route, max_blind_m=max_blind, look_around=look_around)
+    from src.track_geometry import TrackNetwork
+    network = isinstance(geom, TrackNetwork)
+    exit_name = None
     import random
     rng = random.Random(7)
     events = []
@@ -254,7 +277,7 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         if new:
             near = [p for p in centre if abs(p[0] - x) < 4.0 and abs(p[1] - y) < 4.0]
             lines = []
-            for poly in (left, right):
+            for poly in polys:
                 seg = [p for p in poly if math.hypot(p[0] - x, p[1] - y) < 3.5]
                 if len(seg) > 1:
                     lines.append(lane_polyline_robot(seg, (x, y), yaw))
@@ -297,8 +320,10 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
             info["end"] = _where()
             if geom is not None:
                 ahead = geom.project(x + 0.5 * math.cos(yaw), y + 0.5 * math.sin(yaw), hint)
-                info["true_err_deg"] = round(math.degrees(math.atan2(math.sin(ahead["heading_rad"] - yaw),
-                                                                     math.cos(ahead["heading_rad"] - yaw))), 2)
+                te = math.degrees(math.atan2(math.sin(ahead["heading_rad"] - yaw), math.cos(ahead["heading_rad"] - yaw)))
+                if network and abs(te) > 90.0:  # roads have a drawing direction; driving one backwards is fine
+                    te -= math.copysign(180.0, te)
+                info["true_err_deg"] = round(te, 2)
                 pr = geom.project(x, y, hint)
                 info["lateral_m"] = round(pr["lateral_m"], 3)
             pivots.append(info)
@@ -313,7 +338,10 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
             yaw_tail.append(abs(w))
         x += v * math.cos(yaw) * dt
         y += v * math.sin(yaw) * dt
-        ct, idx = _dist_and_index((x, y), centre, idx)
+        if network:
+            ct = abs(geom.project(x, y)["lateral_m"])
+        else:
+            ct, idx = _dist_and_index((x, y), centre, idx)
         max_ct = max(max_ct, ct)
         sum_ct += ct
         n_ct += 1
@@ -328,7 +356,7 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                 tr["worst_at"] = {"x": round(x, 2), "y": round(y, 2), "s_m": round(pr["s_m"], 2)}
             if lat > 0.5 * geom.width_at_s(pr["s_m"]) and tr["left_lane_at"] is None:
                 tr["left_lane_at"] = {"x": round(x, 2), "y": round(y, 2), "s_m": round(pr["s_m"], 2)}
-        if curv[min(idx, len(curv) - 1)] > 0.3:
+        if not network and curv[min(idx, len(curv) - 1)] > 0.3:
             bend_v.append(v)
         if new and csv is not None:
             rows.append((round(tick * dt, 3), round(x, 3), round(y, 3), round(ct, 3),
@@ -336,8 +364,10 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                          None if est is None else round(est.curvature_1pm, 3),
                          cmd["steer"], cmd.get("target_speed"), round(v, 3)))
         if geom is not None:
-            if geom.crossed_finish(x, y):
+            hit = geom.crossed_finish(x, y)
+            if hit:
                 done = True
+                exit_name = hit if isinstance(hit, str) else "finish"
                 break
         elif stop_x is not None:
             if x >= stop_x:
@@ -382,12 +412,27 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                                  dict(zip(("err_m", "s_m", "measured_m", "true_m"),
                                           (round(max(tr["width_err"])[0], 3), *max(tr["width_err"])[1:])))),
         }),
+        **({} if not network else _route_result(geom, route, exit_name, done, ctl)),
         **({} if stop_x is None else {
             "end_x_m": round(x, 3),
             "end_yaw_deg": round(math.degrees(yaw), 2),  # finish straight runs along +x
             "max_yaw_rate_last_1m": round(max(yaw_tail), 3) if yaw_tail else None,
         }),
     }
+
+
+def expected_exit(geom, route) -> str | None:
+    """The exit a route should end at (course ``routes``: first route letter or 'default')."""
+    routes = getattr(geom, "routes", None) or {}
+    key = (route or "").replace(";", ",").split(",")[0].strip().upper() or "default"
+    return routes.get(key, routes.get("default"))
+
+
+def _route_result(geom, route, exit_name, done, ctl) -> dict:
+    exp = expected_exit(geom, route)
+    return {"route": route or "default", "exit": exit_name, "expected_exit": exp,
+            "ok": bool(done and exit_name is not None and exit_name == exp),
+            "junctions": list(ctl.junctions), "final_state": ctl.state}
 
 
 def main(argv=None) -> int:
@@ -406,6 +451,8 @@ def main(argv=None) -> int:
                     help="no IMU yaw to the controller: corners end in the lost-lane brake (old behaviour)")
     ap.add_argument("--quiet", action="store_true", help="no CORNER / PIVOT / REACQUIRE event lines")
     ap.add_argument("--table", action="store_true", help="one summary line per course instead of the dict")
+    ap.add_argument("--route", help="RBM_ROUTE-style junction choices, e.g. S,L,R (default: straight else left)")
+    ap.add_argument("--max-blind", type=float, help="RBM_MAX_BLIND_M (default 4.0)")
     a = ap.parse_args(argv)
     cams = sim_cameras(a.constants, a.wbt)
     for n, c in cams.items():
@@ -416,7 +463,7 @@ def main(argv=None) -> int:
             print(f"--- {c}")
         r = run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow, turn_eff=a.turn_eff,
                 imu_noise_deg=a.imu_noise, imu_drift_dps=a.imu_drift, corners=not a.no_corners,
-                log=None if a.quiet else print)
+                log=None if a.quiet else print, route=a.route, max_blind=a.max_blind)
         rows.append(r)
         if not a.table:
             print({k: v for k, v in r.items() if k != "events"})
@@ -438,6 +485,9 @@ def summary_line(r: dict) -> str:
     perr = " ".join(f"{p['err_deg']:+.1f}/{p.get('true_err_deg', float('nan')):+.1f}" for p in piv) or "-"
     pt = " ".join(f"{p['time_s']:.1f}" for p in piv) or "-"
     stop = "finish" if r["finished"] else (f"brake {r.get('braked_at')}" if r.get("braked_at") else "timeout")
+    if "exit" in r:
+        stop = (f"exit {r['exit']} (want {r['expected_exit']}) {'OK' if r['ok'] else 'FAIL'}"
+                + ("" if r["finished"] else f" {r.get('final_state')} {r.get('braked_at')}"))
     return (f"{r['course']:15} {'yes' if r['finished'] else 'NO':6} {r['time_s']:6.1f} {100 * worst:8.1f} "
             f"{100 * r['mean_ct_m']:7.1f} {r['min_v']:5.2f} {len(piv):6d} {perr:>24} {pt:>7}  {stop}")
 

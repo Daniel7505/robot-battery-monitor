@@ -311,6 +311,206 @@ off the centre line):
     inward in opposite directions, so no corner.
   * corner_mix's rounded left gives only an inner cue, so no corner.
 
+## Intersections: crossings, T junctions, branches and wide plazas
+
+The north star is the same as for corners: unknown, customer-drawn tracks and
+no prior track knowledge. Everything below comes from the two shoulder
+cameras' yellow mask, odometry and the IMU. The large-intersection /
+limited look-ahead edge case is **Dan's**: a crossing can be wider than the
+1.96 m camera reach, so when the robot must decide it may not yet see whether
+the lane carries on.
+
+### Junction classifier (`src/junction_vision.py`)
+
+It reuses the corner detector's line tracer (`lane_vision.trace_lines`,
+which `corner_cues` now shares unchanged). Each lane line is followed up the
+image row by row. Per side (left line from `nadir_left`, right line from
+`nadir_right`) the line's event is one of:
+
+| event | meaning in the picture |
+|---|---|
+| `BEND_OUT` | the run suddenly widens and smears AWAY from the lane centre: a road joins on this side (an opening) |
+| `BEND_IN` | it smears TOWARDS the centre: the outer line of a corner (existing corner path) |
+| `END` | the line just stops (a gap) |
+| `CONT` | still running, straight, at the top row |
+| `CURVE` / `EDGE` | bends gradually / leaves the picture sideways (an ordinary curve) |
+
+Plus two far-side cues: **free bars** (wide yellow runs that no lane line
+claims = lines running across the view) and **resumed lines** (new line
+starts beyond the gap, at the old line's lateral position).
+
+| kind | rule | openings |
+|---|---|---|
+| `corner_L/R` | any `BEND_IN` (left to the corner path) | – |
+| `t_end` | both sides open at the same distance, a bar crosses the lane centre beyond | L − R |
+| `plus` | both sides open, the lane resumes or far pieces with an empty centre | L S R |
+| `plus` (plaza) | both sides open, nothing visible beyond yet | L S? R |
+| `side_L/R` | one side opens, the other line keeps going straight at least one crossing width + 0.25 m past it | L S − / − S R |
+| `gap_straight` | both lines `END`, the lane resumes | S |
+| `lane_lost` | both lines `END`, nothing beyond (also: the end of the paint) | S? |
+| `dead_end` | both `END`, a bar blocks | none |
+| `opening_L/R` | one side opens, not yet known if branch or corner | (not acted on; slows down) |
+
+* Distances: `near_m` = the near crossing line; `center_m` = near +
+  half the crossing width (far − near when the far side is seen, else the
+  own lane width). The robot pivots at `center_m`.
+* Persistence: 2 frames, distance consistent within 0.3 m after odometry.
+  `plus`/`t_end`/`gap_straight`/`lane_lost` count as one family (they refine
+  as the far side comes into view), as do `opening_X` and `side_X`.
+* Fit clipping: at a crossing the lane fit only uses points before the near
+  line; at a side branch only the opening side is clipped. Near a junction
+  (`LaneTracker.bar_filter_frames`, set by the controller) points on free bars
+  are dropped, so the far side's cross lines do not bend the new fit.
+* `est.view` (`yellow_view`): nearest yellow ahead / left / right / a bar
+  across, used while crossing blind and looking around.
+
+### Behaviour (`src/rowfit_control.py`, `src/route_policy.py`)
+
+```
+LANE -> JUNCTION_APPROACH -(L/R)-> CORNER_APPROACH -> PIVOT -> REACQUIRE -> LANE
+                          -(S at a side branch)-> LANE (single-line lane past it)
+                          -(S at a crossing / gap)-> GAP_CROSS -> REACQUIRE -> LANE
+                                     GAP_CROSS -(nothing by max blind)-> LOOK_AROUND -> STOPPED
+```
+
+* **Route policy.** `RBM_ROUTE=S,L,R` = one choice per junction in order;
+  after the list (or with none) the default is *straight if possible, else
+  left, else right*. "Possible" includes *unknown* (`S?`): a wide plaza is
+  crossed, not avoided. A listed choice the junction does not offer falls back
+  to the default and the log says so (`route #1 wanted S — not offered,
+  default L`). Corners and one-way junctions (a gap, the end of the paint)
+  never consume a route entry.
+* **JUNCTION_APPROACH.** Speed cap 0.25 m/s from the first persistent sighting
+  (and 0.6 m of 0.25 m/s whenever one side opens while the other runs straight,
+  so a side branch is never decided at full speed). Decides as soon as the
+  openings are known, at the latest 0.35 m before the near line
+  (odometry-dead-reckoned if vision loses it).
+* **Turns** reuse CORNER_APPROACH / PIVOT / REACQUIRE, pivot point = the
+  junction centre, refreshed from each new sighting.
+* **GAP_CROSS.** Lane pursuit up to the near line, then blind: 0.15 m/s,
+  heading held on the IMU (the lane direction measured on the approach),
+  distance counted by odometry. Every frame without a lane the tracker forgets
+  its prior, so the next lane is taken fresh. It ends when, for 2 frames, a
+  two-line lane is fitted with |heading| < 20°, |offset| < 0.45 m, width within
+  ±25 % of the approach lane and both lines starting within 1.0 m. A bar across
+  the centre ahead (the far side of a wide T) turns it into a turn (route L/R,
+  default left). Side yellow is logged as openings.
+* **Max blind distance** `RBM_MAX_BLIND_M` (default 4.0 m). Reached: stop,
+  LOOK_AROUND (slow pivot to +90°, −90°, back to 0°, 0.5 rad/s; disable with
+  `RBM_LOOK_AROUND=0`), report what yellow was seen, then STOPPED (brakes;
+  drive on by hand). Without IMU yaw it just stops.
+
+### What you see
+
+Console (sim, plus with `RBM_ROUTE=S`):
+
+```
+ROUTE RBM_ROUTE=S -> S then default (straight if possible, else left); max blind 4.00 m (RBM_MAX_BLIND_M), look-around on
+JUNCTION #1 seen plus near 1.77 m centre 2.42 m openings L S? R conf 0.70 — slowing to 0.25 m/s
+JUNCTION #1 now plus openings L S R near 0.63 m centre 1.29 m
+ROUTE junction #1 plus [L S R] -> S (route #1 S)
+GAP_CROSS start: near line 0.63 m, holding heading -0.0deg, creep 0.15 m/s, max blind 4.00 m
+GAP sees yellow left at 1.07 m (after 0.19 m blind) — side line = opening
+GAP reacquire after 0.34 m blind — lane ahead off +0cm hd -0.0deg w 1.30 m — REACQUIRE
+REACQUIRE ok after 3 frames — off +0cm hd -0.0deg conf 0.99, back to LANE
+JUNCTION #2 seen lane_lost near 1.48 m centre 2.13 m openings - S? - conf 0.70 — slowing to 0.25 m/s
+TRACK plus DONE via exit east at x=8.00 y=0.00 m — GPS finish, not a red camera. ...
+```
+
+The `lane_lost` sighting is the end of the paint 0.5 m past the exit: the
+robot slows for it and the GPS referee stops the run at the exit first.
+A turn prints `ROUTE junction #1 plus [L S R] -> L (route #1 L)` and
+`TURN L at the junction centre, pivot point in 1.29 m`, then the usual
+`PIVOT start/done` and `REACQUIRE ok`. Giving up prints
+`GAP no lane after 4.00 m blind ... — LOOK_AROUND` and
+`LOOK_AROUND done — left (+90): ..., right (-90): ..., ahead: .... STOPPED`.
+
+HUD first line: `LANE plus 1.20m LS?R` (sighting), `JCT plus 1.29m LSR`,
+`TURN L L pv+0.80`, `GAP S blind 1.20/4.0m`, `LOOK 2/3`, `STOPPED no lane`.
+
+`lane-vision.csv` gets five more columns after the corner ones:
+`junction_type,junction_m,openings,route_choice,blind_m` (rename an old
+file to get the new header).
+
+### Offline results (`python scripts/intersection_matrix.py`)
+
+Box-mount cameras from the `.wbt`, 0.32 s frames. Success = finished through
+the exit the route asks for. Worst = farthest off the nearest road's centre
+line.
+
+| course | route → exit | result | time | worst | pivot err (IMU / true) |
+|---|---|---|---|---|---|
+| plus | S → east | OK | 27.0 s | 0.0 cm | – (blind 0.34 m) |
+| plus | L → north | OK | 30.0 s | 3.8 cm | +0.7° / +0.7° |
+| plus | R → south | OK | 30.0 s | 3.8 cm | −0.7° / −0.7° |
+| plus | default → east | OK | 27.0 s | 0.0 cm | – |
+| t_end | L → north | OK | 29.9 s | 2.4 cm | +0.7° / +0.7° |
+| t_end | R → south | OK | 29.9 s | 2.4 cm | −0.7° / −0.7° |
+| t_end | S (not offered) → north | OK | 29.9 s | 2.4 cm | +0.7° / +0.7° |
+| t_end | default → north | OK | 29.9 s | 2.4 cm | +0.7° / +0.7° |
+| t_left | S / default → east | OK | 24.5 s | 0.1 cm | – |
+| t_left | L → north | OK | 28.1 s | 1.3 cm | +1.0° / +0.8° |
+| t_right | S / default → east | OK | 24.5 s | 0.1 cm | – |
+| t_right | R → south | OK | 28.1 s | 1.3 cm | −1.0° / −0.8° |
+
+Large gaps (straight; the line-to-line gap across the crossing):
+
+| course | gap | result | time | worst | blind distance | at the decision |
+|---|---|---|---|---|---|---|
+| gap15 | 1.5 m | OK | 31.3 s | 0.0 cm | 0.51 m | far side seen (L S R) |
+| gap25 | 2.5 m | OK | 38.0 s | 0.0 cm | 1.52 m | far side beyond reach (L S? R) |
+| gap35 | 3.5 m | OK | 44.6 s | 0.0 cm | 2.53 m | L S? R |
+| gap45 | 4.5 m | OK | 51.3 s | 0.0 cm | 3.53 m | L S? R |
+
+Blind distance ≈ gap − 1.0 m (the new lines must start within 1 m), so with
+the default 4.0 m any gap up to ~5 m is crossed. gap45 with
+`RBM_MAX_BLIND_M=2.0` stops after 2.00 m, looks around (nothing in view)
+and stays STOPPED, as intended.
+
+Robustness (plus S/L, t_end R, t_left L, t_right S, gap25, gap45):
+
+| condition | result |
+|---|---|
+| tyre scrub (turn_eff 0.8) | 7/7 OK, worst 3.8 cm, pivot err ≤ 1.1° |
+| start offset +15 cm, or −15 cm and +5° yaw | 14/14 OK (worst = the start offset) |
+| IMU drift +0.25°/s | 7/7 OK; gap45 ends 24 cm off after 24 s blind |
+| IMU drift ±0.5°/s (and 0.3° noise) | 6/7 OK; **gap45 fails**: 12° of heading drift over 3.5 m blind puts the robot 0.58 m off, the far lane does not pass the reacquire check, it gives up at 4.0 m and stops safely. gap25 OK (14 cm). |
+| one frame extra camera latency | 11/11 OK; turns end 8–11 cm off (the pivot point is one frame late) |
+
+So the gap crossed reliably is 4.5 m with an IMU drifting ≤ 0.25°/s and
+2.5 m at 0.5°/s. Webots' InertialUnit has no drift; a real gyro's does matter
+for wide plazas.
+
+Old courses (no regressions in accuracy; slightly slower, see below):
+
+| course | worst (before → now) | time (before → now) | pivot err |
+|---|---|---|---|
+| corner90 | 1.5 → 1.7 cm | 24.5 → 27.3 s | +0.7° |
+| corner_mix | 14.3 → 14.3 cm | 34.9 → 37.3 s | −1.1° |
+| corner90_right | 1.5 → 1.7 cm | 24.5 → 27.3 s | −0.7° |
+| corner90_wide | 3.4 → 1.0 cm | 25.0 → 27.4 s | +0.7° |
+| S | 7.8 → 7.8 cm | 41.6 → 42.0 s | – |
+| widen | 1.7 → 1.7 cm | 29.0 → 30.6 s | – |
+| turn90 | 7.4 → 7.4 cm | 15.7 → 16.2 s | – |
+
+The extra seconds: the end of the paint (0.5 m past the finish) is now seen
+as `lane_lost` ahead, so the robot slows to 0.25 m/s for the last ~1.5 m; and
+a corner's inner line now slows it 0.6 m before the corner cue. corner90,
+corner90_right, corner90_wide and corner_mix still finish with scrub 0.8, IMU
+noise 0.3° + drift 0.5°/s, one frame latency, and start offsets (20/20).
+No turn-type junction on S, widen, turn90, corner90 or corner_mix, nor on the
+start/finish bars (tests).
+
+### Limits (not handled yet)
+
+* Junction turns are 90°. Oblique branches (45°) are classified as openings
+  but the pivot angle is still 90°.
+* One junction at a time; two crossings closer than ~2 m apart are untested.
+* A T whose far line is beyond the reach is driven into as a plaza and only
+  turned when the bar ahead shows (pivot = bar − half a lane, assumes the far
+  road has the robot's lane width). Not in the test courses.
+* Side lines seen while blind are reported but do not change the route.
+
 ## Run it
 
 Nothing to set: open `webots/worlds/butlerbot.wbt` and it runs rowfit.

@@ -6,10 +6,13 @@
 # to POST telemetry and GET teleop/throttle state.
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
-#   -World: butlerbot (default, the S), corner90, corner_mix, widen, a world file
-#   name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets the same default.
+#   -World: butlerbot (default, the S), corner90, corner_mix, widen, plus, t_end,
+#   gap45, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
+#   the same default.
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90
+# Intersections: RBM_ROUTE picks a way per junction (S,L,R), e.g.
+#   set RBM_ROUTE=L&& powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World plus
 # The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
 # =============================================================================
 

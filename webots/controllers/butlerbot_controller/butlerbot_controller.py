@@ -661,6 +661,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 f"LANE MODE rowfit (run_id {_RUN_ID}) — lane_vision fit, "
                 f"log → {lane_vision_log.path}"
             )
+            print(rowfit_rt.route_line())
+            for _wmsg in rowfit_rt.route_warnings:
+                print(f"WARNING {_wmsg}")
         except Exception as exc:
             rowfit_rt = None
             print(f"WARNING: rowfit not loaded ({exc}) — falling back to gap lane keep")
@@ -998,6 +1001,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
                         _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
+                        _exit = finish_ref.exit_name(float(gps_xy[0]), float(gps_xy[1])) if hasattr(
+                            finish_ref, "exit_name") else None
+                        if _exit:
+                            _what += f" via exit {_exit}"
                         print(
                             f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
                             "GPS finish, not a red camera. Nadir was on the wheel."

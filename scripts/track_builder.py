@@ -9,6 +9,9 @@ is not an IndexedFaceSet field in R2025a):
                                   (true mitres at sharp corners, see src/track_geometry.py)
     TRACK_START / TRACK_FINISH    green / red bars across the lane (lane width + 0.10 m)
     TRACK_TICKS                   optional white centreline ticks
+    TRACK_LINES (networks)        all lane-line pieces of a track with ``roads`` (intersections):
+                                  lines are cut where another road's carriageway joins
+    TRACK_EXIT_<NAME> (networks)  one red bar per exit (each is a GPS finish line)
 
     python scripts/track_builder.py corner90                        # print the TRACK block
     python scripts/track_builder.py corner90 --world webots/worlds/butlerbot_corner90.wbt
@@ -27,7 +30,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from src.track_geometry import TRACK_FILE_TAG, TrackGeometry, load_track  # noqa: E402
+from src.track_geometry import TRACK_FILE_TAG, TrackGeometry, TrackNetwork, load_track  # noqa: E402
 
 PAINT_Z = 0.008  # stripe centre height (top at 0.013, above the floor, no z-fighting)
 LINE_H_M = 0.01
@@ -186,8 +189,28 @@ def _tick_pose(geom: TrackGeometry, x: float, y: float):
     return px, py, th
 
 
+def network_meshes(net: TrackNetwork) -> dict:
+    top = PAINT_Z + LINE_H_M / 2.0
+    out = {}
+    pts, faces = [], []
+    segs = net.paint_segments()
+    for _c, le, re_ in segs:
+        strip_prism(le, re_, top, LINE_H_M, pts, faces)
+    out["TRACK_LINES"] = ("yellow", pts, faces,
+                          f"Lane lines (yellow, {net.stripe_w_m * 100:.0f} cm) of {len(net.roads)} roads, "
+                          f"{len(segs)} pieces: cut where another road joins; top z {top:.3f}")
+    for name, color, xy, th, w in net.bars():
+        pts, faces = [], []
+        box_strip(xy[0], xy[1], BAR_Z, th, BAR_ALONG_M, w + BAR_EXTRA_M, BAR_H_M, pts, faces)
+        label = "START line (green)" if color == "green" else f"EXIT {name[11:].lower()} (red) - GPS finish"
+        out[name] = (color, pts, faces, f"{label} at ({xy[0]:g}, {xy[1]:g})")
+    return out
+
+
 def track_meshes(geom: TrackGeometry) -> dict:
     """name -> (color, pts, faces, comment) for every painted part."""
+    if isinstance(geom, TrackNetwork):
+        return network_meshes(geom)
     sp = geom.spec
     top = PAINT_Z + LINE_H_M / 2.0
     out = {}
@@ -228,6 +251,16 @@ def track_file_rel(geom: TrackGeometry) -> str | None:
 
 
 def default_header(geom: TrackGeometry) -> list:
+    if isinstance(geom, TrackNetwork):
+        ws = sorted({round(w, 2) for g in geom.roads for w in g.spec.widths})
+        return [
+            f"Track {geom.name} (visual only - no boundingObject)",
+            geom.spec.description or f"{len(geom.roads)} roads",
+            f"Start ({geom.start_xy[0]:g},{geom.start_xy[1]:g})  exits: " +
+            ", ".join(f"{e.name} ({e.xy[0]:g},{e.xy[1]:g})" for e in geom.exits),
+            f"Roads {len(geom.roads)}, lane widths {'/'.join(f'{w:.2f}' for w in ws)} m, "
+            f"stripe {geom.stripe_w_m * 100:.0f} cm",
+        ]
     sp = geom.spec
     fx, fy = geom.finish_xy
     w0, w1 = min(sp.widths), max(sp.widths)
@@ -273,6 +306,9 @@ def replace_track_block(text: str, block: str) -> str:
 
 
 def info_line(geom: TrackGeometry) -> str:
+    if isinstance(geom, TrackNetwork):
+        return (f'    "TRACK (ENU): {geom.name}  start ({geom.start_xy[0]:g},{geom.start_xy[1]:g})  exits '
+                + " ".join(e.name for e in geom.exits) + f'  file {track_file_rel(geom)}"')
     fx, fy = geom.finish_xy
     w0, w1 = min(geom.spec.widths), max(geom.spec.widths)
     wt = f"{w0:.2f} m" if w1 - w0 < 1e-9 else f"{w0:.2f}..{w1:.2f} m"

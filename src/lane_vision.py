@@ -71,6 +71,12 @@ GATE_MAX_HELD_FRAMES = 3  # matches rowfit_control.LOST_FRAMES_STOP
 # GATE_MAX_SHORT_HOLDS in a row (~0.8 m at cruise), then they do.
 GATE_MIN_VIEW_M = 0.5
 GATE_MAX_SHORT_HOLDS = 6
+# Post-pivot settling: after the relaxed re-acquire window (and again when the
+# controller returns to LANE) the jump checks stay widened for a few frames,
+# because the first fits of the new leg still settle (only part of it in view).
+GATE_SETTLE_FRAMES = 5
+GATE_SETTLE_HEADING_RAD = math.radians(25.0)  # added to the heading-jump limit
+GATE_SETTLE_OFFSET_M = 0.15  # added to the offset-jump limit
 
 _WBT_DEFAULT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -1153,6 +1159,7 @@ class LaneTracker:
         self.corner: CornerEstimate | None = None  # this frame's fused corner cue
         self._corner_track: tuple[int, float, int] | None = None  # (dir, distance, frames)
         self.relax_frames = 0  # gate relaxed (jump / vanish / short-view checks off) this many frames
+        self.settle_frames = 0  # jump limits widened this many frames (post-pivot settling)
 
     def reset(self) -> None:
         self.prior_near = None
@@ -1166,6 +1173,11 @@ class LaneTracker:
         self.corner = None
         self._corner_track = None
         self.relax_frames = 0
+        self.settle_frames = 0
+
+    def begin_settle(self, frames: int = GATE_SETTLE_FRAMES) -> None:
+        """Widen the jump checks for ``frames`` frames (the new lane is settling)."""
+        self.settle_frames = max(self.settle_frames, int(frames))
 
     def begin_reacquire(self, relax_frames: int = 6) -> None:
         """After a pivot: forget the old lane (keep the measured width), relax the gate.
@@ -1243,6 +1255,10 @@ class LaneTracker:
         est.corner = corner
         if self.relax_frames > 0:
             self.relax_frames -= 1
+            if self.relax_frames == 0:
+                self.begin_settle()  # relaxed window over: settle before the full gate
+        elif self.settle_frames > 0:
+            self.settle_frames -= 1
         self.last = est
         return est
 
@@ -1269,12 +1285,18 @@ class LaneTracker:
             p_off = signed_lateral(0.0, 0.0, a0, psi, k)
             p_hd = -(psi + k * (-a0 * math.sin(psi)))
             lim_h = GATE_HEADING_JUMP_RAD + GATE_LANE_KAPPA_MAX * abs(dx_m)
+            settling = self.settle_frames > 0
+            if settling:
+                lim_h += GATE_SETTLE_HEADING_RAD
             if abs(est.heading_rad - p_hd) > lim_h:
                 return (
                     f"heading jump {math.degrees(est.heading_rad - p_hd):+.0f}deg > "
-                    f"{math.degrees(lim_h):.0f}deg for {abs(dx_m):.2f} m driven (IMU yaw applied)"
+                    f"{math.degrees(lim_h):.0f}deg for {abs(dx_m):.2f} m driven (IMU yaw applied"
+                    f"{', settling' if settling else ''})"
                 )
             lim_o = GATE_OFFSET_JUMP_M + GATE_OFFSET_JUMP_PER_M * abs(dx_m)
+            if settling:
+                lim_o += GATE_SETTLE_OFFSET_M
             if abs(est.offset_m - p_off) > lim_o:
                 return f"offset jump {100 * (est.offset_m - p_off):+.0f}cm > {100 * lim_o:.0f}cm for {abs(dx_m):.2f} m driven"
         return ""

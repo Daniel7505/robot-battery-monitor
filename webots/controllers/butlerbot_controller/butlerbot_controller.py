@@ -1390,9 +1390,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         else ""
                     )
                     ct_s = ""
-                    if _track_ct is not None and gps_xy is not None:
+                    if gps_xy is not None:
                         try:
-                            ct_s = f" ct={_track_ct(gps_xy[0], gps_xy[1]):+.3f}"
+                            # loaded track's centre line (same sampler as drift_report);
+                            # the S default keeps the S formula
+                            _ct = finish_ref.cross_track(gps_xy[0], gps_xy[1]) if hasattr(
+                                finish_ref, "cross_track") else None
+                            if _ct is None and _track_ct is not None:
+                                _ct = _track_ct(gps_xy[0], gps_xy[1])
+                            ct_s = "" if _ct is None else f" ct={_ct:+.3f}"
                         except Exception:
                             ct_s = ""
                     print(

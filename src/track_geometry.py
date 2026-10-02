@@ -377,6 +377,19 @@ class FinishReferee:
             return float(x) >= self.finish_x_m
         return self.track.crossed_finish(float(x), float(y))
 
+    def cross_track(self, x: float, y: float) -> float | None:
+        """Signed sideways distance (m, + = left) from the loaded track's centre
+        line, via the same sampler drift_report uses. None for the S default
+        (the caller keeps its own S formula)."""
+        if self.track is None:
+            return None
+        hint = getattr(self, "_hint", None)
+        pr = self.track.project(float(x), float(y), hint)
+        if hint is not None and pr["dist_m"] > 1.0:  # lost the local window: search all
+            pr = self.track.project(float(x), float(y))
+        self._hint = pr["index"]
+        return float(pr["lateral_m"])
+
     def describe(self) -> str:
         if self.track is None:
             return f"finish x>={self.finish_x_m:g} m ({self.source})"

@@ -272,6 +272,8 @@ class RowfitController:
             if self.reacq_ok >= REACQUIRE_OK_FRAMES:
                 self.state = STATE_LANE
                 self.cooldown_m = CORNER_COOLDOWN_M
+                if self.tracker is not None and hasattr(self.tracker, "begin_settle"):
+                    self.tracker.begin_settle()  # the new leg's fit is still settling
                 self._event(
                     f"REACQUIRE ok after {self.reacq_frames} frames — off {est.offset_m * 100:+.0f}cm "
                     f"hd {math.degrees(est.heading_rad):+.1f}deg conf {est.confidence:.2f}, back to LANE"

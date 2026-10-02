@@ -285,3 +285,62 @@ def test_runtime_hud_and_log_carry_state(monkeypatch, tmp_path):
     assert rec["state"] == "CORNER_APPROACH" and rec["corner_dir"] == "left"
     assert float(rec["corner_m"]) == pytest.approx(1.12) and float(rec["corner_conf"]) == pytest.approx(0.8)
     assert rec["run_id"] == "r1" and float(rec["yaw_deg"]) == pytest.approx(math.degrees(0.01), abs=0.01)
+
+
+def _straight_tracker():
+    from src.lane_vision import offset_polyline
+
+    tr = LaneTracker(CAMS)
+    c = lane_polyline_robot([(-2 + 0.1 * i, 0.0) for i in range(60)], (0.0, 0.0), 0.0)
+    lines = [offset_polyline(c, 0.65), offset_polyline(c, -0.65)]
+    imgs = {n: (render_lane_bgra(m, lines), m.width, m.height) for n, m in CAMS.items()}
+    assert tr.process(imgs).valid
+    return tr, imgs
+
+
+def test_post_pivot_settling_widens_jump_gate():
+    """Dan's Webots run 20261001-224819: right after REACQUIRE -> LANE one fit was
+    rejected (heading jump +29deg > 20deg for 0.10 m driven). While the new
+    leg's fit settles the jump limits are widened; the +/-45 deg limit stays."""
+    from src.lane_vision import GATE_SETTLE_FRAMES
+
+    tr, imgs = _straight_tracker()
+    jump = LaneEstimate(valid=True, heading_rad=math.radians(29.0), lookahead_m=1.5, confidence=0.8,
+                        n_left=50, n_right=50)
+    assert "heading jump +29deg > 20deg" in tr.gate_reason(jump, tr.prior_near, 0.10)
+    tr.begin_settle()
+    assert tr.gate_reason(jump, tr.prior_near, 0.10) == ""
+    crossed = LaneEstimate(valid=True, heading_rad=math.radians(50.0), lookahead_m=1.5, confidence=0.8,
+                           n_left=50, n_right=50)
+    assert "beyond" in tr.gate_reason(crossed, tr.prior_near, 0.10)
+    for _ in range(GATE_SETTLE_FRAMES):
+        tr.process(imgs)
+    assert tr.settle_frames == 0
+    assert "heading jump" in tr.gate_reason(jump, tr.prior_near, 0.10)  # full gate again
+
+
+def test_relax_window_hands_over_to_settling():
+    from src.lane_vision import GATE_SETTLE_FRAMES
+
+    tr, imgs = _straight_tracker()
+    tr.begin_reacquire(relax_frames=2)
+    tr.process(imgs)
+    assert tr.relax_frames == 1 and tr.settle_frames == 0
+    tr.process(imgs)
+    assert tr.relax_frames == 0 and tr.settle_frames == GATE_SETTLE_FRAMES
+
+
+def test_reacquire_to_lane_starts_settling():
+    b = _Bot()
+    tr, _imgs = _straight_tracker()
+    b.ctl.tracker = tr
+    b.tick(_lane(corner=_corner(0.70)), new=True)
+    n = 0
+    while b.ctl.state != rc.STATE_REACQUIRE and n < 3000:
+        b.tick()
+        n += 1
+    tr.relax_frames = 0
+    tr.settle_frames = 0
+    for _ in range(rc.REACQUIRE_OK_FRAMES):
+        b.tick(_lane(), new=True)
+    assert b.ctl.state == rc.STATE_LANE and tr.settle_frames > 0

@@ -34,3 +34,21 @@ Gap-mode rows above are from the old view; gap mode is not re-tuned for this one
 | Date | run_id | Mode | Finished | Time s | Max | @x | Mean | RMS | Speed | Notes |
 |------|--------|------|----------|--------|-----|----|------|-----|-------|-------|
 | 2026-10-01 | 20261001-201555 | rowfit (PR #7, box cameras) | yes, done at x=16.45 m | 77.3 | **7.4 cm** | — | 2.8 cm | 3.7 cm | — | First run on the box mount (Dan, Webots R2025a). Old mount rowfit: 9.3 / 3.2 / 4.3 cm, 65.7 s. Pose came from the wbt fallback (supervisor read failed, fixed later in PR #7). Visible right turn on the last frame before parking (red finish bar fitted as lane; gated later in PR #7). |
+
+## corner90: sharp 90° left (`butlerbot_corner90.wbt`, 8.0 m)
+
+First waypoint-track world: 4 m straight, a true right-angle left, 4 m to the
+finish (`tracks/corner90.json`). It has the box cameras and rowfit with the
+sharp-corner state machine (PR #8): LANE → CORNER_APPROACH → PIVOT → REACQUIRE → LANE.
+
+Scored with:
+
+```
+python scripts\drift_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv" --track corner90
+```
+
+max / mean / rms = sideways distance off the corner90 centre line (GPS truth), metres.
+
+| Date | run_id | Mode | Finished | Time s | Max | @x | Mean | RMS | Pivot | Notes |
+|------|--------|------|----------|--------|-----|----|------|-----|-------|-------|
+| 2026-10-01 | 20261001-224819 | rowfit + corner pivot (PR #8) | yes | 39.9 | **3.9 cm** | 3.96 m (left) | 0.8 cm | 1.3 cm | yaw +89.9° vs target +90.6° (err +0.7°), 3.1 s | Dan, Webots. One of two runs, both perfect. `CORNER seen left 1.80 m conf 1.00`, `REACQUIRE ok after 3 frames`. States `LANE > CORNER_APPROACH > PIVOT > REACQUIRE > LANE`, 1 pivot. One `Rowfit REJECTED fit (heading jump +29deg > 20deg …)` right after REACQUIRE → LANE, since fixed with the post-pivot settling window. Before the corner logic it braked at the corner (sim: x 4.29). |

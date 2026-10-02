@@ -113,6 +113,32 @@ _PROJECT_ENV_FILE = os.path.join(
 )
 
 
+def project_env(name: str, default: str | None = None) -> str | None:
+    """Process env ``name``, else ``name=value`` from the repo ``.env``, else default.
+
+    Same fallback as :func:`api_token`, so Webots launched from a shortcut
+    (no ``set`` in a cmd window) still sees e.g. ``RBM_LANE_MODE=rowfit``.
+    A value set in the process environment always wins over ``.env``.
+    """
+    val = os.environ.get(name)
+    if val is not None and val.strip():
+        return val.strip()
+    try:
+        with open(_PROJECT_ENV_FILE, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, raw = line.partition("=")
+                if key.strip() == name:
+                    raw = raw.split(" #", 1)[0]
+                    raw = raw.strip().strip('"').strip("'")
+                    return raw or default
+    except OSError:
+        pass
+    return default
+
+
 def api_token() -> str | None:
     """Shared dashboard token: env ``RBM_API_TOKEN``, else the repo ``.env``.
 

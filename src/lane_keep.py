@@ -187,11 +187,26 @@ class NadirGuard:
         self.reason = ""
         self.last_err = 0.0
 
-    def step(self, left_px: int | None, right_px: int | None) -> dict:
+    def step(
+        self,
+        left_px: int | None,
+        right_px: int | None,
+        new_frame: bool | None = None,
+    ) -> dict:
+        """``new_frame=None`` keeps the legacy per-tick behaviour (default path).
+
+        Legacy bug: the controller calls this every 8 ms tick but the camera
+        only refreshes every 320 ms, so 39 of 40 calls see d=0 and reset the
+        unison counter — it can never reach ``unison_frames``. Pass
+        ``new_frame=True/False`` to count per camera frame instead (opt-in,
+        ``RBM_NADIR_GUARD_PER_FRAME=1`` in the controller).
+        """
         if left_px is None and right_px is None:
             self.abort = True
             self.reason = "both nadir eyes gone"
             return {"abort": True, "reason": self.reason}
+        if new_frame is False:
+            return {"abort": False, "reason": ""}
         if (
             left_px is not None
             and right_px is not None
@@ -447,13 +462,21 @@ def lane_keep_command(
     right_ahead_px: int | None = None,
     nadir_guard: NadirGuard | None = None,
     dt: float = 0.008,
+    guard_new_frame: bool | None = None,
     **_ignored,
 ) -> dict:
-    """Shoulder nadir only. Extra args are ignored; they do not steer."""
+    """Shoulder nadir only. Extra args are ignored; they do not steer.
+
+    ``guard_new_frame`` (default None = legacy) is forwarded to
+    ``NadirGuard.step`` so the unison check can count per camera frame.
+    """
     lost = left_gap_px is None and right_gap_px is None
     halt = None
     if nadir_guard is not None:
-        halt = nadir_guard.step(left_gap_px, right_gap_px)
+        if guard_new_frame is None:
+            halt = nadir_guard.step(left_gap_px, right_gap_px)
+        else:
+            halt = nadir_guard.step(left_gap_px, right_gap_px, new_frame=guard_new_frame)
     if lost:
         halt = {"abort": True, "reason": "both nadir eyes gone"}
     if halt is not None and halt.get("abort"):

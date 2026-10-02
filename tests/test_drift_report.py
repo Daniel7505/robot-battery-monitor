@@ -36,3 +36,46 @@ def test_cli_runs(tmp_path, capsys):
     out = tmp_path / "s.csv"
     assert dr.main([str(p), "--out", str(out)]) == 0
     assert "yes" in capsys.readouterr().out and out.is_file()
+
+
+def test_run_id_splits_runs_and_is_reported(tmp_path, capsys):
+    p = tmp_path / "lane-vision.csv"
+    hdr = ("unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
+           "nL_pts,nR_pts,steer,target_speed,new_frame,run_id")
+    lines = [hdr]
+    # two runs back to back: no x reset and no time gap -> only run_id separates them
+    for i in range(10):
+        lines.append(f"{i},{i * 0.5},0.01,rowfit,0,0,0,1.9,0.9,50,50,0.1,0.44,1,20261001-180000")
+    for i in range(10):
+        lines.append(f"{10 + i},{5 + i * 0.5},-0.2,rowfit,0,0,0,1.9,0.9,50,50,0.1,0.44,0,20261001-181500")
+    p.write_text("\n".join(lines) + "\n")
+    runs = dr.split_runs(dr.load_rows(p))
+    assert [len(r) for r in runs] == [10, 10]
+    s2 = dr.summarize(runs[1], 2)
+    assert s2["run_id"] == "20261001-181500" and s2["mode"] == "rowfit"
+    assert dr.main([str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "20261001-180000" in out and "run_id" in out
+
+
+def test_old_logs_have_no_run_id_column_in_summary(tmp_path):
+    p = _write(tmp_path, [(i, i * 0.5, 0.0, 0) for i in range(10)])
+    s = dr.summarize(dr.split_runs(dr.load_rows(p))[0], 1)
+    assert "run_id" not in s and "mode" not in s
+
+
+def test_track_s_scores_vs_centreline(tmp_path, capsys):
+    from s_track import centerline
+
+    rows = [(i, 3.0 + 0.25 * i, centerline(3.0 + 0.25 * i)[0], 0) for i in range(20)]
+    p = _write(tmp_path, rows)
+    assert dr.main([str(p), "--track", "s"]) == 0
+    assert "S-track" in capsys.readouterr().out
+
+
+def test_finish_counts_last_row_just_short_of_line(tmp_path):
+    # Real 2026-10-01 rowfit run: parked on the red, last log row at x=16.43.
+    rows = [(i, min(i * 0.4, 16.43), 0.0, 0) for i in range(42)]
+    assert dr.summarize(dr.load_rows(_write(tmp_path, rows)), 1)["finished"]
+    short = [(i, i * 0.4, 0.0, 0) for i in range(40)]  # stops at 15.6 m
+    assert not dr.summarize(dr.load_rows(_write(tmp_path, short)), 1)["finished"]

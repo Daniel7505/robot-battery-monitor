@@ -17,6 +17,8 @@ Usage:
     python scripts/drift_report.py --last 5        # only the 5 newest runs
     python scripts/drift_report.py --out runs.csv  # also save a per-run CSV
     python scripts/drift_report.py --track s       # drift vs the S centre line, not y=0
+    python scripts/drift_report.py --track corner90                # any tracks/<name>.json
+    python scripts/drift_report.py --track path\\to\\my_track.json   # or a track file
     python scripts/drift_report.py "%USERPROFILE%\\OneDrive\\Desktop\\Grok Workspace\\lane-vision.csv"
 
 The default folder can be moved with the RBM_LOG_DIR environment variable
@@ -37,6 +39,7 @@ DEFAULT_LOG = (
     if os.environ.get("RBM_LOG_DIR")
     else Path.home() / "OneDrive" / "Desktop" / "Grok Workspace"
 ) / "steer-actions.csv"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # src.track_geometry
 try:  # single source of truth for the track: scripts/s_track.py (generates the .wbt paint)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from s_track import FINISH_X_M  # noqa: E402  (16.5 m red finish line)
@@ -70,6 +73,8 @@ def load_rows(path: Path) -> list[dict]:
                 row["run_id"] = r["run_id"].strip()
             if (r.get("mode") or "").strip():
                 row["mode"] = r["mode"].strip()
+            if (r.get("state") or "").strip():  # corner state machine (newer logs)
+                row["state"] = r["state"].strip()
             rows.append(row)
     return rows
 
@@ -98,7 +103,10 @@ def split_runs(rows: list[dict]) -> list[list[dict]]:
     return runs
 
 
-def summarize(run: list[dict], n: int) -> dict:
+def summarize(run: list[dict], n: int, geom=None) -> dict:
+    """Per-run numbers. With ``geom`` (a TrackGeometry) y is already the
+    sideways offset from that track's centre line, distance is progress along
+    it and 'finished' uses its finish line (GPS referee)."""
     ys = [r["y"] for r in run]
     absy = [abs(y) for y in ys]
     worst = max(run, key=lambda r: abs(r["y"]))
@@ -109,16 +117,28 @@ def summarize(run: list[dict], n: int) -> dict:
         extra["run_id"] = run[0]["run_id"]
     if "mode" in run[0]:
         extra["mode"] = run[0]["mode"]
+    seq: list[str] = []
+    for r in run:
+        st = r.get("state")
+        if st and (not seq or seq[-1] != st):
+            seq.append(st)
+    if seq:
+        extra["states"] = " > ".join(seq)
+        extra["pivots"] = seq.count("PIVOT")
     return {
         "run": n,
         **extra,
         "start": datetime.fromtimestamp(run[0]["t"]).strftime("%Y-%m-%d %H:%M:%S"),
         "duration_s": round(run[-1]["t"] - run[0]["t"], 1),
         "rows": len(run),
-        "distance_m": round(max_x - min(r["x"] for r in run), 2),
-        "finished": max_x >= FINISH_X_M - FINISH_TOL_M,
+        "distance_m": round(
+            (max(r["s"] for r in run) - min(r["s"] for r in run)) if geom is not None
+            else max_x - min(r["x"] for r in run), 2),
+        "finished": (any(geom.crossed_finish(r["x"], r["gy"], tol_m=FINISH_TOL_M) for r in run)
+                     if geom is not None else max_x >= FINISH_X_M - FINISH_TOL_M),
         "max_drift_m": round(max(absy), 3),
         "worst_at_x_m": round(worst["x"], 2),
+        **({"worst_at_s_m": round(worst["s"], 2)} if geom is not None else {}),
         "worst_side": "left" if worst["y"] > 0 else "right" if worst["y"] < 0 else "-",
         "mean_drift_m": round(sum(absy) / len(absy), 3),
         "rms_drift_m": round(math.sqrt(sum(y * y for y in ys) / len(ys)), 3),
@@ -132,22 +152,34 @@ def main(argv=None) -> int:
     ap.add_argument("--last", type=int, default=0, help="only show the N newest runs")
     ap.add_argument("--min-rows", type=int, default=5, help="ignore runs shorter than this")
     ap.add_argument("--out", type=Path, help="write the per-run summary to this CSV")
-    ap.add_argument("--track", choices=["s"], help="score drift vs the S-track centre line "
-                    "(scripts/s_track.py) instead of world y=0")
+    ap.add_argument("--track", help="score drift vs a track's centre line instead of world y=0: "
+                    "a name in tracks/ (s, corner90, corner_mix, widen, ...) or a track .json file")
     a = ap.parse_args(argv)
 
     if not a.log.is_file():
         print(f"Log not found: {a.log}", file=sys.stderr)
         return 1
     rows = load_rows(a.log)
-    if a.track == "s":
-        from s_track import centerline
+    geom = None
+    if a.track:
+        from src.track_geometry import load_track
 
-        for r in rows:
-            cy, th = centerline(r["x"])
-            r["y"] = (r["y"] - cy) * math.cos(th)
+        try:
+            geom = load_track(a.track)
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"Track not loaded: {exc}", file=sys.stderr)
+            return 1
     runs = [r for r in split_runs(rows) if len(r) >= a.min_rows]
-    stats = [summarize(r, i + 1) for i, r in enumerate(runs)]
+    if geom is not None:
+        for run in runs:
+            hint = None
+            for r in run:
+                pr = geom.project(r["x"], r["y"], hint)
+                if pr["dist_m"] > 1.0 and hint is not None:  # lost the local window: search all
+                    pr = geom.project(r["x"], r["y"])
+                hint = pr["index"]
+                r["gy"], r["y"], r["s"] = r["y"], pr["lateral_m"], pr["s_m"]
+    stats = [summarize(r, i + 1, geom) for i, r in enumerate(runs)]
     if a.last:
         stats = stats[-a.last:]
     if not stats:
@@ -170,8 +202,13 @@ def main(argv=None) -> int:
         if labelled:
             line += f"  {s.get('run_id', '-'):15}  {s.get('mode', '-'):6}"
         print(line)
-    if a.track:
-        print("\nmax/mean/rms = sideways distance off the S-track centre line, metres.")
+    for s in stats:
+        if s.get("states") and s["states"] != "LANE":
+            print(f"run {s['run']} corner states: {s['states']}  (pivots {s['pivots']})")
+    if geom is not None:
+        label = "S-track" if geom.spec.name == "s" else f"{geom.spec.name} track"
+        print(f"\nmax/mean/rms = sideways distance off the {label} centre line, metres "
+              f"(dist m = progress along it; done = crossed its finish line).")
     else:
         print("\nmax/mean/rms = sideways distance off the centre line (|y_m|), metres.")
 

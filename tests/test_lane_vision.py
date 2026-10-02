@@ -28,6 +28,7 @@ from src.lane_vision import (
 )
 
 HW = 0.65  # lane half width used to PAINT test frames only
+ROOT_WORLD = __import__("pathlib").Path(__file__).resolve().parents[1] / "webots" / "worlds" / "butlerbot.wbt"
 
 
 def path(segs, start=(-1.5, 0.0), h0=0.0, ds=0.04):
@@ -539,3 +540,94 @@ def test_fit_windows_follow_camera_coverage():
     near_max, split, far_min = fit_windows([far])
     assert b > 0.3
     assert near_max == pytest.approx(b + 0.4) and split <= near_max and far_min == pytest.approx(b)
+
+
+# ---------------------------------------------------------------- toed-out (yawed) cameras
+
+
+def _toed_out_pair(yaw_deg):
+    from src.lane_vision import CameraModel, aim_pitch_for_reach, yaw_pitch_rotation
+
+    t = NADIR_LEFT_POSE["translation"]
+    y = math.radians(yaw_deg)
+    p = aim_pitch_for_reach(t, 1.2, 128, 128, 1.96, yaw_rad=y)
+    left = CameraModel("nadir_left", t, yaw_pitch_rotation(y, p), 128, 128, 1.2)
+    right = CameraModel("nadir_right", (t[0], -t[1], t[2]), yaw_pitch_rotation(-y, p), 128, 128, 1.2)
+    return {"nadir_left": left, "nadir_right": right}, p
+
+
+@pytest.mark.parametrize("yaw_deg", [-15.0, 0.0, 10.0, 25.0])
+def test_yaw_then_pitch_rotation_round_trips(yaw_deg):
+    from src.lane_vision import CameraModel, camera_look_angles, yaw_pitch_rotation
+
+    pitch = math.radians(53.0)
+    rot = yaw_pitch_rotation(math.radians(yaw_deg), pitch)
+    cam = CameraModel("c", NADIR_LEFT_POSE["translation"], rot, 128, 128, 1.2)
+    p, y = camera_look_angles(cam)
+    assert p == pytest.approx(pitch, abs=1e-9) and y == pytest.approx(math.radians(yaw_deg), abs=1e-9)
+    # no roll: the image's horizontal axis (camera +Y) stays level
+    assert cam.R[2][1] == pytest.approx(0.0, abs=1e-12)
+    if yaw_deg == 0.0:
+        assert rot == (0.0, 1.0, 0.0, pitch)
+
+
+def test_mirrored_toed_out_pair_sees_mirror_images():
+    cams, _ = _toed_out_pair(10.0)
+    L, R = cams["nadir_left"], cams["nadir_right"]
+    assert (R.rotation[0], R.rotation[1], R.rotation[2]) == pytest.approx((-L.rotation[0], L.rotation[1], -L.rotation[2]))
+    assert R.rotation[3] == pytest.approx(L.rotation[3])
+    for col, row in ((3.0, 5.0), (64.0, 64.0), (110.5, 127.0)):
+        gl = L.pixel_to_ground(col, row)
+        gr = R.pixel_to_ground(127.0 - col, row)
+        assert gr[0] == pytest.approx(gl[0], abs=1e-9) and gr[1] == pytest.approx(-gl[1], abs=1e-9)
+        back = L.ground_to_pixel(*gl)
+        assert back == pytest.approx((col, row), abs=1e-6)
+    assert L.pixel_to_ground(L.cx, 0)[0] == pytest.approx(1.96, abs=1e-6)  # pitch re-solved for the same reach
+
+
+@pytest.mark.parametrize("yaw_deg", [10.0, 20.0])
+def test_lane_tracker_works_with_toed_out_cameras(yaw_deg):
+    """lane_vision is pose-general: the same fit with toed-out cameras, incl. a 1.8 m lane
+    that the straight-ahead mount loses near the robot."""
+    cams, _ = _toed_out_pair(yaw_deg)
+    straight = [(-2 + 0.1 * i, 0.0) for i in range(80)]
+    for hw, off, yaw in ((0.65, 0.05, 0.0), (0.65, -0.1, math.radians(5)), (0.9, 0.0, 0.0)):
+        c = lane_polyline_robot(straight, (0.0, off), yaw)
+        lines = [offset_polyline(c, hw), offset_polyline(c, -hw)]
+        imgs = {n: (render_lane_bgra(cam, lines), 128, 128) for n, cam in cams.items()}
+        est = LaneTracker(cams).process(imgs)
+        assert est.valid
+        assert est.offset_m == pytest.approx(off, abs=0.015)
+        assert est.heading_rad == pytest.approx(yaw, abs=0.015)
+        assert est.lane_width_m == pytest.approx(2 * hw, abs=0.03)
+
+
+def test_parse_wbt_reads_a_yawed_camera(tmp_path):
+    cams, p = _toed_out_pair(10.0)
+    text = (ROOT_WORLD).read_text(encoding="utf-8")
+    rl = " ".join(f"{v:.6f}" for v in cams["nadir_left"].rotation)
+    rr = " ".join(f"{v:.6f}" for v in cams["nadir_right"].rotation)
+    a, b = text.split("rotation 0 1 0 0.9411", 2)[0:2], text.split("rotation 0 1 0 0.9411", 2)[2]
+    w = tmp_path / "yawed.wbt"
+    w.write_text(a[0] + f"rotation {rl}" + a[1] + f"rotation {rr}" + b, encoding="utf-8")
+    parsed = parse_wbt_cameras(str(w))
+    for n in ("nadir_left", "nadir_right"):
+        assert parsed[n]["rotation"] == pytest.approx(cams[n].rotation, abs=1e-5)
+
+
+def test_aim_camera_yaw_prints_mirrored_rotation():
+    import importlib.util
+    import io
+    from contextlib import redirect_stdout
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location("aim_camera", Path(__file__).resolve().parents[1] / "scripts" / "aim_camera.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert mod.main(["--yaw", "10"]) == 0
+    out = buf.getvalue()
+    assert "rotation -0.0858892 0.981718 0.169862 0.9512" in out
+    assert "rotation 0.0858892 0.981718 -0.169862 0.9512" in out
+    assert "53.65 deg down" in out

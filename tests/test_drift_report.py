@@ -79,3 +79,18 @@ def test_finish_counts_last_row_just_short_of_line(tmp_path):
     assert dr.summarize(dr.load_rows(_write(tmp_path, rows)), 1)["finished"]
     short = [(i, i * 0.4, 0.0, 0) for i in range(40)]  # stops at 15.6 m
     assert not dr.summarize(dr.load_rows(_write(tmp_path, short)), 1)["finished"]
+
+
+def test_corner_states_reported(tmp_path, capsys):
+    p = tmp_path / "lane-vision.csv"
+    hdr = ("unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
+           "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
+           "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg")
+    states = ["LANE"] * 4 + ["CORNER_APPROACH"] * 3 + ["PIVOT"] * 3 + ["REACQUIRE"] * 2 + ["LANE"] * 3
+    lines = [hdr] + [f"{i},{min(4.0, i * 0.3)},0.0,rowfit,0,0,0,1.9,0.9,50,50,0.0,0.4,1,r1,{st},left,1.1,0.9,0,90"
+                     for i, st in enumerate(states)]
+    p.write_text("\n".join(lines) + "\n")
+    s = dr.summarize(dr.load_rows(p), 1)
+    assert s["states"] == "LANE > CORNER_APPROACH > PIVOT > REACQUIRE > LANE" and s["pivots"] == 1
+    assert dr.main([str(p)]) == 0
+    assert "corner states: LANE > CORNER_APPROACH > PIVOT" in capsys.readouterr().out

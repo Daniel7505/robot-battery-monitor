@@ -14,9 +14,12 @@ ROOT = Path(__file__).resolve().parent.parent
 CTRL = ROOT / "webots" / "controllers" / "butlerbot_controller"
 
 
-def _run(tmp_path, mode):
+def _run(tmp_path, mode, world=None):
     env = dict(os.environ)
     env.pop("RBM_LANE_MODE", None)
+    env.pop("RBM_TRACK", None)
+    if world is not None:
+        env["FAKE_WEBOTS_WORLD"] = str(ROOT / "webots" / "worlds" / world)
     if mode is not None:
         env["RBM_LANE_MODE"] = mode
     env.update(
@@ -46,9 +49,25 @@ def test_controller_loop_runs(tmp_path, mode):
         assert "pitch=53.9deg" in text
         assert "WARNING rowfit camera model" not in text, text
         log = (tmp_path / "lane-vision.csv").read_text().splitlines()
-        assert log[0].endswith("new_frame,run_id")
+        assert "new_frame,run_id," in log[0] and log[0].endswith("yaw_deg,yaw_target_deg")
+        row = dict(zip(log[0].split(","), log[1].split(",")))
+        assert row["state"] in ("LANE", "CORNER_APPROACH", "PIVOT", "REACQUIRE")
         assert len(log) > 1 and ",rowfit," in log[1]
     else:
         assert "LANE MODE rowfit" not in text and "CAM POSE" not in text
         assert "NADIR STEER ON" in text
         assert not (tmp_path / "lane-vision.csv").exists()
+
+
+@pytest.mark.parametrize(
+    "world, expect",
+    [
+        ("butlerbot.wbt", "FINISH REFEREE track s: finish (16.5, 0)"),
+        ("butlerbot_corner90.wbt", "FINISH REFEREE track corner90: finish (4, 4) heading +90deg"),
+        (None, "FINISH REFEREE finish x>=16.5 m (default S)"),
+    ],
+)
+def test_finish_referee_comes_from_the_loaded_world(tmp_path, world, expect):
+    text = _run(tmp_path, None, world)
+    assert expect in text, text
+    assert "WARNING finish referee" not in text

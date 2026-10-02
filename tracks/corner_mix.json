@@ -1,0 +1,14 @@
+{
+  "name": "corner_mix",
+  "description": "4 m straight, ROUNDED left corner (centre radius 0.5 m, so the inner line is a sharp mitre), 4 m, SHARP 90 deg right, 4 m to the finish.",
+  "lane_width_m": 1.30,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "waypoints": [
+    [0, 0],
+    {"x": 4, "y": 0, "radius_m": 0.5},
+    {"x": 4, "y": 4, "radius_m": 0},
+    [8, 4]
+  ]
+}

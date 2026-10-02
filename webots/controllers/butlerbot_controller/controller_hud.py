@@ -230,6 +230,11 @@ def _paint_rowfit_overlay(disp, handle: dict, lane_eyes: dict, w: int, h: int) -
         x = int(round((float(col) + 0.5) * w / cam_w))
         y = int(round((float(row) + 0.5) * h / cam_h))
         disp.fillRectangle(max(0, x - 1), max(0, y - 1), 3, 3)
+    # corner cue: the row where the line widens across (orange = outer line, yellow = inner)
+    for row, _col, role in (lane_eyes.get("rowfit_corner") or {}).get(handle.get("cname"), []):
+        disp.setColor(0xFF8800 if role == "outer" else 0xFFE000)
+        y = int(round((float(row) + 0.5) * h / cam_h))
+        disp.fillRectangle(0, max(0, y - 1), w, 3)
     disp.setColor(int(handle["color"]))
     for i, line in enumerate(lane_eyes.get("rowfit_text") or []):
         disp.drawText(str(line)[:30], 2, 16 + 15 * i)

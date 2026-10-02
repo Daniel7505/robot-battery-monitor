@@ -12,6 +12,16 @@ used to paint the synthetic images and to score cross-track error.
     python scripts/rowfit_sim.py            # both courses
     python scripts/rowfit_sim.py turn90 --csv out.csv
     python scripts/rowfit_sim.py s_finish --yellow lane_keep   # finish bar scored as paint
+    python scripts/rowfit_sim.py corner90 widen                # any tracks/<name>.json
+    python scripts/rowfit_sim.py path/to/track.json            # or a track file
+    python scripts/rowfit_sim.py corner90 corner_mix --table   # one line per course
+    python scripts/rowfit_sim.py corner90 --turn-eff 0.8 --imu-drift 0.5   # pivot robustness
+    python scripts/rowfit_sim.py corner90 --no-corners         # old behaviour: brake at the corner
+
+Sharp corners: the controller gets the (simulated) IMU yaw and pivots in
+place; the robot kinematics are the same diff-drive integration, so an
+in-place turn is just opposite wheel speeds. ``--turn-eff`` scales the
+realised yaw rate (scrub), ``--imu-noise`` / ``--imu-drift`` corrupt the yaw.
 
 Not a substitute for Webots (no tyre slip, lighting, motion blur, body
 occlusion), but it catches sign errors, instability and speed logic.
@@ -93,6 +103,45 @@ def finish_course():
     return pre + centre, centre, bars, FINISH_X_M, HALF_WIDTH_M
 
 
+def _densify(poly, step=0.04):
+    out = [poly[0]]
+    for a, b in zip(poly, poly[1:]):
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L < 1e-9:
+            continue
+        n = max(1, int(math.ceil(L / step)))
+        out += [(a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n) for i in range(1, n + 1)]
+    return out
+
+
+def track_geometry(name: str):
+    """A tracks/*.json course (name or path), or None for the built-in courses."""
+    from src.track_geometry import load_track
+
+    if name in ("turn90", "turn90r08", "s", "s_finish"):
+        return None
+    try:
+        return load_track(name)
+    except FileNotFoundError:
+        return None
+
+
+def track_course(geom):
+    """Painted lines (dense, with run-in / run-out), bars and scoring centre line."""
+    sp = geom.spec
+    left = _densify(geom.lane_line(+1.0))
+    right = _densify(geom.lane_line(-1.0))
+    bars = []
+    for on, xy, th, w, rgb in ((sp.start_bar, geom.start_xy, geom.start_heading, sp.widths[0], GREEN_BAR),
+                               (sp.finish_bar, geom.finish_xy, geom.finish_heading, sp.widths[-1], RED_BAR)):
+        if on:
+            h = 0.5 * (w + 0.10)
+            nx, ny = -math.sin(th), math.cos(th)
+            bars.append(([(xy[0] - h * nx, xy[1] - h * ny), (xy[0] + h * nx, xy[1] + h * ny)], 0.08, rgb))
+    centre = geom.dense_centerline(0.04, extend_before=2.0, extend_after=sp.paint_after_finish_m)
+    return centre, left, right, bars
+
+
 def course(name: str):
     if name == "turn90":
         return path_from_segments([(4.0, 0.0), (1.0 * math.pi / 2, 1.0), (4.0, 0.0)])
@@ -138,9 +187,18 @@ def _path_curvature(poly):
 
 
 def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0,
-        cams=None, yellow_mode=None, start_x=0.0):
+        cams=None, yellow_mode=None, start_x=0.0, turn_eff=1.0, imu_noise_deg=0.0, imu_drift_dps=0.0,
+        corners=True, log=None):
+    """Closed loop on one course. ``turn_eff`` scales the realised yaw rate
+    (tyre scrub in a pivot: the wheels ask for more turn than the body makes);
+    the IMU reads the true yaw plus ``imu_drift_dps`` drift and white noise.
+    ``corners=False`` runs without the IMU in the controller (no pivots:
+    the old brake-at-the-corner behaviour)."""
     stop_x, bars = None, []
-    if name == "s_finish":
+    geom = track_geometry(name)
+    if geom is not None:
+        centre, left, right, bars = track_course(geom)
+    elif name == "s_finish":
         centre, painted, bars, stop_x, half_w = finish_course()
         left = offset_polyline(painted, half_w)
         right = offset_polyline(painted, -half_w)
@@ -152,12 +210,24 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
     yaw_tail = []  # (x, yaw_rate) near the finish
     n_held = 0
     x, y, yaw = float(start_x), float(start_offset), float(start_yaw)
-    if start_x:
+    if geom is not None:
+        sx, sy = geom.start_xy
+        h0 = geom.start_heading
+        x, y, yaw = sx - start_offset * math.sin(h0), sy + start_offset * math.cos(h0), h0 + start_yaw
+    elif start_x:
         y += min(centre, key=lambda p: abs(p[0] - start_x))[1]
     cams = dict(cams or sim_cameras())
     tracker = LaneTracker(cams, yellow_mode=yellow_mode)
     ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(c) for c in cams.values()])
     ctl = RowfitController(ld_min=ld_min, ld_max=ld_max)
+    ctl.tracker = tracker
+    import random
+    rng = random.Random(7)
+    events = []
+    pivots = []
+    states = {}
+    corner_first = None
+    pivot_pose = None
     bend_v = []
     dt, frame_every = 0.008, 40
     tick = 0
@@ -169,6 +239,15 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
     last_frame_pose = (x, y, yaw)
     end = centre[-1]
     done = False
+    tr = {"left_lane_at": None, "first_held_at": None, "first_lost_at": None, "worst_at": None,
+          "max_lat_m": 0.0, "braked_at": None, "width_err": [], "v": 0.0}
+    hint = None
+
+    def _where():
+        if geom is None:
+            return {"x": round(x, 2), "y": round(y, 2)}
+        pr = geom.project(x, y, hint)
+        return {"x": round(x, 2), "y": round(y, 2), "s_m": round(pr["s_m"], 2)}
     while tick * dt < max_s:
         new = tick % frame_every == 0
         est = None
@@ -188,15 +267,47 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
             last_frame_pose = (x, y, yaw)
             est = tracker.process(imgs, dx_m=dx, dyaw_rad=dyaw)
             n_held += int(bool(getattr(est, "held", False)))
+            if getattr(est, "held", False) and tr["first_held_at"] is None:
+                tr["first_held_at"] = {**_where(), "v": round(tr["v"], 3), "reason": getattr(est, "reject_reason", None)}
+            if geom is not None and est is not None and est.valid and est.width_measured:
+                s_now = geom.project(x, y, hint)["s_m"]
+                tr["width_err"].append((abs(est.lane_width_m - geom.width_at_s(s_now)), round(s_now, 2),
+                                        round(est.lane_width_m, 3), round(geom.width_at_s(s_now), 3)))
+            if est is not None and not est.valid and not getattr(est, "held", False) and tr["first_lost_at"] is None:
+                tr["first_lost_at"] = _where()
             pending.append(est)
             est = pending.pop(0) if len(pending) > latency_frames else None
             del near
-        cmd = ctl.step(est, new_frame=new and est is not None, dt=dt)
+        imu = yaw + math.radians(imu_drift_dps) * tick * dt + rng.gauss(0.0, math.radians(imu_noise_deg))
+        st_before = ctl.state
+        cmd = ctl.step(est, new_frame=new and est is not None, dt=dt, yaw=imu if corners else None)
+        states[ctl.state] = states.get(ctl.state, 0.0) + dt
+        for e in ctl.drain_events():
+            events.append((round(tick * dt, 2), _where(), e))
+            if log:
+                log(f"  t={tick * dt:6.2f}s {_where()} {e}")
+        if est is not None and getattr(est, "corner", None) is not None and est.corner.seen and corner_first is None:
+            corner_first = {**_where(), "dist_m": round(est.corner.distance_m, 2), "dir": est.corner.side,
+                            "conf": round(est.corner.confidence, 2)}
+        if st_before != "PIVOT" and ctl.state == "PIVOT":
+            pivot_pose = {**_where(), "v_at_start": round(tr["v"], 3)}
+        if st_before == "PIVOT" and ctl.state != "PIVOT" and ctl.last_pivot is not None:
+            info = dict(ctl.last_pivot)
+            info["start"] = pivot_pose
+            info["end"] = _where()
+            if geom is not None:
+                ahead = geom.project(x + 0.5 * math.cos(yaw), y + 0.5 * math.sin(yaw), hint)
+                info["true_err_deg"] = round(math.degrees(math.atan2(math.sin(ahead["heading_rad"] - yaw),
+                                                                     math.cos(ahead["heading_rad"] - yaw))), 2)
+                pr = geom.project(x, y, hint)
+                info["lateral_m"] = round(pr["lateral_m"], 3)
+            pivots.append(info)
         if cmd["brake"]:
+            tr["braked_at"] = {**_where(), "state": st_before}
             break
         wl, wr = cmd["left"], cmd["right"]
         v = 0.5 * (wl + wr) * WHEEL_RADIUS_M
-        w = (wr - wl) * WHEEL_RADIUS_M / TRACK_M
+        w = (wr - wl) * WHEEL_RADIUS_M / TRACK_M * float(turn_eff)
         yaw += w * dt
         if stop_x is not None and x > stop_x - 1.0:
             yaw_tail.append(abs(w))
@@ -207,6 +318,16 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         sum_ct += ct
         n_ct += 1
         speeds.append(v)
+        tr["v"] = v
+        if geom is not None:
+            pr = geom.project(x, y, hint)
+            hint = pr["index"]
+            lat = abs(pr["lateral_m"])
+            if lat > tr["max_lat_m"]:
+                tr["max_lat_m"] = lat
+                tr["worst_at"] = {"x": round(x, 2), "y": round(y, 2), "s_m": round(pr["s_m"], 2)}
+            if lat > 0.5 * geom.width_at_s(pr["s_m"]) and tr["left_lane_at"] is None:
+                tr["left_lane_at"] = {"x": round(x, 2), "y": round(y, 2), "s_m": round(pr["s_m"], 2)}
         if curv[min(idx, len(curv) - 1)] > 0.3:
             bend_v.append(v)
         if new and csv is not None:
@@ -214,7 +335,11 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                          None if est is None else round(est.offset_m, 3),
                          None if est is None else round(est.curvature_1pm, 3),
                          cmd["steer"], cmd.get("target_speed"), round(v, 3)))
-        if stop_x is not None:
+        if geom is not None:
+            if geom.crossed_finish(x, y):
+                done = True
+                break
+        elif stop_x is not None:
             if x >= stop_x:
                 done = True
                 break
@@ -239,6 +364,24 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         "bend_mean_v": round(sum(bend_v) / len(bend_v), 3) if bend_v else None,
         "ld_window_m": (round(ld_min, 2), round(ld_max, 2)),
         "held_frames": n_held,
+        "corner_first_seen": corner_first,
+        "pivots": pivots,
+        "time_in_state_s": {k: round(v, 2) for k, v in states.items()},
+        "events": [e[2] for e in events],
+        **({} if geom is None else {
+            "track_length_m": round(geom.length_m, 2),
+            "end": _where(),
+            "end_yaw_deg": round(math.degrees(yaw), 1),
+            "max_lateral_m": round(tr["max_lat_m"], 3),
+            "worst_at": tr["worst_at"],
+            "left_lane_at": tr["left_lane_at"],
+            "first_held_at": tr["first_held_at"],
+            "first_lost_at": tr["first_lost_at"],
+            "braked_at": tr["braked_at"],
+            "lane_width_worst": (None if not tr["width_err"] else
+                                 dict(zip(("err_m", "s_m", "measured_m", "true_m"),
+                                          (round(max(tr["width_err"])[0], 3), *max(tr["width_err"])[1:])))),
+        }),
         **({} if stop_x is None else {
             "end_x_m": round(x, 3),
             "end_yaw_deg": round(math.degrees(yaw), 2),  # finish straight runs along +x
@@ -255,13 +398,48 @@ def main(argv=None) -> int:
     ap.add_argument("--constants", action="store_true", help="use NADIR_*_POSE instead of the .wbt")
     ap.add_argument("--wbt", help="world file to read the camera poses from")
     ap.add_argument("--yellow", choices=("rg", "lane_keep"), help="yellow test (default lane_vision.YELLOW_MODE)")
+    ap.add_argument("--turn-eff", type=float, default=1.0,
+                    help="realised / commanded yaw rate (tyre scrub in a pivot), e.g. 0.8")
+    ap.add_argument("--imu-noise", type=float, default=0.0, help="IMU yaw white noise, deg")
+    ap.add_argument("--imu-drift", type=float, default=0.0, help="IMU yaw drift, deg/s")
+    ap.add_argument("--no-corners", action="store_true",
+                    help="no IMU yaw to the controller: corners end in the lost-lane brake (old behaviour)")
+    ap.add_argument("--quiet", action="store_true", help="no CORNER / PIVOT / REACQUIRE event lines")
+    ap.add_argument("--table", action="store_true", help="one summary line per course instead of the dict")
     a = ap.parse_args(argv)
     cams = sim_cameras(a.constants, a.wbt)
     for n, c in cams.items():
         print(f"camera {n}: t={c.translation} rot={c.rotation} fov={c.fov_rad}")
+    rows = []
     for c in a.courses:
-        print(run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow))
+        if not a.quiet:
+            print(f"--- {c}")
+        r = run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow, turn_eff=a.turn_eff,
+                imu_noise_deg=a.imu_noise, imu_drift_dps=a.imu_drift, corners=not a.no_corners,
+                log=None if a.quiet else print)
+        rows.append(r)
+        if not a.table:
+            print({k: v for k, v in r.items() if k != "events"})
+    if a.table:
+        print(summary_header())
+        for r in rows:
+            print(summary_line(r))
     return 0
+
+
+def summary_header() -> str:
+    return (f"{'course':15} {'finish':6} {'time_s':>6} {'worst_cm':>8} {'mean_cm':>7} {'min_v':>5} "
+            f"{'pivots':>6} {'pivot_err_deg(imu/true)':>24} {'pivot_s':>7}  stop")
+
+
+def summary_line(r: dict) -> str:
+    worst = r.get("max_lateral_m", r["max_ct_m"])
+    piv = r.get("pivots") or []
+    perr = " ".join(f"{p['err_deg']:+.1f}/{p.get('true_err_deg', float('nan')):+.1f}" for p in piv) or "-"
+    pt = " ".join(f"{p['time_s']:.1f}" for p in piv) or "-"
+    stop = "finish" if r["finished"] else (f"brake {r.get('braked_at')}" if r.get("braked_at") else "timeout")
+    return (f"{r['course']:15} {'yes' if r['finished'] else 'NO':6} {r['time_s']:6.1f} {100 * worst:8.1f} "
+            f"{100 * r['mean_ct_m']:7.1f} {r['min_v']:5.2f} {len(piv):6d} {perr:>24} {pt:>7}  {stop}")
 
 
 if __name__ == "__main__":

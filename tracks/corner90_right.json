@@ -1,0 +1,25 @@
+{
+  "name": "corner90_right",
+  "description": "Mirror of corner90: 4 m straight, SHARP 90 deg RIGHT, 4 m straight to the finish (sim test track).",
+  "lane_width_m": 1.3,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "start_bar": true,
+  "finish_bar": true,
+  "waypoints": [
+    [
+      0,
+      0
+    ],
+    {
+      "x": 4,
+      "y": 0,
+      "radius_m": 0
+    },
+    [
+      4,
+      -4
+    ]
+  ]
+}

@@ -31,8 +31,11 @@ DEFAULT_LOG_DIR = os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop", "
 LANE_VISION_LOG_NAME = "lane-vision.csv"
 LANE_VISION_HEADER = (
     "unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
-    "nL_pts,nR_pts,steer,target_speed,new_frame,run_id"
+    "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
+    "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg"
 )
+# Corner columns sit AFTER run_id so rows appended to an older lane-vision.csv
+# (old header) still line up for every column the old header names.
 # Controller process start = run label in lane-vision.csv.
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 
@@ -81,7 +84,7 @@ class LaneVisionLog:
         self.run_id = run_id
         self._ready = False
 
-    def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool) -> None:
+    def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool, yaw=None) -> None:
         try:
             if not self._ready:
                 new = not os.path.isfile(self.path) or os.path.getsize(self.path) == 0
@@ -106,6 +109,12 @@ class LaneVisionLog:
                 _fmt(cmd.get("target_speed"), 3),
                 "1" if new_frame else "0",
                 self.run_id,
+                str(cmd.get("state") or ""),
+                str(cmd.get("corner_dir") or ""),
+                _fmt(cmd.get("corner_m"), 3),
+                _fmt(cmd.get("corner_conf"), 2),
+                _fmt(None if yaw is None else math.degrees(float(yaw)), 2),
+                _fmt(cmd.get("yaw_target_deg"), 2),
             ]
             with open(self.path, "a", encoding="ascii") as fh:
                 fh.write(",".join(vals) + "\n")
@@ -124,6 +133,8 @@ class RowfitRuntime:
         self.pose_source: dict[str, str] = {n: "constants" for n in self.cams_model}
         self.tracker = LaneTracker(self.cams_model)
         self.ctl = RowfitController()
+        self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
+        self.last_cmd: dict = {}
         self.est = None  # last estimate (for logs / HUD)
         self._pending = None
         self._has_pending = False
@@ -181,6 +192,7 @@ class RowfitRuntime:
                 msgs.append(f"{name}: live pose not read from supervisor, using {src} ({reason})")
         self.cams_model = models
         self.tracker = LaneTracker(models)
+        self.ctl.tracker = self.tracker
         ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(m) for m in models.values()])
         self.ctl.ld_min, self.ctl.ld_max = ld_min, ld_max
         tr = self.tracker
@@ -239,19 +251,54 @@ class RowfitRuntime:
         self.frames += 1
         return est
 
-    def command(self, dt: float) -> dict:
+    def command(self, dt: float, yaw: float | None = None, *, log=print) -> dict:
+        """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
+        sharp-corner pivot (without it a corner ends in the lost-lane brake).
+        Corner state changes are printed through ``log``."""
         new = self._has_pending
         est = self._pending if new else None
         self._has_pending = False
         self._pending = None
-        cmd = self.ctl.step(est, new_frame=new, dt=dt, frame_dt=self.frame_dt)
+        cmd = self.ctl.step(est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw)
+        for msg in self.ctl.drain_events():
+            log(msg)
+        self.last_cmd = cmd
         return cmd
+
+    def state_line(self) -> str:
+        """One HUD line for the corner state machine."""
+        c = self.ctl
+        side = "L" if c.corner_dir > 0 else "R"
+        if c.state == "CORNER_APPROACH":
+            rem = c.remaining_m if c.remaining_m is not None else 0.0
+            return f"CORNER {side} {c.corner_dist_m or 0:.2f}m pv{rem:+.2f}"
+        if c.state == "PIVOT":
+            yaw = self._frame_yaw
+            if yaw is not None and c.yaw_target is not None:
+                err = math.atan2(math.sin(c.yaw_target - yaw), math.cos(c.yaw_target - yaw))
+                return f"PIVOT {side} err {math.degrees(err):+.0f}d"
+            return f"PIVOT {side}"
+        if c.state == "REACQUIRE":
+            return f"REACQUIRE {c.reacq_ok}/3"
+        est = self.est
+        corner = getattr(est, "corner", None) if est is not None else None
+        if corner is not None:
+            return f"LANE cue {corner.side[0].upper()} {corner.distance_m:.2f}m c{corner.confidence:.1f}"
+        return "LANE"
 
     def fill_eyes(self, lane_eyes: dict) -> None:
         est = self.est
         lane_eyes["error_source"] = "rowfit"
+        lane_eyes["rowfit_state"] = self.ctl.state
+        state = self.state_line()
+        corner = getattr(est, "corner", None) if est is not None else None
+        # crossbar rows for the HUD: cam -> [(row, col, role)]
+        lane_eyes["rowfit_corner"] = {} if corner is None else {
+            c.cam: [(c.row, c.col, c.role)] for c in corner.cues
+        }
         if est is not None and getattr(est, "held", False):
             lane_eyes["rowfit_text"] = [
+                state,
                 "rowfit: HELD (fit rejected)",
                 (est.reject_reason or "")[:28],
                 f"off {est.offset_m * 100:+.0f}cm hd {math.degrees(est.heading_rad):+.0f}d",
@@ -259,11 +306,12 @@ class RowfitRuntime:
             lane_eyes["rowfit_px"] = {}
             return
         if est is None or not est.valid:
-            lane_eyes["rowfit_text"] = ["rowfit: no lane"]
+            lane_eyes["rowfit_text"] = [state, "rowfit: no lane"]
             lane_eyes["rowfit_px"] = {}
             return
         lane_eyes["rowfit_px"] = est.pixels
         lane_eyes["rowfit_text"] = [
+            state,
             f"off {est.offset_m * 100:+.0f}cm hd {math.degrees(est.heading_rad):+.0f}d",
             f"k {est.curvature_1pm:+.2f} conf {est.confidence:.2f}",
             f"L{est.n_left} R{est.n_right} look {est.lookahead_m:.1f}m",

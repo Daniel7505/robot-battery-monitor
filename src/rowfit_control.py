@@ -1,7 +1,8 @@
 """Row-fit lane keep: steer + speed from a fitted lane model.
 
-Used by the Webots controller only when ``RBM_LANE_MODE=rowfit``. The
-default ``gap`` path (``lane_keep.lane_keep_command``) is untouched.
+Used by the Webots controller in the default lane mode (``RBM_LANE_MODE``
+unset or ``rowfit``). ``RBM_LANE_MODE=gap`` runs the old pixel path
+(``lane_keep.lane_keep_command``), which this module does not touch.
 
 Per NEW camera frame (every ~320 ms) the controller:
 
@@ -41,13 +42,39 @@ ACCEL_M_S2 = 0.25  # speed-up-out (gentle)
 DECEL_M_S2 = 0.80  # slow-in (quick)
 LD_BASE_M = 0.45
 LD_GAIN_S = 1.2  # look-ahead = base + gain * v
-LD_MIN_M = 0.55
-LD_MAX_M = 1.6
+LD_MIN_M = 0.55  # pursuit-stability floor (not a camera number)
+LD_MAX_M = 1.6  # default only; the runtime derives it from the camera coverage
+# Look-ahead window from the camera footprint (lookahead_bounds_from_coverage):
+# goal at most LD_FAR_MARGIN_M short of the nearest top-row reach (so the far
+# fit still has line beyond it), at least LD_NEAR_MARGIN_M past the bottom row.
+LD_FAR_MARGIN_M = 0.36  # 1.96 m top row -> 1.6 m, the tuned value
+LD_NEAR_MARGIN_M = 0.25
+LD_ABS_MIN_M = 0.4
+LD_ABS_MAX_M = 2.5
 K_D_OFFSET = 0.6  # 1/m per (m/s) of offset rate
 KAPPA_MAX = 2.5
 STEER_CAP = 0.8
 MIN_CONF = 0.15
 LOST_FRAMES_STOP = 3  # ~1 s at 320 ms frames
+
+
+def lookahead_bounds_from_coverage(coverages) -> tuple[float, float]:
+    """(ld_min, ld_max) from ``lane_vision.camera_coverage`` dicts of all lane cameras.
+
+    Uses the shortest top-row reach and the farthest-forward bottom row, so
+    the goal point stays inside what every camera sees. Clamped to
+    [LD_ABS_MIN_M, LD_ABS_MAX_M]; falls back to LD_MIN_M/LD_MAX_M.
+    """
+    tops = [c.get("top_row_x_m") for c in coverages if c and c.get("top_row_x_m") is not None]
+    bots = [c.get("bottom_row_x_m") for c in coverages if c and c.get("bottom_row_x_m") is not None]
+    if not tops:
+        return LD_MIN_M, LD_MAX_M
+    ld_max = max(LD_ABS_MIN_M, min(LD_ABS_MAX_M, min(tops) - LD_FAR_MARGIN_M))
+    ld_min = LD_MIN_M
+    if bots:
+        ld_min = max(ld_min, max(bots) + LD_NEAR_MARGIN_M)
+    ld_min = max(LD_ABS_MIN_M, min(ld_min, ld_max))
+    return ld_min, ld_max
 
 
 def curve_speed(kappa_abs: float, conf: float = 1.0) -> float:
@@ -76,8 +103,16 @@ class SpeedGovernor:
 
 
 class RowfitController:
-    def __init__(self, *, k_steer: float = DEFAULT_K_STEER) -> None:
+    def __init__(
+        self,
+        *,
+        k_steer: float = DEFAULT_K_STEER,
+        ld_min: float = LD_MIN_M,
+        ld_max: float = LD_MAX_M,
+    ) -> None:
         self.k_steer = float(k_steer)
+        self.ld_min = float(ld_min)
+        self.ld_max = float(ld_max)
         self.filter = SteerFilter()
         self.gov = SpeedGovernor()
         self.kappa_cmd = 0.0
@@ -88,7 +123,7 @@ class RowfitController:
         self.n_frames = 0
 
     def reset(self) -> None:
-        self.__init__(k_steer=self.k_steer)
+        self.__init__(k_steer=self.k_steer, ld_min=self.ld_min, ld_max=self.ld_max)
 
     def on_frame(self, est, frame_dt: float = 0.32) -> None:
         """Recompute the held command from a NEW frame's LaneEstimate."""
@@ -100,9 +135,9 @@ class RowfitController:
             return
         self.frames_lost = 0
         v = self.gov.v
-        Ld = max(LD_MIN_M, min(LD_MAX_M, LD_BASE_M + LD_GAIN_S * v))
+        Ld = max(self.ld_min, min(self.ld_max, LD_BASE_M + LD_GAIN_S * v))
         if est.lookahead_m > 0.0:
-            Ld = max(LD_MIN_M, min(Ld, est.lookahead_m - 0.1))
+            Ld = max(self.ld_min, min(Ld, est.lookahead_m - 0.1))
         gx, gy = est.goal_point(Ld)
         d2 = gx * gx + gy * gy
         k_pp = 0.0 if d2 < 1e-6 else 2.0 * gy / d2

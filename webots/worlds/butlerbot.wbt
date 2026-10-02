@@ -2305,10 +2305,9 @@ Robot {
     }
     # Shoulder nadirs only. LINE / SIDE / FINISH / Z/W and aim pucks
     # archived at archives/butlerbot_choir_2026-09-02.wbt.
-    # Left shoulder. Daniel mouse-framed 2026-08-25 (DUMP_CAM).
-    # VIEWPOINT COPY position 0.01042 0.41808 0.72919
-    # orientation 0.006250 0.999953 -0.007464 1.394247
-    # One still: drive wheel + left yellow. On the wheel.
+    # Left shoulder. Boom + box from Daniel's 2026-08-25 framing (DUMP_CAM,
+    # VIEWPOINT COPY position 0.01042 0.41808 0.72919). Since 2026-10-01
+    # NADIR_CAM_L sits in this box (front-bottom edge), see the Camera node.
     DEF NADIR_BOOM_L Transform {
       translation 0.00521 0.26904 0.57460
       rotation 1 0 0 -0.767
@@ -2341,18 +2340,22 @@ Robot {
       ]
     }
     DEF NADIR_CAM_L Camera {
-      # Daniel framed 2026-09-04. Box/boom still old — redraw later.
-      # ~4 m look-ahead, z ~1.31 m. Angle 1.1 after HUD tick. Do not File-Save.
-      translation -0.386826 0.504837 1.306679
-      rotation -0.00125006 0.999996 0.00256741 1.1
+      # Lens on the front-bottom edge of NADIR_BOX_L (box centre
+      # 0.01042 0.41808 0.72919, 0.05 m cube): the box is behind/above the
+      # lens, so no ray can see its inside. Pure pitch 0 1 0 0.9411 rad
+      # (53.9 deg down) from scripts/aim_camera.py: top row -> 1.96 m ahead
+      # of the axle (same reach as the old z 1.31 mount), bottom row
+      # ~0.06 m ahead. Controller reads this pose live (Supervisor).
+      # Keep a direct Robot child. Do not File-Save.
+      translation 0.03542 0.41808 0.70419
+      rotation 0 1 0 0.9411
       name "nadir_left"
       width 128
       height 128
       fieldOfView 1.2
       near 0.03
     }
-    # Right shoulder: Y-mirror of the left boom/box. Same look-down as left
-    # (Daniel framed left; if this picture is wrong, stop — he frames it).
+    # Right shoulder: Y-mirror of the left boom/box/camera.
     DEF NADIR_BOOM_R Transform {
       translation 0.00521 -0.26904 0.57460
       rotation 1 0 0 0.767
@@ -2385,9 +2388,10 @@ Robot {
       ]
     }
     DEF NADIR_CAM_R Camera {
-      # Y-mirror of NADIR_CAM_L (Daniel 2026-09-04). Copy left + y negated.
-      translation -0.386826 -0.504837 1.306679
-      rotation -0.00125006 0.999996 0.00256741 1.1
+      # True Y-mirror of NADIR_CAM_L: translation y negated, same pure
+      # pitch (0 1 0 theta is mirror-symmetric). Front-bottom edge of NADIR_BOX_R.
+      translation 0.03542 -0.41808 0.70419
+      rotation 0 1 0 0.9411
       name "nadir_right"
       width 128
       height 128

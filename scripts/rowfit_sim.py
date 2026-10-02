@@ -2,7 +2,10 @@
 """Offline closed-loop check of the rowfit lane keep (no Webots).
 
 Kinematic diff-drive robot, 8 ms ticks, both nadir cameras rendered from
-the SAME camera model every 320 ms (src/lane_vision.render_lane_bgra),
+the SAME camera model every 320 ms (src/lane_vision.render_lane_bgra).
+Camera poses come from webots/worlds/butlerbot.wbt (parse_wbt_cameras, the
+same fallback the controller uses; ``--constants`` uses NADIR_*_POSE) and the
+look-ahead window is derived from their coverage, as in the controller.
 LaneTracker + RowfitController in the loop. The course geometry is only
 used to paint the synthetic images and to score cross-track error.
 
@@ -26,12 +29,30 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from src.lane_keep import WHEEL_RADIUS_M  # noqa: E402
 from src.lane_vision import (  # noqa: E402
     NADIR_CAMS,
+    CameraModel,
     LaneTracker,
+    camera_coverage,
+    parse_wbt_cameras,
     lane_polyline_robot,
     offset_polyline,
     render_lane_bgra,
 )
-from src.rowfit_control import TRACK_M, RowfitController  # noqa: E402
+from src.rowfit_control import TRACK_M, RowfitController, lookahead_bounds_from_coverage  # noqa: E402
+
+
+def sim_cameras(use_constants: bool = False, wbt_path=None) -> dict:
+    """Nadir camera models from the world file (fallback: constants)."""
+    if not use_constants:
+        try:
+            w = parse_wbt_cameras(wbt_path)
+            cams = {
+                n: CameraModel(n, w[n]["translation"], w[n]["rotation"], w[n]["width"], w[n]["height"], w[n]["fov"])
+                for n in NADIR_CAMS
+            }
+            return cams
+        except (OSError, KeyError):
+            pass
+    return dict(NADIR_CAMS)
 
 
 def path_from_segments(segs, start=(-2.0, 0.0), h0=0.0, ds=0.04):
@@ -81,13 +102,31 @@ def _dist_and_index(p, poly, hint=0):
     return best, bi
 
 
-def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0):
+def _path_curvature(poly):
+    """|curvature| at each polyline vertex (heading change / step)."""
+    out = [0.0] * len(poly)
+    for i in range(1, len(poly) - 1):
+        (x0, y0), (x1, y1), (x2, y2) = poly[i - 1], poly[i], poly[i + 1]
+        h1 = math.atan2(y1 - y0, x1 - x0)
+        h2 = math.atan2(y2 - y1, x2 - x1)
+        dh = math.atan2(math.sin(h2 - h1), math.cos(h2 - h1))
+        ds = 0.5 * (math.hypot(x1 - x0, y1 - y0) + math.hypot(x2 - x1, y2 - y1)) or 1.0
+        out[i] = abs(dh) / ds
+    return out
+
+
+def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0,
+        cams=None):
     centre = course(name)
+    curv = _path_curvature(centre)
     left = offset_polyline(centre, half_w)
     right = offset_polyline(centre, -half_w)
     x, y, yaw = 0.0, float(start_offset), float(start_yaw)
-    tracker = LaneTracker()
-    ctl = RowfitController()
+    cams = dict(cams or sim_cameras())
+    tracker = LaneTracker(cams)
+    ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(c) for c in cams.values()])
+    ctl = RowfitController(ld_min=ld_min, ld_max=ld_max)
+    bend_v = []
     dt, frame_every = 0.008, 40
     tick, idx = 0, 0
     max_ct, sum_ct, n_ct = 0.0, 0.0, 0
@@ -107,7 +146,7 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                 seg = [p for p in poly if math.hypot(p[0] - x, p[1] - y) < 3.5]
                 if len(seg) > 1:
                     lines.append(lane_polyline_robot(seg, (x, y), yaw))
-            imgs = {n: (render_lane_bgra(c, lines), c.width, c.height) for n, c in NADIR_CAMS.items()}
+            imgs = {n: (render_lane_bgra(c, lines), c.width, c.height) for n, c in cams.items()}
             px, py, pyaw = last_frame_pose
             dyaw = math.atan2(math.sin(yaw - pyaw), math.cos(yaw - pyaw))
             dx = math.hypot(x - px, y - py)
@@ -130,6 +169,8 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         sum_ct += ct
         n_ct += 1
         speeds.append(v)
+        if curv[min(idx, len(curv) - 1)] > 0.3:
+            bend_v.append(v)
         if new and csv is not None:
             rows.append((round(tick * dt, 3), round(x, 3), round(y, 3), round(ct, 3),
                          None if est is None else round(est.offset_m, 3),
@@ -152,6 +193,9 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         "mean_ct_m": round(sum_ct / max(1, n_ct), 3),
         "min_v": round(min(speeds), 3) if speeds else 0.0,
         "max_v": round(max(speeds), 3) if speeds else 0.0,
+        "bend_min_v": round(min(bend_v), 3) if bend_v else None,
+        "bend_mean_v": round(sum(bend_v) / len(bend_v), 3) if bend_v else None,
+        "ld_window_m": (round(ld_min, 2), round(ld_max, 2)),
     }
 
 
@@ -160,9 +204,14 @@ def main(argv=None) -> int:
     ap.add_argument("courses", nargs="*", default=["s", "turn90"])
     ap.add_argument("--csv")
     ap.add_argument("--latency", type=int, default=0, help="frames of extra camera latency")
+    ap.add_argument("--constants", action="store_true", help="use NADIR_*_POSE instead of the .wbt")
+    ap.add_argument("--wbt", help="world file to read the camera poses from")
     a = ap.parse_args(argv)
+    cams = sim_cameras(a.constants, a.wbt)
+    for n, c in cams.items():
+        print(f"camera {n}: t={c.translation} rot={c.rotation} fov={c.fov_rad}")
     for c in a.courses:
-        print(run(c, csv=a.csv, latency_frames=a.latency))
+        print(run(c, csv=a.csv, latency_frames=a.latency, cams=cams))
     return 0
 
 

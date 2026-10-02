@@ -349,7 +349,8 @@ def _merge_throttle(local: float, remote: float | None) -> float:
 
 # Default folder unchanged (~/OneDrive/Desktop/Grok Workspace); RBM_LOG_DIR overrides.
 _STEER_LOG = os.path.join(_log_dir(), "steer-actions.csv")
-# RBM_LANE_MODE=rowfit (env or repo .env) -> lane_vision row fit; default 'gap'.
+# Lane mode: default 'rowfit' (lane_vision row fit); RBM_LANE_MODE=gap (env or
+# repo .env) -> old pixel-fan path.
 _LANE_MODE = _lane_mode()
 _steer_log_ready = False
 _steer_log_key = ""
@@ -654,7 +655,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     nadir_guard = None if nadir_guard_cls is None else nadir_guard_cls()
     eye_huds = _label_eye_huds(robot, cams)
     if rowfit_rt is not None:
-        for msg in rowfit_rt.check_cameras(cams):
+        for msg in rowfit_rt.bind_cameras(robot, cams) + rowfit_rt.check_cameras(cams):
             print(f"WARNING rowfit camera model: {msg}")
     nadir_lobe_done = False
     nadir_logged = False

@@ -56,4 +56,21 @@ class Robot:
             else: d = Motor(name)
             self.devs[name] = d
         return self.devs[name]
-class Supervisor(Robot): pass
+class _Field:
+    def __init__(self, v): self.v = list(v)
+    def getSFVec3f(self): return self.v
+    def getSFRotation(self): return self.v
+class _Node:
+    def __init__(self, nid, parent=None, t=(0, 0, 0), r=(0, 0, 1, 0)):
+        self.nid, self.parent, self.f = nid, parent, {"translation": _Field(t), "rotation": _Field(r)}
+    def getId(self): return self.nid
+    def getParentNode(self): return self.parent
+    def getField(self, k): return self.f.get(k)
+class Supervisor(Robot):
+    """Camera nodes are direct Robot children with the repo .wbt pose."""
+    _self = _Node(1)
+    def getSelf(self): return self._self
+    def getFromDevice(self, dev):
+        from src.lane_vision import parse_wbt_cameras
+        p = parse_wbt_cameras().get(getattr(dev, "name", ""))
+        return None if p is None else _Node(2, self._self, p["translation"], p["rotation"])

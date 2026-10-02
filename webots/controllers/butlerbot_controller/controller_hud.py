@@ -216,7 +216,7 @@ def _paint_eye_huds(handles: list[dict], lane_eyes: dict) -> None:
 
 
 def _paint_rowfit_overlay(disp, handle: dict, lane_eyes: dict, w: int, h: int) -> None:
-    """RBM_LANE_MODE=rowfit only: fitted stripe points + lane numbers."""
+    """Rowfit lane mode only (the default): fitted stripe points + lane numbers."""
     cam = handle.get("cam")
     cam_w, cam_h = 128, 128
     if cam is not None:

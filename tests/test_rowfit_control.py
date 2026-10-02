@@ -203,13 +203,137 @@ def test_lane_mode_default_env_and_dotenv(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     monkeypatch.delenv("RBM_LANE_MODE", raising=False)
     glue = _load_glue(monkeypatch, env)
+    assert glue.DEFAULT_LANE_MODE == "rowfit"
+    assert glue.lane_mode() == "rowfit"  # unset -> rowfit (new default)
+    env.write_text("# x\nRBM_LANE_MODE=gap  # old pixel fan\n")
     assert glue.lane_mode() == "gap"
-    env.write_text("# x\nRBM_LANE_MODE=rowfit  # try it\n")
+    env.write_text("RBM_LANE_MODE=\n")
     assert glue.lane_mode() == "rowfit"
-    monkeypatch.setenv("RBM_LANE_MODE", "gap")  # process env wins over .env
+    monkeypatch.setenv("RBM_LANE_MODE", "rowfit")  # process env wins over .env
+    env.write_text("RBM_LANE_MODE=gap\n")
+    assert glue.lane_mode() == "rowfit"
+    monkeypatch.setenv("RBM_LANE_MODE", " GAP ")
     assert glue.lane_mode() == "gap"
     monkeypatch.setenv("RBM_LANE_MODE", "bogus")
-    assert glue.lane_mode() == "gap"
+    assert glue.lane_mode() == "rowfit"
+
+
+def test_lookahead_bounds_follow_camera_coverage():
+    from src.lane_vision import NADIR_CAMS, CameraModel, camera_coverage
+
+    covs = [camera_coverage(c) for c in NADIR_CAMS.values()]
+    assert rc.lookahead_bounds_from_coverage(covs) == pytest.approx((0.55, 1.6), abs=0.005)
+    # the old z 1.31 m mount had the same top reach -> same tuned window
+    old = CameraModel("old", (-0.386826, 0.504837, 1.306679), (-0.00125006, 0.999996, 0.00256741, 1.1), 128, 128, 1.2)
+    assert rc.lookahead_bounds_from_coverage([camera_coverage(old)]) == pytest.approx((0.55, 1.6), abs=0.005)
+    # a shorter-reach camera pulls ld_max in; a far-forward bottom row pushes ld_min out
+    short = CameraModel("s", (0.0, 0.4, 0.7), (0, 1, 0, 1.2), 128, 128, 1.2)
+    cs = camera_coverage(short)
+    lo, hi = rc.lookahead_bounds_from_coverage([cs])
+    assert hi == pytest.approx(cs["top_row_x_m"] - rc.LD_FAR_MARGIN_M) and lo <= hi
+    lo, hi = rc.lookahead_bounds_from_coverage([{"top_row_x_m": 3.0, "bottom_row_x_m": 0.6}])
+    assert lo == pytest.approx(0.85) and hi == pytest.approx(2.5)
+    assert rc.lookahead_bounds_from_coverage([]) == (rc.LD_MIN_M, rc.LD_MAX_M)
+
+
+def test_controller_uses_its_lookahead_window():
+    ctl = rc.RowfitController(ld_min=0.7, ld_max=0.8)
+    ctl.gov.v = 0.44  # base + gain*v = 0.98 -> clamped to 0.8
+    ctl.on_frame(est(look=1.9))
+    assert ctl.lookahead_used == pytest.approx(0.8, abs=0.01)
+    ctl.reset()
+    assert (ctl.ld_min, ctl.ld_max) == (0.7, 0.8)
+
+
+def test_runtime_bind_cameras_reads_live_pose(monkeypatch, tmp_path):
+    glue = _load_glue(monkeypatch, tmp_path / "none.env")
+
+    class F:
+        def __init__(self, v):
+            self.v = list(v)
+
+        def getSFVec3f(self):
+            return self.v
+
+        getSFRotation = getSFVec3f
+
+    class N:
+        def __init__(self, nid, parent=None, t=(0, 0, 0), r=(0, 0, 1, 0)):
+            self.nid, self.parent, self.f = nid, parent, {"translation": F(t), "rotation": F(r)}
+
+        def getId(self):
+            return self.nid
+
+        def getParentNode(self):
+            return self.parent
+
+        def getField(self, k):
+            return self.f[k]
+
+    class Dev:
+        def __init__(self, name):
+            self.name = name
+
+        def getWidth(self):
+            return 128
+
+        def getHeight(self):
+            return 128
+
+        def getFov(self):
+            return 1.2
+
+    robot_node = N(1)
+    y = {"nadir_left": 0.5, "nadir_right": -0.5}
+    nodes = {n: N(10 + i, robot_node, (0.05, y[n], 0.8), (0, 1, 0, 1.0)) for i, n in enumerate(y)}
+
+    class Sup:
+        def getSelf(self):
+            return robot_node
+
+        def getFromDevice(self, dev):
+            return nodes[dev.name]
+
+    cams = {n: Dev(n) for n in y}
+    rt = glue.RowfitRuntime()
+    lines = []
+    msgs = rt.bind_cameras(Sup(), cams, log=lines.append)
+    assert msgs == []
+    assert lines[0].startswith("CAM POSE nadir_left from supervisor: t=(0.0500, 0.5000, 0.8000)")
+    assert "pitch=57.3deg" in lines[0]
+    assert lines[1].startswith("CAM POSE nadir_right from supervisor: t=(0.0500, -0.5000, 0.8000)")
+    assert rt.pose_source == {"nadir_left": "supervisor", "nadir_right": "supervisor"}
+    assert rt.tracker.cams["nadir_left"].translation == (0.05, 0.5, 0.8)
+    assert rt.cams_model["nadir_right"].rotation[3] == pytest.approx(1.0)
+    # look-ahead window re-derived from THIS camera's (shorter) coverage
+    from src.lane_vision import camera_coverage
+
+    top = camera_coverage(rt.cams_model["nadir_left"])["top_row_x_m"]
+    assert rt.ctl.ld_max == pytest.approx(max(rc.LD_ABS_MIN_M, top - rc.LD_FAR_MARGIN_M))
+    assert rt.check_cameras(cams) == []
+
+
+def test_runtime_bind_cameras_plain_robot_falls_back_to_wbt(monkeypatch, tmp_path):
+    glue = _load_glue(monkeypatch, tmp_path / "none.env")
+    from src.lane_vision import NADIR_LEFT_POSE
+
+    class Dev:
+        def getWidth(self):
+            return 128
+
+        def getHeight(self):
+            return 128
+
+        def getFov(self):
+            return 1.2
+
+    rt = glue.RowfitRuntime()
+    lines = []
+    msgs = rt.bind_cameras(object(), {"nadir_left": Dev(), "nadir_right": None}, log=lines.append)
+    assert lines[0].startswith("CAM POSE nadir_left from wbt butlerbot.wbt")
+    assert any("nadir_right: device missing" in m for m in msgs)
+    assert any("using wbt" in m for m in msgs)
+    assert rt.cams_model["nadir_left"].translation == NADIR_LEFT_POSE["translation"]
 
 
 def test_log_dir_default_and_override(monkeypatch, tmp_path):

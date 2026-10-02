@@ -42,7 +42,13 @@ YELLOW_THRESH = 0.22  # same as nadir_wheel_to_tape
 FALLBACK_LANE_W_M = 1.30  # only until both lines have been seen once
 MAX_RANGE_M = 3.5
 MIN_SIDE_PTS = 4
-NEAR_MAX_X_M = 0.9  # near-field fit (offset / heading at the axle)
+# Fit windows (floor x ahead of the axle). The cameras no longer see behind
+# the axle (bottom row ~0.06 m ahead since the box mount), so the near fit
+# must stop before a bend that starts ~0.5 m ahead can bend the axle heading:
+# 0.9 m was fine only while ~0.55 m of floor behind the axle anchored it.
+# fit_windows() widens them if a camera's bottom row sits farther ahead.
+NEAR_MAX_X_M = 0.6  # near-field fit (offset / heading at the axle)
+NEAR_MIN_SPAN_M = 0.4  # near window is at least this long past the bottom row
 FAR_MIN_X_M = 0.25  # far-field fit (curvature ahead / pursuit goal)
 SPLIT_X_M = 0.6  # points nearer than this are judged by the near model
 
@@ -140,18 +146,23 @@ class CameraModel:
         return (self.cx - self.focal_px * cyv / cxv, self.cy - self.focal_px * czv / cxv)
 
 
-# Mirrors webots/worlds/butlerbot.wbt (NADIR_CAM_L / NADIR_CAM_R).
-# tests/test_lane_vision.py parses the .wbt and fails if these drift.
+# Fallback copy of webots/worlds/butlerbot.wbt (NADIR_CAM_L / NADIR_CAM_R).
+# The controller reads the live pose from Webots at start-up
+# (camera_model_from_device); these are only the last fallback and the
+# default for tests/offline tools. tests/test_lane_vision.py parses the .wbt
+# and fails if these drift. Lens on the front-bottom edge of NADIR_BOX_L/R
+# (box centre 0.01042 +/-0.41808 0.72919, 0.05 m cube), pitch from
+# scripts/aim_camera.py (top row -> 1.96 m ahead of the axle).
 NADIR_LEFT_POSE = {
-    "translation": (-0.386826, 0.504837, 1.306679),
-    "rotation": (-0.00125006, 0.999996, 0.00256741, 1.1),
+    "translation": (0.03542, 0.41808, 0.70419),
+    "rotation": (0.0, 1.0, 0.0, 0.9411),
     "width": 128,
     "height": 128,
     "fov": 1.2,
 }
 NADIR_RIGHT_POSE = {
-    "translation": (-0.386826, -0.504837, 1.306679),
-    "rotation": (-0.00125006, 0.999996, 0.00256741, 1.1),
+    "translation": (0.03542, -0.41808, 0.70419),
+    "rotation": (0.0, 1.0, 0.0, 0.9411),
     "width": 128,
     "height": 128,
     "fov": 1.2,
@@ -243,6 +254,199 @@ def camera_coverage(cam: CameraModel) -> dict:
         "top_m_per_px_lat_long": _m_per_px(0),
         "focal_px": cam.focal_px,
     }
+
+
+def _mat_mul(A, B):
+    return tuple(tuple(sum(A[i][k] * B[k][j] for k in range(3)) for j in range(3)) for i in range(3))
+
+
+def _mat_vec(A, v):
+    return tuple(A[i][0] * v[0] + A[i][1] * v[1] + A[i][2] * v[2] for i in range(3))
+
+
+def matrix_to_axis_angle(R) -> tuple[float, float, float, float]:
+    """Rotation matrix -> Webots axis-angle (x, y, z, angle), angle in [0, pi]."""
+    tr = R[0][0] + R[1][1] + R[2][2]
+    c = max(-1.0, min(1.0, 0.5 * (tr - 1.0)))
+    ang = math.acos(c)
+    if ang < 1e-9:
+        return (0.0, 1.0, 0.0, 0.0)
+    x = R[2][1] - R[1][2]
+    y = R[0][2] - R[2][0]
+    z = R[1][0] - R[0][1]
+    n = math.sqrt(x * x + y * y + z * z)
+    if n < 1e-9:  # angle ~ pi: axis from the diagonal
+        x = math.sqrt(max(0.0, (R[0][0] + 1.0) / 2.0))
+        y = math.copysign(math.sqrt(max(0.0, (R[1][1] + 1.0) / 2.0)), R[0][1] or 1.0)
+        z = math.copysign(math.sqrt(max(0.0, (R[2][2] + 1.0) / 2.0)), R[0][2] or 1.0)
+        n = math.sqrt(x * x + y * y + z * z) or 1.0
+    return (x / n, y / n, z / n, ang)
+
+
+def camera_look_angles(cam: CameraModel) -> tuple[float, float]:
+    """(pitch_down_rad, yaw_left_rad) of the optical axis (camera +X) in the robot frame."""
+    dx, dy, dz = _mat_vec(cam.R, (1.0, 0.0, 0.0))
+    return (math.atan2(-dz, math.hypot(dx, dy)), math.atan2(dy, dx))
+
+
+def describe_camera(cam: CameraModel) -> str:
+    pitch, yaw = camera_look_angles(cam)
+    t = ", ".join(f"{v:.4f}" for v in cam.translation)
+    r = " ".join(f"{v:.6g}" for v in cam.rotation)
+    return (
+        f"t=({t}) rot=({r}) pitch={math.degrees(pitch):.2f}deg yaw={math.degrees(yaw):+.2f}deg "
+        f"{cam.width}x{cam.height} fov={cam.fov_rad:.3f}"
+    )
+
+
+def _node_local_pose(node):
+    t = node.getField("translation").getSFVec3f()
+    r = node.getField("rotation").getSFRotation()
+    return tuple(float(v) for v in t[:3]), _axis_angle_matrix(tuple(float(v) for v in r[:4]))
+
+
+def _node_id(node):
+    try:
+        return node.getId()
+    except Exception:
+        return id(node)
+
+
+def supervisor_camera_pose(robot, device=None, def_name: str | None = None, max_depth: int = 16) -> dict:
+    """Camera pose in the Robot node frame, read live through the Supervisor API.
+
+    Finds the camera node with ``robot.getFromDevice(device)`` (else
+    ``getFromDef(def_name)``), then composes the local translation/rotation
+    fields of the camera and every Transform/Pose/Solid between it and the
+    Robot node (``robot.getSelf()``). For a direct Robot child that is just the
+    camera's own fields. Raises if anything is missing (caller falls back).
+    """
+    node = None
+    if device is not None and hasattr(robot, "getFromDevice"):
+        node = robot.getFromDevice(device)
+    if node is None and def_name and hasattr(robot, "getFromDef"):
+        node = robot.getFromDef(def_name)
+    if node is None:
+        raise LookupError("camera node not reachable via supervisor")
+    self_node = robot.getSelf()
+    if self_node is None:
+        raise LookupError("robot.getSelf() returned None")
+    self_id = _node_id(self_node)
+    # p_robot = R_acc * p_cam + t_acc, walking up the parent chain
+    t_acc = (0.0, 0.0, 0.0)
+    R_acc = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    cur = node
+    for _ in range(max_depth):
+        t, R = _node_local_pose(cur)
+        t_acc = tuple(a + b for a, b in zip(_mat_vec(R, t_acc), t))
+        R_acc = _mat_mul(R, R_acc)
+        parent = cur.getParentNode()
+        if parent is None:
+            raise LookupError("camera is not under the robot node")
+        if _node_id(parent) == self_id:
+            break
+        cur = parent
+    else:
+        raise LookupError("camera nested too deep")
+    return {"translation": t_acc, "rotation": matrix_to_axis_angle(R_acc)}
+
+
+def _device_optics(device, fallback: dict) -> tuple[int, int, float]:
+    try:
+        return int(device.getWidth()), int(device.getHeight()), float(device.getFov())
+    except Exception:
+        return int(fallback["width"]), int(fallback["height"]), float(fallback["fov"])
+
+
+def camera_model_from_device(
+    robot,
+    device,
+    name: str,
+    *,
+    def_name: str | None = None,
+    wbt_path: str | None = None,
+    fallback_pose: dict | None = None,
+) -> tuple[CameraModel, str]:
+    """Build the CameraModel for a live camera. Returns (model, source).
+
+    Pose source order: ``supervisor`` (live node fields) -> ``wbt`` (parse the
+    loaded world, or the repo world) -> ``constants`` (NADIR_*_POSE).
+    Width/height/fov always come from the device when it answers.
+    """
+    const = fallback_pose or {"nadir_left": NADIR_LEFT_POSE, "nadir_right": NADIR_RIGHT_POSE}.get(name)
+    pose = None
+    source = ""
+    try:
+        pose = supervisor_camera_pose(robot, device, def_name)
+        source = "supervisor"
+    except Exception:
+        pose = None
+    if pose is None:
+        paths = []
+        if wbt_path:
+            paths.append(wbt_path)
+        try:
+            wp = robot.getWorldPath()
+            if wp:
+                paths.append(str(wp))
+        except Exception:
+            pass
+        paths.append(_WBT_DEFAULT)
+        for path in paths:
+            try:
+                cams = parse_wbt_cameras(path)
+            except Exception:
+                continue
+            if name in cams:
+                pose = cams[name]
+                source = f"wbt {os.path.basename(path)}"
+                break
+    if pose is None:
+        if const is None:
+            raise LookupError(f"no pose for camera {name}")
+        pose = const
+        source = "constants"
+    base = const or pose
+    if "width" in pose:
+        base = {**base, **{k: pose[k] for k in ("width", "height", "fov")}}
+    w, h, fov = _device_optics(device, base) if device is not None else (base["width"], base["height"], base["fov"])
+    model = CameraModel(name, pose["translation"], pose["rotation"], w, h, fov)
+    return model, source
+
+
+def aim_pitch_for_reach(
+    translation: tuple[float, float, float],
+    fov_rad: float,
+    width: int,
+    height: int,
+    far_x_m: float,
+    *,
+    plane_z: float = PAINT_TOP_Z_M,
+) -> float:
+    """Pure pitch (rotation 0 1 0 theta) that puts the top row's centre on the floor far_x_m ahead.
+
+    Uses CameraModel itself (bisection), so it matches the runtime math
+    including the half-pixel centre of row 0.
+    """
+    if float(translation[2]) <= plane_z:
+        raise ValueError("camera must be above the floor plane")
+    if float(far_x_m) <= float(translation[0]):
+        raise ValueError("far reach must be ahead of the camera")
+
+    def _top_x(p):
+        g = CameraModel("aim", translation, (0.0, 1.0, 0.0, p), width, height, fov_rad, plane_z).pixel_to_ground(
+            (width - 1) / 2.0, 0.0
+        )
+        return math.inf if g is None else g[0]
+
+    lo, hi = 0.0, math.pi / 2.0  # top_x decreases with pitch
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if _top_x(mid) > far_x_m:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
 
 
 # --------------------------------------------------------------------------
@@ -556,11 +760,31 @@ def predict_model(
     return (py, npsi + k * sarc, k)
 
 
+def fit_windows(cams) -> tuple[float, float, float]:
+    """(near_max_x, split_x, far_min_x) for these cameras' floor coverage.
+
+    Defaults NEAR_MAX_X_M / SPLIT_X_M / FAR_MIN_X_M, pushed out so the near
+    window keeps >= NEAR_MIN_SPAN_M of floor past the farthest-forward bottom
+    row and the far window starts at or after it.
+    """
+    bots = []
+    for cam in cams:
+        x = camera_coverage(cam)["bottom_row_x_m"]
+        if x is not None:
+            bots.append(x)
+    bottom = max(bots) if bots else 0.0
+    near_max = max(NEAR_MAX_X_M, bottom + NEAR_MIN_SPAN_M)
+    split = min(near_max, max(SPLIT_X_M, bottom + NEAR_MIN_SPAN_M))
+    far_min = max(FAR_MIN_X_M, bottom)
+    return near_max, split, far_min
+
+
 class LaneTracker:
     """Stateful per-frame lane fit (keeps prior + online lane width)."""
 
     def __init__(self, cams: dict[str, CameraModel] | None = None) -> None:
         self.cams = dict(cams or NADIR_CAMS)
+        self.near_max_x, self.split_x, self.far_min_x = fit_windows(self.cams.values())
         self.prior_near: tuple[float, float, float] | None = None
         self.prior_far: tuple[float, float, float] | None = None
         self.lane_w: float | None = None
@@ -632,11 +856,11 @@ class LaneTracker:
             nl, nr = _side_counts(pts)
             if nl == 0 and nr == 0:
                 break
-            near_pts = [p for p in pts if p.side and p.x <= NEAR_MAX_X_M]
+            near_pts = [p for p in pts if p.side and p.x <= self.near_max_x]
             nb = _side_counts(near_pts)
             near_both = nb[0] >= MIN_SIDE_PTS and nb[1] >= MIN_SIDE_PTS
             near = self._refit(near_pts, near_m, width, fit_width=near_both)
-            far = self._refit([p for p in pts if p.side and p.x >= FAR_MIN_X_M], far_m, width, False)
+            far = self._refit([p for p in pts if p.side and p.x >= self.far_min_x], far_m, width, False)
             if near is None and far is None:
                 res = fit_lane(pts, init=near_m, lane_w=width, fit_width=False)
                 if res is None:
@@ -665,7 +889,7 @@ class LaneTracker:
         res_all = []
         ok = 0
         for p in inl:
-            m = near_m if p.x <= SPLIT_X_M else far_m
+            m = near_m if p.x <= self.split_x else far_m
             res_all.append(signed_lateral(p.x, p.y, *m) - p.side * 0.5 * width)
             # 6 cm sanity check (validation only, not the scale)
             e = 1e-4
@@ -734,11 +958,10 @@ class LaneTracker:
         params, _w, rms = res
         return (params[0], params[1], params[2]), params[3], rms
 
-    @staticmethod
-    def _assign_piecewise(pts, near_m, far_m, lane_w, gate):
+    def _assign_piecewise(self, pts, near_m, far_m, lane_w, gate):
         hw = 0.5 * lane_w
         for p in pts:
-            m = near_m if p.x <= SPLIT_X_M else far_m
+            m = near_m if p.x <= self.split_x else far_m
             d = signed_lateral(p.x, p.y, *m)
             side = 1 if d > 0.0 else -1
             g = gate + 0.04 * max(0.0, p.x)

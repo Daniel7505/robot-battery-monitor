@@ -11,9 +11,11 @@ from src.lane_vision import NADIR_CAMS, lane_polyline_robot, offset_polyline, re
 _c = lane_polyline_robot([(-2 + 0.1 * i, 0.0) for i in range(60)], (0.0, 0.05), 0.0)
 _IMG = {n: render_lane_bgra(m, [offset_polyline(_c, 0.65), offset_polyline(_c, -0.65)]) for n, m in NADIR_CAMS.items()}
 
+_TAGS = iter(range(10, 10000))
 class _Any:
     def __init__(self, name=""):
         self.name = name
+        self._tag = next(_TAGS)
     def __getattr__(self, k):
         return lambda *a, **kw: 0.0
 class Motor(_Any): pass
@@ -67,10 +69,23 @@ class _Node:
     def getParentNode(self): return self.parent
     def getField(self, k): return self.f.get(k)
 class Supervisor(Robot):
-    """Camera nodes are direct Robot children with the repo .wbt pose."""
+    """Mimics R2025a's Python Supervisor: getFromDevice takes the INTEGER device
+    tag and passes it to ctypes (a Camera object raises ctypes.ArgumentError).
+    Camera nodes are direct Robot children with the repo .wbt pose."""
     _self = _Node(1)
+    _defs = {"NADIR_CAM_L": "nadir_left", "NADIR_CAM_R": "nadir_right"}
     def getSelf(self): return self._self
-    def getFromDevice(self, dev):
+    def _cam_node(self, name):
         from src.lane_vision import parse_wbt_cameras
-        p = parse_wbt_cameras().get(getattr(dev, "name", ""))
+        p = parse_wbt_cameras().get(name)
         return None if p is None else _Node(2, self._self, p["translation"], p["rotation"])
+    def getFromDevice(self, tag):
+        import ctypes
+        if not isinstance(tag, int):
+            raise ctypes.ArgumentError("argument 1: TypeError: Don't know how to convert parameter 1")
+        for d in self.devs.values():
+            if getattr(d, "_tag", None) == tag:
+                return self._cam_node(d.name)
+        return None
+    def getFromDef(self, name):
+        return self._cam_node(self._defs[name]) if name in self._defs else None

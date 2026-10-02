@@ -3,9 +3,9 @@ ButlerBot Webots controller — nadir-only orchestrator.
 
 Each simulation step:
 
-1. Read GPS, IMU, wheel encoders, keyboard / dashboard teleop.
+1. Read GPS, IMU, wheel encoders, agent / dashboard API commands.
 2. Drive wheels (nadir keep, manual, API) with local + remote throttle.
-3. ABS stop on Space or dashboard ``drive_stop``.
+3. ABS stop on dashboard / agent ``drive_stop``.
 4. Estimate joint power, drain a virtual battery, POST telemetry.
 5. Poll ``GET /api/twin/state`` for throttle, API drive, ``stop_epoch``.
 
@@ -19,11 +19,11 @@ Copy that file back over this one to undo.
 Siblings (do not re-merge):
 
 * ``controller_hud.py`` — Display gauges + shoulder overlays
-* ``controller_keys.py`` — keyboard teleop
+* ``controller_keys.py`` — legacy debug key input (not a user feature;
+  the agent steers through the twin API)
 * ``controller_wheels.py`` — ABS / residual-spin / soft-grip
 * ``twin_publisher.py`` — telemetry HTTP
 
-Click the **floor**, not the robot, or Webots steals keyboard focus.
 """
 
 from __future__ import annotations
@@ -491,7 +491,7 @@ def _init_devices(
     if keyboard is not None:
         keyboard.enable(timestep)
     else:
-        print("WARNING: Keyboard device unavailable — WASD teleop disabled")
+        print("Keyboard device unavailable (debug key input off)")
 
     hud: Display | None = None
     try:
@@ -661,8 +661,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
-    print("Teleop: Arrow keys or I/J/K/L — Space = stop. Click the FLOOR (not the robot)")
-    print("Or use Dashboard: Drive Forward (API) under the twin panel")
     for _w in ("left_wheel", "right_wheel"):
         _enable_full_wheel_torque(motors[_w])
         motors[_w].setPosition(float("inf"))
@@ -992,7 +990,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             new_frame=True,
                         )
                     _e = rowfit_rt.est
-                    if rowfit_rt.frames % 3 == 1 and _e is not None:
+                    if _e is not None and getattr(_e, "held", False):
+                        _rj = _e.rejected or {}
+                        print(
+                            f"Rowfit REJECTED fit ({_e.reject_reason}) — holding last lane "
+                            f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} k={_e.curvature_1pm:+.2f}; "
+                            f"rejected off={_rj.get('offset_m', float('nan')):+.3f} "
+                            f"hd={_rj.get('heading_rad', float('nan')):+.3f} "
+                            f"nL={_rj.get('n_left')} nR={_rj.get('n_right')} "
+                            f"steer={lk.get('steer')} phase={lk.get('phase')}"
+                        )
+                    elif rowfit_rt.frames % 3 == 1 and _e is not None:
                         print(
                             "Rowfit "
                             f"L={lk['left']:.2f} R={lk['right']:.2f} steer={lk.get('steer')} "

@@ -134,7 +134,7 @@ def test_ground_pixel_roundtrip():
             assert back[1] == pytest.approx(row, abs=1e-6)
 
 
-def test_yellow_mask_matches_lane_keep_score():
+def test_yellow_mask_lane_keep_mode_matches_lane_keep_score():
     rnd = random.Random(3)
     px = bytearray()
     want = []
@@ -142,7 +142,22 @@ def test_yellow_mask_matches_lane_keep_score():
         b, g, r = rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)
         px += bytes((b, g, r, 255))
         want.append(1 if yellow_score((r / 255, g / 255, b / 255)) >= 0.22 else 0)
-    assert list(yellow_mask(bytes(px), 20, 20, 0.22)) == want
+    assert list(yellow_mask(bytes(px), 20, 20, 0.22, mode="lane_keep")) == want
+
+
+def test_yellow_mask_rg_needs_red_and_green():
+    def one(rgb, mode=None):
+        r, g, b = (int(round(v * 255)) for v in rgb)
+        return yellow_mask(bytes((b, g, r, 255)), 1, 1, 0.22, mode=mode)[0]
+
+    paint, floor, red_bar, green_bar = (0.95, 0.95, 0.2), (0.55, 0.56, 0.58), (0.9, 0.15, 0.12), (0.1, 0.85, 0.25)
+    assert one(paint) and not one(floor)
+    assert not one(red_bar) and not one(green_bar)  # s_track finish / start bars
+    assert one(red_bar, "lane_keep")  # the gap score calls the red bar yellow
+    rnd = random.Random(5)
+    for _ in range(300):  # r == g: identical to the gap score
+        v, b = rnd.random(), rnd.random()
+        assert one((v, v, b)) == one((v, v, b), "lane_keep")
 
 
 # ---------------------------------------------------------------- lane fits
@@ -217,7 +232,8 @@ def test_one_line_missing_uses_online_width():
     tr = LaneTracker()
     first = tr.process(frames(straight, hw=0.55))  # this course is 1.10 m wide
     assert first.lane_width_m == pytest.approx(1.10, abs=0.03)
-    est = tr.process(frames(straight, (0.0, 0.12), 0.0, drop="left", hw=0.55))
+    # 12 cm sideways needs some driving to be physical (plausibility gate)
+    est = tr.process(frames(straight, (0.0, 0.12), 0.0, drop="left", hw=0.55), dx_m=0.2)
     assert est.valid and est.n_left == 0 and est.n_right > 20
     assert est.offset_m == pytest.approx(0.12, abs=0.02)
     assert est.lane_width_m == pytest.approx(1.10, abs=0.03)

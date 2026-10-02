@@ -1,5 +1,7 @@
 """
-Teleop limits for ButlerBot — WASD drive math, local thermal model, agent throttle.
+Teleop limits for ButlerBot — drive math for API/agent (and legacy debug-key)
+commands, local thermal model, agent throttle. Manual keyboard driving is not a
+user feature; the agent steers through the twin API.
 
 Used by the Webots controller; logic is testable without Webots.
 

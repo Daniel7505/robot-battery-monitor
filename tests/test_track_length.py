@@ -38,13 +38,34 @@ def _world_text() -> str:
     return WORLD.read_text(encoding="utf-8")
 
 
+def _world_meshes() -> dict:
+    """DEF TRACK_* Shape -> (baseColor, points, faces) parsed from the world file."""
+    out = {}
+    for m in re.finditer(
+        r"DEF (TRACK_\w+) Shape \{(.*?)coordIndex \[(.*?)\]", _world_text(), re.S
+    ):
+        body = m.group(2)
+        col = tuple(float(v) for v in re.search(r"baseColor (\S+) (\S+) (\S+)", body).groups())
+        nums = [float(v) for v in re.search(r"point \[(.*?)\]", body, re.S).group(1).replace(",", " ").split()]
+        pts = [tuple(nums[i : i + 3]) for i in range(0, len(nums), 3)]
+        faces, cur = [], []
+        for v in (int(t) for t in m.group(3).split()):
+            if v < 0:
+                faces.append(cur)
+                cur = []
+            else:
+                cur.append(v)
+        out[m.group(1)] = (col, pts, faces)
+    return out
+
+
 def _world_finish_x() -> float:
-    m = re.search(
-        r"# FINISH line \(red\)[^\n]*\nTransform \{\n\s*translation\s+(-?[\d.]+)\s+(-?[\d.]+)",
-        _world_text(),
-    )
-    assert m, "red FINISH Transform not found in butlerbot.wbt"
-    return float(m.group(1))
+    meshes = _world_meshes()
+    assert "TRACK_FINISH" in meshes, "red TRACK_FINISH mesh not found in butlerbot.wbt"
+    col, pts, _ = meshes["TRACK_FINISH"]
+    assert col == pytest.approx((0.9, 0.15, 0.12))
+    xs = [p[0] for p in pts]
+    return (min(xs) + max(xs)) / 2.0
 
 
 def test_world_red_finish_line_is_16_5():
@@ -52,14 +73,83 @@ def test_world_red_finish_line_is_16_5():
 
 
 def test_world_paint_ends_at_finish():
-    xs = [
-        float(m.group(1))
-        for m in re.finditer(r"translation\s+(-?[\d.]+)\s+-?[\d.]+\s+0\.008\b", _world_text())
-    ]
-    assert xs, "no lane paint found"
-    # Last lane-edge box (0.38 m long) is centered within one paint step of the line.
-    assert 16.5 - 0.38 <= max(xs) <= 16.5
-    assert min(xs) == pytest.approx(0.0)
+    meshes = _world_meshes()
+    for name in ("TRACK_LINE_L", "TRACK_LINE_R"):
+        xs = [p[0] for p in meshes[name][1]]
+        assert xs, "no lane paint found"
+        # Paint starts half a 0.38 m piece behind the start and ends just past the red line.
+        assert min(xs) == pytest.approx(-0.19, abs=1e-3)
+        assert 16.5 <= max(xs) <= 16.5 + 0.19
+
+
+def test_track_is_one_pose_no_loose_segments():
+    """Scene tree: one DEF TRACK Pose with 5 Shapes, no top-level paint Transforms."""
+    text = _world_text()
+    assert text.count("{") == text.count("}")
+    assert text.count("[") == text.count("]")
+    assert re.findall(r"^DEF TRACK Pose \{", text, re.M) == ["DEF TRACK Pose {"]
+    assert not re.search(r"^(Transform|Pose) \{", text, re.M)
+    assert set(_world_meshes()) == {"TRACK_LINE_L", "TRACK_LINE_R", "TRACK_START", "TRACK_FINISH", "TRACK_TICKS"}
+
+
+def _legacy_box_corners():
+    """Corners of the 105 archived Transform+Box paint nodes (parsed, not regenerated)."""
+    import math
+
+    arc = (ROOT / "archives" / "butlerbot_track_boxes_2026-10-01.wbt").read_text(encoding="utf-8")
+    pat = (
+        r"Transform \{\n  translation (\S+) (\S+) (\S+)\n  rotation 0 0 1 (\S+)\n"
+        r"(.*?)size (\S+) (\S+) (\S+)"
+    )
+    for m in re.finditer(pat, arc, re.S):
+        x, y, z, yaw = map(float, m.group(1, 2, 3, 4))
+        sx, sy, sz = map(float, m.group(6, 7, 8))
+        color = tuple(float(v) for v in re.search(r"baseColor (\S+) (\S+) (\S+)", m.group(5)).groups())
+        c, s = math.cos(yaw), math.sin(yaw)
+        for dx in (-sx / 2, sx / 2):
+            for dy in (-sy / 2, sy / 2):
+                for dz in (-sz / 2, sz / 2):
+                    yield color, (x + dx * c - dy * s, y + dx * s + dy * c, z + dz)
+
+
+def test_mesh_reproduces_old_box_paint():
+    """Every corner of the archived 105 boxes is a vertex of the new meshes (<0.2 mm)."""
+    import math
+
+    meshes = _world_meshes()
+    by_col = {}
+    for col, pts, _ in meshes.values():
+        by_col.setdefault(col, []).extend(pts)
+    n = 0
+    worst = 0.0
+    for color, corner in _legacy_box_corners():
+        vs = by_col[color]
+        worst = max(worst, min(math.dist(corner, v) for v in vs if abs(v[0] - corner[0]) < 0.01))
+        n += 1
+    assert n == 105 * 8 == sum(len(p) for _, p, _ in meshes.values())
+    assert worst < 2e-4
+
+
+def test_mesh_top_faces_point_up():
+    meshes = _world_meshes()
+    for name, (_, pts, faces) in meshes.items():
+        top = max(p[2] for p in pts)
+        n_top = 0
+        for f in faces:
+            P = [pts[i] for i in f]
+            if all(abs(p[2] - top) < 1e-9 for p in P):
+                u = [P[1][j] - P[0][j] for j in range(3)]
+                v = [P[2][j] - P[0][j] for j in range(3)]
+                assert u[0] * v[1] - u[1] * v[0] > 0, f"{name} top face winds downward"
+                n_top += 1
+        assert n_top >= 1
+    assert "solid FALSE" in _world_text() and "ccw TRUE" in _world_text()
+
+
+def test_old_boxes_archived_out_of_world():
+    arc = (ROOT / "archives" / "butlerbot_track_boxes_2026-10-01.wbt").read_text(encoding="utf-8")
+    assert s_track.emit_vrml_boxes().strip() in arc
+    assert s_track.emit_vrml_boxes().strip() not in _world_text()
 
 
 def test_generator_matches_world_exactly():

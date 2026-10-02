@@ -28,5 +28,9 @@ the old z 1.31 m mount 0.39 m behind the axle, and `rowfit` is the default
 lane mode. The top row still reaches ~1.96 m, but the bottom row now lands
 just ahead of the axle instead of 0.55 m behind it, and the stripe is ~2× wider in
 pixels near the robot. Runs after this change are a **new baseline**: don't
-compare them 1:1 with the rows above. No run has been recorded on this mount yet.
+compare them 1:1 with the rows above.
 Gap-mode rows above are from the old view; gap mode is not re-tuned for this one.
+
+| Date | run_id | Mode | Finished | Time s | Max | @x | Mean | RMS | Speed | Notes |
+|------|--------|------|----------|--------|-----|----|------|-----|-------|-------|
+| 2026-10-01 | 20261001-201555 | rowfit (PR #7, box cameras) | yes, done at x=16.45 m | 77.3 | **7.4 cm** | — | 2.8 cm | 3.7 cm | — | First run on the box mount (Dan, Webots R2025a). Old mount rowfit: 9.3 / 3.2 / 4.3 cm, 65.7 s. Pose came from the wbt fallback (supervisor read failed, fixed later in PR #7). Visible right turn on the last frame before parking (red finish bar fitted as lane; gated later in PR #7). |

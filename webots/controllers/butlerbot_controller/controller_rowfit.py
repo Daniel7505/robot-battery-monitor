@@ -155,8 +155,11 @@ class RowfitRuntime:
             dev = cams.get(name)
             if dev is None:
                 msgs.append(f"{name}: device missing")
+            why: list[str] = []
             try:
-                model, src = camera_model_from_device(robot, dev, name, def_name=CAMERA_DEFS.get(name))
+                model, src = camera_model_from_device(
+                    robot, dev, name, def_name=CAMERA_DEFS.get(name), errors=why
+                )
             except Exception as exc:
                 msgs.append(f"{name}: pose lookup failed ({exc}) — keeping constants")
                 model, src = self.cams_model[name], "constants"
@@ -174,7 +177,8 @@ class RowfitRuntime:
                 f"top {_fmt(cov['top_row_x_m'], 2)} m"
             )
             if src != "supervisor":
-                msgs.append(f"{name}: live pose not read from supervisor, using {src}")
+                reason = "; ".join(why) or "no reason recorded"
+                msgs.append(f"{name}: live pose not read from supervisor, using {src} ({reason})")
         self.cams_model = models
         self.tracker = LaneTracker(models)
         ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(m) for m in models.values()])
@@ -246,6 +250,14 @@ class RowfitRuntime:
     def fill_eyes(self, lane_eyes: dict) -> None:
         est = self.est
         lane_eyes["error_source"] = "rowfit"
+        if est is not None and getattr(est, "held", False):
+            lane_eyes["rowfit_text"] = [
+                "rowfit: HELD (fit rejected)",
+                (est.reject_reason or "")[:28],
+                f"off {est.offset_m * 100:+.0f}cm hd {math.degrees(est.heading_rad):+.0f}d",
+            ]
+            lane_eyes["rowfit_px"] = {}
+            return
         if est is None or not est.valid:
             lane_eyes["rowfit_text"] = ["rowfit: no lane"]
             lane_eyes["rowfit_px"] = {}

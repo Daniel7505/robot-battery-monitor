@@ -137,6 +137,7 @@ def test_closed_loop_ninety_degree_turn():
     res = sim.run("turn90", max_s=25.0)
     assert res["finished"]
     assert res["max_ct_m"] < 0.15
+    assert res["held_frames"] == 0  # plausibility gate stays quiet in a real bend
     assert res["min_v"] < 0.37  # slowed in the bend (after the start ramp)
     assert res["max_v"] == pytest.approx(0.44, abs=0.01)
 
@@ -396,3 +397,230 @@ def test_runtime_end_to_end_with_fake_cameras(monkeypatch, tmp_path):
     rt.fill_eyes(eyes)
     assert eyes["error_source"] == "rowfit" and eyes["rowfit_text"]
     assert eyes["rowfit_offset_m"] == pytest.approx(0.1, abs=0.02)
+
+
+def _r2025a_supervisor(nodes_by_tag, robot_node, defs=None, device_lookup_works=True):
+    """Shape of Webots R2025a's Python Supervisor (controller/supervisor.py):
+    getFromDevice(tag) hands the tag to ctypes, so a Device object raises
+    ctypes.ArgumentError; getSelf() is Node(tag=0)."""
+    import ctypes
+
+    class Sup:
+        def getSelf(self):
+            return robot_node
+
+        def getFromDevice(self, tag):
+            if not isinstance(tag, int):
+                raise ctypes.ArgumentError("argument 1: TypeError: Don't know how to convert parameter 1")
+            return nodes_by_tag.get(tag) if device_lookup_works else None
+
+        def getFromDef(self, name):
+            return (defs or {}).get(name)
+
+    return Sup()
+
+
+class _F:
+    def __init__(self, v):
+        self.v = list(v)
+
+    def getSFVec3f(self):
+        return self.v
+
+    getSFRotation = getSFVec3f
+
+
+class _N:
+    def __init__(self, nid, parent=None, t=(0, 0, 0), r=(0, 0, 1, 0)):
+        self.nid, self.parent, self.f = nid, parent, {"translation": _F(t), "rotation": _F(r)}
+
+    def getId(self):
+        return self.nid
+
+    def getParentNode(self):
+        return self.parent
+
+    def getField(self, k):
+        return self.f.get(k)
+
+
+class _TagDev:
+    def __init__(self, tag):
+        self._tag = tag
+
+    def getWidth(self):
+        return 128
+
+    def getHeight(self):
+        return 128
+
+    def getFov(self):
+        return 1.2
+
+
+def test_r2025a_get_from_device_needs_the_tag(monkeypatch, tmp_path):
+    # Dan's 2026-10-01 run: getFromDevice(camera_object) -> ctypes.ArgumentError,
+    # silently swallowed -> "using wbt". Now the tag is passed.
+    glue = _load_glue(monkeypatch, tmp_path / "none.env")
+    robot = _N(1)
+    nodes = {7: _N(2, robot, (0.03542, 0.41808, 0.70419), (0, 1, 0, 0.9411)),
+             8: _N(3, robot, (0.03542, -0.41808, 0.70419), (0, 1, 0, 0.9411))}
+    cams = {"nadir_left": _TagDev(7), "nadir_right": _TagDev(8)}
+    rt = glue.RowfitRuntime()
+    lines = []
+    assert rt.bind_cameras(_r2025a_supervisor(nodes, robot), cams, log=lines.append) == []
+    assert lines[0].startswith("CAM POSE nadir_left from supervisor: t=(0.0354, 0.4181, 0.7042)")
+    assert lines[1].startswith("CAM POSE nadir_right from supervisor: t=(0.0354, -0.4181, 0.7042)")
+
+
+def test_get_from_def_fallback_and_reason_in_warning(monkeypatch, tmp_path):
+    glue = _load_glue(monkeypatch, tmp_path / "none.env")
+    robot = _N(1)
+    defs = {"NADIR_CAM_L": _N(2, robot, (0.1, 0.4, 0.7), (0, 1, 0, 0.9))}
+    sup = _r2025a_supervisor({}, robot, defs=defs, device_lookup_works=False)
+    rt = glue.RowfitRuntime()
+    lines = []
+    msgs = rt.bind_cameras(sup, {"nadir_left": _TagDev(7), "nadir_right": _TagDev(8)}, log=lines.append)
+    assert lines[0].startswith("CAM POSE nadir_left from supervisor: t=(0.1000, 0.4000, 0.7000)")
+    # right: device lookup returned None, no DEF -> wbt, and the warning says why
+    assert lines[1].startswith("CAM POSE nadir_right from wbt")
+    (m,) = msgs
+    assert m.startswith("nadir_right: live pose not read from supervisor, using wbt")
+    assert "getFromDevice(tag): returned None" in m
+    assert "ArgumentError" in m and "Don't know how to convert parameter 1" in m
+    assert "getFromDef('NADIR_CAM_R'): returned None" in m
+
+
+def test_missing_fields_reason_is_reported():
+    from src.lane_vision import supervisor_camera_pose
+
+    robot = _N(1)
+    bad = _N(2, robot)
+    bad.f = {}
+    with pytest.raises(LookupError, match="no translation/rotation field"):
+        supervisor_camera_pose(_r2025a_supervisor({7: bad}, robot), _TagDev(7))
+
+
+# ---------------------------------------------------------- plausibility gate
+
+
+def _sim():
+    spec = importlib.util.spec_from_file_location("rowfit_sim", ROOT / "scripts" / "rowfit_sim.py")
+    sim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sim)
+    return sim
+
+
+def _tracked_straight():
+    """Tracker that has seen a straight, centred lane (prior + last good fit)."""
+    from src.lane_vision import LaneTracker, lane_polyline_robot, offset_polyline, render_lane_bgra
+
+    tr = LaneTracker()
+    c = lane_polyline_robot([(-2 + 0.1 * i, 0.0) for i in range(60)], (0.0, 0.0), 0.0)
+    lines = [offset_polyline(c, 0.65), offset_polyline(c, -0.65)]
+    imgs = {n: (render_lane_bgra(m, lines), 128, 128) for n, m in tr.cams.items()}
+    est = tr.process(imgs)
+    assert est.valid and not est.held
+    return tr
+
+
+def test_dans_finish_frame_is_rejected():
+    # Webots 2026-10-01 run 20261001-201555, last frame before parking:
+    # off=-0.517 hd=-1.576 k=-0.01 conf=0.38 nL=0 nR=218 (red bar fitted as lane)
+    tr = _tracked_straight()
+    bogus = LaneEstimate(valid=True, offset_m=-0.517, heading_rad=-1.576, curvature_1pm=-0.01,
+                         lookahead_m=1.0, confidence=0.38, n_left=0, n_right=218)
+    reason = tr.gate_reason(bogus, tr.prior_near, 0.14)
+    assert "heading -90deg beyond" in reason
+    # each gate on its own
+    assert "heading jump" in tr.gate_reason(
+        LaneEstimate(valid=True, heading_rad=-0.6, lookahead_m=1.5, confidence=0.9, n_left=50, n_right=50),
+        tr.prior_near, 0.10)
+    assert "offset jump" in tr.gate_reason(
+        LaneEstimate(valid=True, offset_m=-0.3, lookahead_m=1.5, confidence=0.9, n_left=50, n_right=50),
+        tr.prior_near, 0.14)
+    assert "left side vanished" in tr.gate_reason(
+        LaneEstimate(valid=True, lookahead_m=1.5, confidence=0.38, n_left=0, n_right=218), tr.prior_near, 0.14)
+    assert "short view" in tr.gate_reason(
+        LaneEstimate(valid=True, lookahead_m=0.3, confidence=0.9, n_left=20, n_right=20), tr.prior_near, 0.14)
+    # a normal next frame passes; bigger jumps pass when the robot drove farther
+    ok = LaneEstimate(valid=True, offset_m=0.03, heading_rad=0.05, lookahead_m=1.8, confidence=0.9,
+                      n_left=60, n_right=60)
+    assert tr.gate_reason(ok, tr.prior_near, 0.14) == ""
+    assert tr.gate_reason(LaneEstimate(valid=True, heading_rad=0.4, lookahead_m=1.8, confidence=0.9,
+                                       n_left=60, n_right=60), tr.prior_near, 0.14) == ""
+    # no prior (start-up / after 3 lost frames): only the absolute limits apply
+    assert tr.gate_reason(LaneEstimate(valid=True, offset_m=0.4, lookahead_m=0.3, confidence=0.42,
+                                       n_left=40, n_right=0), None, 0.0) == ""
+
+
+def test_rejected_fit_holds_last_lane_and_keeps_lost_brake():
+    tr = _tracked_straight()
+    ctl = rc.RowfitController()
+    run_ticks(ctl, 0)
+    ctl.step(tr.last, new_frame=True)
+    run_ticks(ctl, 200)
+    # three implausible frames in a row (simulate the fits)
+    for i in range(3):
+        tr._predict(0.14, 0.0)
+        pred = tr.prior_near
+        lost = tr.frames_lost
+        bogus_reason = tr.gate_reason(
+            LaneEstimate(valid=True, offset_m=-0.517, heading_rad=-1.576, lookahead_m=1.0,
+                         confidence=0.38, n_left=0, n_right=218), pred, 0.14)
+        assert bogus_reason
+        tr.frames_lost = lost + 1
+        held = tr.held_estimate(bogus_reason)
+        assert held.held and not held.valid
+        assert abs(held.heading_rad) < 1e-6 and abs(held.offset_m) < 0.01  # last good lane, moved
+        cmd = ctl.step(held, new_frame=True)
+        assert abs(cmd["steer"]) < 0.02, cmd  # no swerve toward the bogus 90 deg lane
+        if i < 2:
+            assert not cmd["brake"] and cmd["phase"] == "rowfit_hold"
+            assert ctl.target_speed <= rc.V_HELD_M_S
+    assert cmd["brake"]  # existing brake after LOST_FRAMES_STOP frames
+    assert ctl.held_frames == 3
+
+
+def test_short_view_holds_do_not_brake_at_once():
+    from src.lane_vision import GATE_MAX_SHORT_HOLDS
+
+    tr = _tracked_straight()
+    short = LaneEstimate(valid=True, lookahead_m=0.3, confidence=0.9, n_left=20, n_right=20)
+    tr.fit_points = lambda pts: short  # every frame: lane only 0.3 m long
+    seen = []
+    for _ in range(GATE_MAX_SHORT_HOLDS + 3):
+        tr._predict(0.14, 0.0)
+        e = tr.fit_points_gated([], dx_m=0.14)
+        seen.append((e.held, e.counts_as_lost, tr.frames_lost))
+    assert all(h for h, _c, _f in seen)
+    assert [c for _h, c, _f in seen[:GATE_MAX_SHORT_HOLDS]] == [False] * GATE_MAX_SHORT_HOLDS
+    assert seen[GATE_MAX_SHORT_HOLDS][1] and seen[-1][2] >= 3
+
+
+def test_finish_bar_no_turn_closed_loop():
+    sim = _sim()
+    import src.lane_vision as lv
+
+    kw = dict(start_x=13.5, start_offset=0.03, start_yaw=0.03)
+    # Reproduce Dan's bug: gap-style yellow (red bar = paint) and no gate -> big swerve
+    gate = lv.LaneTracker.gate_reason
+    try:
+        lv.LaneTracker.gate_reason = lambda self, *a, **k: ""
+        bug = sim.run("s_finish", yellow_mode="lane_keep", **kw)
+    finally:
+        lv.LaneTracker.gate_reason = gate
+    assert abs(bug["end_yaw_deg"]) > 10 and bug["max_yaw_rate_last_1m"] > 0.3
+    # Gate alone (red bar still detected as yellow): no swerve
+    gated = sim.run("s_finish", yellow_mode="lane_keep", **kw)
+    assert abs(gated["end_yaw_deg"]) < 3 and gated["max_yaw_rate_last_1m"] < 0.05
+    assert gated["end_x_m"] > 16.3  # stopped at the line (GPS or lost-lane brake)
+    # Default (rg yellow + gate): drives to the GPS finish straight
+    dflt = sim.run("s_finish", **kw)
+    assert dflt["finished"] and abs(dflt["end_yaw_deg"]) < 2 and dflt["max_yaw_rate_last_1m"] < 0.05
+
+
+def test_s_track_does_not_regress_with_gate():
+    res = _sim().run("s")
+    assert res["finished"] and res["max_ct_m"] < 0.085 and res["held_frames"] == 0
+    assert res["max_v"] == pytest.approx(0.44, abs=0.01)

@@ -11,6 +11,7 @@ used to paint the synthetic images and to score cross-track error.
 
     python scripts/rowfit_sim.py            # both courses
     python scripts/rowfit_sim.py turn90 --csv out.csv
+    python scripts/rowfit_sim.py s_finish --yellow lane_keep   # finish bar scored as paint
 
 Not a substitute for Webots (no tyre slip, lighting, motion blur, body
 occlusion), but it catches sign errors, instability and speed logic.
@@ -71,6 +72,27 @@ def path_from_segments(segs, start=(-2.0, 0.0), h0=0.0, ds=0.04):
     return pts
 
 
+RED_BAR = (0.9, 0.15, 0.12)  # s_track finish bar baseColor
+GREEN_BAR = (0.1, 0.85, 0.25)  # s_track start bar baseColor
+
+
+def finish_course():
+    """The world's S as painted: lines from x=-0.19 to 16.51 m (end of the last
+    0.38 m paint box), green start bar at x=0, red finish bar at x=16.5 m
+    (both 0.08 m x 1.4 m). The run stops at GPS x >= FINISH_X_M like the
+    controller. Bar colours score as 'yellow' with lane_keep.yellow_score."""
+    from s_track import FINISH_X_M, HALF_WIDTH_M, centerline
+
+    xs = [-0.19 + 0.02 * i for i in range(int(round((FINISH_X_M + 0.01 + 0.19) / 0.02)) + 1)]
+    centre = [(x, centerline(x)[0]) for x in xs]
+    pre = [(-2.0 + 0.04 * i, 0.0) for i in range(45)]
+    bars = [
+        ([(0.0, -0.7), (0.0, 0.7)], 0.08, GREEN_BAR),
+        ([(FINISH_X_M, -0.7), (FINISH_X_M, 0.7)], 0.08, RED_BAR),
+    ]
+    return pre + centre, centre, bars, FINISH_X_M, HALF_WIDTH_M
+
+
 def course(name: str):
     if name == "turn90":
         return path_from_segments([(4.0, 0.0), (1.0 * math.pi / 2, 1.0), (4.0, 0.0)])
@@ -116,19 +138,30 @@ def _path_curvature(poly):
 
 
 def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0,
-        cams=None):
-    centre = course(name)
+        cams=None, yellow_mode=None, start_x=0.0):
+    stop_x, bars = None, []
+    if name == "s_finish":
+        centre, painted, bars, stop_x, half_w = finish_course()
+        left = offset_polyline(painted, half_w)
+        right = offset_polyline(painted, -half_w)
+    else:
+        centre = course(name)
+        left = offset_polyline(centre, half_w)
+        right = offset_polyline(centre, -half_w)
     curv = _path_curvature(centre)
-    left = offset_polyline(centre, half_w)
-    right = offset_polyline(centre, -half_w)
-    x, y, yaw = 0.0, float(start_offset), float(start_yaw)
+    yaw_tail = []  # (x, yaw_rate) near the finish
+    n_held = 0
+    x, y, yaw = float(start_x), float(start_offset), float(start_yaw)
+    if start_x:
+        y += min(centre, key=lambda p: abs(p[0] - start_x))[1]
     cams = dict(cams or sim_cameras())
-    tracker = LaneTracker(cams)
+    tracker = LaneTracker(cams, yellow_mode=yellow_mode)
     ld_min, ld_max = lookahead_bounds_from_coverage([camera_coverage(c) for c in cams.values()])
     ctl = RowfitController(ld_min=ld_min, ld_max=ld_max)
     bend_v = []
     dt, frame_every = 0.008, 40
-    tick, idx = 0, 0
+    tick = 0
+    idx = min(range(len(centre)), key=lambda i: math.hypot(centre[i][0] - x, centre[i][1] - y))
     max_ct, sum_ct, n_ct = 0.0, 0.0, 0
     speeds = []
     rows = []
@@ -146,12 +179,15 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                 seg = [p for p in poly if math.hypot(p[0] - x, p[1] - y) < 3.5]
                 if len(seg) > 1:
                     lines.append(lane_polyline_robot(seg, (x, y), yaw))
-            imgs = {n: (render_lane_bgra(c, lines), c.width, c.height) for n, c in cams.items()}
+            marks = [(lane_polyline_robot(b, (x, y), yaw), w_, c_) for b, w_, c_ in bars
+                     if min(math.hypot(px - x, py - y) for px, py in b) < 3.5]
+            imgs = {n: (render_lane_bgra(c, lines, marks=marks), c.width, c.height) for n, c in cams.items()}
             px, py, pyaw = last_frame_pose
             dyaw = math.atan2(math.sin(yaw - pyaw), math.cos(yaw - pyaw))
             dx = math.hypot(x - px, y - py)
             last_frame_pose = (x, y, yaw)
             est = tracker.process(imgs, dx_m=dx, dyaw_rad=dyaw)
+            n_held += int(bool(getattr(est, "held", False)))
             pending.append(est)
             est = pending.pop(0) if len(pending) > latency_frames else None
             del near
@@ -162,6 +198,8 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         v = 0.5 * (wl + wr) * WHEEL_RADIUS_M
         w = (wr - wl) * WHEEL_RADIUS_M / TRACK_M
         yaw += w * dt
+        if stop_x is not None and x > stop_x - 1.0:
+            yaw_tail.append(abs(w))
         x += v * math.cos(yaw) * dt
         y += v * math.sin(yaw) * dt
         ct, idx = _dist_and_index((x, y), centre, idx)
@@ -176,7 +214,11 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                          None if est is None else round(est.offset_m, 3),
                          None if est is None else round(est.curvature_1pm, 3),
                          cmd["steer"], cmd.get("target_speed"), round(v, 3)))
-        if idx >= len(centre) - 30 or math.hypot(x - end[0], y - end[1]) < 0.5:
+        if stop_x is not None:
+            if x >= stop_x:
+                done = True
+                break
+        elif idx >= len(centre) - 30 or math.hypot(x - end[0], y - end[1]) < 0.5:
             done = True
             break
         tick += 1
@@ -196,6 +238,12 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         "bend_min_v": round(min(bend_v), 3) if bend_v else None,
         "bend_mean_v": round(sum(bend_v) / len(bend_v), 3) if bend_v else None,
         "ld_window_m": (round(ld_min, 2), round(ld_max, 2)),
+        "held_frames": n_held,
+        **({} if stop_x is None else {
+            "end_x_m": round(x, 3),
+            "end_yaw_deg": round(math.degrees(yaw), 2),  # finish straight runs along +x
+            "max_yaw_rate_last_1m": round(max(yaw_tail), 3) if yaw_tail else None,
+        }),
     }
 
 
@@ -206,12 +254,13 @@ def main(argv=None) -> int:
     ap.add_argument("--latency", type=int, default=0, help="frames of extra camera latency")
     ap.add_argument("--constants", action="store_true", help="use NADIR_*_POSE instead of the .wbt")
     ap.add_argument("--wbt", help="world file to read the camera poses from")
+    ap.add_argument("--yellow", choices=("rg", "lane_keep"), help="yellow test (default lane_vision.YELLOW_MODE)")
     a = ap.parse_args(argv)
     cams = sim_cameras(a.constants, a.wbt)
     for n, c in cams.items():
         print(f"camera {n}: t={c.translation} rot={c.rotation} fov={c.fov_rad}")
     for c in a.courses:
-        print(run(c, csv=a.csv, latency_frames=a.latency, cams=cams))
+        print(run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow))
     return 0
 
 

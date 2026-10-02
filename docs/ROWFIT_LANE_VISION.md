@@ -19,9 +19,14 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
    start-up the controller **reads each camera's pose live from Webots**
    (Supervisor: the camera node's translation/rotation relative to the Robot
    node, composed through any parent Transforms) and its width, height and
-   fov from the device. If that fails it parses the loaded `.wbt`, then falls
+   fov from the device. The node is found with `getFromDevice(camera._tag)`.
+   In R2025a that call needs the integer device tag; passing the Camera
+   object raises `ctypes.ArgumentError`, which is why Dan's 2026-10-01 run fell
+   back to the wbt. If that fails too, it tries `getFromDef('NADIR_CAM_L'/'_R')`
+   on the same Supervisor the controller created. If that fails it parses the loaded `.wbt`, then falls
    back to the `NADIR_LEFT_POSE` / `NADIR_RIGHT_POSE` constants. The console
-   says which one it used (`CAM POSE nadir_left from supervisor: …`). The
+   says which one it used (`CAM POSE nadir_left from supervisor: …`), and a
+   failed live read prints the real exception text in brackets. The
    constants are still kept in sync with `butlerbot.wbt` by a test, because
    tests, the offline sim and the fallback use them.
    Webots R2025a cameras look along their own +X, with +Y to the left of the
@@ -74,8 +79,11 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
    0.55 m of floor behind the axle. Without it, a bend starting 0.5 m ahead
    tilted the axle heading by ~19° in the synthetic test, so it is now 0.6 m.
 
-2. **Find the paint.** The yellow test is the same one the gap mode uses
-   (`yellow_score ≥ 0.22`). The scan runs along every image row *and* every
+2. **Find the paint.** Yellow means `min(R, G) − B ≥ 0.22` (`YELLOW_MODE="rg"`).
+   Gap mode uses `(R + G)/2 − B`, which gives the same number for real yellow
+   (R ≈ G). But the red finish bar (0.9, 0.15, 0.12) scores 0.41 on it, so
+   rowfit fitted the red bar as lane. Under `min(R, G)` red and green bars
+   score below 0. The scan runs along every image row *and* every
    column. For each yellow run, its two edges are mapped to the floor and the
    midpoint is taken. That midpoint sits on the stripe's centre line at any
    angle, so a line that turns sideways (a 90° bend) still gives good points.
@@ -89,7 +97,7 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
    circle arc, or straight when curvature is 0) with paint at ±half a lane
    width. Points that don't fit are down-weighted and then dropped. Two
    fits are made:
-   * near (points up to 0.9 m ahead) gives **offset** and **heading** at the axle,
+   * near (points up to 0.6 m ahead) gives **offset** and **heading** at the axle,
    * far (points from 0.25 m ahead) gives **curvature ahead** and the steering goal point,
 
    so a straight that runs into a bend isn't averaged into one wrong arc.
@@ -122,6 +130,23 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
 9. **Lost lane.** One or two frames with no lane: hold the steering at
    0.20 m/s. Three frames in a row (about 1 s): brake (ABS) and wait. It
    starts again when the lane comes back.
+10. **Plausibility gate (no track knowledge).** A new fit is rejected when:
+    * |heading| > 45°,
+    * |curvature| > 2 1/m,
+    * heading jumps more than 0.15 rad + curvature × distance rolled since the
+      last good frame (the last lane is first moved by odometry and IMU yaw),
+    * offset jumps more than 6 cm + 0.6 × distance rolled,
+    * a line seen in the last good frame is suddenly empty and confidence is
+      below 0.45.
+
+    A rejected fit does not steer. The robot follows the last good lane
+    (carried forward by odometry and yaw) at ≤ 0.30 m/s, and the frame counts
+    as "no lane", so the 3-frame brake still applies. One exception: a fit that
+    only sees < 0.5 m of paint ahead (end of the lane) is held for up to 6
+    frames before it counts as lost. Dan's 2026-10-01 finish frame
+    (`nL=0 nR=218 hd=-1.576 off=-0.517`) is a regression test. The console
+    prints `Rowfit REJECTED fit (<reason>) — holding last lane …` and the HUD
+    shows `rowfit: HELD (fit rejected)`.
 
 The track shape (`s_track.py`) is **not** used for steering. It's only used
 for tests, the offline sim and the GPS finish stop that was already there.

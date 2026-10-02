@@ -198,13 +198,12 @@ One normal simulation step while the twin is linked.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Op as Operator / keyboard
+    participant Ag as Agent / dashboard API
     participant W as Webots controller
     participant B as DigitalTwinBridge
     participant H as Hardware tick / PMS
     participant UI as Browser dashboard
 
-    Op->>W: I/J/K/L or Space (focus 3D view)
     W->>W: Read GPS, IMU, encoders
     W->>W: Apply teleop / ABS / throttle
     W->>W: Estimate channel draws + battery drain
@@ -228,19 +227,17 @@ Why a plain `left=0, right=0` is not enough — `stop_epoch` and dual-hub hard-z
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Op as Operator
-    participant UI as Dashboard
+    participant Ag as Agent / dashboard API
     participant B as Twin Bridge
     participant W as Webots controller
     participant M as Left/right wheel motors
 
-    alt Space in Webots
-        Op->>W: Space → ABS sequence
+    alt Controller stop (finish line / lane lost)
+        W->>W: ABS sequence
         W->>W: Coast / brake / hard-zero both hubs
         W->>W: Require finite encoders + quiet yaw/hub rates
-    else Stop from UI
-        Op->>UI: Drive Stop
-        UI->>B: POST /api/twin/command {drive_stop: true}
+    else Stop command
+        Ag->>B: POST /api/twin/command {drive_stop: true}
         B->>B: Increment stop_epoch
         W->>B: GET /api/twin/state
         B-->>W: stop_epoch N (new)

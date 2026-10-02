@@ -37,6 +37,7 @@ from src.lane_keep import (
 TRACK_M = 2.0 * WHEEL_Y_LEFT_M  # 0.34 m between drive wheels
 V_CRUISE_M_S = 0.44  # = 5.5 rad/s, the gap path cruise
 V_MIN_M_S = 0.20
+V_HELD_M_S = 0.30  # cap while steering a held (rejected-fit) lane
 A_LAT_M_S2 = 0.12  # curve speed: v = sqrt(a_lat / |kappa|)
 ACCEL_M_S2 = 0.25  # speed-up-out (gentle)
 DECEL_M_S2 = 0.80  # slow-in (quick)
@@ -121,13 +122,34 @@ class RowfitController:
         self.frames_lost = 0
         self.last_offset: float | None = None
         self.n_frames = 0
+        self.held_frames = 0
 
     def reset(self) -> None:
         self.__init__(k_steer=self.k_steer, ld_min=self.ld_min, ld_max=self.ld_max)
 
+    def _pursuit(self, est, v: float) -> tuple[float, float]:
+        """(pure-pursuit curvature, goal distance^2) on the estimate's centre arc."""
+        Ld = max(self.ld_min, min(self.ld_max, LD_BASE_M + LD_GAIN_S * v))
+        if est.lookahead_m > 0.0:
+            Ld = max(self.ld_min, min(Ld, est.lookahead_m - 0.1))
+        gx, gy = est.goal_point(Ld)
+        d2 = gx * gx + gy * gy
+        return (0.0 if d2 < 1e-6 else 2.0 * gy / d2), d2
+
     def on_frame(self, est, frame_dt: float = 0.32) -> None:
         """Recompute the held command from a NEW frame's LaneEstimate."""
         self.n_frames += 1
+        if est is not None and getattr(est, "held", False):
+            # Rejected (implausible) fit: steer along the last good lane, moved
+            # by odometry/IMU, at reduced speed. Counts toward the lost-lane
+            # brake unless the tracker says it is only a short view.
+            self.held_frames += 1
+            if getattr(est, "counts_as_lost", True):
+                self.frames_lost += 1
+            self.target_speed = min(self.target_speed, V_HELD_M_S)
+            self.last_offset = None
+            self.kappa_cmd = max(-KAPPA_MAX, min(KAPPA_MAX, self._pursuit(est, self.gov.v)[0]))
+            return
         if est is None or not getattr(est, "valid", False) or est.confidence < MIN_CONF:
             self.frames_lost += 1
             self.target_speed = V_MIN_M_S
@@ -135,12 +157,7 @@ class RowfitController:
             return
         self.frames_lost = 0
         v = self.gov.v
-        Ld = max(self.ld_min, min(self.ld_max, LD_BASE_M + LD_GAIN_S * v))
-        if est.lookahead_m > 0.0:
-            Ld = max(self.ld_min, min(Ld, est.lookahead_m - 0.1))
-        gx, gy = est.goal_point(Ld)
-        d2 = gx * gx + gy * gy
-        k_pp = 0.0 if d2 < 1e-6 else 2.0 * gy / d2
+        k_pp, d2 = self._pursuit(est, v)
         k_d = 0.0
         if self.last_offset is not None and frame_dt > 1e-3:
             k_d = -K_D_OFFSET * (est.offset_m - self.last_offset) / float(frame_dt)

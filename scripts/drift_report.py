@@ -73,6 +73,8 @@ def load_rows(path: Path) -> list[dict]:
                 row["run_id"] = r["run_id"].strip()
             if (r.get("mode") or "").strip():
                 row["mode"] = r["mode"].strip()
+            if (r.get("state") or "").strip():  # corner state machine (newer logs)
+                row["state"] = r["state"].strip()
             rows.append(row)
     return rows
 
@@ -115,6 +117,14 @@ def summarize(run: list[dict], n: int, geom=None) -> dict:
         extra["run_id"] = run[0]["run_id"]
     if "mode" in run[0]:
         extra["mode"] = run[0]["mode"]
+    seq: list[str] = []
+    for r in run:
+        st = r.get("state")
+        if st and (not seq or seq[-1] != st):
+            seq.append(st)
+    if seq:
+        extra["states"] = " > ".join(seq)
+        extra["pivots"] = seq.count("PIVOT")
     return {
         "run": n,
         **extra,
@@ -192,6 +202,9 @@ def main(argv=None) -> int:
         if labelled:
             line += f"  {s.get('run_id', '-'):15}  {s.get('mode', '-'):6}"
         print(line)
+    for s in stats:
+        if s.get("states") and s["states"] != "LANE":
+            print(f"run {s['run']} corner states: {s['states']}  (pivots {s['pivots']})")
     if geom is not None:
         label = "S-track" if geom.spec.name == "s" else f"{geom.spec.name} track"
         print(f"\nmax/mean/rms = sideways distance off the {label} centre line, metres "

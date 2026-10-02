@@ -138,6 +138,7 @@ def test_closed_loop_ninety_degree_turn():
     assert res["finished"]
     assert res["max_ct_m"] < 0.15
     assert res["held_frames"] == 0  # plausibility gate stays quiet in a real bend
+    assert res["pivots"] == [] and res["corner_first_seen"] is None  # 1 m radius: no corner cue
     assert res["min_v"] < 0.37  # slowed in the bend (after the start ramp)
     assert res["max_v"] == pytest.approx(0.44, abs=0.01)
 
@@ -355,7 +356,8 @@ def test_lane_vision_log_header_and_run_id(monkeypatch, tmp_path):
     lines = p.read_text().splitlines()
     assert lines[0] == (
         "unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
-        "nL_pts,nR_pts,steer,target_speed,new_frame,run_id"
+        "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
+        "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg"
     )
     assert len(lines) == 3
     row = dict(zip(lines[0].split(","), lines[1].split(",")))
@@ -604,12 +606,15 @@ def test_finish_bar_no_turn_closed_loop():
 
     kw = dict(start_x=13.5, start_offset=0.03, start_yaw=0.03)
     # Reproduce Dan's bug: gap-style yellow (red bar = paint) and no gate -> big swerve
-    gate = lv.LaneTracker.gate_reason
+    # (the corner cue's fit clipping is switched off too: it is newer than the bug)
+    gate, cues = lv.LaneTracker.gate_reason, lv.corner_cues
     try:
         lv.LaneTracker.gate_reason = lambda self, *a, **k: ""
+        lv.corner_cues = lambda *a, **k: []
         bug = sim.run("s_finish", yellow_mode="lane_keep", **kw)
     finally:
         lv.LaneTracker.gate_reason = gate
+        lv.corner_cues = cues
     assert abs(bug["end_yaw_deg"]) > 10 and bug["max_yaw_rate_last_1m"] > 0.3
     # Gate alone (red bar still detected as yellow): no swerve
     gated = sim.run("s_finish", yellow_mode="lane_keep", **kw)
@@ -618,9 +623,12 @@ def test_finish_bar_no_turn_closed_loop():
     # Default (rg yellow + gate): drives to the GPS finish straight
     dflt = sim.run("s_finish", **kw)
     assert dflt["finished"] and abs(dflt["end_yaw_deg"]) < 2 and dflt["max_yaw_rate_last_1m"] < 0.05
+    assert dflt["pivots"] == [] and dflt["corner_first_seen"] is None  # start / finish bars: no corner
+    assert gated["pivots"] == []  # red bar scored as yellow: a bar across the lane, still no corner
 
 
 def test_s_track_does_not_regress_with_gate():
     res = _sim().run("s")
     assert res["finished"] and res["max_ct_m"] < 0.085 and res["held_frames"] == 0
+    assert res["pivots"] == [] and res["corner_first_seen"] is None
     assert res["max_v"] == pytest.approx(0.44, abs=0.01)

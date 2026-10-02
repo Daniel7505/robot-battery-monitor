@@ -1,0 +1,25 @@
+{
+  "name": "corner90_wide",
+  "description": "corner90 with a 1.60 m lane (sim test track): 4 m straight, SHARP 90 deg left, 4 m to the finish.",
+  "lane_width_m": 1.6,
+  "stripe_width_m": 0.06,
+  "paint_before_start_m": 0.3,
+  "paint_after_finish_m": 0.5,
+  "start_bar": true,
+  "finish_bar": true,
+  "waypoints": [
+    [
+      0,
+      0
+    ],
+    {
+      "x": 4,
+      "y": 0,
+      "radius_m": 0
+    },
+    [
+      4,
+      4
+    ]
+  ]
+}

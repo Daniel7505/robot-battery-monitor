@@ -151,6 +151,166 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
 The track shape (`s_track.py`) is **not** used for steering. It's only used
 for tests, the offline sim and the GPS finish stop that was already there.
 
+## Sharp corners: "the line widens, then disappears"
+
+**The idea is Dan's.** Watching the shoulder HUDs at a sharp corner, he
+noticed that in the look-ahead rows the yellow run in one row suddenly gets
+much wider than a stripe, because the line now runs *across* the row. That
+run is smeared toward one side, and the rows beyond it have no yellow. On the
+right shoulder cam at a left turn, the outer (right) line widens to the left
+and then disappears. The code below uses exactly that, with no track
+knowledge: only the camera model and the yellow mask.
+
+### Detector (`src/lane_vision.py`: `corner_cues`, `fuse_corner_cues`, `LaneTracker`)
+
+Per camera, each line is followed up the image (near to far). The tracker
+takes the run nearest the column extrapolated from the line's last rows,
+including runs that touch the image edge.
+
+* **Stripe width.** The line's own stripe is the median ground width
+  (metres, via `CameraModel.pixel_to_ground`) of its nearest normal rows.
+  Nominal is 6 cm.
+* **Crossbar.** The first row whose run is at least
+  `CORNER_WIDE_FACTOR` = 3× that width and at least `CORNER_WIDE_MIN_M` = 0.15 m.
+  It must be reached:
+  * within `CORNER_RAMP_MAX_M` = 0.15 m of a normal-width row, and
+  * with at most `CORNER_MAX_RAMP_ROWS` = 1 in-between row.
+
+  A rounded bend widens over many rows instead, so it is not flagged.
+  corner_mix's r = 0.5 m outer line ramps over 4+ rows.
+* **Direction.** The run's smear past the line: toward robot +y means a left
+  turn, −y a right turn. The smear must be at least 0.12 m.
+* **Role.**
+  * *Outer*: the smear crosses the lane, e.g. the right line smearing left.
+    This is Dan's case.
+  * *Inner*: the inner line bends away. It gives the same direction, but it is
+    only supporting evidence. A rounded corner still has a mitred inner line,
+    so an inner cue alone never triggers.
+* **"Then disappears".** The band where the line would have continued
+  (±0.10 m on the ground) is checked in the farther rows: at most 2 yellow px.
+  `empty_beyond` is None when the crossbar is in the top rows and there is
+  nothing beyond it to look at.
+* **Fusion and confidence.** An outer cue is required.
+  * Outer cue: 0.50.
+  * Empty beyond: +0.25. Paint beyond: −0.20.
+  * An inner cue of the same direction, nearer: +0.20.
+  * Both cameras see the crossbar: +0.05.
+  * Two outer cues in opposite directions (a bar across the lane, or the end
+    of the paint) give **no corner**.
+* **Persistence.** `seen` needs two consecutive frames with the same
+  direction, a distance consistent with odometry (±0.25 m), and conf ≥ 0.6.
+* **Distance.** The ground x of the crossbar's stripe centre at the line,
+  ahead of the axle.
+* **Fit clip.** While a cue is present, fit points from 0.12 m before the
+  crossbar onward are dropped. So are points past an inner cue on its side.
+  The turning paint no longer bends the lane fit or trips the plausibility
+  gate. This also fixes the baseline's `heading jump` rejections before the
+  corner.
+
+### Controller (`src/rowfit_control.py`)
+
+`LANE → CORNER_APPROACH → PIVOT → REACQUIRE → LANE`. The controller gets the
+IMU yaw every tick (`RowfitRuntime.command(dt, yaw=…)`).
+
+* **CORNER_APPROACH** (on a persistent cue, conf ≥ 0.6).
+  * Pivot point = cue distance − lane width / 2. That is the corner's
+    centre-line vertex, so turning 90° there leaves the axle on the new leg's
+    centre line.
+  * The lane width is the tracker's measured one, nothing hardcoded.
+    corner90_wide (1.6 m) pivots 0.8 m short of its outer line.
+  * The remaining distance is re-measured on every frame that still shows the
+    cue, and integrated from the speed between frames.
+  * Speed = min(0.25 m/s, √(2·0.3·remaining)), down to a 4 cm/s creep, so it
+    arrives nearly stopped. There is no ABS brake before the pivot.
+  * It steers on the clipped near-lane fit. Missing or held frames do not
+    count toward the lost-lane brake here, because the lane is *supposed*
+    to end.
+  * It records the approach lane's direction in IMU yaw
+    (yaw − fitted heading, smoothed).
+* **PIVOT** (remaining ≤ 1.5 cm).
+  * Turns in place with opposite wheel speeds, closed loop on IMU yaw.
+  * Target = approach-lane yaw ± 90° in the cue's direction. The rate is
+    2·error, capped at 0.9 rad/s, with an acceleration limit of 1.5 rad/s²
+    and a stop-in-time limit. A 0.12 rad/s floor stops it stalling short.
+  * **Done** when |error| ≤ 1° at rate ≤ 0.05 rad/s for 4 ticks. Done early
+    if vision sees a two-sided lane aligned within 1.5° while |error| < 12°.
+    Timeout 8 s → brake.
+  * At the end the tracker gets `begin_reacquire()`. It forgets the old lane,
+    keeps the measured width, and relaxes the gate for 6 frames (only the
+    ±45° check stays). So the expected 90° heading change is not rejected as
+    a "jump".
+* **REACQUIRE.**
+  * ≤ 0.20 m/s on normal rowfit steering.
+  * Back to LANE after 3 valid frames in a row with |heading| < 20°.
+  * The fallback is unchanged: no lane for 3 frames means **brake**
+    (`REACQUIRE failed …`).
+  * No new corner is accepted for the first 0.5 m of the new leg.
+* **No IMU yaw** (`yaw=None`): it still approaches, then brakes at the pivot
+  point (`CORNER reached but no IMU yaw — braking`).
+
+### What you see in Webots
+
+Console, in this order (the sim's corner90 lines):
+
+```
+CORNER seen left 1.66 m conf 0.95 (nadir_right outer + nadir_left inner) — approach, pivot point in 1.01 m (lane 1.30 m)
+PIVOT start left yaw -0.0deg -> target +90.1deg (lane +0.1deg, remaining +0.015 m)
+PIVOT done yaw +89.4deg (target +90.1, err +0.7deg, 3.0 s, yaw on target) — REACQUIRE
+REACQUIRE ok after 3 frames — off -7cm hd -0.1deg conf 0.18, back to LANE
+```
+
+* **HUD.**
+  * The first text line on each shoulder HUD is the state:
+    * `LANE`;
+    * `LANE cue L 1.66m c1.0` (a cue that is not yet persistent);
+    * `CORNER L 1.12m pv+0.47` (pv = distance to the pivot point);
+    * `PIVOT L err +34d`;
+    * `REACQUIRE 1/3`.
+  * The crossbar row is drawn as a horizontal bar: orange for the outer line,
+    yellow for the inner.
+* **`lane-vision.csv`.** New columns **after** `run_id`:
+  `state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg`. Rows
+  appended to an older file still line up for the old columns. Rename the old
+  file to get the new header.
+* **`drift_report.py`.** Prints a line like
+  `run 3 corner states: LANE > CORNER_APPROACH > PIVOT > REACQUIRE > LANE (pivots 1)`.
+
+### Offline sim
+
+`python scripts/rowfit_sim.py corner90 corner_mix corner90_right corner90_wide s widen turn90 --table`
+
+* The kinematics were already diff-drive, so a pivot is just opposite wheel
+  speeds. The controller gets the simulated IMU yaw.
+* `--turn-eff 0.8` models tyre scrub (80 % of the commanded yaw rate).
+* `--imu-noise DEG` and `--imu-drift DEG_PER_S` corrupt the yaw.
+* `--no-corners` withholds the yaw.
+* Test tracks: `tracks/corner90_right.json` (mirror) and
+  `tracks/corner90_wide.json` (1.60 m lane), both sim-only, no world.
+
+Results with the box-mount cameras from the `.wbt` (worst / mean = distance
+off the centre line):
+
+| course | finish | time | worst / mean | min v | pivot err (IMU / true) | pivot time |
+|---|---|---|---|---|---|---|
+| corner90 | yes | 24.5 s | 1.5 / 0.2 cm | 0 (pivot) | +0.7° / +0.6° | 3.0 s |
+| corner90_right | yes | 24.5 s | 1.5 / 0.2 cm | 0 (pivot) | −0.7° / −0.6° | 3.0 s |
+| corner90_wide (1.6 m) | yes | 25.0 s | 3.4 / 0.8 cm | 0 (pivot) | +0.7° / +1.0° | 3.0 s |
+| corner_mix (rounded L, sharp R) | yes | 34.9 s | 14.3 / 1.9 cm (at the rounded arc, as before) | 0 (pivot) | −1.1° / −1.1° | 2.9 s |
+| S | yes | 41.6 s | 7.8 / 2.8 cm | 0.20 | no pivot | – |
+| widen | yes | 29.0 s | 1.7 / 0.5 cm | 0.20 | no pivot | – |
+| turn90 (1 m radius) | yes | 15.7 s | 7.4 / 3.0 cm | 0.20 | no pivot | – |
+
+* **Robustness.** corner90, corner90_right, corner90_wide and corner_mix all
+  still finish with each of: scrub 0.8, IMU noise 0.3° plus drift 0.5°/s,
+  one frame of extra latency, and a start offset of +15 cm and 5° or −20 cm.
+  The worst pivot error was 3.3°; REACQUIRE corrects it.
+* **No false corners.**
+  * S, widen and turn90: no corner cue at all.
+  * Start and finish bars: rg yellow ignores red and green.
+  * The finish bar scored *as* yellow (gap-mode yellow): both lines smear
+    inward in opposite directions, so no corner.
+  * corner_mix's rounded left gives only an inner cue, so no corner.
+
 ## Run it
 
 Nothing to set: open `webots/worlds/butlerbot.wbt` and it runs rowfit.
@@ -182,7 +342,7 @@ next to the robot, so gap mode needs re-tuning before it can be trusted again.
 * `lane-vision.csv` (rowfit only) sits next to `steer-actions.csv`. It gets
   one row per new camera frame (`new_frame=1`) plus one per telemetry
   publish (`new_frame=0`):
-  `unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,nL_pts,nR_pts,steer,target_speed,new_frame,run_id`.
+  `unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,nL_pts,nR_pts,steer,target_speed,new_frame,run_id,state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg`.
   `run_id` is the controller start time, so every reload is its own run.
 * `steer-actions.csv` keeps logging in both modes (`src=rowfit` in rowfit).
 * Folder: `~/OneDrive/Desktop/Grok Workspace` as before, or set `RBM_LOG_DIR`
@@ -224,5 +384,8 @@ straight). For `lane-vision.csv`, runs are split by `run_id`.
   poses read from the `.wbt`) holds the S within 7.8 cm and a 1 m radius 90°
   turn within 7.4 cm with the box mount (old mount: 7.7 / 8.0 cm). Real tyres
   and latency will differ.
-* Sharp corners (radius ≈ 0) are fitted as tight arcs and seen late. A
-  rounded 90° turn (radius ≥ 0.8 m) is what this is tested for.
+* Sharp corners are only verified in the offline sim. Real paint edges,
+  motion blur during the pivot, tyre scrub on the parquet and the IMU in
+  Webots may change the numbers. The pivot is closed loop on the IMU, so scrub
+  only makes it slower, but the cue thresholds (3× stripe, 0.15 m ramp) were
+  tuned on synthetic images.

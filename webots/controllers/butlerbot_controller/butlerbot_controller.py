@@ -977,7 +977,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 rowfit_new = False
                 if rowfit_rt is not None:
                     rowfit_new = rowfit_rt._has_pending
-                    lk = rowfit_rt.command(dt)
+                    lk = rowfit_rt.command(dt, yaw=prev_yaw if imu is not None else None)
                 else:
                     if guard_kw:
                         guard_kw["guard_new_frame"] = bool(harvest_now)
@@ -1023,6 +1023,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             est=rowfit_rt.est,
                             cmd=lk,
                             new_frame=True,
+                            yaw=prev_yaw,
                         )
                     _e = rowfit_rt.est
                     if _e is not None and getattr(_e, "held", False):
@@ -1598,8 +1599,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             cmd={
                                 "steer": lane_eyes.get("steer"),
                                 "target_speed": rowfit_rt.ctl.target_speed,
+                                **rowfit_rt.ctl.corner_fields(),
                             },
                             new_frame=False,
+                            yaw=prev_yaw,
                         )
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):

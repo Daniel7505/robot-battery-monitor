@@ -10,6 +10,8 @@ A future Paint / Unity / CAD importer only has to write this format.
 | `tracks/s.json` | the S in `butlerbot.wbt` (826 waypoints every 2 cm, written by `python scripts/s_track.py --write-track`) |
 | `tracks/corner90.json` | 4 m straight, **sharp** 90° left (true right angle), 4 m to the finish |
 | `tracks/corner_mix.json` | 4 m, rounded left (centre radius 0.5 m), 4 m, sharp 90° right, 4 m |
+| `tracks/corner90_right.json` | mirror of corner90: sharp 90° **right** (sim test track, no world) |
+| `tracks/corner90_wide.json` | corner90 with a 1.60 m lane (sim test track, no world) |
 | `tracks/widen.json` | straight; lane widens 1.30 → 1.60 m over 2 m, holds 2 m, narrows back over 2 m; finish x = 11 |
 
 ## Format
@@ -110,7 +112,12 @@ python scripts\drift_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\la
 * `done` means the run crossed the track's finish line (0.15 m tolerance, as before).
 * Without `--track` it is unchanged (|y|).
 
-## Baseline in the offline sim (current rowfit, no corner logic)
+## Baseline in the offline sim (before the corner logic)
+
+> Superseded: rowfit now pivots at sharp corners. See "Sharp corners" in
+> `docs/ROWFIT_LANE_VISION.md`. corner90 and corner_mix now finish. The table
+> below is the pre-corner baseline, kept for comparison
+> (`rowfit_sim.py corner90 --no-corners` now stops *at* the pivot point instead).
 
 `python scripts/rowfit_sim.py corner90 widen corner_mix` (any track name or file works).
 

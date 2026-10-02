@@ -49,7 +49,9 @@ def test_controller_loop_runs(tmp_path, mode):
         assert "pitch=53.9deg" in text
         assert "WARNING rowfit camera model" not in text, text
         log = (tmp_path / "lane-vision.csv").read_text().splitlines()
-        assert log[0].endswith("new_frame,run_id")
+        assert "new_frame,run_id," in log[0] and log[0].endswith("yaw_deg,yaw_target_deg")
+        row = dict(zip(log[0].split(","), log[1].split(",")))
+        assert row["state"] in ("LANE", "CORNER_APPROACH", "PIVOT", "REACQUIRE")
         assert len(log) > 1 and ",rowfit," in log[1]
     else:
         assert "LANE MODE rowfit" not in text and "CAM POSE" not in text

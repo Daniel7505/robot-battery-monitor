@@ -71,3 +71,11 @@ def test_track_s_scores_vs_centreline(tmp_path, capsys):
     p = _write(tmp_path, rows)
     assert dr.main([str(p), "--track", "s"]) == 0
     assert "S-track" in capsys.readouterr().out
+
+
+def test_finish_counts_last_row_just_short_of_line(tmp_path):
+    # Real 2026-10-01 rowfit run: parked on the red, last log row at x=16.43.
+    rows = [(i, min(i * 0.4, 16.43), 0.0, 0) for i in range(42)]
+    assert dr.summarize(dr.load_rows(_write(tmp_path, rows)), 1)["finished"]
+    short = [(i, i * 0.4, 0.0, 0) for i in range(40)]  # stops at 15.6 m
+    assert not dr.summarize(dr.load_rows(_write(tmp_path, short)), 1)["finished"]

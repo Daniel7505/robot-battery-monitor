@@ -44,6 +44,9 @@ except ImportError:  # pragma: no cover
     FINISH_X_M = 16.5  # end of the S corridor (matches butlerbot_controller)
 RESET_DROP_M = 1.0     # x going backwards by this much = new run
 GAP_S = 30.0           # silence this long between rows = new run
+# Log rows land ~0.3 s apart (one camera frame), so the last row can be up to
+# ~0.15 m short of the finish line the controller actually stopped on.
+FINISH_TOL_M = 0.15
 
 
 def _f(v):
@@ -113,7 +116,7 @@ def summarize(run: list[dict], n: int) -> dict:
         "duration_s": round(run[-1]["t"] - run[0]["t"], 1),
         "rows": len(run),
         "distance_m": round(max_x - min(r["x"] for r in run), 2),
-        "finished": max_x >= FINISH_X_M,
+        "finished": max_x >= FINISH_X_M - FINISH_TOL_M,
         "max_drift_m": round(max(absy), 3),
         "worst_at_x_m": round(worst["x"], 2),
         "worst_side": "left" if worst["y"] > 0 else "right" if worst["y"] < 0 else "-",

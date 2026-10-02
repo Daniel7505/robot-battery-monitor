@@ -11,9 +11,11 @@ from src.lane_vision import NADIR_CAMS, lane_polyline_robot, offset_polyline, re
 _c = lane_polyline_robot([(-2 + 0.1 * i, 0.0) for i in range(60)], (0.0, 0.05), 0.0)
 _IMG = {n: render_lane_bgra(m, [offset_polyline(_c, 0.65), offset_polyline(_c, -0.65)]) for n, m in NADIR_CAMS.items()}
 
+_TAGS = iter(range(10, 10000))
 class _Any:
     def __init__(self, name=""):
         self.name = name
+        self._tag = next(_TAGS)
     def __getattr__(self, k):
         return lambda *a, **kw: 0.0
 class Motor(_Any): pass
@@ -56,4 +58,34 @@ class Robot:
             else: d = Motor(name)
             self.devs[name] = d
         return self.devs[name]
-class Supervisor(Robot): pass
+class _Field:
+    def __init__(self, v): self.v = list(v)
+    def getSFVec3f(self): return self.v
+    def getSFRotation(self): return self.v
+class _Node:
+    def __init__(self, nid, parent=None, t=(0, 0, 0), r=(0, 0, 1, 0)):
+        self.nid, self.parent, self.f = nid, parent, {"translation": _Field(t), "rotation": _Field(r)}
+    def getId(self): return self.nid
+    def getParentNode(self): return self.parent
+    def getField(self, k): return self.f.get(k)
+class Supervisor(Robot):
+    """Mimics R2025a's Python Supervisor: getFromDevice takes the INTEGER device
+    tag and passes it to ctypes (a Camera object raises ctypes.ArgumentError).
+    Camera nodes are direct Robot children with the repo .wbt pose."""
+    _self = _Node(1)
+    _defs = {"NADIR_CAM_L": "nadir_left", "NADIR_CAM_R": "nadir_right"}
+    def getSelf(self): return self._self
+    def _cam_node(self, name):
+        from src.lane_vision import parse_wbt_cameras
+        p = parse_wbt_cameras().get(name)
+        return None if p is None else _Node(2, self._self, p["translation"], p["rotation"])
+    def getFromDevice(self, tag):
+        import ctypes
+        if not isinstance(tag, int):
+            raise ctypes.ArgumentError("argument 1: TypeError: Don't know how to convert parameter 1")
+        for d in self.devs.values():
+            if getattr(d, "_tag", None) == tag:
+                return self._cam_node(d.name)
+        return None
+    def getFromDef(self, name):
+        return self._cam_node(self._defs[name]) if name in self._defs else None

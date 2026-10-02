@@ -85,8 +85,6 @@ def _draw_hud(
     if braking:
         display.setColor(0xFF8844)
         display.drawText("BRAKING", 168, 78)
-    display.setColor(0x8899AA)
-    display.drawText("I/J/K/L drive · Space stop", 12, 124)
 
     if message:
         display.setColor(0x3A1808)
@@ -216,7 +214,7 @@ def _paint_eye_huds(handles: list[dict], lane_eyes: dict) -> None:
 
 
 def _paint_rowfit_overlay(disp, handle: dict, lane_eyes: dict, w: int, h: int) -> None:
-    """RBM_LANE_MODE=rowfit only: fitted stripe points + lane numbers."""
+    """Rowfit lane mode only (the default): fitted stripe points + lane numbers."""
     cam = handle.get("cam")
     cam_w, cam_h = 128, 128
     if cam is not None:

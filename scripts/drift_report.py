@@ -7,7 +7,7 @@ and prints how far the bot drifted off the centre line (y_m) in each run.
 
 A new run starts when x_m jumps back toward the start (a reset / new sim)
 or when there is a long gap between rows. Logs that carry a ``run_id``
-column (``lane-vision.csv`` from RBM_LANE_MODE=rowfit) are split by
+column (``lane-vision.csv`` from rowfit, the default lane mode) are split by
 run_id instead (one run per controller start); a ``mode`` column, when
 present, is shown per run.
 

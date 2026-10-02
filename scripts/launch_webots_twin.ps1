@@ -6,7 +6,7 @@
 # to POST telemetry and GET teleop/throttle state.
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-DashboardUrl "http://127.0.0.1:5000"]
-# In Webots: click the FLOOR (not the robot) then use I/J/K/L or dashboard Drive.
+# The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
 # =============================================================================
 
 param(

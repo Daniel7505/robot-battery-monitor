@@ -408,7 +408,6 @@ HTML_TEMPLATE = '''
             <div id="steer-readout">steer — · nL — · nR — · pose —</div>
             <div id="steer-action-log" class="steer-action-log">Waiting for lane-keep steer samples…</div>
         </div>
-        <p class="teleop-hint">Webots steals WASD for the camera — use <strong>Arrow keys</strong> or <strong>I/J/K/L</strong> in the 3D view, or drive from here via the twin API.</p>
         <div class="agent-action-log">
             <div class="agent-action-log-title">Agent Action Log <span style="font-weight:normal;color:#678;font-size:0.85em">— real-time decisions tied to simulation</span></div>
             <div id="agent-action-log"></div>

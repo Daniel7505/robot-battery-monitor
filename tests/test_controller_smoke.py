@@ -16,9 +16,11 @@ CTRL = ROOT / "webots" / "controllers" / "butlerbot_controller"
 
 def _run(tmp_path, mode):
     env = dict(os.environ)
+    env.pop("RBM_LANE_MODE", None)
+    if mode is not None:
+        env["RBM_LANE_MODE"] = mode
     env.update(
         PYTHONPATH=str(ROOT / "tests" / "fake_webots"),
-        RBM_LANE_MODE=mode,
         RBM_LOG_DIR=str(tmp_path),
         TWIN_DASHBOARD_URL="http://127.0.0.1:9",
         FAKE_WEBOTS_STEPS="200",
@@ -30,17 +32,23 @@ def _run(tmp_path, mode):
     return out.stdout + out.stderr
 
 
-@pytest.mark.parametrize("mode", ["gap", "rowfit"])
+@pytest.mark.parametrize("mode", ["gap", "rowfit", None])
 def test_controller_loop_runs(tmp_path, mode):
     text = _run(tmp_path, mode)
     assert "ButlerBot controller stopped" in text, text
     assert "Controller step error" not in text, text
     assert "fatal error" not in text, text
-    if mode == "rowfit":
+    if mode in ("rowfit", None):  # unset = rowfit (default)
+        assert "LANE MODE rowfit" in text
         assert "ROWFIT STEER ON" in text
+        assert "CAM POSE nadir_left from supervisor: t=(0.0354, 0.4181, 0.7042)" in text, text
+        assert "CAM POSE nadir_right from supervisor: t=(0.0354, -0.4181, 0.7042)" in text
+        assert "pitch=53.9deg" in text
+        assert "WARNING rowfit camera model" not in text, text
         log = (tmp_path / "lane-vision.csv").read_text().splitlines()
         assert log[0].endswith("new_frame,run_id")
         assert len(log) > 1 and ",rowfit," in log[1]
     else:
+        assert "LANE MODE rowfit" not in text and "CAM POSE" not in text
         assert "NADIR STEER ON" in text
         assert not (tmp_path / "lane-vision.csv").exists()

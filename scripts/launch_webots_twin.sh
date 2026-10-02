@@ -6,7 +6,7 @@
 # Exports TWIN_DASHBOARD_URL for the controller's twin_publisher HTTP client.
 #
 # Usage: ./scripts/launch_webots_twin.sh [dashboard_url]
-# In Webots: click the floor (not the robot), then I/J/K/L or dashboard Drive.
+# The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
 # =============================================================================
 
 set -euo pipefail

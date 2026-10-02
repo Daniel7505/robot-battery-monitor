@@ -18,3 +18,19 @@ max / mean / rms = sideways distance off the S-track centre line (GPS truth), me
 | 2026-10-01 | — | gap (old default) | yes | — | ~1 m | ~7.2–7.6 m (right) | — | — | 0.44 fixed | Pre-rowfit reference from drift_report on earlier runs: line loss at the first S reversal. |
 
 Add a row after each notable run (new mode, new tuning, new personal best).
+
+## New baseline: cameras in the shoulder boxes (2026-10-01)
+
+From the "Cameras into shoulder boxes, live camera pose, rowfit default" PR
+on, the nadir cameras sit in `NADIR_BOX_L/R` at z ≈ 0.70–0.73 m
+(`translation 0.03542 ±0.41808 0.70419`, `rotation 0 1 0 0.9411`) instead of
+the old z 1.31 m mount 0.39 m behind the axle, and `rowfit` is the default
+lane mode. The top row still reaches ~1.96 m, but the bottom row now lands
+just ahead of the axle instead of 0.55 m behind it, and the stripe is ~2× wider in
+pixels near the robot. Runs after this change are a **new baseline**: don't
+compare them 1:1 with the rows above.
+Gap-mode rows above are from the old view; gap mode is not re-tuned for this one.
+
+| Date | run_id | Mode | Finished | Time s | Max | @x | Mean | RMS | Speed | Notes |
+|------|--------|------|----------|--------|-----|----|------|-----|-------|-------|
+| 2026-10-01 | 20261001-201555 | rowfit (PR #7, box cameras) | yes, done at x=16.45 m | 77.3 | **7.4 cm** | — | 2.8 cm | 3.7 cm | — | First run on the box mount (Dan, Webots R2025a). Old mount rowfit: 9.3 / 3.2 / 4.3 cm, 65.7 s. Pose came from the wbt fallback (supervisor read failed, fixed later in PR #7). Visible right turn on the last frame before parking (red finish bar fitted as lane; gated later in PR #7). |

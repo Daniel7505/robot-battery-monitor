@@ -11,7 +11,8 @@ Pipeline (one call per new camera frame, see :class:`LaneTracker`):
    the camera looks along its local +X, +Y is image-left, +Z is image-up
    (doc "camera.md": s=0 <-> +hFov/2, t=0 <-> +vFov/2). Robot frame:
    origin on the floor under the drive axle, +x forward, +y left, +z up.
-2. Yellow pixels (same score as ``lane_keep.yellow_score``) are grouped
+2. Yellow pixels (min(R,G) - B >= 0.22; equals ``lane_keep.yellow_score``
+   for r == g but rejects red/green marks) are grouped
    into runs along every image ROW and every image COLUMN. Each run's two
    edges are projected to the floor; the midpoint of the two floor points
    lies on the painted stripe's centre line for ANY stripe angle, so
@@ -39,12 +40,37 @@ STRIPE_W_M = 0.06
 # s_track.PAINT_Z (0.008 m box centre) + half the 0.010 m box height.
 PAINT_TOP_Z_M = 0.013
 YELLOW_THRESH = 0.22  # same as nadir_wheel_to_tape
+YELLOW_MODE = "rg"  # yellow_mask: "rg" = min(R,G)-B (rejects red/green bars), "lane_keep" = gap score
 FALLBACK_LANE_W_M = 1.30  # only until both lines have been seen once
 MAX_RANGE_M = 3.5
 MIN_SIDE_PTS = 4
-NEAR_MAX_X_M = 0.9  # near-field fit (offset / heading at the axle)
+# Fit windows (floor x ahead of the axle). The cameras no longer see behind
+# the axle (bottom row ~0.06 m ahead since the box mount), so the near fit
+# must stop before a bend that starts ~0.5 m ahead can bend the axle heading:
+# 0.9 m was fine only while ~0.55 m of floor behind the axle anchored it.
+# fit_windows() widens them if a camera's bottom row sits farther ahead.
+NEAR_MAX_X_M = 0.6  # near-field fit (offset / heading at the axle)
+NEAR_MIN_SPAN_M = 0.4  # near window is at least this long past the bottom row
 FAR_MIN_X_M = 0.25  # far-field fit (curvature ahead / pursuit goal)
 SPLIT_X_M = 0.6  # points nearer than this are judged by the near model
+
+# Plausibility gate (generic: robot kinematics + paint physics, no track data).
+# Lane heading relative to the robot can only change between frames by the
+# robot's own yaw (measured by the IMU and already applied to the prior) plus
+# lane curvature x distance driven.
+GATE_MAX_HEADING_RAD = math.radians(45.0)  # lane-keep never runs this crossed
+GATE_LANE_KAPPA_MAX = 2.0  # 1/m: tightest lane bend (0.5 m radius) for the jump limit
+GATE_HEADING_JUMP_RAD = 0.15  # + kappa_max * |dx| per frame
+GATE_OFFSET_JUMP_M = 0.06  # + |dx| * GATE_OFFSET_JUMP_PER_M per frame
+GATE_OFFSET_JUMP_PER_M = 0.6
+GATE_SINGLE_SIDE_MIN_CONF = 0.45  # a side seen last frame now empty AND conf below this -> reject
+GATE_MAX_HELD_FRAMES = 3  # matches rowfit_control.LOST_FRAMES_STOP
+# Lane visible for less than this ahead of the axle (lines ending, e.g. at a
+# finish bar): the fit is too short to trust heading/curvature, so drive the
+# held lane. Short-view holds don't count as lost frames until
+# GATE_MAX_SHORT_HOLDS in a row (~0.8 m at cruise), then they do.
+GATE_MIN_VIEW_M = 0.5
+GATE_MAX_SHORT_HOLDS = 6
 
 _WBT_DEFAULT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -140,18 +166,23 @@ class CameraModel:
         return (self.cx - self.focal_px * cyv / cxv, self.cy - self.focal_px * czv / cxv)
 
 
-# Mirrors webots/worlds/butlerbot.wbt (NADIR_CAM_L / NADIR_CAM_R).
-# tests/test_lane_vision.py parses the .wbt and fails if these drift.
+# Fallback copy of webots/worlds/butlerbot.wbt (NADIR_CAM_L / NADIR_CAM_R).
+# The controller reads the live pose from Webots at start-up
+# (camera_model_from_device); these are only the last fallback and the
+# default for tests/offline tools. tests/test_lane_vision.py parses the .wbt
+# and fails if these drift. Lens on the front-bottom edge of NADIR_BOX_L/R
+# (box centre 0.01042 +/-0.41808 0.72919, 0.05 m cube), pitch from
+# scripts/aim_camera.py (top row -> 1.96 m ahead of the axle).
 NADIR_LEFT_POSE = {
-    "translation": (-0.386826, 0.504837, 1.306679),
-    "rotation": (-0.00125006, 0.999996, 0.00256741, 1.1),
+    "translation": (0.03542, 0.41808, 0.70419),
+    "rotation": (0.0, 1.0, 0.0, 0.9411),
     "width": 128,
     "height": 128,
     "fov": 1.2,
 }
 NADIR_RIGHT_POSE = {
-    "translation": (-0.386826, -0.504837, 1.306679),
-    "rotation": (-0.00125006, 0.999996, 0.00256741, 1.1),
+    "translation": (0.03542, -0.41808, 0.70419),
+    "rotation": (0.0, 1.0, 0.0, 0.9411),
     "width": 128,
     "height": 128,
     "fov": 1.2,
@@ -245,25 +276,283 @@ def camera_coverage(cam: CameraModel) -> dict:
     }
 
 
+def _mat_mul(A, B):
+    return tuple(tuple(sum(A[i][k] * B[k][j] for k in range(3)) for j in range(3)) for i in range(3))
+
+
+def _mat_vec(A, v):
+    return tuple(A[i][0] * v[0] + A[i][1] * v[1] + A[i][2] * v[2] for i in range(3))
+
+
+def matrix_to_axis_angle(R) -> tuple[float, float, float, float]:
+    """Rotation matrix -> Webots axis-angle (x, y, z, angle), angle in [0, pi]."""
+    tr = R[0][0] + R[1][1] + R[2][2]
+    c = max(-1.0, min(1.0, 0.5 * (tr - 1.0)))
+    ang = math.acos(c)
+    if ang < 1e-9:
+        return (0.0, 1.0, 0.0, 0.0)
+    x = R[2][1] - R[1][2]
+    y = R[0][2] - R[2][0]
+    z = R[1][0] - R[0][1]
+    n = math.sqrt(x * x + y * y + z * z)
+    if n < 1e-9:  # angle ~ pi: axis from the diagonal
+        x = math.sqrt(max(0.0, (R[0][0] + 1.0) / 2.0))
+        y = math.copysign(math.sqrt(max(0.0, (R[1][1] + 1.0) / 2.0)), R[0][1] or 1.0)
+        z = math.copysign(math.sqrt(max(0.0, (R[2][2] + 1.0) / 2.0)), R[0][2] or 1.0)
+        n = math.sqrt(x * x + y * y + z * z) or 1.0
+    return (x / n, y / n, z / n, ang)
+
+
+def camera_look_angles(cam: CameraModel) -> tuple[float, float]:
+    """(pitch_down_rad, yaw_left_rad) of the optical axis (camera +X) in the robot frame."""
+    dx, dy, dz = _mat_vec(cam.R, (1.0, 0.0, 0.0))
+    return (math.atan2(-dz, math.hypot(dx, dy)), math.atan2(dy, dx))
+
+
+def describe_camera(cam: CameraModel) -> str:
+    pitch, yaw = camera_look_angles(cam)
+    t = ", ".join(f"{v:.4f}" for v in cam.translation)
+    r = " ".join(f"{v:.6g}" for v in cam.rotation)
+    return (
+        f"t=({t}) rot=({r}) pitch={math.degrees(pitch):.2f}deg yaw={math.degrees(yaw):+.2f}deg "
+        f"{cam.width}x{cam.height} fov={cam.fov_rad:.3f}"
+    )
+
+
+def _node_local_pose(node):
+    ft, fr = node.getField("translation"), node.getField("rotation")
+    if ft is None or fr is None:
+        raise LookupError("node has no translation/rotation field")
+    t = ft.getSFVec3f()
+    r = fr.getSFRotation()
+    return tuple(float(v) for v in t[:3]), _axis_angle_matrix(tuple(float(v) for v in r[:4]))
+
+
+def _node_id(node):
+    try:
+        return node.getId()
+    except Exception:
+        return id(node)
+
+
+def _device_tag(device):
+    """Integer device tag of a Webots Device (R2025a Python keeps it in ``_tag``)."""
+    for attr in ("getTag", "tag"):
+        v = getattr(device, attr, None)
+        v = v() if callable(v) else v
+        if isinstance(v, int):
+            return v
+    v = getattr(device, "_tag", None)
+    return v if isinstance(v, int) else None
+
+
+def find_camera_node(robot, device=None, def_name: str | None = None):
+    """Supervisor Node of a camera device. Returns (node, how, errors).
+
+    Webots R2025a's Python ``Supervisor.getFromDevice(tag)`` takes the integer
+    device TAG and hands it straight to ctypes; passing the Camera object raises
+    ``ctypes.ArgumentError`` ("Don't know how to convert parameter 1"). So try
+    the tag first, then the object (other wrappers / versions), then
+    ``getFromDef(def_name)``. Every failure is recorded in ``errors``.
+    """
+    errors: list[str] = []
+    attempts = []
+    if device is not None and hasattr(robot, "getFromDevice"):
+        tag = _device_tag(device)
+        if tag is not None:
+            attempts.append(("getFromDevice(tag)", lambda: robot.getFromDevice(tag)))
+        attempts.append(("getFromDevice(device)", lambda: robot.getFromDevice(device)))
+    elif device is not None:
+        errors.append("robot has no getFromDevice (not a Supervisor?)")
+    if def_name:
+        if hasattr(robot, "getFromDef"):
+            attempts.append((f"getFromDef({def_name!r})", lambda: robot.getFromDef(def_name)))
+        else:
+            errors.append("robot has no getFromDef (not a Supervisor?)")
+    for how, fn in attempts:
+        try:
+            node = fn()
+        except Exception as exc:  # ctypes.ArgumentError, TypeError, ...
+            errors.append(f"{how}: {type(exc).__name__}: {exc}")
+            continue
+        if node is None:
+            errors.append(f"{how}: returned None")
+            continue
+        return node, how, errors
+    return None, "", errors
+
+
+def supervisor_camera_pose(robot, device=None, def_name: str | None = None, max_depth: int = 16) -> dict:
+    """Camera pose in the Robot node frame, read live through the Supervisor API.
+
+    Finds the camera node (:func:`find_camera_node`), then composes the local
+    translation/rotation fields of the camera and every Transform/Pose/Solid
+    between it and the Robot node (``robot.getSelf()``). For a direct Robot
+    child that is just the camera's own fields. Raises LookupError with the
+    collected reasons if anything is missing (caller falls back).
+    """
+    node, how, errors = find_camera_node(robot, device, def_name)
+    if node is None:
+        raise LookupError("camera node not found: " + ("; ".join(errors) or "no lookup possible"))
+    if not hasattr(robot, "getSelf"):
+        raise LookupError("robot has no getSelf (not a Supervisor?)")
+    self_node = robot.getSelf()
+    if self_node is None:
+        raise LookupError("robot.getSelf() returned None")
+    self_id = _node_id(self_node)
+    # p_robot = R_acc * p_cam + t_acc, walking up the parent chain
+    t_acc = (0.0, 0.0, 0.0)
+    R_acc = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    cur = node
+    for _ in range(max_depth):
+        try:
+            t, R = _node_local_pose(cur)
+        except Exception as exc:
+            raise LookupError(f"translation/rotation fields unreadable via {how}: {type(exc).__name__}: {exc}")
+        t_acc = tuple(a + b for a, b in zip(_mat_vec(R, t_acc), t))
+        R_acc = _mat_mul(R, R_acc)
+        parent = cur.getParentNode()
+        if parent is None:
+            raise LookupError("camera is not under the robot node")
+        if _node_id(parent) == self_id:
+            break
+        cur = parent
+    else:
+        raise LookupError("camera nested too deep")
+    return {"translation": t_acc, "rotation": matrix_to_axis_angle(R_acc), "lookup": how}
+
+
+def _device_optics(device, fallback: dict) -> tuple[int, int, float]:
+    try:
+        return int(device.getWidth()), int(device.getHeight()), float(device.getFov())
+    except Exception:
+        return int(fallback["width"]), int(fallback["height"]), float(fallback["fov"])
+
+
+def camera_model_from_device(
+    robot,
+    device,
+    name: str,
+    *,
+    def_name: str | None = None,
+    wbt_path: str | None = None,
+    fallback_pose: dict | None = None,
+    errors: list | None = None,
+) -> tuple[CameraModel, str]:
+    """Build the CameraModel for a live camera. Returns (model, source).
+
+    Pose source order: ``supervisor`` (live node fields) -> ``wbt`` (parse the
+    loaded world, or the repo world) -> ``constants`` (NADIR_*_POSE).
+    Width/height/fov always come from the device when it answers. Why the
+    supervisor read failed (exception text) is appended to ``errors``.
+    """
+    const = fallback_pose or {"nadir_left": NADIR_LEFT_POSE, "nadir_right": NADIR_RIGHT_POSE}.get(name)
+    pose = None
+    source = ""
+    try:
+        pose = supervisor_camera_pose(robot, device, def_name)
+        source = "supervisor"
+    except Exception as exc:
+        pose = None
+        if errors is not None:
+            errors.append(f"supervisor: {type(exc).__name__}: {exc}")
+    if pose is None:
+        paths = []
+        if wbt_path:
+            paths.append(wbt_path)
+        try:
+            wp = robot.getWorldPath()
+            if wp:
+                paths.append(str(wp))
+        except Exception:
+            pass
+        paths.append(_WBT_DEFAULT)
+        for path in paths:
+            try:
+                cams = parse_wbt_cameras(path)
+            except Exception:
+                continue
+            if name in cams:
+                pose = cams[name]
+                source = f"wbt {os.path.basename(path)}"
+                break
+    if pose is None:
+        if const is None:
+            raise LookupError(f"no pose for camera {name}")
+        pose = const
+        source = "constants"
+    base = const or pose
+    if "width" in pose:
+        base = {**base, **{k: pose[k] for k in ("width", "height", "fov")}}
+    w, h, fov = _device_optics(device, base) if device is not None else (base["width"], base["height"], base["fov"])
+    model = CameraModel(name, pose["translation"], pose["rotation"], w, h, fov)
+    return model, source
+
+
+def aim_pitch_for_reach(
+    translation: tuple[float, float, float],
+    fov_rad: float,
+    width: int,
+    height: int,
+    far_x_m: float,
+    *,
+    plane_z: float = PAINT_TOP_Z_M,
+) -> float:
+    """Pure pitch (rotation 0 1 0 theta) that puts the top row's centre on the floor far_x_m ahead.
+
+    Uses CameraModel itself (bisection), so it matches the runtime math
+    including the half-pixel centre of row 0.
+    """
+    if float(translation[2]) <= plane_z:
+        raise ValueError("camera must be above the floor plane")
+    if float(far_x_m) <= float(translation[0]):
+        raise ValueError("far reach must be ahead of the camera")
+
+    def _top_x(p):
+        g = CameraModel("aim", translation, (0.0, 1.0, 0.0, p), width, height, fov_rad, plane_z).pixel_to_ground(
+            (width - 1) / 2.0, 0.0
+        )
+        return math.inf if g is None else g[0]
+
+    lo, hi = 0.0, math.pi / 2.0  # top_x decreases with pitch
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if _top_x(mid) > far_x_m:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
 # --------------------------------------------------------------------------
 # Detection
 # --------------------------------------------------------------------------
 
 
-def yellow_mask(image, width: int, height: int, thresh: float = YELLOW_THRESH) -> bytearray:
-    """1 where ``lane_keep.yellow_score(rgb) >= thresh`` on a BGRA buffer.
+def yellow_mask(
+    image, width: int, height: int, thresh: float = YELLOW_THRESH, mode: str | None = None
+) -> bytearray:
+    """1 where a BGRA pixel is lane yellow.
 
-    yellow_score = (r+g)/2 - b in 0..1, so >= thresh  <=>  R+G-2B >= 510*thresh.
+    ``mode="rg"`` (default, YELLOW_MODE): min(R, G) - B >= thresh. Yellow needs
+    BOTH red and green; red or green marks (finish/start bars) don't pass.
+    For r == g (the yellow paint and its blend with a grey floor) it equals
+    the gap-mode score.
+    ``mode="lane_keep"``: ``lane_keep.yellow_score`` = (r+g)/2 - b >= thresh
+    (gap-mode test; scores the red finish bar 0.9/0.15/0.12 as 0.41 = yellow).
     """
     n = int(width) * int(height)
     buf = bytes(image[: n * 4]) if not isinstance(image, (bytes, bytearray)) else image
     if len(buf) < n * 4:
         return bytearray(n)
-    lim = 510.0 * float(thresh)
     bs = buf[0: n * 4: 4]
     gs = buf[1: n * 4: 4]
     rs = buf[2: n * 4: 4]
-    return bytearray(1 if (r + g - 2 * b) >= lim else 0 for b, g, r in zip(bs, gs, rs))
+    if (mode or YELLOW_MODE) == "lane_keep":
+        lim = 510.0 * float(thresh)
+        return bytearray(1 if (r + g - 2 * b) >= lim else 0 for b, g, r in zip(bs, gs, rs))
+    lim = 255.0 * float(thresh)
+    return bytearray(1 if (min(r, g) - b) >= lim else 0 for b, g, r in zip(bs, gs, rs))
 
 
 def _runs(seq) -> list[tuple[int, int]]:
@@ -303,13 +592,14 @@ def detect_points(
     *,
     thresh: float = YELLOW_THRESH,
     max_run_px: int = 60,
+    yellow_mode: str | None = None,
 ) -> list[LinePoint]:
     """Stripe-centre floor points from row and column runs of yellow."""
     w = int(width or cam.width)
     h = int(height or cam.height)
     if not image or w < 4 or h < 4:
         return []
-    mask = yellow_mask(image, w, h, thresh)
+    mask = yellow_mask(image, w, h, thresh, yellow_mode)
     pts: list[LinePoint] = []
 
     def _add(e0, e1, axis, run_px, ccol, crow):
@@ -399,6 +689,13 @@ class LaneEstimate:
     psi: float = 0.0
     near_curvature_1pm: float = 0.0
     pixels: dict = field(default_factory=dict)  # cam -> [(col,row,side)] for the HUD
+    # Plausibility gate (LaneTracker): a rejected fit comes back valid=False,
+    # held=True, carrying the last good lane moved by odometry/IMU, and the
+    # reason. The rejected fit's own numbers are kept in ``rejected``.
+    held: bool = False
+    counts_as_lost: bool = True  # held: does it count toward the lost-lane brake
+    reject_reason: str = ""
+    rejected: dict = field(default_factory=dict)
 
     def goal_point(self, lookahead_m: float) -> tuple[float, float]:
         """Centre-line point at straight-line distance ~lookahead from the axle."""
@@ -556,16 +853,40 @@ def predict_model(
     return (py, npsi + k * sarc, k)
 
 
+def fit_windows(cams) -> tuple[float, float, float]:
+    """(near_max_x, split_x, far_min_x) for these cameras' floor coverage.
+
+    Defaults NEAR_MAX_X_M / SPLIT_X_M / FAR_MIN_X_M, pushed out so the near
+    window keeps >= NEAR_MIN_SPAN_M of floor past the farthest-forward bottom
+    row and the far window starts at or after it.
+    """
+    bots = []
+    for cam in cams:
+        x = camera_coverage(cam)["bottom_row_x_m"]
+        if x is not None:
+            bots.append(x)
+    bottom = max(bots) if bots else 0.0
+    near_max = max(NEAR_MAX_X_M, bottom + NEAR_MIN_SPAN_M)
+    split = min(near_max, max(SPLIT_X_M, bottom + NEAR_MIN_SPAN_M))
+    far_min = max(FAR_MIN_X_M, bottom)
+    return near_max, split, far_min
+
+
 class LaneTracker:
     """Stateful per-frame lane fit (keeps prior + online lane width)."""
 
-    def __init__(self, cams: dict[str, CameraModel] | None = None) -> None:
+    def __init__(self, cams: dict[str, CameraModel] | None = None, *, yellow_mode: str | None = None) -> None:
         self.cams = dict(cams or NADIR_CAMS)
+        self.yellow_mode = yellow_mode
+        self.near_max_x, self.split_x, self.far_min_x = fit_windows(self.cams.values())
         self.prior_near: tuple[float, float, float] | None = None
         self.prior_far: tuple[float, float, float] | None = None
         self.lane_w: float | None = None
         self.frames_lost = 0
         self.last: LaneEstimate | None = None
+        self._last_good: LaneEstimate | None = None
+        self.rejects = 0
+        self.short_holds = 0
 
     def reset(self) -> None:
         self.prior_near = None
@@ -573,6 +894,9 @@ class LaneTracker:
         self.lane_w = None
         self.frames_lost = 0
         self.last = None
+        self._last_good = None
+        self.rejects = 0
+        self.short_holds = 0
 
     def _predict(self, dx: float, dyaw: float) -> None:
         """Move the priors into the new robot frame (odometry dx, IMU dyaw)."""
@@ -597,10 +921,100 @@ class LaneTracker:
             item = images.get(name)
             if not item or not item[0]:
                 continue
-            pts.extend(detect_points(cam, item[0], item[1], item[2]))
-        est = self.fit_points(pts)
+            pts.extend(detect_points(cam, item[0], item[1], item[2], yellow_mode=self.yellow_mode))
+        est = self.fit_points_gated(pts, dx_m=float(dx_m))
         self.last = est
         return est
+
+    def gate_reason(self, est: LaneEstimate, pred_near, dx_m: float) -> str:
+        """Why a fitted lane is physically implausible ("" = accept)."""
+        if not est.valid:
+            return ""
+        if abs(est.heading_rad) > GATE_MAX_HEADING_RAD:
+            return f"heading {math.degrees(est.heading_rad):+.0f}deg beyond +/-{math.degrees(GATE_MAX_HEADING_RAD):.0f}"
+        last = self._last_good if pred_near is not None else None
+        if last is not None and est.confidence < GATE_SINGLE_SIDE_MIN_CONF:
+            for side, n_now, n_before in (("left", est.n_left, last.n_left), ("right", est.n_right, last.n_right)):
+                if n_now == 0 and n_before >= MIN_SIDE_PTS:
+                    return (
+                        f"{side} side vanished (L{est.n_left} R{est.n_right}, was "
+                        f"L{last.n_left} R{last.n_right}) at conf {est.confidence:.2f}"
+                    )
+        if pred_near is not None and est.lookahead_m < GATE_MIN_VIEW_M:
+            return f"short view: lane seen only {est.lookahead_m:.2f} m ahead (< {GATE_MIN_VIEW_M:.2f})"
+        if pred_near is not None:
+            a0, psi, k = pred_near
+            p_off = signed_lateral(0.0, 0.0, a0, psi, k)
+            p_hd = -(psi + k * (-a0 * math.sin(psi)))
+            lim_h = GATE_HEADING_JUMP_RAD + GATE_LANE_KAPPA_MAX * abs(dx_m)
+            if abs(est.heading_rad - p_hd) > lim_h:
+                return (
+                    f"heading jump {math.degrees(est.heading_rad - p_hd):+.0f}deg > "
+                    f"{math.degrees(lim_h):.0f}deg for {abs(dx_m):.2f} m driven (IMU yaw applied)"
+                )
+            lim_o = GATE_OFFSET_JUMP_M + GATE_OFFSET_JUMP_PER_M * abs(dx_m)
+            if abs(est.offset_m - p_off) > lim_o:
+                return f"offset jump {100 * (est.offset_m - p_off):+.0f}cm > {100 * lim_o:.0f}cm for {abs(dx_m):.2f} m driven"
+        return ""
+
+    def held_estimate(self, reason: str, rejected: LaneEstimate | None = None) -> LaneEstimate:
+        """Last good lane (priors already moved by odometry/IMU), flagged held."""
+        rej = {}
+        if rejected is not None and rejected.valid:
+            rej = {
+                "offset_m": rejected.offset_m, "heading_rad": rejected.heading_rad,
+                "curvature_1pm": rejected.curvature_1pm, "confidence": rejected.confidence,
+                "n_left": rejected.n_left, "n_right": rejected.n_right,
+            }
+        width = self.lane_w if self.lane_w is not None else FALLBACK_LANE_W_M
+        if self.prior_near is None or self.prior_far is None:
+            return LaneEstimate(valid=False, held=False, reject_reason=reason, rejected=rej, lane_width_m=width)
+        a0n, psin, kn = self.prior_near
+        a0, psi, k = self.prior_far
+        last = self._last_good
+        return LaneEstimate(
+            valid=False,
+            offset_m=signed_lateral(0.0, 0.0, a0n, psin, kn),
+            heading_rad=-(psin + kn * (-a0n * math.sin(psin))),
+            curvature_1pm=k,
+            lookahead_m=0.0 if last is None else last.lookahead_m,
+            confidence=0.0 if last is None else last.confidence,
+            lane_width_m=width,
+            width_measured=self.lane_w is not None,
+            a0=a0,
+            psi=psi,
+            near_curvature_1pm=kn,
+            held=True,
+            reject_reason=reason,
+            rejected=rej,
+        )
+
+    def fit_points_gated(self, pts: list[LinePoint], *, dx_m: float = 0.0) -> LaneEstimate:
+        """:meth:`fit_points` + plausibility gate. A rejected fit does not touch
+        the priors / lane width; it counts as a lost frame (priors dropped after
+        GATE_MAX_HELD_FRAMES in a row, as for a missing lane)."""
+        pred_near, pred_far = self.prior_near, self.prior_far
+        lane_w, lost = self.lane_w, self.frames_lost
+        est = self.fit_points(pts)
+        reason = self.gate_reason(est, pred_near, dx_m)
+        if not reason:
+            if est.valid:
+                self._last_good = est
+                self.short_holds = 0
+            return est
+        self.prior_near, self.prior_far, self.lane_w = pred_near, pred_far, lane_w
+        short = reason.startswith("short view")
+        self.short_holds = self.short_holds + 1 if short else 0
+        if short and self.short_holds <= GATE_MAX_SHORT_HOLDS:
+            self.frames_lost = lost  # a short view is not a lost lane (yet)
+        else:
+            self.frames_lost = lost + 1
+        held = self.held_estimate(reason, est)
+        held.counts_as_lost = self.frames_lost > lost
+        if self.frames_lost >= GATE_MAX_HELD_FRAMES:
+            self.prior_near = self.prior_far = None
+        self.rejects += 1
+        return held
 
     def fit_points(self, pts: list[LinePoint]) -> LaneEstimate:
         lane_w = self.lane_w if self.lane_w is not None else FALLBACK_LANE_W_M
@@ -632,11 +1046,11 @@ class LaneTracker:
             nl, nr = _side_counts(pts)
             if nl == 0 and nr == 0:
                 break
-            near_pts = [p for p in pts if p.side and p.x <= NEAR_MAX_X_M]
+            near_pts = [p for p in pts if p.side and p.x <= self.near_max_x]
             nb = _side_counts(near_pts)
             near_both = nb[0] >= MIN_SIDE_PTS and nb[1] >= MIN_SIDE_PTS
             near = self._refit(near_pts, near_m, width, fit_width=near_both)
-            far = self._refit([p for p in pts if p.side and p.x >= FAR_MIN_X_M], far_m, width, False)
+            far = self._refit([p for p in pts if p.side and p.x >= self.far_min_x], far_m, width, False)
             if near is None and far is None:
                 res = fit_lane(pts, init=near_m, lane_w=width, fit_width=False)
                 if res is None:
@@ -665,7 +1079,7 @@ class LaneTracker:
         res_all = []
         ok = 0
         for p in inl:
-            m = near_m if p.x <= SPLIT_X_M else far_m
+            m = near_m if p.x <= self.split_x else far_m
             res_all.append(signed_lateral(p.x, p.y, *m) - p.side * 0.5 * width)
             # 6 cm sanity check (validation only, not the scale)
             e = 1e-4
@@ -734,11 +1148,10 @@ class LaneTracker:
         params, _w, rms = res
         return (params[0], params[1], params[2]), params[3], rms
 
-    @staticmethod
-    def _assign_piecewise(pts, near_m, far_m, lane_w, gate):
+    def _assign_piecewise(self, pts, near_m, far_m, lane_w, gate):
         hw = 0.5 * lane_w
         for p in pts:
-            m = near_m if p.x <= SPLIT_X_M else far_m
+            m = near_m if p.x <= self.split_x else far_m
             d = signed_lateral(p.x, p.y, *m)
             side = 1 if d > 0.0 else -1
             g = gate + 0.04 * max(0.0, p.x)
@@ -784,17 +1197,23 @@ def render_lane_bgra(
     paint=(0.85, 0.85, 0.18),
     floor=(0.55, 0.56, 0.58),
     noise: float = 0.04,
+    marks=(),
 ) -> bytes:
-    """Render paint polylines (robot frame) into a BGRA buffer, nearest-sample."""
+    """Render paint polylines (robot frame) into a BGRA buffer, nearest-sample.
+
+    ``marks``: extra (polyline, width_m, rgb) strokes in other colours, e.g. a
+    red finish bar (drawn first, so lane paint wins where they overlap).
+    """
     cell = 0.1
     grid: dict[tuple[int, int], list] = {}
-    half = stripe_w / 2.0
-    for line in lines:
+    strokes = [(m[0], 0.5 * float(m[1]), tuple(m[2])) for m in marks]
+    strokes += [(line, stripe_w / 2.0, tuple(paint)) for line in lines]
+    for line, half, stroke_rgb in strokes:
         for i in range(len(line) - 1):
             (x0, y0), (x1, y1) = line[i], line[i + 1]
             for gx in range(int(math.floor((min(x0, x1) - half) / cell)), int(math.floor((max(x0, x1) + half) / cell)) + 1):
                 for gy in range(int(math.floor((min(y0, y1) - half) / cell)), int(math.floor((max(y0, y1) + half) / cell)) + 1):
-                    grid.setdefault((gx, gy), []).append((x0, y0, x1, y1))
+                    grid.setdefault((gx, gy), []).append((x0, y0, x1, y1, half, stroke_rgb))
     w, h = cam.width, cam.height
     out = bytearray(w * h * 4)
     seed = 12345
@@ -806,12 +1225,12 @@ def render_lane_bgra(
             p = cam.pixel_to_ground(col, row)
             if p is not None:
                 segs = grid.get((int(math.floor(p[0] / cell)), int(math.floor(p[1] / cell))), ())
-                for x0, y0, x1, y1 in segs:
+                for x0, y0, x1, y1, half, stroke_rgb in reversed(segs):
                     vx, vy = x1 - x0, y1 - y0
                     L2 = vx * vx + vy * vy
                     t = 0.0 if L2 < 1e-12 else max(0.0, min(1.0, ((p[0] - x0) * vx + (p[1] - y0) * vy) / L2))
                     if math.hypot(p[0] - (x0 + t * vx), p[1] - (y0 + t * vy)) <= half:
-                        color = paint
+                        color = stroke_rgb
                         break
             else:
                 color = (0.3, 0.35, 0.45)

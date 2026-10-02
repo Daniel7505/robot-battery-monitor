@@ -20,7 +20,7 @@ The live demo is still a robot “car dashboard”:
 - Main battery level (percentage) and watts per body part (legs, arms, torso, compute, cooling)
 - Warnings when draw, pack, or heat look unsafe
 - How long the pack might last; history in Postgres
-- Webots twin: teleop, ABS stop, and **lane-keep** on a painted corridor (travel-band, not docking-grade)
+- Webots twin: **lane-keep** on a painted corridor (travel-band, not docking-grade), API drive commands for the agent, ABS stop
 
 **Next harness work:** parts catalog (`python -m src.parts_db`) and a thin design agent (`python -m src.design_agent`). Twin eval of those BOMs is not wired yet. No more lane-keep knobs unless asked.
 
@@ -80,7 +80,7 @@ If you are opening this repo cold (code review, portfolio, or family showcase), 
 | `src/teleop_agent.py` | Pure drive/ABS/throttle math (testable without Webots) |
 | `src/onboard_agent.py` | Rules that intervene when the operator pushes power/heat too hard |
 | `src/hardware_ros2.py` | Production-like tick: allocate, safety, twin, agent, log |
-| `webots/.../butlerbot_controller.py` | Sim step loop, keyboard teleop, residual-spin fixes |
+| `webots/.../butlerbot_controller.py` | Sim step loop, rowfit lane keep, API drive/stop, ABS / residual-spin fixes |
 | `config/config.yaml` | Knobs for twin, agent, mission, hardware profile |
 | `docs/STABILITY.md` | Why the robot used to spin after stop, and what fixed it |
 

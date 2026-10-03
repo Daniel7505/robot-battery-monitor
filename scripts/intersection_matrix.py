@@ -4,6 +4,7 @@
   python scripts/intersection_matrix.py            # routes x courses + gap series + robustness + regressions
   python scripts/intersection_matrix.py --only routes
   python scripts/intersection_matrix.py --jobs 8
+  python scripts/intersection_matrix.py --only warehouse   # every mission in tracks/warehouse.json
 
 Prints markdown tables (paste into docs / PR). Success on an intersection
 course = finished AND crossed the exit the route asks for (course ``routes``).
@@ -36,6 +37,20 @@ ROBUST = [  # (label, kwargs)
 ]
 ROBUST_CASES = [("plus", "S"), ("plus", "L"), ("t_end", "R"), ("t_left", "L"), ("t_right", "S"), ("gap25", None),
                 ("gap45", None)]
+WAREHOUSE = "warehouse"  # missions (RBM_ROUTE strings) are read from the track file
+
+
+def warehouse_cases(track: str = WAREHOUSE) -> list:
+    """(course, route, kwargs) per mission in the track file; time limit from the route length."""
+    import json
+
+    from src.track_geometry import track_path
+
+    with open(track_path(track), encoding="utf-8") as fh:
+        d = json.load(fh)
+    return [(track, m["route"], {"max_s": 120.0 + 4.0 * float(m["length_m"])}) for m in d.get("missions", [])]
+
+
 REGRESSION = ["corner90", "corner_mix", "corner90_right", "corner90_wide", "s", "widen", "turn90", "s_finish"]
 
 
@@ -67,7 +82,7 @@ HDR = ("| course | route | want exit | exit | result | time s | worst cm | pivot
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--only", choices=("routes", "gaps", "robust", "regress", "blind"))
+    ap.add_argument("--only", choices=("routes", "gaps", "robust", "regress", "blind", "warehouse"))
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
     a = ap.parse_args(argv)
     jobs = []
@@ -82,6 +97,8 @@ def main(argv=None) -> int:
     if a.only in (None, "robust"):
         for label, kw in ROBUST:
             sec.append((f"Robustness: {label}", [(c, r, kw) for c, r in ROBUST_CASES]))
+    if a.only in (None, "warehouse"):
+        sec.append(("Warehouse missions (tracks/warehouse.json)", warehouse_cases()))
     if a.only in (None, "regress"):
         sec.append(("Regression (old courses)", [(c, None, {}) for c in REGRESSION]))
     for _t, cases in sec:

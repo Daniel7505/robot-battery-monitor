@@ -613,10 +613,26 @@ class TrackNetwork:
         net.spec.start_bar = net.start_bar
         return net
 
+    def _road_boxes(self) -> list:
+        """Per road: centre-line bounding box grown by its widest half lane
+        (a cheap reject before the exact distance test; big networks)."""
+        if getattr(self, "_boxes", None) is None:
+            self._boxes = []
+            for g in self.roads:
+                xs = [p[0] for p in g.centerline]
+                ys = [p[1] for p in g.centerline]
+                m = max(g.spec.widths) / 2.0 + 1e-6
+                self._boxes.append((min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m))
+        return self._boxes
+
     def _inside_other(self, k: int, x: float, y: float) -> bool:
         h = self.stripe_w_m / 2.0
+        boxes = self._road_boxes()
         for j, g in enumerate(self.roads):
             if j == k:
+                continue
+            x0, y0, x1, y1 = boxes[j]
+            if x < x0 or x > x1 or y < y0 or y > y1:
                 continue
             pr = g.project(x, y)
             w = g.width_at_s(max(0.0, min(g.length_m, pr["s_m"])))

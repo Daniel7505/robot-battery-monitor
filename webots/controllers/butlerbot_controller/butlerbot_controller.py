@@ -443,6 +443,52 @@ _NADIR_SNAP_DIR = os.path.join(
 )
 
 
+def _is_top_down(rot) -> bool:
+    """World Viewpoint looks straight down (ENU axis-angle ~ 0 1 0 pi/2), e.g. the warehouse follow cam."""
+    try:
+        ax, ay, az, ang = (float(c) for c in rot)
+    except Exception:
+        return False
+    n = math.sqrt(ax * ax + ay * ay + az * az)
+    if n < 1e-9:
+        return False
+    ax, ay, az = ax / n, ay / n, az / n
+    if ay < 0:  # same rotation written as -axis / -angle
+        ax, ay, az, ang = -ax, -ay, -az, -ang
+    return ay > 0.999 and abs(ang - math.pi / 2) < 0.02
+
+
+def _apply_top_down_follow(robot, vp, pos_field) -> None:
+    """Top-down follow pose authored by the world (height / fov / orientation derived from
+    the world's builder settings, e.g. scripts/warehouse_builder.py follow_viewpoint()).
+
+    Keep the world's height, straight-down orientation and fov; re-centre the eye over
+    the robot and follow it with a Tracking Shot (translation only, so the map keeps a
+    fixed world orientation and the eye only moves horizontally above the walls).
+    """
+    field = vp.getField
+    eye = list(pos_field.getSFVec3f())
+    try:
+        rp = robot.getSelf().getPosition()
+        eye[0], eye[1] = float(rp[0]), float(rp[1])
+    except Exception:
+        pass
+    follow = field("follow")
+    if follow:
+        follow.setSFString("ButlerBot")
+    ftype = field("followType")
+    if ftype:
+        ftype.setSFString("Tracking Shot")
+    pos_field.setSFVec3f(eye)
+    fov = field("fieldOfView")
+    fov_v = fov.getSFFloat() if fov else float("nan")
+    print(
+        "Camera: top-down follow (world Viewpoint) Tracking Shot on ButlerBot "
+        f"eye=({eye[0]:.2f}, {eye[1]:.2f}, {eye[2]:.2f}) fov={fov_v:.2f} "
+        f"floor across={2 * eye[2] * math.tan(fov_v / 2):.1f} m"
+    )
+
+
 def _apply_follow_camera(robot: Robot) -> None:
     if Supervisor is None or not isinstance(robot, Supervisor):
         return
@@ -456,6 +502,15 @@ def _apply_follow_camera(robot: Robot) -> None:
     try:
         field = vp.getField
         follow = field("follow")
+        if follow is not None and not follow.getSFString().strip():
+            # World authored a FIXED view (no follow): keep it, no chase cam.
+            print("Camera: fixed world Viewpoint (no follow) kept, chase reset skipped")
+            return
+        ori0 = field("orientation")
+        pos0 = field("position")
+        if ori0 is not None and pos0 is not None and _is_top_down(ori0.getSFRotation()):
+            _apply_top_down_follow(robot, vp, pos0)
+            return
         if follow:
             follow.setSFString("ButlerBot")
         ftype = field("followType")

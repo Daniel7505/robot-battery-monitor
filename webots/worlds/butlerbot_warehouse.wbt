@@ -65,17 +65,19 @@ WorldInfo {
 }
 
 DEF VIEWPOINT Viewpoint {
-  # Warehouse overview: FIXED, straight down over the whole 65 x 70 m floor (no follow).
-  # Derived from WarehouseSpec by scripts/warehouse_builder.py overview_viewpoint(). Dock wall at the
-  # bottom of the view, +x (into the building) up, +y left. No roof / ceiling in this world.
-  # The chase cam (Tracking Shot) is not used here: at the dock exits it ended up behind the dock wall.
+  # Warehouse TOP-DOWN FOLLOW cam: straight down over ButlerBot from 48.5 m (walls 9 m, racks 6 m), ~30 m of floor across the window.
+  # Tracking Shot = follows the robot's translation only, so the map never rotates:
+  # dock wall at the bottom, +x (into the building) up, +y left, same as the preview.
+  # Derived from WarehouseSpec by scripts/warehouse_builder.py follow_viewpoint(); the controller
+  # keeps this pose (re-centred on the robot) instead of the 3.2 m chase. No roof / ceiling.
+  follow "ButlerBot"
+  followType "Tracking Shot"
+  followSmoothness 0.2
   orientation 0 1 0 1.5708
-  position 28.5 18 231.4633
+  position 0 0 48.4909
   fieldOfView 0.6
-  near 2.31
-  far 462.9
-  follow ""
-  followType "None"
+  near 0.48
+  far 194
 }
 
 Background {

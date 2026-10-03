@@ -37,29 +37,39 @@ The robot starts at **(0, 0) facing +x**, the same spawn as every world.
 That point is 4 m inside receiving door RCV-1, facing into the building.
 The Robot block is byte-identical to `butlerbot.wbt` (a test checks this).
 
-## Main 3D view: fixed top-down overview
+## Main 3D view: top-down follow cam
 
-The world's `DEF VIEWPOINT` is a **fixed, straight-down view of the whole
-floor** (`follow ""`, `followType "None"`), not the chase cam. The dock wall is at the
-bottom of the view, +x (into the building) points up and +y points left, the same as the preview.
-`overview_viewpoint()` in the builder works it out from the spec, with nothing hard-coded:
-* centre of the floor;
+The world's `DEF VIEWPOINT` **follows ButlerBot from straight above**:
+`follow "ButlerBot"`, `followType "Tracking Shot"`. A Tracking Shot copies the robot's
+translation only, not its heading, so the map never rotates. The dock wall stays at the bottom of
+the view, +x (into the building) points up and +y points left, the same as the preview.
+(`"Mounted Shot"` would spin the view with the robot's heading. `"Pan and Tilt Shot"` stays in place and
+tilts towards the robot, so it would no longer look straight down.)
+`follow_viewpoint()` in the builder derives the pose from the spec, with nothing hard-coded:
+* eye straight above the spawn (0, 0); the Tracking Shot keeps it above the robot;
 * orientation `0 1 0 π/2` (ENU: identity looks along +x, so a +90° pitch about y looks straight down);
-* height so the floor plus `overview_margin_m` fits a 3D window up to `overview_aspect`
-  (2:1) wide at `overview_fov` 0.6 rad. Webots applies the FOV to the wider side of the window.
-  This gives about 231 m. The narrow FOV keeps rack-top parallax under 1 m, so the lanes in the outer aisles stay visible;
-* `near` = 1 % of the height, so the 13 mm tape doesn't z-fight the floor.
+* height = `follow_span_m` (30 m) of floor across the wider side of the window at `follow_fov` 0.6 rad
+  (Webots applies the FOV to the wider side of the window), and never less than
+  `follow_min_clear_m` (3 m) above the tallest thing in the building (the 9 m walls; racks are 6 m, door headers stop at the wall top).
+  This gives **48.5 m**: **30 m of floor across** and 20 m top to bottom in a 3:2 window
+  (16.9 m at 16:9, 22.5 m at 4:3). Aisles are 6 m apart, so that is about 5 aisles across (2 either side of the robot's aisle), and the dock wall 4 m behind the start is in view.
+* `near` = 1 % of the height, so the 13 mm tape doesn't z-fight the floor. `far` = 4× the height leaves room to scroll out.
 
-The building has no roof or ceiling, so nothing sits between the eye and the floor.
-The controller's chase-cam reset (`_apply_follow_camera`) now leaves alone a world Viewpoint
-that has an empty `follow`. Every other world still has `follow "ButlerBot"` and keeps the chase.
+The eye only moves horizontally at 48.5 m. There is no roof or ceiling, so it can't clip into
+a rack, wall or door anywhere, including at the dock exits. Rack-top parallax hides
+at most about 2 m of an aisle at the edge of the view; the robot's own aisle in the centre is fully visible.
 
-Why: with the Tracking Shot chase, the eye stays 3.2 m behind the robot **in world −x**
-(a tracking shot copies the translation, not the heading). At a dock exit the robot drives
-−x to x = −3, so once it passed x ≈ −0.8 the eye (z ≈ 3.5 m, above the 3.2 m doors) went
-into the door header and dock wall (x −4.3…−4) and then out the other side. The main view
-filled with grey wall while the robot-mounted shoulder cameras were unaffected.
-The robot is small at this height (about 70 m of floor on screen); scroll to zoom. There is no follow, so the view stays where you leave it.
+The controller's camera reset (`_apply_follow_camera`) checks the world's Viewpoint. If it looks
+straight down, the controller **keeps that height, orientation and FOV** (so it comes from the
+builder settings), re-centres the eye on the robot, and sets `follow "ButlerBot"` / Tracking Shot.
+The console prints `Camera: top-down follow (world Viewpoint) ... floor across=30.0 m`.
+Every other world (`butlerbot.wbt` and the track worlds) keeps the old 3.2 m-behind chase. A world
+Viewpoint with an empty `follow` is still left alone (a fixed view).
+
+Why not the chase here: the chase eye stays 3.2 m behind the robot **in world −x**
+(again, a tracking shot copies translation, not heading). At a dock exit the robot drives
+−x to x = −3, so the eye (z ≈ 3.5 m) went into the door header and dock wall (x −4.3…−4).
+Scroll to zoom in or out. Reloading the world restores this view.
 
 Every rack, wall, header, door, pallet and table is a static **Solid with a
 `boundingObject` Box** (no physics), with a unique name and `DEF WH_*`.

@@ -185,26 +185,109 @@ def test_every_aisle_is_taped_and_joined_to_the_cross_aisles(built):
     assert g.follow(odd["route"]).exit == "shipping_1"
 
 
-def test_viewpoint_is_a_fixed_top_down_overview(built):
-    """Main 3D view: no follow, straight down, whole floor in frame, nothing above it."""
+def _viewpoint_fields(text):
+    vp = re.search(r"^DEF VIEWPOINT Viewpoint \{\n(.*?)^\}", text, re.M | re.S).group(1)
+    out = {}
+    for ln in vp.splitlines():
+        ln = ln.strip()
+        if ln and not ln.startswith("#"):
+            k, v = ln.split(None, 1)
+            out[k] = v.strip('"') if v.startswith('"') else [float(c) for c in v.split()]
+    return out
+
+
+def test_viewpoint_is_a_top_down_follow_cam(built):
+    """Main 3D view: follows ButlerBot, straight down, fixed world orientation, above every rack / wall / door."""
     lay = built["layout"]
     sp = lay.sp
     text = WORLD.read_text(encoding="utf-8")
-    vp = re.search(r"^DEF VIEWPOINT Viewpoint \{\n(.*?)^\}", text, re.M | re.S).group(1)
-    body = "\n".join(ln for ln in vp.splitlines() if not ln.strip().startswith("#"))
-    assert re.search(r'follow ""', body) and 'followType "None"' in body
-    assert "ButlerBot" not in body
-    v = wb.overview_viewpoint(lay)
+    f = _viewpoint_fields(text)
+    assert f["follow"] == "ButlerBot"
+    assert f["followType"] == "Tracking Shot"  # translation only: the map never rotates (not Mounted / Pan and Tilt)
+    v = wb.follow_viewpoint(lay)
     ax, ay, az, ang = v["orientation"]
-    assert (ax, ay, az) == (0.0, 1.0, 0.0) and ang == pytest.approx(math.pi / 2)  # straight down (ENU)
+    assert (ax, ay, az) == (0.0, 1.0, 0.0) and ang == pytest.approx(math.pi / 2)  # straight down (ENU), dock wall at the bottom
+    assert f["orientation"][:3] == [0.0, 1.0, 0.0] and f["orientation"][3] == pytest.approx(math.pi / 2, abs=1e-4)
     x, y, z = v["position"]
-    assert x == pytest.approx((lay.x0 + lay.x1) / 2) and y == pytest.approx((lay.y0 + lay.y1) / 2)
-    tan_h = math.tan(v["fov"] / 2)
-    for aspect in (1.0, 16 / 9, sp.overview_aspect):  # fov on the wider side; floor depth runs up the screen
-        tan_v = tan_h / aspect
-        assert z * tan_v >= sp.depth_m / 2 and z * tan_h >= sp.width_m / 2
-    assert v["near"] < z - sp.wall_h_m and (v["far"] == 0 or v["far"] > z)
+    assert (x, y) == (0.0, 0.0)  # straight above the spawn; Tracking Shot keeps it above the robot
+    assert f["position"] == pytest.approx([x, y, z], abs=1e-4) and f["fieldOfView"] == [pytest.approx(v["fov"])]
+    # never clips: the eye only moves horizontally and sits above the tallest thing in the building
+    tops = [b.z0 + b.h for b in lay.walls_and_doors() + lay.racks() + built["staging"]]
+    assert max(tops) <= sp.wall_h_m + 1e-9 and sp.rack_h_m < sp.wall_h_m
+    assert z >= sp.wall_h_m + sp.follow_min_clear_m
+    assert z - f["near"][0] > sp.wall_h_m + 1.0 and f["far"][0] > z  # wall tops / floor inside the clip range
+    # a few aisles of floor: ~30 m across the wider side (5 aisle pitches), > 2.5 pitches on the narrow side up to 16:9
+    span = 2 * z * math.tan(v["fov"] / 2)
+    pitch = sp.aisle_w_m + 2 * sp.rack_depth_m + sp.flue_m
+    assert 20.0 <= span <= 30.0 + 1e-6 and span / pitch >= 5 - 1e-6 and span / (16 / 9) > 2.5 * pitch
     # nothing (roof / ceiling) above the walls between the eye and the floor
-    for b in lay.walls_and_doors() + lay.racks() + built["staging"]:
-        assert b.z0 + b.h <= sp.wall_h_m + 1e-9
     assert not re.search(r"(?i)(ceiling|roof)\s+(Solid|Shape|Pose)", text)
+
+
+_CTRL_PROBE = r"""
+import math, re, sys
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import controller as C
+
+class F:
+    def __init__(s, v): s.v = v
+    def getSFString(s): return s.v
+    def setSFString(s, v): s.v = v
+    def getSFVec3f(s): return list(s.v)
+    def setSFVec3f(s, v): s.v = list(v)
+    def getSFRotation(s): return list(s.v)
+    def setSFRotation(s, v): s.v = list(v)
+    def getSFFloat(s): return s.v
+    def setSFFloat(s, v): s.v = v
+
+text = open(sys.argv[3], encoding="utf-8").read()
+body = re.search(r"^DEF VIEWPOINT Viewpoint \{\n(.*?)^\}", text, re.M | re.S).group(1)
+fields = {}
+for ln in body.splitlines():
+    ln = ln.strip()
+    if ln and not ln.startswith("#"):
+        k, v = ln.split(None, 1)
+        fields[k] = F(v.strip('"') if v.startswith('"') else (float(v) if len(v.split()) == 1 else [float(c) for c in v.split()]))
+for k, d in (("follow", ""), ("followType", "Tracking Shot"), ("followSmoothness", 0.5)):
+    fields.setdefault(k, F(d))
+
+class VP:
+    def getField(s, k): return fields.get(k)
+class Self:
+    def getPosition(s): return [0.0, 0.0, 0.05]
+class Sup(C.Supervisor):
+    def getFromDef(s, name): return VP() if name == "VIEWPOINT" else None
+    def getSelf(s): return Self()
+
+import butlerbot_controller as bc
+bc._apply_follow_camera(Sup())
+print("RESULT", fields["follow"].v, "|", fields["followType"].v, "|", fields["position"].v, "|", fields["orientation"].v, "|", fields["fieldOfView"].v)
+"""
+
+
+@pytest.mark.parametrize("world", ["butlerbot_warehouse.wbt", "butlerbot.wbt"])
+def test_controller_camera_reset_per_world(world, tmp_path):
+    """Warehouse: the controller keeps the world's top-down follow pose (re-centred on the robot), not the
+    3.2 m chase. Every other world still gets the chase cam."""
+    import os
+    import subprocess
+
+    ctrl = ROOT / "webots" / "controllers" / "butlerbot_controller"
+    env = dict(os.environ, RBM_LOG_DIR=str(tmp_path), TWIN_DASHBOARD_URL="http://127.0.0.1:9")
+    out = subprocess.run([sys.executable, "-c", _CTRL_PROBE, str(ROOT / "tests" / "fake_webots"), str(ctrl),
+                          str(ROOT / "webots" / "worlds" / world)],
+                         cwd=ctrl, env=env, capture_output=True, text=True, timeout=120)
+    text = out.stdout + out.stderr
+    line = next(ln for ln in text.splitlines() if ln.startswith("RESULT")).split(" ", 1)[1]
+    follow, ftype, pos, ori, fov = (p.strip() for p in line.split("|"))
+    pos, ori = eval(pos), eval(ori)  # noqa: S307 - our own probe output
+    assert follow == "ButlerBot" and ftype == "Tracking Shot", text
+    if world == "butlerbot_warehouse.wbt":
+        v = wb.follow_viewpoint(wb.build_all(write=False)["layout"])
+        assert "top-down follow" in text and "Camera reset: Tracking Shot" not in text, text
+        assert pos == pytest.approx([0.0, 0.0, v["position"][2]], abs=1e-3)
+        assert ori[:3] == [0.0, 1.0, 0.0] and ori[3] == pytest.approx(math.pi / 2, abs=1e-4)
+        assert float(fov) == pytest.approx(v["fov"])
+    else:
+        assert "Camera reset: Tracking Shot on ButlerBot" in text and "top-down" not in text, text
+        assert pos[2] == pytest.approx(3.54536) and pos[0] == pytest.approx(-3.18573)

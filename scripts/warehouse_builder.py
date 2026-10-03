@@ -50,7 +50,7 @@ class WarehouseSpec:
     # building (x = into the building from the dock wall, y = along the dock wall, + = left of the robot)
     width_m: float = 70.0  # along y (dock wall length)
     depth_m: float = 65.0  # along x
-    dock_wall_x: float = -4.0  # robot starts 4 m inside RCV-1 (the chase viewpoint stays inside the wall)
+    dock_wall_x: float = -4.0  # robot starts 4 m inside RCV-1
     wall_h_m: float = 9.0
     wall_t_m: float = 0.3
     # racks: selective pallet racking, back-to-back doubles + one single row on each side wall
@@ -82,10 +82,11 @@ class WarehouseSpec:
     receiving_doors: tuple = (-2, -1, 0, 1)  # door offsets (x pitch) from RCV-1 at y = 0
     shipping_doors: tuple = (-1, 0, 1, 2)  # offsets from SHP-1 (on the shipping aisle)
     exit_inset_m: float = 1.0  # exit bar this far inside the dock wall
-    # main 3D view: fixed straight-down overview of the whole floor (no follow; the building has no roof)
-    overview_fov: float = 0.6  # Viewpoint fieldOfView (rad); Webots applies it to the wider side of the 3D window
-    overview_aspect: float = 2.0  # widest 3D-window width / height the whole floor must still fit in
-    overview_margin_m: float = 3.0  # floor border kept in view on every side
+    # main 3D view: top-down FOLLOW cam. Straight down over the robot, fixed world orientation (dock wall at the
+    # bottom), Webots "Tracking Shot" (copies the robot's translation only). The building has no roof.
+    follow_fov: float = 0.6  # Viewpoint fieldOfView (rad); Webots applies it to the wider side of the 3D window
+    follow_span_m: float = 30.0  # floor shown across the wider side of the 3D window (a few aisles)
+    follow_min_clear_m: float = 3.0  # eye at least this far above the tallest thing (the 9 m walls)
     # staging
     pallet_m: tuple = (1.2, 1.0)  # footprint x, y
     pallet_heights: tuple = (1.0, 1.2, 1.4, 1.1)
@@ -526,45 +527,51 @@ def warehouse_vrml(lay: Layout, staging: list) -> str:
     return "".join(out)
 
 
-def overview_viewpoint(lay: Layout) -> dict:
-    """Fixed straight-down Viewpoint over the whole floor, derived from the spec.
+def follow_viewpoint(lay: Layout) -> dict:
+    """Top-down FOLLOW Viewpoint over the robot, derived from the spec.
 
     Webots ENU: a Viewpoint with identity orientation looks along +x; axis-angle
     ``0 1 0 pi/2`` pitches it straight down (image top = +x = into the building,
     image left = +y, so the dock wall is at the bottom, same as the preview).
-    Webots applies ``fieldOfView`` to the wider side of the 3D window, so the floor
-    depth (x, vertical on screen) must fit in the narrower vertical angle of a
-    window up to ``overview_aspect`` wide, and the width (y) in the horizontal one.
-    The building has no roof or ceiling, so nothing sits between this eye and the floor.
+    ``followType "Tracking Shot"`` copies the robot's translation only, so the eye
+    stays straight above the robot and the map never rotates ("Mounted Shot" would
+    spin with the robot's heading, "Pan and Tilt Shot" would stay put and tilt).
+    Height: ``follow_span_m`` of floor across the wider side of the window at
+    ``follow_fov`` (Webots applies fieldOfView to the wider side), and never lower
+    than ``follow_min_clear_m`` above the walls, the tallest thing in the building
+    (racks 6 m, door headers up to the wall top). There is no roof or ceiling, and
+    the eye only ever moves horizontally, so it cannot clip into anything.
+    The eye starts above the spawn (0, 0); the controller re-applies this pose from
+    the world's Viewpoint at start (``_apply_follow_camera``).
     """
     sp = lay.sp
-    cx, cy = (lay.x0 + lay.x1) / 2, (lay.y0 + lay.y1) / 2
-    half_x = sp.depth_m / 2 + sp.wall_t_m + sp.overview_margin_m  # screen vertical
-    half_y = sp.width_m / 2 + sp.wall_t_m + sp.overview_margin_m  # screen horizontal
-    tan_h = math.tan(sp.overview_fov / 2)
-    tan_v = tan_h / max(1.0, sp.overview_aspect)
-    z = max(half_x / tan_v, half_y / tan_h, sp.wall_h_m + 1.0)
+    tallest = max([sp.wall_h_m, sp.rack_h_m, sp.door_h_m] + [b.z0 + b.h for b in lay.walls_and_doors() + lay.racks()])
+    z = max(sp.follow_span_m / 2 / math.tan(sp.follow_fov / 2), tallest + sp.follow_min_clear_m)
     near = max(0.05, round(0.01 * z, 2))  # depth precision: the 13 mm tape must not z-fight the floor from z m up
-    far = round(2 * z, 1)  # room to zoom out; finite keeps depth precision
-    return {"position": (cx, cy, z), "orientation": (0.0, 1.0, 0.0, math.pi / 2), "fov": sp.overview_fov,
-            "near": near, "far": far}
+    far = round(4 * z, 1)  # room to scroll out; finite keeps depth precision
+    return {"position": (0.0, 0.0, z), "orientation": (0.0, 1.0, 0.0, math.pi / 2), "fov": sp.follow_fov,
+            "near": near, "far": far, "span_m": 2 * z * math.tan(sp.follow_fov / 2), "tallest_m": tallest}
 
 
-def overview_viewpoint_vrml(lay: Layout) -> str:
-    v = overview_viewpoint(lay)
+def follow_viewpoint_vrml(lay: Layout) -> str:
+    v = follow_viewpoint(lay)
     sp = lay.sp
+    z = v["position"][2]
     return ("DEF VIEWPOINT Viewpoint {\n"
-            f"  # Warehouse overview: FIXED, straight down over the whole {sp.depth_m:g} x {sp.width_m:g} m floor (no follow).\n"
-            f"  # Derived from WarehouseSpec by scripts/warehouse_builder.py overview_viewpoint(). Dock wall at the\n"
-            f"  # bottom of the view, +x (into the building) up, +y left. No roof / ceiling in this world.\n"
-            f"  # The chase cam (Tracking Shot) is not used here: at the dock exits it ended up behind the dock wall.\n"
+            f"  # Warehouse TOP-DOWN FOLLOW cam: straight down over ButlerBot from {z:.1f} m "
+            f"(walls {sp.wall_h_m:g} m, racks {sp.rack_h_m:g} m), ~{v['span_m']:.0f} m of floor across the window.\n"
+            "  # Tracking Shot = follows the robot's translation only, so the map never rotates:\n"
+            "  # dock wall at the bottom, +x (into the building) up, +y left, same as the preview.\n"
+            "  # Derived from WarehouseSpec by scripts/warehouse_builder.py follow_viewpoint(); the controller\n"
+            "  # keeps this pose (re-centred on the robot) instead of the 3.2 m chase. No roof / ceiling.\n"
+            '  follow "ButlerBot"\n'
+            '  followType "Tracking Shot"\n'
+            "  followSmoothness 0.2\n"
             f"  orientation {' '.join(_f(c) for c in v['orientation'])}\n"
             f"  position {' '.join(_f(c) for c in v['position'])}\n"
             f"  fieldOfView {_f(v['fov'])}\n"
             f"  near {_f(v['near'])}\n"
             f"  far {_f(v['far'])}\n"
-            '  follow ""\n'
-            '  followType "None"\n'
             "}\n")
 
 
@@ -585,7 +592,7 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None) ->
     text = text[:fl0] + floor + text[fl1:]
     vp0 = text.index("\nDEF VIEWPOINT Viewpoint {") + 1
     vp1 = text.index("\n}\n", vp0) + 3
-    text = text[:vp0] + overview_viewpoint_vrml(lay) + text[vp1:]
+    text = text[:vp0] + follow_viewpoint_vrml(lay) + text[vp1:]
     # Indoors: 6 m racks would throw the aisles into hard shadow; no shadows in this world.
     head, rest = text.split("\nRobot {", 1)
     head = head.replace("castShadows TRUE", "castShadows FALSE")

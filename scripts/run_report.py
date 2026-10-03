@@ -5,7 +5,11 @@ For each run (one ``run_id`` per controller start) it prints: the track,
 states visited, junction classifications / openings seen, route choices
 (every decision, S,S included) vs. junctions driven through, blind distance, max / mean cross-track error, time and the outcome (exit
 crossed or where it stopped). ``drift_report.py`` scores drift only; this
-one is for the intersection runs.
+one is for the intersection runs. Runs logged with the obstacle columns
+(``obstacle_state, obstacle_m, obstacle_band, obstacle_conf``; empty when
+RBM_OBSTACLES was off) also get an ``obstacles:`` line: every slow / stop
+with where, how far, which height band, how long it waited and how it
+resumed.
 
 Which track a run was on:
   1. ``--track NAME`` (forces it for every run), else
@@ -145,6 +149,56 @@ def route_decisions(run) -> list[dict]:
 
 def route_choices(run) -> list[str]:
     return [d["choice"] for d in route_decisions(run)]
+
+
+def obstacle_events(run) -> dict | None:
+    """Slow / stop events from the obstacle columns; None when the log has none (older file)."""
+    if not any("obstacle_state" in r for r in run):
+        return None
+    on = any(r.get("obstacle_state") for r in run)
+    stops, slows = [], 0
+    prev = ""
+    cur = None
+    dists = [d for d in (_f(r.get("obstacle_m")) for r in run) if d is not None]
+    bands = []
+    for r in run:
+        st = r.get("obstacle_state", "")
+        b = r.get("obstacle_band", "")
+        if b and b not in bands:
+            bands.append(b)
+        if st != prev:
+            t = _f(r.get("unix_s"))
+            if st == "SLOW_FOR_OBSTACLE" and prev != "STOPPED_FOR_OBSTACLE":
+                slows += 1
+            if st == "STOPPED_FOR_OBSTACLE":
+                cur = {"t": t, "x": _f(r.get("x_m")), "y": _f(r.get("y_m")), "m": _f(r.get("obstacle_m")),
+                       "band": b, "wait_s": None, "how": "still stopped at the end of the log"}
+                stops.append(cur)
+            elif prev == "STOPPED_FOR_OBSTACLE" and cur is not None:
+                cur["wait_s"] = None if (t is None or cur["t"] is None) else round(t - cur["t"], 1)
+                cur["how"] = "corridor cleared" if st == "CLEAR" else "obstacle moved off (resumed slow)"
+                cur = None
+        prev = st
+    if cur is not None and cur["t"] is not None:
+        cur["wait_s"] = round((_f(run[-1].get("unix_s")) or cur["t"]) - cur["t"], 1)
+    return {"on": on, "slows": slows, "stops": stops, "nearest_m": round(min(dists), 2) if dists else None,
+            "bands": bands}
+
+
+def obstacle_line(o: dict | None) -> str | None:
+    if o is None:
+        return None
+    if not o["on"]:
+        return "obstacles: off (RBM_OBSTACLES)"
+    parts = [f"{len(o['stops'])} stop(s), {o['slows']} slow-down(s)"]
+    if o["nearest_m"] is not None:
+        parts.append(f"nearest {o['nearest_m']} m ({'/'.join(o['bands']) or '-'})")
+    for k, st in enumerate(o["stops"], 1):
+        where = "" if st["x"] is None else f" at ({st['x']:.2f}, {st['y']:.2f})"
+        parts.append(f"stop {k}{where}: {st['band'] or '?'} obstacle "
+                     + ("" if st["m"] is None else f"{st['m']:.2f} m ahead") + ", waited "
+                     + ("?" if st["wait_s"] is None else f"{st['wait_s']} s") + f", {st['how']}")
+    return "obstacles: " + "; ".join(parts)
 
 
 def _graph(geom):
@@ -304,6 +358,7 @@ def summarize(n, run, meta, track_arg, tracks, earlier):
         "end_xy": (round(_f(last["x_m"]), 2), round(_f(last["y_m"]), 2)),
         "same_as_run": same,
         "warnings": m.get("warnings", "") if m else "",
+        "obstacles": obstacle_events(run),
     }
 
 
@@ -353,6 +408,9 @@ def main(argv=None) -> int:
         if s["ct_max_cm"] is not None:
             print(f"  cross-track: max {s['ct_max_cm']} cm, mean {s['ct_mean_cm']} cm"
                   + (f"  (worst at {s['ct_worst_at']})" if s["ct_worst_at"] else ""))
+        ol = obstacle_line(s["obstacles"])
+        if ol:
+            print(f"  {ol}")
         print(f"  outcome:   {s['outcome']}")
         if s["same_as_run"]:
             print(f"  NOTE: every row identical to run {s['same_as_run']} (same world and route replayed) "

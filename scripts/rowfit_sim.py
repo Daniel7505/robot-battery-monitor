@@ -175,6 +175,105 @@ def course(name: str):
     raise SystemExit(f"unknown course {name}")
 
 
+class SimObstacles:
+    """Stereo obstacles in the offline sim: textured boxes rendered for the robot's
+    stereo pair (src.stereo_synth raycaster), the SAME sensor + gate as the
+    controller, and the true clearance / collision check.
+
+    ``remove_after_stop_s``: a test harness takes the boxes away after the robot
+    has waited this long in STOPPED_FOR_OBSTACLE (the robot is not told).
+    Frames with no box within ``render_range_m`` skip the raycast and feed a
+    'clear' report (nothing to see; saves time on long courses)."""
+
+    HALF_W = 0.443  # robot half width (shoulder boxes)
+    FRONT = 0.15
+    BACK = 0.15
+
+    def __init__(self, boxes, *, remove_after_stop_s=None, render_range_m=6.0, backend="auto"):
+        from src.obstacle_gate import ObstacleGate
+        from src.rowfit_control import DECEL_M_S2, V_CRUISE_M_S
+        from src.stereo_depth import STEREO_LEFT_CAM, STEREO_RIGHT_CAM, CorridorParams, StereoObstacleSensor, StereoRig
+
+        self.boxes = list(boxes)
+        self.rig = StereoRig(STEREO_LEFT_CAM, STEREO_RIGHT_CAM)
+        self.sensor = StereoObstacleSensor(self.rig, CorridorParams(), backend=backend)
+        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_CRUISE_M_S)
+        self.remove_after = remove_after_stop_s
+        self.render_range = float(render_range_m)
+        self.removed_at = None
+        self.stopped_s = 0.0
+        self.min_clear = None
+        self.collided = False
+        self.stops = []  # {t, est_clear_m, true_clear_m, band}
+        self.resumed_at = None
+        self.renders = 0
+        self.last_rep = None
+
+    def _robot_pts(self, x, y, yaw, b):
+        c, s = math.cos(yaw), math.sin(yaw)
+        pts = []
+        n = 12
+        for i in range(n + 1):
+            u = b.x0 + (b.x1 - b.x0) * i / n
+            v = b.y0 + (b.y1 - b.y0) * i / n
+            pts += [(u, b.y0), (u, b.y1), (b.x0, v), (b.x1, v)]
+        return [((px - x) * c + (py - y) * s, -(px - x) * s + (py - y) * c) for px, py in pts]
+
+    def true_clearance(self, x, y, yaw):
+        best = None
+        for b in self.boxes:
+            for rx, ry in self._robot_pts(x, y, yaw, b):
+                if abs(ry) <= self.HALF_W and -self.BACK <= rx <= self.FRONT:
+                    self.collided = True
+                if abs(ry) <= self.HALF_W and rx > self.FRONT:
+                    best = rx - self.FRONT if best is None else min(best, rx - self.FRONT)
+        return best
+
+    def frame(self, t, x, y, yaw, ctl, dx, frame_dt):
+        from src.obstacle_gate import STATE_STOPPED, ObstacleReport
+        from src.stereo_synth import render_pair
+
+        near = [b for b in self.boxes
+                if math.hypot(0.5 * (b.x0 + b.x1) - x, 0.5 * (b.y0 + b.y1) - y) < self.render_range]
+        if near:
+            L, R = render_pair(self.rig, (x, y, yaw), near, supersample=1)
+            rep = self.sensor.process_gray(L, R, kappa=ctl.kappa_cmd)
+            self.renders += 1
+        else:
+            rep = ObstacleReport(source="stereo", range_m=self.sensor.params.max_range_m,
+                                 view_bottom=self.rig.view_bottom())
+        self.last_rep = rep
+        prev = self.gate.state
+        self.gate.on_frame(rep, v_m_s=ctl.gov.v, dx_m=dx, frame_dt_s=frame_dt)
+        ctl.obstacle_v_cap = self.gate.v_cap
+        if self.gate.emergency:
+            ctl.gov.v = 0.0
+            self.gate.emergency = False
+        if self.gate.state == STATE_STOPPED and prev != STATE_STOPPED:
+            self.stops.append({"t_s": round(t, 2), "est_clear_m": self.gate.fields()["obstacle_clear_m"],
+                               "true_clear_m": None, "band": self.gate.fields()["obstacle_band"]})
+        if prev == STATE_STOPPED and self.gate.state != STATE_STOPPED and self.resumed_at is None:
+            self.resumed_at = round(t, 2)
+        if self.gate.state == STATE_STOPPED:
+            self.stopped_s += frame_dt
+            if self.remove_after is not None and self.removed_at is None and self.stopped_s >= self.remove_after:
+                self.boxes = []
+                self.removed_at = round(t, 2)
+        return self.gate.drain_events()
+
+    def tick(self, x, y, yaw):
+        c = self.true_clearance(x, y, yaw)
+        if c is not None:
+            self.min_clear = c if self.min_clear is None else min(self.min_clear, c)
+        return c
+
+    def result(self) -> dict:
+        return {"stops": self.stops, "history": self.gate.history, "min_true_clear_m":
+                None if self.min_clear is None else round(self.min_clear, 3), "collided": self.collided,
+                "removed_at_s": self.removed_at, "resumed_at_s": self.resumed_at, "renders": self.renders,
+                "backend": self.sensor.backend}
+
+
 def _dist_and_index(p, poly, hint=0):
     best, bi = 1e9, hint
     lo, hi = max(0, hint - 40), min(len(poly) - 1, hint + 120)
@@ -204,7 +303,8 @@ def _path_curvature(poly):
 
 def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, csv=None, latency_frames=0,
         cams=None, yellow_mode=None, start_x=0.0, turn_eff=1.0, imu_noise_deg=0.0, imu_drift_dps=0.0,
-        corners=True, log=None, route=None, max_blind=None, look_around=True):
+        corners=True, log=None, route=None, max_blind=None, look_around=True, obstacles=None,
+        remove_after_stop_s=None, stereo_backend="auto"):
     """Closed loop on one course. ``turn_eff`` scales the realised yaw rate
     (tyre scrub in a pivot: the wheels ask for more turn than the body makes);
     the IMU reads the true yaw plus ``imu_drift_dps`` drift and white noise.
@@ -212,7 +312,9 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
     the old brake-at-the-corner behaviour). ``route``: RBM_ROUTE-style
     choices ("S,L"), ``max_blind``: RBM_MAX_BLIND_M. On an intersection
     course (TrackNetwork) the result has ``exit`` (which exit was crossed),
-    ``expected_exit`` (the course's ``routes`` entry) and ``ok``."""
+    ``expected_exit`` (the course's ``routes`` entry) and ``ok``.
+    ``obstacles``: world ``stereo_synth.SceneBox`` list -> stereo pair + gate in
+    the loop (:class:`SimObstacles`), result key ``obstacles``."""
     stop_x, bars = None, []
     geom = track_geometry(name)
     if geom is not None:
@@ -269,6 +371,9 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
     tr = {"left_lane_at": None, "first_held_at": None, "first_lost_at": None, "worst_at": None,
           "max_lat_m": 0.0, "braked_at": None, "width_err": [], "v": 0.0}
     hint = None
+    obs = None if obstacles is None else SimObstacles(obstacles, remove_after_stop_s=remove_after_stop_s,
+                                                      backend=stereo_backend)
+    obs_pose = (x, y)
 
     def _where():
         if geom is None:
@@ -307,6 +412,13 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
             pending.append(est)
             est = pending.pop(0) if len(pending) > latency_frames else None
             del near
+            if obs is not None:
+                dxo = math.hypot(x - obs_pose[0], y - obs_pose[1])
+                obs_pose = (x, y)
+                for e in obs.frame(tick * dt, x, y, yaw, ctl, dxo, frame_every * dt):
+                    events.append((round(tick * dt, 2), _where(), e))
+                    if log:
+                        log(f"  t={tick * dt:6.2f}s {_where()} {e}")
         imu = yaw + math.radians(imu_drift_dps) * tick * dt + rng.gauss(0.0, math.radians(imu_noise_deg))
         st_before = ctl.state
         cmd = ctl.step(est, new_frame=new and est is not None, dt=dt, yaw=imu if corners else None)
@@ -337,6 +449,14 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
             tr["braked_at"] = {**_where(), "state": st_before}
             break
         wl, wr = cmd["left"], cmd["right"]
+        if obs is not None:
+            c_true = obs.tick(x, y, yaw)
+            if obs.stops and obs.stops[-1]["true_clear_m"] is None and ctl.gov.v < 1e-3:
+                obs.stops[-1]["true_clear_m"] = None if c_true is None else round(c_true, 3)
+            if obs.gate.state == "STOPPED_FOR_OBSTACLE":
+                states["STOPPED_FOR_OBSTACLE"] = states.get("STOPPED_FOR_OBSTACLE", 0.0) + dt
+            elif obs.gate.state == "SLOW_FOR_OBSTACLE":
+                states["SLOW_FOR_OBSTACLE"] = states.get("SLOW_FOR_OBSTACLE", 0.0) + dt
         v = 0.5 * (wl + wr) * WHEEL_RADIUS_M
         w = (wr - wl) * WHEEL_RADIUS_M / TRACK_M * float(turn_eff)
         yaw += w * dt
@@ -419,6 +539,7 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
                                           (round(max(tr["width_err"])[0], 3), *max(tr["width_err"])[1:])))),
         }),
         **({} if not network else _route_result(geom, route, exit_name, done, ctl)),
+        **({} if obs is None else {"obstacles": obs.result()}),
         **({} if stop_x is None else {
             "end_x_m": round(x, 3),
             "end_yaw_deg": round(math.degrees(yaw), 2),  # finish straight runs along +x
@@ -463,6 +584,13 @@ def main(argv=None) -> int:
     ap.add_argument("--route", help="RBM_ROUTE-style junction choices, e.g. S,L,R (default: straight else left)")
     ap.add_argument("--max-blind", type=float, help="RBM_MAX_BLIND_M (default 4.0)")
     ap.add_argument("--max-s", type=float, default=90.0, help="sim time limit, s (default 90; the warehouse needs ~600)")
+    ap.add_argument("--obstacles", action="store_true",
+                    help="stereo obstacle sensing in the loop; on the warehouse: the obstacles-world test props")
+    ap.add_argument("--obstacle", action="append", default=[], metavar="X,Y,SX,SY,H",
+                    help="extra textured box (world centre x,y, size x,y, height), repeatable; implies --obstacles")
+    ap.add_argument("--remove-after", type=float, metavar="S",
+                    help="test harness: take the boxes away after S s in STOPPED_FOR_OBSTACLE")
+    ap.add_argument("--stereo-backend", choices=("auto", "sgbm", "numpy"), default="auto")
     a = ap.parse_args(argv)
     cams = sim_cameras(a.constants, a.wbt)
     for n, c in cams.items():
@@ -471,17 +599,51 @@ def main(argv=None) -> int:
     for c in a.courses:
         if not a.quiet:
             print(f"--- {c}")
+        boxes = None
+        if a.obstacles or a.obstacle:
+            boxes = obstacle_boxes(c) if a.obstacles else []
+            for spec in a.obstacle:
+                bx, by, sx, sy, h = (float(v) for v in spec.split(","))
+                boxes.append(SceneBox_at(bx, by, sx, sy, h))
         r = run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow, turn_eff=a.turn_eff,
                 imu_noise_deg=a.imu_noise, imu_drift_dps=a.imu_drift, corners=not a.no_corners,
-                log=None if a.quiet else print, route=a.route, max_blind=a.max_blind, max_s=a.max_s)
+                log=None if a.quiet else print, route=a.route, max_blind=a.max_blind, max_s=a.max_s,
+                obstacles=boxes, remove_after_stop_s=a.remove_after, stereo_backend=a.stereo_backend)
         rows.append(r)
         if not a.table:
             print({k: v for k, v in r.items() if k != "events"})
+        elif "obstacles" in r:
+            o = r["obstacles"]
+            print(f"  obstacles: {len(o['stops'])} stop(s) {o['stops']}, min true clearance {o['min_true_clear_m']} m, "
+                  f"collided {o['collided']}, removed at {o['removed_at_s']} s, resumed at {o['resumed_at_s']} s, "
+                  f"{o['renders']} stereo frames ({o['backend']})")
     if a.table:
         print(summary_header())
         for r in rows:
             print(summary_line(r))
     return 0
+
+
+def SceneBox_at(x, y, sx, sy, h, z0=0.0, name="box"):
+    from src.stereo_synth import SceneBox
+
+    return SceneBox.at(x, y, sx, sy, h, z0=z0, name=name)
+
+
+def obstacle_boxes(course_name: str) -> list:
+    """The obstacles world's test props as raycaster boxes (warehouse only; else none)."""
+    if course_name != "warehouse":
+        return []
+    import warehouse_builder as wb
+    from src.stereo_synth import SceneBox, table
+
+    out = []
+    for b in wb.build_all(write=False)["props"]:
+        if b.kind == "obs_table":
+            out += table(b.cx, b.cy, b.sx, b.sy, b.h, name=b.name)
+        else:
+            out.append(SceneBox.at(b.cx, b.cy, b.sx, b.sy, b.h, name=b.name, seed=sum(map(ord, b.name)) % 97))
+    return out
 
 
 def summary_header() -> str:

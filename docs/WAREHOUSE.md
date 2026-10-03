@@ -132,9 +132,25 @@ python scripts\rowfit_sim.py warehouse --route L,S --max-s 300 --table
 `--max-s` is needed because the default limit of 90 s is too short for the
 warehouse.
 
-## Next steps (placeholders in place)
+## Obstacles world
 
-1. **Stereo depth cameras** on the robot. Shelves, pallets, tables and walls are already Solids with boundingObjects; check the depth against the generator's boxes (`Layout.racks()` / `staging()`).
-2. **Radar.**
-3. **Obstacles.** The empty `DEF WH_OBSTACLES Group` in the world is the place for them, filled by the generator.
-4. Design: a second middle cross aisle (`n_mid_cross`), and realistic dock levelers / door states.
+`webots/worlds/butlerbot_warehouse_obstacles.wbt` is generated next to the
+clean world (`python scripts\warehouse_builder.py` writes both). It is the
+same warehouse and robot, with three props in `DEF WH_OBSTACLES Group`, all
+placed from the layout (`Layout.obstacle_props`, spec fields `obs_*`):
+
+| prop | where | route | expected |
+|---|---|---|---|
+| `WH_OBS_BOX` 0.6 × 0.5 × 0.5 m | aisle 5 centre line, rack block 0 | `odd_aisle_to_shipping` | stop before it; resume when deleted |
+| `WH_OBS_TABLE` 0.9 m high | dock lane x = 4, edge 0.30 m right of the centre line | `dock_shuttle` (`L,S`) | stop, waist band |
+| `WH_OBS_SHELF` 1.8 m high | start lane, corner 0.75 m left of the centre line | every mission | pass, no slow-down |
+
+The clean `butlerbot_warehouse.wbt` keeps an empty `WH_OBSTACLES` group.
+The world's `# OBSTACLES on` tag turns stereo sensing on there. Details are
+in `docs/OBSTACLES.md`.
+
+## Next steps
+
+1. **Stereo obstacle sensing**: first pass done (`docs/OBSTACLES.md`). Open: avoidance and re-routing around a blocked aisle.
+2. **Radar** through the `ObstacleSource` interface in `src/obstacle_gate.py`.
+3. Design: a second middle cross aisle (`n_mid_cross`), and realistic dock levelers / door states.

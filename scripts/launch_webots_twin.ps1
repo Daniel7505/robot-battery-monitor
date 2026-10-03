@@ -7,7 +7,7 @@
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
 #   -World: butlerbot (default, the S), corner90, corner_mix, widen, plus, t_end,
-#   gap45, warehouse, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
+#   gap45, warehouse, warehouse_obstacles, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
 #   the same default.
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90
@@ -77,6 +77,7 @@ Write-Host "Dashboard: $DashboardUrl"
 Write-Host "World:     $WorldFile"
 Write-Host "Track:     $(if ($env:RBM_TRACK) { $env:RBM_TRACK } else { '(none: S default)' })"
 Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else { '(unset: straight if possible, else left)' })  RBM_MAX_BLIND_M=$(if ($env:RBM_MAX_BLIND_M) { $env:RBM_MAX_BLIND_M } else { '(4.0)' })"
+Write-Host "Obstacles: RBM_OBSTACLES=$(if ($env:RBM_OBSTACLES) { $env:RBM_OBSTACLES } else { '(unset: on only in worlds tagged # OBSTACLES on)' })  RBM_STEREO_BACKEND=$(if ($env:RBM_STEREO_BACKEND) { $env:RBM_STEREO_BACKEND } else { '(auto)' })
 Write-Host ""
 
 # Soft check: controller still starts if dashboard is down; twin POSTs will fail until it is up

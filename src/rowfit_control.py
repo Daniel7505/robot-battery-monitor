@@ -224,6 +224,9 @@ class RowfitController:
         self.look_i = 0
         self.look_seen: list = []
         self.junctions: list[dict] = []  # one record per decided junction (sim / report)
+        # obstacles (src.obstacle_gate): an external forward-speed cap, None = no cap. It only
+        # caps speed; the lane / junction state machine underneath keeps its progress.
+        self.obstacle_v_cap: float | None = None
 
     def reset(self) -> None:
         tracker, route, mb, la = self.tracker, self.policy.route, self.max_blind_m, self.look_around
@@ -522,6 +525,8 @@ class RowfitController:
             self.target_speed = min(self.target_speed, V_JUNCTION_M_S)
         if self.state == STATE_REACQUIRE:
             self.target_speed = min(self.target_speed, V_REACQUIRE_M_S)
+        if self.obstacle_v_cap is not None:
+            self.target_speed = min(self.target_speed, max(0.0, float(self.obstacle_v_cap)))
         if self.frames_lost >= LOST_FRAMES_STOP:
             if self.state == STATE_REACQUIRE and not self._reacq_fail_logged:
                 self._reacq_fail_logged = True
@@ -582,6 +587,8 @@ class RowfitController:
             return self._pivot_tick(est, False, dt, float(yaw))
         target = min(V_APPROACH_M_S, math.sqrt(2.0 * A_APPROACH_M_S2 * max(0.0, rem - PIVOT_ARRIVE_M)))
         target = max(V_CREEP_M_S, target)
+        if self.obstacle_v_cap is not None:
+            target = min(target, max(0.0, float(self.obstacle_v_cap)))
         self.target_speed = target
         # this profile can need more than the governor's slow-in decel: follow it directly
         if self.gov.v > target:
@@ -734,6 +741,8 @@ class RowfitController:
 
     def _drive(self, est, new_frame: bool, dt: float, yaw, v_cap: float, *, hold_yaw: float | None = None) -> float:
         """Lane pursuit on the (clipped) fit if valid, else IMU heading hold; returns v."""
+        if self.obstacle_v_cap is not None:
+            v_cap = min(v_cap, max(0.0, float(self.obstacle_v_cap)))
         if new_frame:
             if hold_yaw is None and est is not None and est.valid and est.confidence >= MIN_CONF:
                 k_pp, d2 = self._pursuit(est, max(self.gov.v, 0.1))

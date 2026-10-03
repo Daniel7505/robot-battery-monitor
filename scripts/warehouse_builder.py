@@ -69,8 +69,8 @@ class WarehouseSpec:
     lane_w_m: float = 1.30
     stripe_w_m: float = 0.06
     main_aisle: int = 2  # aisle index (0 = rightmost) that holds the start lane at y = 0
-    tape_every: int = 2  # tape every n-th aisle counted from the main aisle (+ both edge aisles)
-    shipping_aisle: int | None = None  # taped aisle extended to shipping door SHP-1 (None: 2nd taped from the left)
+    tape_every: int = 1  # tape every n-th aisle counted from the main aisle (+ both edge aisles); 1 = every aisle
+    shipping_aisle: int | None = None  # taped aisle extended to shipping door SHP-1 (None: 2nd aisle in from the left wall)
     # shipping & receiving
     dock_lane_x: float = 4.0  # tape lane along the dock wall (dock apron in front of it)
     plaza_x: float = 10.0  # forklift crossing on the start lane (tape gap)
@@ -82,6 +82,10 @@ class WarehouseSpec:
     receiving_doors: tuple = (-2, -1, 0, 1)  # door offsets (x pitch) from RCV-1 at y = 0
     shipping_doors: tuple = (-1, 0, 1, 2)  # offsets from SHP-1 (on the shipping aisle)
     exit_inset_m: float = 1.0  # exit bar this far inside the dock wall
+    # main 3D view: fixed straight-down overview of the whole floor (no follow; the building has no roof)
+    overview_fov: float = 0.6  # Viewpoint fieldOfView (rad); Webots applies it to the wider side of the 3D window
+    overview_aspect: float = 2.0  # widest 3D-window width / height the whole floor must still fit in
+    overview_margin_m: float = 3.0  # floor border kept in view on every side
     # staging
     pallet_m: tuple = (1.2, 1.0)  # footprint x, y
     pallet_heights: tuple = (1.0, 1.2, 1.4, 1.1)
@@ -144,7 +148,10 @@ class Layout:
         taped = {0, n - 1} | {i for i in range(n) if (i - sp.main_aisle) % sp.tape_every == 0}
         self.taped = sorted(taped)
         inner = [i for i in self.taped if i not in (0, n - 1, sp.main_aisle)]
-        self.ship_aisle = sp.shipping_aisle if sp.shipping_aisle is not None else (inner[-1] if inner else n - 1)
+        if sp.shipping_aisle is not None:
+            self.ship_aisle = sp.shipping_aisle
+        else:  # second aisle in from the left wall (SHP-1..4 stay put whatever tape_every is)
+            self.ship_aisle = n - 3 if (n - 3) in inner else (inner[-1] if inner else n - 1)
         if self.ship_aisle in (0, n - 1, sp.main_aisle) or self.ship_aisle not in self.taped:
             raise ValueError("shipping_aisle must be a taped inner aisle (not the start or an edge aisle)")
         self.ship_y = self.aisle_y[self.ship_aisle]
@@ -222,6 +229,9 @@ class Layout:
         """Named test drives: (name, description, to_exit, via points)."""
         n = self.n_aisles - 1
         far_block = self.rack_blocks[-1]
+        # an aisle an odd number of aisles from the start aisle (untaped while tape_every was 2): the middle one
+        odds = [i for i in range(1, n) if (i - self.sp.main_aisle) % 2 and i in self.taped and i != self.ship_aisle]
+        odd = odds[len(odds) // 2] if odds else self.ship_aisle
         return [
             {"name": "far_aisle_to_shipping",
              "description": f"receiving RCV-1 -> far aisle {n} (back block) -> shipping SHP-1",
@@ -234,6 +244,11 @@ class Layout:
             {"name": "dock_shuttle",
              "description": "receiving RCV-1 -> dock lane -> shipping SHP-2 (short run along the dock)",
              "to": "shipping_2", "via": []},
+            {"name": "odd_aisle_to_shipping",
+             "description": f"receiving RCV-1 -> front cross aisle -> down aisle {odd} (taped since every aisle is taped, "
+                            f"front to back) -> back cross aisle -> down shipping aisle {self.ship_aisle} -> shipping SHP-1",
+             "to": "shipping_1", "via": [[round((xa + xb) / 2, 2), round(self.aisle_y[odd], 3)] for xa, xb in self.rack_blocks] +
+                                        [[round((far_block[0] + far_block[1]) / 2, 2), round(self.ship_y, 3)]]},
         ]
 
     # ---- walls / doors -------------------------------------------------------
@@ -511,6 +526,48 @@ def warehouse_vrml(lay: Layout, staging: list) -> str:
     return "".join(out)
 
 
+def overview_viewpoint(lay: Layout) -> dict:
+    """Fixed straight-down Viewpoint over the whole floor, derived from the spec.
+
+    Webots ENU: a Viewpoint with identity orientation looks along +x; axis-angle
+    ``0 1 0 pi/2`` pitches it straight down (image top = +x = into the building,
+    image left = +y, so the dock wall is at the bottom, same as the preview).
+    Webots applies ``fieldOfView`` to the wider side of the 3D window, so the floor
+    depth (x, vertical on screen) must fit in the narrower vertical angle of a
+    window up to ``overview_aspect`` wide, and the width (y) in the horizontal one.
+    The building has no roof or ceiling, so nothing sits between this eye and the floor.
+    """
+    sp = lay.sp
+    cx, cy = (lay.x0 + lay.x1) / 2, (lay.y0 + lay.y1) / 2
+    half_x = sp.depth_m / 2 + sp.wall_t_m + sp.overview_margin_m  # screen vertical
+    half_y = sp.width_m / 2 + sp.wall_t_m + sp.overview_margin_m  # screen horizontal
+    tan_h = math.tan(sp.overview_fov / 2)
+    tan_v = tan_h / max(1.0, sp.overview_aspect)
+    z = max(half_x / tan_v, half_y / tan_h, sp.wall_h_m + 1.0)
+    near = max(0.05, round(0.01 * z, 2))  # depth precision: the 13 mm tape must not z-fight the floor from z m up
+    far = round(2 * z, 1)  # room to zoom out; finite keeps depth precision
+    return {"position": (cx, cy, z), "orientation": (0.0, 1.0, 0.0, math.pi / 2), "fov": sp.overview_fov,
+            "near": near, "far": far}
+
+
+def overview_viewpoint_vrml(lay: Layout) -> str:
+    v = overview_viewpoint(lay)
+    sp = lay.sp
+    return ("DEF VIEWPOINT Viewpoint {\n"
+            f"  # Warehouse overview: FIXED, straight down over the whole {sp.depth_m:g} x {sp.width_m:g} m floor (no follow).\n"
+            f"  # Derived from WarehouseSpec by scripts/warehouse_builder.py overview_viewpoint(). Dock wall at the\n"
+            f"  # bottom of the view, +x (into the building) up, +y left. No roof / ceiling in this world.\n"
+            f"  # The chase cam (Tracking Shot) is not used here: at the dock exits it ended up behind the dock wall.\n"
+            f"  orientation {' '.join(_f(c) for c in v['orientation'])}\n"
+            f"  position {' '.join(_f(c) for c in v['position'])}\n"
+            f"  fieldOfView {_f(v['fov'])}\n"
+            f"  near {_f(v['near'])}\n"
+            f"  far {_f(v['far'])}\n"
+            '  follow ""\n'
+            '  followType "None"\n'
+            "}\n")
+
+
 def build_world(lay: Layout, net, staging: list, template: str | None = None) -> str:
     import track_builder as tb  # scripts/
 
@@ -526,6 +583,9 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None) ->
              f"Floor {{\n  translation {_f(cx)} {_f(cy)} 0\n  name \"ground\"\n  size {_f(sp.depth_m)} {_f(sp.width_m)}\n"
              f"  tileSize 1 1\n  appearance Parquetry {{\n    type \"chequered\"\n    colorOverride 0.55 0.56 0.58\n  }}\n}}\n")
     text = text[:fl0] + floor + text[fl1:]
+    vp0 = text.index("\nDEF VIEWPOINT Viewpoint {") + 1
+    vp1 = text.index("\n}\n", vp0) + 3
+    text = text[:vp0] + overview_viewpoint_vrml(lay) + text[vp1:]
     # Indoors: 6 m racks would throw the aisles into hard shadow; no shadows in this world.
     head, rest = text.split("\nRobot {", 1)
     head = head.replace("castShadows TRUE", "castShadows FALSE")
@@ -623,13 +683,13 @@ def draw_preview(lay: Layout, net, graph, staging: list, missions: list, path: s
     for n in graph.junctions:
         ax.plot(*P(*n.xy), "o", ms=4, mfc="white", mec="#555", zorder=5)
     # missions
-    cols = ["#d62728", "#2ca02c", "#9467bd"]
+    cols = ["#d62728", "#2ca02c", "#9467bd", "#ff7f0e"]
     for k, m in enumerate(missions):
         p = graph.plan(m["to"], via=m["via"])
         pts = [q for e in p.edges for q in e.poly]
         off = (k - 1) * 0.35
         xs, ys = zip(*[P(q[0] + off, q[1] + off) for q in pts])
-        ax.plot(xs, ys, ls=(0, (4, 3)), color=cols[k % 3], lw=1.3, zorder=4.5,
+        ax.plot(xs, ys, ls=(0, (4, 3)), color=cols[k % len(cols)], lw=1.3, zorder=4.5,
                 label=f"{m['name']}: {m['length_m']:.0f} m, {m['junctions']} junctions  RBM_ROUTE={m['route']}")
     # start / exits
     ax.annotate("", xy=P(2.5, 0), xytext=P(0, 0), arrowprops=dict(arrowstyle="-|>", color="#00a03c", lw=2.5), zorder=7)

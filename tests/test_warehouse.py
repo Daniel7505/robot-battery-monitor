@@ -162,3 +162,49 @@ def test_closed_loop_dock_shuttle():
     assert r["max_lateral_m"] < 0.08
     assert [j["choice"] for j in r["junctions"]] == m["route"].split(",")
     assert all(abs(p["true_err_deg"]) < 3.0 for p in r["pivots"])
+
+
+def test_every_aisle_is_taped_and_joined_to_the_cross_aisles(built):
+    """Every aisle has a lane, and each one meets the front, middle and back cross aisles in a T / plus."""
+    lay, g = built["layout"], built["graph"]
+    assert lay.taped == list(range(lay.n_aisles))
+    xs = [lay.xF] + lay.xM + [lay.xB]
+    nodes = {(round(n.xy[0], 2), round(n.xy[1], 2)): n for n in g.junctions}
+    corners = {(round(p[0], 2), round(p[1], 2)) for _k, p, _a in g.corners()}
+    for i, y in enumerate(lay.aisle_y):
+        for x in xs:
+            edge_corner = i in (0, lay.n_aisles - 1) and x in (lay.xF, lay.xB)  # perimeter corner, not a junction
+            assert (round(x, 2), round(y, 2)) in (corners if edge_corner else nodes), (i, x, y)
+    # the forklift crossing is still a tape gap on the start lane
+    assert any(r.spec.name == "forklift_crossing" and r.spec.widths[0] > 2.0 for r in built["net"].roads)
+    # a drive down an odd aisle (untaped before) reaches its exit
+    d = json.loads(TRACK.read_text(encoding="utf-8"))
+    odd = next(m for m in d["missions"] if m["name"] == "odd_aisle_to_shipping")
+    ys = {round(v[1], 3) for v in odd["via"][:-1]}
+    assert len(ys) == 1 and (lay.aisle_y.index(ys.pop()) - lay.sp.main_aisle) % 2 == 1
+    assert g.follow(odd["route"]).exit == "shipping_1"
+
+
+def test_viewpoint_is_a_fixed_top_down_overview(built):
+    """Main 3D view: no follow, straight down, whole floor in frame, nothing above it."""
+    lay = built["layout"]
+    sp = lay.sp
+    text = WORLD.read_text(encoding="utf-8")
+    vp = re.search(r"^DEF VIEWPOINT Viewpoint \{\n(.*?)^\}", text, re.M | re.S).group(1)
+    body = "\n".join(ln for ln in vp.splitlines() if not ln.strip().startswith("#"))
+    assert re.search(r'follow ""', body) and 'followType "None"' in body
+    assert "ButlerBot" not in body
+    v = wb.overview_viewpoint(lay)
+    ax, ay, az, ang = v["orientation"]
+    assert (ax, ay, az) == (0.0, 1.0, 0.0) and ang == pytest.approx(math.pi / 2)  # straight down (ENU)
+    x, y, z = v["position"]
+    assert x == pytest.approx((lay.x0 + lay.x1) / 2) and y == pytest.approx((lay.y0 + lay.y1) / 2)
+    tan_h = math.tan(v["fov"] / 2)
+    for aspect in (1.0, 16 / 9, sp.overview_aspect):  # fov on the wider side; floor depth runs up the screen
+        tan_v = tan_h / aspect
+        assert z * tan_v >= sp.depth_m / 2 and z * tan_h >= sp.width_m / 2
+    assert v["near"] < z - sp.wall_h_m and (v["far"] == 0 or v["far"] > z)
+    # nothing (roof / ceiling) above the walls between the eye and the floor
+    for b in lay.walls_and_doors() + lay.racks() + built["staging"]:
+        assert b.z0 + b.h <= sp.wall_h_m + 1e-9
+    assert not re.search(r"(?i)(ceiling|roof)\s+(Solid|Shape|Pose)", text)

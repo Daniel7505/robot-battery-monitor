@@ -160,9 +160,15 @@ circles the perimeter and never stops.
 set RBM_ROUTE=L,S
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
 
-set RBM_ROUTE=S,S,S,S,L,S,S,S,S,R,S
+set RBM_ROUTE=S,S,S,S,L,S,S,S,S,S,S,S,S,S,R,S
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+set RBM_ROUTE=S,S,L,S,S,R,S,L,S,S,L,S,S,S
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
 ```
+
+The warehouse main view is a fixed top-down overview of the whole floor, with no chase cam
+(see `docs/WAREHOUSE.md`). Scroll to zoom in on the robot.
 
 A T-end never goes straight: `RBM_ROUTE=S` (or unset) at a T falls back to
 left, and the console says `route #1 wanted S — not offered, default L`.

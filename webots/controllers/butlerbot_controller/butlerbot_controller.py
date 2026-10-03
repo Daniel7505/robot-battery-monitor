@@ -456,6 +456,10 @@ def _apply_follow_camera(robot: Robot) -> None:
     try:
         field = vp.getField
         follow = field("follow")
+        if follow is not None and not follow.getSFString().strip():
+            # World authored a FIXED view (e.g. warehouse top-down overview): keep it, no chase cam.
+            print("Camera: fixed world Viewpoint (no follow) kept, chase reset skipped")
+            return
         if follow:
             follow.setSFString("ButlerBot")
         ftype = field("followType")

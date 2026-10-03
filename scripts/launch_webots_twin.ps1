@@ -7,7 +7,7 @@
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
 #   -World: butlerbot (default, the S), corner90, corner_mix, widen, plus, t_end,
-#   gap45, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
+#   gap45, warehouse, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
 #   the same default.
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90

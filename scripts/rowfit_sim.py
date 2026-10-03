@@ -17,6 +17,7 @@ used to paint the synthetic images and to score cross-track error.
     python scripts/rowfit_sim.py corner90 corner_mix --table   # one line per course
     python scripts/rowfit_sim.py corner90 --turn-eff 0.8 --imu-drift 0.5   # pivot robustness
     python scripts/rowfit_sim.py corner90 --no-corners         # old behaviour: brake at the corner
+    python scripts/rowfit_sim.py warehouse --route L,S --max-s 300 --table   # a warehouse mission
 
 Sharp corners: the controller gets the (simulated) IMU yaw and pivots in
 place; the robot kinematics are the same diff-drive integration, so an
@@ -225,6 +226,9 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         left = offset_polyline(centre, half_w)
         right = offset_polyline(centre, -half_w)
     polys = (list(left) + list(right)) if (left and isinstance(left[0], list)) else [left, right]
+    # bounding box per painted piece: a big network (the warehouse) only renders the pieces near the robot
+    pboxes = [(min(p[0] for p in q), min(p[1] for p in q), max(p[0] for p in q), max(p[1] for p in q))
+              if q else (0.0, 0.0, -1.0, -1.0) for q in polys]
     curv = _path_curvature(centre)
     yaw_tail = []  # (x, yaw_rate) near the finish
     n_held = 0
@@ -277,7 +281,9 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
         if new:
             near = [p for p in centre if abs(p[0] - x) < 4.0 and abs(p[1] - y) < 4.0]
             lines = []
-            for poly in polys:
+            for poly, (bx0, by0, bx1, by1) in zip(polys, pboxes):
+                if x < bx0 - 3.5 or x > bx1 + 3.5 or y < by0 - 3.5 or y > by1 + 3.5:
+                    continue
                 seg = [p for p in poly if math.hypot(p[0] - x, p[1] - y) < 3.5]
                 if len(seg) > 1:
                     lines.append(lane_polyline_robot(seg, (x, y), yaw))
@@ -424,7 +430,10 @@ def run(name: str, *, half_w=0.65, start_offset=0.0, start_yaw=0.0, max_s=90.0, 
 def expected_exit(geom, route) -> str | None:
     """The exit a route should end at (course ``routes``: first route letter or 'default')."""
     routes = getattr(geom, "routes", None) or {}
-    key = (route or "").replace(";", ",").split(",")[0].strip().upper() or "default"
+    full = ",".join(t.strip().upper() for t in (route or "").replace(";", ",").replace(" ", ",").split(",") if t.strip())
+    if full and full in routes:  # a whole RBM_ROUTE string (warehouse missions)
+        return routes[full]
+    key = full.split(",")[0] or "default"
     return routes.get(key, routes.get("default"))
 
 
@@ -453,6 +462,7 @@ def main(argv=None) -> int:
     ap.add_argument("--table", action="store_true", help="one summary line per course instead of the dict")
     ap.add_argument("--route", help="RBM_ROUTE-style junction choices, e.g. S,L,R (default: straight else left)")
     ap.add_argument("--max-blind", type=float, help="RBM_MAX_BLIND_M (default 4.0)")
+    ap.add_argument("--max-s", type=float, default=90.0, help="sim time limit, s (default 90; the warehouse needs ~600)")
     a = ap.parse_args(argv)
     cams = sim_cameras(a.constants, a.wbt)
     for n, c in cams.items():
@@ -463,7 +473,7 @@ def main(argv=None) -> int:
             print(f"--- {c}")
         r = run(c, csv=a.csv, latency_frames=a.latency, cams=cams, yellow_mode=a.yellow, turn_eff=a.turn_eff,
                 imu_noise_deg=a.imu_noise, imu_drift_dps=a.imu_drift, corners=not a.no_corners,
-                log=None if a.quiet else print, route=a.route, max_blind=a.max_blind)
+                log=None if a.quiet else print, route=a.route, max_blind=a.max_blind, max_s=a.max_s)
         rows.append(r)
         if not a.table:
             print({k: v for k, v in r.items() if k != "events"})

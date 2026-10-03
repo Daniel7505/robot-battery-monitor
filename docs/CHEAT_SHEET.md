@@ -177,7 +177,13 @@ Per-run summary with the junction columns (track, states, junction types /
 openings, route, blind distance, cross-track error, time, exit). The track
 comes from `lane-vision-runs.csv` (written next to the log by the controller:
 world, track, route, warnings), else it is guessed; runs that replay an
-earlier run frame for frame are flagged:
+earlier run frame for frame are flagged. The route line lists every decision,
+repeated choices included (`route_choice` is sticky, so S,S is one value in the
+CSV). On a road-graph track (the warehouse, plus, ...) it also counts the
+junctions the GPS track drove through, names any with no logged decision (a
+straight pass of a side branch that repeats the previous choice leaves no
+trace), and says where the worst cross-track error was (nearest junction or
+corner):
 
 ```bat
 python scripts\run_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv"

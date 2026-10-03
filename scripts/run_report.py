@@ -2,8 +2,8 @@
 """Per-run summary of lane-vision.csv, junction columns included.
 
 For each run (one ``run_id`` per controller start) it prints: the track,
-states visited, junction classifications / openings seen, route choices,
-blind distance, max / mean cross-track error, time and the outcome (exit
+states visited, junction classifications / openings seen, route choices
+(every decision, S,S included) vs. junctions driven through, blind distance, max / mean cross-track error, time and the outcome (exit
 crossed or where it stopped). ``drift_report.py`` scores drift only; this
 one is for the intersection runs.
 
@@ -42,7 +42,10 @@ EXIT_TOL_M = 0.15  # rows are ~0.3 s apart: the last one can stop short of the r
 # What the junction classifier should report on each intersection track
 # (first junction); used only to guess the track of an unlabelled run.
 TRACK_JUNCTION = {"plus": "plus", "t_end": "t_end", "t_left": "side_L", "t_right": "side_R",
-                  "gap15": "plus", "gap25": "plus", "gap35": "plus", "gap45": "plus"}
+                  "gap15": "plus", "gap25": "plus", "gap35": "plus", "gap45": "plus",
+                  "warehouse": "plus"}
+JN_PASS_M = 0.6  # GPS within this of a junction node = the robot drove through it
+JN_DECISION_M = 2.5  # a decision is logged ~1-1.5 m before the junction centre
 _SKIP_SAME = {"unix_s", "run_id"}
 
 
@@ -91,8 +94,119 @@ def junction_views(run) -> list[tuple[str, str, int]]:
     return [(k, o, n) for (k, o), n in _compress(seq) if k or o]
 
 
+def _ways(openings: str) -> int:
+    o = openings or ""
+    return int("L" in o) + int("S" in o) + int("R" in o)
+
+
+def route_decisions(run) -> list[dict]:
+    """Junction decisions visible in the log, in order: {choice, x, y, kind}.
+
+    ``route_choice`` is sticky (the controller keeps the last choice), so two
+    equal choices in a row (S,S) don't show as a change. A decision is:
+      * ``route_choice`` changing, unless the junction offers one way only
+        (the end of the paint, ``lane_lost [-S?-]``: no route entry used), or
+        it changes inside GAP_CROSS (a line across the gap: the same junction
+        turned, not a new entry: the last decision is corrected);
+      * leaving JUNCTION_APPROACH for GAP_CROSS / CORNER_APPROACH at a junction
+        with >= 2 ways, when that approach had no decision yet (S then S).
+    A straight pass of a side branch that repeats the previous choice leaves no
+    trace in the CSV (the controller drops the junction in the same frame), so
+    compare with the GPS junction count.
+    """
+    out: list[dict] = []
+    prev_rc, prev_state, prev_kind, prev_op = "", "", "", ""
+    decided = False
+    for r in run:
+        st, rc = r.get("state", ""), r.get("route_choice", "")
+        kind, op = r.get("junction_type", ""), r.get("openings", "")
+        if st == "JUNCTION_APPROACH" and prev_state != "JUNCTION_APPROACH":
+            decided = False
+        x, y = _f(r.get("x_m")), _f(r.get("y_m"))
+        if rc and rc != prev_rc:
+            if prev_state == "GAP_CROSS" and out:
+                out[-1]["choice"] = rc
+                out[-1]["note"] = "gap T: turned"
+            elif not (kind and _ways(op) < 2):
+                if not (decided and out):
+                    out.append({"choice": rc, "x": x, "y": y, "kind": kind or "side"})
+                else:
+                    out[-1]["choice"] = rc
+                decided = True
+        elif (st in ("GAP_CROSS", "CORNER_APPROACH") and prev_state == "JUNCTION_APPROACH" and not decided
+              and _ways(op or prev_op) >= 2):
+            out.append({"choice": rc or "S", "x": x, "y": y, "kind": kind or prev_kind})
+            decided = True
+        if st != "JUNCTION_APPROACH":
+            decided = False  # the approach is over: the next change is the next junction
+        prev_rc, prev_state, prev_kind, prev_op = rc or prev_rc, st, kind, op
+    return out
+
+
 def route_choices(run) -> list[str]:
-    return [c for c, _n in _compress(r.get("route_choice", "") for r in run) if c]
+    return [d["choice"] for d in route_decisions(run)]
+
+
+def _graph(geom):
+    if geom is None or not hasattr(geom, "roads"):
+        return None
+    try:
+        from src.route_planner import RoadGraph
+
+        return RoadGraph(geom)
+    except Exception:
+        return None
+
+
+def _node_name(geom, node) -> str:
+    names = sorted(geom.roads[k].spec.name for k in node.roads)
+    return " x ".join(names) + f" ({node.xy[0]:g}, {node.xy[1]:g})"
+
+
+def junctions_passed(graph, run) -> list | None:
+    """Junction nodes the GPS track drove through, in order (a node counts
+    again after the robot has been 2 m away from it)."""
+    if graph is None:
+        return None
+    nodes = graph.junctions
+    out, inside = [], set()
+    for r in run:
+        x, y = _f(r["x_m"]), _f(r["y_m"])
+        for nd in nodes:
+            d = math.hypot(x - nd.xy[0], y - nd.xy[1])
+            if d <= JN_PASS_M and nd.id not in inside:
+                inside.add(nd.id)
+                out.append(nd)
+            elif d > 2.0:
+                inside.discard(nd.id)
+    return out
+
+
+def silent_junctions(passed, decisions, radius_m: float = JN_DECISION_M) -> list:
+    """Junctions driven through with no logged decision within ``radius_m``
+    of them (each decision explains at most one pass)."""
+    left = list(decisions)
+    out = []
+    for nd in passed or []:
+        k = next((i for i, d in enumerate(left) if d["x"] is not None
+                  and math.hypot(d["x"] - nd.xy[0], d["y"] - nd.xy[1]) <= radius_m), None)
+        if k is None:
+            out.append(nd)
+        else:
+            left.pop(k)
+    return out
+
+
+def nearest_feature(geom, graph, x, y) -> str:
+    if graph is None:
+        return ""
+    cands = [(math.hypot(x - nd.xy[0], y - nd.xy[1]), "junction " + _node_name(geom, nd)) for nd in graph.junctions]
+    cands += [(math.hypot(x - p[0], y - p[1]), f"corner {geom.roads[k].spec.name} ({p[0]:g}, {p[1]:g})")
+              for k, p, _a in graph.corners()]
+    if not cands:
+        return ""
+    d, what = min(cands)
+    return f"{d:.1f} m from {what}"
 
 
 def _load_track(name):
@@ -153,6 +267,15 @@ def summarize(n, run, meta, track_arg, tracks, earlier):
             pr = geom.project(_f(r["x_m"]), _f(r["y_m"]), hint)
             hint = pr.get("index")
             ct.append(abs(pr["lateral_m"]))
+    graph = _graph(geom)
+    worst = ""
+    if ct:
+        i = max(range(len(ct)), key=ct.__getitem__)
+        wx, wy = _f(run[i]["x_m"]), _f(run[i]["y_m"])
+        near = nearest_feature(geom, graph, wx, wy)
+        worst = f"({wx:.2f}, {wy:.2f}) {run[i].get('state', '')}" + (f", {near}" if near else "")
+    decisions = route_decisions(run)
+    passed = junctions_passed(graph, run)
     states = [s for s, _n in _compress(r.get("state", "") for r in run) if s]
     blind = [b for b in (_f(r.get("blind_m")) for r in run) if b is not None]
     ex = exit_of(geom, run)
@@ -168,7 +291,11 @@ def summarize(n, run, meta, track_arg, tracks, earlier):
         "route_env": m.get("route", "") if m else None,
         "states": " > ".join(states),
         "junctions": "; ".join(f"{k or '-'}[{o.replace(' ', '')}]x{c}" for k, o, c in junction_views(run)),
-        "choices": ",".join(route_choices(run)) or "-",
+        "choices": ",".join(d["choice"] for d in decisions) or "-",
+        "n_decisions": len(decisions),
+        "jn_passed": None if passed is None else len(passed),
+        "jn_silent": [_node_name(geom, nd) for nd in silent_junctions(passed, decisions)],
+        "ct_worst_at": worst,
         "blind_max_m": round(max(blind), 2) if blind else None,
         "ct_max_cm": round(100 * max(ct), 1) if ct else None,
         "ct_mean_cm": round(100 * sum(ct) / len(ct), 1) if ct else None,
@@ -212,8 +339,20 @@ def main(argv=None) -> int:
         print(f"  states:    {s['states'] or '-'}")
         print(f"  junctions: {s['junctions'] or '-'}")
         print(f"  route:     {s['choices']}" + (f"   blind max {s['blind_max_m']} m" if s["blind_max_m"] else ""))
+        jn = f"  decisions: {s['n_decisions']} in the log"
+        if s["jn_passed"] is not None:
+            jn += f", {s['jn_passed']} junctions driven through (GPS)"
+        planned = len([c for c in (s["route_env"] or "").replace(";", ",").replace(" ", ",").split(",") if c.strip()])
+        if planned:
+            jn += f", RBM_ROUTE has {planned}"
+        print(jn)
+        if s["jn_silent"]:
+            print(f"  NOTE: no decision logged at {len(s['jn_silent'])} junction(s): " + "; ".join(s["jn_silent"])
+                  + ". A straight pass of a side branch that repeats the previous choice leaves no trace in the CSV"
+                  " (check the next choices still line up with RBM_ROUTE), or the junction was missed")
         if s["ct_max_cm"] is not None:
-            print(f"  cross-track: max {s['ct_max_cm']} cm, mean {s['ct_mean_cm']} cm")
+            print(f"  cross-track: max {s['ct_max_cm']} cm, mean {s['ct_mean_cm']} cm"
+                  + (f"  (worst at {s['ct_worst_at']})" if s["ct_worst_at"] else ""))
         print(f"  outcome:   {s['outcome']}")
         if s["same_as_run"]:
             print(f"  NOTE: every row identical to run {s['same_as_run']} (same world and route replayed) "

@@ -63,3 +63,88 @@ def test_report_uses_logged_world_and_track(tmp_path, capsys):
     assert "cross-track: max 2.0 cm" in out
     assert rr.main([str(log), "--track", "t_end"]) == 0
     assert "track t_end (--track)" in capsys.readouterr().out
+
+
+def _rows_to_dicts(lines):
+    keys = HDR.split(",")
+    return [dict(zip(keys, ln.split(","))) for ln in lines]
+
+
+def test_route_decisions_keep_repeated_choices():
+    """route_choice is sticky: S at two junctions in a row is one value in the
+    CSV. Leaving JUNCTION_APPROACH again is the second S; the end-of-paint
+    lane_lost (one way) is not a decision; a gap that turns out to be a T
+    corrects the last decision instead of adding one."""
+    rid = "A"
+    rows = [_row(100, 0.0, 0.0, rid, "LANE"),
+            _row(101, 2.4, 0.0, rid, "JUNCTION_APPROACH", "plus", "LS?R"),
+            _row(102, 2.5, 0.0, rid, "GAP_CROSS", "plus", "LSR", "S", "0"),
+            _row(103, 4.0, 0.0, rid, "LANE", "", "", "S"),
+            _row(104, 6.4, 0.0, rid, "JUNCTION_APPROACH", "plus", "LS?R", "S"),
+            _row(105, 8.2, 0.0, rid, "GAP_CROSS", "plus", "LS?R", "S", "0"),
+            _row(106, 11.0, 0.0, rid, "LANE", "", "", "S"),
+            _row(107, 14.0, 0.0, rid, "JUNCTION_APPROACH", "plus", "LS?R", "S"),
+            _row(108, 15.0, 0.0, rid, "GAP_CROSS", "plus", "LSR", "S", "0.5"),
+            _row(109, 15.5, 0.0, rid, "CORNER_APPROACH", "plus", "LSR", "L"),
+            _row(110, 16.0, 2.0, rid, "LANE", "", "", "L"),
+            _row(111, 16.0, 4.9, rid, "LANE", "", "", "S"),  # side branch passed straight
+            _row(112, 16.0, 9.0, rid, "JUNCTION_APPROACH", "lane_lost", "-S?-", "S"),
+            _row(113, 16.0, 9.5, rid, "GAP_CROSS", "lane_lost", "-S?-", "S", "0")]
+    ds = rr.route_decisions(_rows_to_dicts(rows))
+    assert [d["choice"] for d in ds] == ["S", "S", "L", "S"]
+    assert ds[2].get("note") == "gap T: turned" and ds[3]["kind"] == "side"
+    # the end of the paint after a turn changes route_choice to the only way: still no entry
+    rows2 = rows[:11] + [_row(112, 16.0, 9.0, rid, "JUNCTION_APPROACH", "lane_lost", "-S?-", "L"),
+                         _row(113, 16.0, 9.5, rid, "GAP_CROSS", "lane_lost", "-S?-", "S", "0")]
+    assert rr.route_choices(_rows_to_dicts(rows2)) == ["S", "S", "L"]
+
+
+def _warehouse_front(rid, t0):
+    """RCV-1 -> S (dock lane) -> S (forklift crossing) -> L (front cross aisle)
+    -> S past aisle 3 -> S past aisle 4 (no trace: same choice, side branch)."""
+    rows, t = [], t0
+    def add(x, y, st, jt="", op="", ch="", blind=""):
+        nonlocal t
+        rows.append(_row(t, x, y, rid, st, jt, op, ch, blind))
+        t += 1
+    for x in (0.0, 1.0):
+        add(x, 0.0, "LANE")
+    add(2.4, 0.0, "JUNCTION_APPROACH", "plus", "LS?R")
+    add(2.5, 0.0, "GAP_CROSS", "plus", "LSR", "S", "0")
+    for x in (3.5, 4.0, 4.5, 5.5):
+        add(x, 0.0, "GAP_CROSS" if x < 4.6 else "LANE", ch="S")
+    add(6.4, 0.0, "JUNCTION_APPROACH", "plus", "LS?R", "S")
+    for x in (8.2, 9.5, 10.0, 10.5):
+        add(x, 0.0, "GAP_CROSS", "plus", "LS?R", "S", "0")
+    for x in (12.0, 14.0, 15.3):
+        add(x, 0.0, "LANE", ch="S")
+    add(16.4, 0.0, "CORNER_APPROACH", "plus", "LSR", "L")
+    add(17.94, 0.03, "PIVOT", "plus", "LSR", "L")
+    add(18.0, 0.3, "REACQUIRE", "", "", "L")
+    for y in (1.0, 3.0):
+        add(18.0, y, "LANE", ch="L")
+    for y in (4.9, 5.5, 6.0, 6.5, 8.0, 10.0, 11.5, 12.0, 12.5, 14.0):
+        add(18.0, y, "LANE", ch="S")
+    return rows
+
+
+def test_report_warehouse_counts_silent_junctions_and_worst_spot(tmp_path, capsys):
+    log = tmp_path / "lane-vision.csv"
+    log.write_text("\n".join([HDR] + _warehouse_front("W", 100)) + "\n")
+    assert rr.main([str(log), "--track", "warehouse"]) == 0
+    out = capsys.readouterr().out
+    assert "route:     S,S,L,S" in out
+    assert "decisions: 4 in the log, 5 junctions driven through (GPS)" in out
+    assert "no decision logged at 1 junction(s): aisle_4 x perimeter (18, 12)" in out
+    assert "worst at (17.94, 0.03) PIVOT, 0.1 m from junction perimeter x warehouse (18, 0)" in out
+
+
+def test_guess_knows_the_warehouse():
+    import sys
+
+    sys.path.insert(0, str(ROOT))
+    from src.track_geometry import load_track
+
+    run = _rows_to_dicts(_warehouse_front("W", 100)
+                         + [_row(200, -2.0, 36.0, "W", "LANE"), _row(201, -3.0, 36.0, "W", "GAP_CROSS")])
+    assert rr.guess_track(run, {"plus": load_track("plus"), "warehouse": load_track("warehouse")}) == "warehouse"

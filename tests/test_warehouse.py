@@ -291,3 +291,38 @@ def test_controller_camera_reset_per_world(world, tmp_path):
     else:
         assert "Camera reset: Tracking Shot on ButlerBot" in text and "top-down" not in text, text
         assert pos[2] == pytest.approx(3.54536) and pos[0] == pytest.approx(-3.18573)
+
+
+# ------------------------------------------------------------ obstacles world
+
+OBS_WORLD = ROOT / "webots" / "worlds" / "butlerbot_warehouse_obstacles.wbt"
+
+
+def test_obstacles_world_is_generator_output_with_three_props(built):
+    net = load_track("warehouse")
+    text = OBS_WORLD.read_text(encoding="utf-8")
+    assert text == wb.build_world(built["layout"], net, built["staging"], props=built["props"])
+    assert text.splitlines()[1].startswith("# OBSTACLES on")  # turns sensing on (controller_obstacles)
+    for name in ("OBS_BOX", "OBS_TABLE", "OBS_SHELF"):
+        assert f"DEF WH_{name} " in text
+    clean = WORLD.read_text(encoding="utf-8")
+    assert "OBS_" not in clean and "# OBSTACLES on" not in clean  # the clean warehouse stays clean
+    assert text.split("\nRobot {", 1)[1] == clean.split("\nRobot {", 1)[1]  # same robot, same spawn
+
+
+def test_obstacle_props_sit_where_the_brief_says(built):
+    from src.stereo_depth import CorridorParams
+
+    lay, sp = built["layout"], built["layout"].sp
+    half = CorridorParams().half_width_m
+    props = {b.name: b for b in built["props"]}
+    box, table, shelf = props["OBS_BOX"], props["OBS_TABLE"], props["OBS_SHELF"]
+    # box straddles an aisle centre line inside a rack block (odd-aisle route)
+    assert any(abs(box.cy - y) < 1e-6 for y in lay.aisle_y)
+    # table edge 0.30 m into the dock lane (robot drives +y there, so +x is its right): inside the corridor
+    x_edge = table.cx - table.sx / 2
+    assert x_edge - sp.dock_lane_x == pytest.approx(sp.obs_table_intrude_m)
+    assert x_edge - sp.dock_lane_x < half and table.h == pytest.approx(sp.table_m[2])
+    # shelf corner just outside the corridor beside the start lane (y = 0), but inside the lateral pad
+    y_edge = shelf.cy - shelf.sy / 2
+    assert half < y_edge < half + 0.25 and shelf.h >= 1.3

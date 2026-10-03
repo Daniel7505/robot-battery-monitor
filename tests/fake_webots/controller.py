@@ -30,11 +30,27 @@ class Display(_Any):
     BGRA = 1
     def getWidth(self): return 256
     def getHeight(self): return 256
+_STEREO = {}
+
+
+def _stereo_img(name):
+    """Stereo pair of a textured box 1.0 m ahead (front face), rendered once (src.stereo_synth)."""
+    if not _STEREO:
+        import numpy as np
+        from src.stereo_depth import STEREO_LEFT_CAM, STEREO_RIGHT_CAM
+        from src.stereo_synth import SceneBox, render_gray
+        box = [SceneBox.at(1.0 + 0.25, 0.0, 0.5, 0.5, 0.5)]
+        for n, cam in (("stereo_left", STEREO_LEFT_CAM), ("stereo_right", STEREO_RIGHT_CAM)):
+            g = render_gray(cam, (0.0, 0.0, 0.0), box, supersample=1).astype(np.uint8)
+            _STEREO[n] = np.dstack([g, g, g, np.full_like(g, 255)]).tobytes()
+    return _STEREO[name]
+
+
 class Camera(_Any):
-    def getImage(self): return _IMG[self.name]
-    def getWidth(self): return 128
-    def getHeight(self): return 128
-    def getFov(self): return 1.2
+    def getImage(self): return _stereo_img(self.name) if self.name.startswith("stereo") else _IMG[self.name]
+    def getWidth(self): return 320 if self.name.startswith("stereo") else 128
+    def getHeight(self): return 240 if self.name.startswith("stereo") else 128
+    def getFov(self): return 1.4 if self.name.startswith("stereo") else 1.2
 class Robot:
     MAX_STEPS = int(os.environ.get("FAKE_WEBOTS_STEPS", "400"))
     def __init__(self):
@@ -51,7 +67,7 @@ class Robot:
     def getSelf(self): return _Any("self")
     def getDevice(self, name):
         if name not in self.devs:
-            if name.startswith("nadir"): d = Camera(name)
+            if name.startswith(("nadir", "stereo")): d = Camera(name)
             elif name.startswith("hud"): d = Display(name)
             elif name in ("gps", "gps_head"): d = GPS(name)
             elif name == "imu": d = InertialUnit(name)
@@ -74,7 +90,8 @@ class Supervisor(Robot):
     tag and passes it to ctypes (a Camera object raises ctypes.ArgumentError).
     Camera nodes are direct Robot children with the repo .wbt pose."""
     _self = _Node(1)
-    _defs = {"NADIR_CAM_L": "nadir_left", "NADIR_CAM_R": "nadir_right"}
+    _defs = {"NADIR_CAM_L": "nadir_left", "NADIR_CAM_R": "nadir_right",
+             "STEREO_CAM_L": "stereo_left", "STEREO_CAM_R": "stereo_right"}
     def getSelf(self): return self._self
     def _cam_node(self, name):
         from src.lane_vision import parse_wbt_cameras

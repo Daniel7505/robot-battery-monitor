@@ -20,11 +20,16 @@ into the building.
 Outputs:
     tracks/warehouse.json                    road graph (TrackNetwork format) + missions
     webots/worlds/butlerbot_warehouse.wbt    floor, walls, dock doors, racks, staging, track
+    webots/worlds/butlerbot_warehouse_obstacles.wbt   the same + obstacle test props (WH_OBSTACLES)
+    webots/worlds/textures/obstacle_speckle.png       grain texture of the props (stereo needs texture)
     /workspace/warehouse_preview.png         top-down preview (or --preview PATH)
 
 Shelves, walls, doors and staging items are static Solids with a
 boundingObject (no physics), so distance sensors / stereo / radar added
-later see them. No obstacles and no extra sensors yet (placeholders only).
+later see them. The clean world has an empty ``WH_OBSTACLES`` group; the
+``_obstacles`` world fills it with three test props placed on known routes
+(:meth:`Layout.obstacle_props`) and carries ``# OBSTACLES on`` so the
+controller turns stereo obstacle sensing on there by default.
 """
 from __future__ import annotations
 
@@ -41,6 +46,9 @@ if ROOT not in sys.path:
 
 TRACK_JSON = os.path.join(ROOT, "tracks", "warehouse.json")
 WORLD = os.path.join(ROOT, "webots", "worlds", "butlerbot_warehouse.wbt")
+OBSTACLES_WORLD = os.path.join(ROOT, "webots", "worlds", "butlerbot_warehouse_obstacles.wbt")
+PROP_TEXTURE = os.path.join(ROOT, "webots", "worlds", "textures", "obstacle_speckle.png")
+PROP_TEXTURE_URL = "textures/obstacle_speckle.png"  # relative to the world file
 PREVIEW = "/workspace/warehouse_preview.png"
 SQFT_PER_M2 = 10.7639
 
@@ -92,6 +100,13 @@ class WarehouseSpec:
     pallet_heights: tuple = (1.0, 1.2, 1.4, 1.1)
     table_m: tuple = (2.4, 0.9, 0.9)  # packing table x, y, height
     lane_clear_m: float = 0.9  # staging items keep this clear of a lane edge
+    # obstacle test props (butlerbot_warehouse_obstacles.wbt only). Positions come from the layout:
+    obs_box_m: tuple = (0.6, 0.5, 0.5)  # carton / tote stack x, y, height: on the odd-aisle route's aisle centre
+    obs_table_intrude_m: float = 0.30  # packing-table edge this far from the dock-lane centre (inside the corridor)
+    obs_table_at_m: float = 4.8  # ... starting this far along the dock lane past the start-lane crossing
+    obs_shelf_m: tuple = (1.2, 0.6, 1.8)  # free-standing shelf unit x, y, height beside the start lane
+    obs_shelf_gap_m: float = 0.10  # its corner this far OUTSIDE the lane edge (outside the corridor: pass)
+    obs_shelf_x_m: float = 13.0  # its near corner x on the start lane (after the forklift crossing)
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +343,38 @@ class Layout:
             y += 2 * py + 0.2 + 2.4
         return out
 
+    # ---- obstacle test props (obstacles world only) ----------------------------
+    def obstacle_props(self, staging=()) -> list:
+        """Three props on known routes, all derived from the layout. Each Box has
+        meta: route (mission), expect (what the robot should do), lane (where)."""
+        sp = self.sp
+        n = self.n_aisles - 1
+        odds = [i for i in range(1, n) if (i - sp.main_aisle) % 2 and i in self.taped and i != self.ship_aisle]
+        odd = odds[len(odds) // 2] if odds else self.ship_aisle
+        bx, by, bh = sp.obs_box_m
+        blk = self.rack_blocks[0]
+        out = [Box("OBS_BOX", "obs_box", round((blk[0] + blk[1]) / 2, 3), round(self.aisle_y[odd], 3), bx, by, bh,
+                   meta={"route": "odd_aisle_to_shipping", "lane": f"aisle {odd} centre, rack block 0",
+                         "expect": "STOP before it; delete it in Webots -> resume"})]
+        tx, ty, th = sp.table_m  # packing table: long side along the dock lane (robot drives +y there)
+        x_in = sp.dock_lane_x + sp.obs_table_intrude_m
+        out.append(Box("OBS_TABLE", "obs_table", round(x_in + ty / 2, 3), round(sp.obs_table_at_m + tx / 2, 3), ty, tx, th,
+                       meta={"route": "dock_shuttle", "lane": f"dock lane x={sp.dock_lane_x:g}, edge "
+                                                              f"{sp.obs_table_intrude_m:.2f} m right of centre",
+                             "expect": "STOP (waist band)"}))
+        shx, shy, shh = sp.obs_shelf_m
+        y_in = sp.lane_w_m / 2 + sp.obs_shelf_gap_m
+        out.append(Box("OBS_SHELF", "obs_shelf", round(sp.obs_shelf_x_m + shx / 2, 3), round(y_in + shy / 2, 3), shx, shy,
+                       shh, meta={"route": "every mission (start lane)", "lane": f"start lane y=0, corner "
+                                                                                 f"{y_in:.2f} m left of centre",
+                                  "expect": "PASS (outside the corridor), no slow / stop"}))
+        for b in out:  # props must not sit on staging items
+            for q in staging:
+                a, c = b.rect, q.rect
+                if a[0] < c[2] and c[0] < a[2] and a[1] < c[3] and c[1] < a[3]:
+                    raise ValueError(f"{b.name} overlaps {q.name}")
+        return out
+
     def summary(self, net=None, graph=None) -> dict:
         sp = self.sp
         rows = self.rack_rows()
@@ -389,7 +436,7 @@ def build_track(lay: Layout):
     d["notes"] = [
         "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
         f"Default route (no RBM_ROUTE): {dflt.note or ('ends at ' + str(dflt.exit))}.",
-        "NEXT (not built yet): stereo depth cameras, then radar; then obstacles (WH_OBSTACLES group in the world).",
+        "Obstacles: stereo pair on ButlerBot (docs/OBSTACLES.md); test props only in butlerbot_warehouse_obstacles.wbt. Radar next.",
     ]
     return d, TrackNetwork.from_dict(d, TRACK_JSON), g, dflt
 
@@ -483,7 +530,75 @@ def _rack_children(b: Box, sp: WarehouseSpec, app) -> str:
     return ch
 
 
-def warehouse_vrml(lay: Layout, staging: list) -> str:
+def _tex_app(tint, scale=2.0, ind="          ") -> str:
+    r, g, b = tint
+    return (f"appearance PBRAppearance {{\n{ind}  baseColor {_f(r)} {_f(g)} {_f(b)}\n"
+            f"{ind}  baseColorMap ImageTexture {{\n{ind}    url [\n{ind}      \"{PROP_TEXTURE_URL}\"\n{ind}    ]\n{ind}  }}\n"
+            f"{ind}  roughness 0.85\n{ind}  metalness 0\n"
+            f"{ind}  textureTransform TextureTransform {{\n{ind}    scale {_f(scale)} {_f(scale)}\n{ind}  }}\n"
+            f"{ind}}}")
+
+
+def _tex_shape(tint, size, at=(0, 0, 0), scale=2.0) -> str:
+    ind = "        "
+    return (f"{ind}Pose {{\n{ind}  translation {' '.join(_f(v) for v in at)}\n{ind}  children [\n"
+            f"{ind}    Shape {{\n{ind}      {_tex_app(tint, scale, ind + '      ')}\n"
+            f"{ind}      geometry Box {{ size {' '.join(_f(v) for v in size)} }}\n{ind}    }}\n{ind}  ]\n{ind}}}\n")
+
+
+# tints (x the grey speckle texture): blue / grey, far from the lane-yellow test (min(R,G) - B >= 0.22)
+_PROP_TINT = {"obs_box": (0.55, 0.62, 0.78), "obs_table": (0.62, 0.62, 0.66), "obs_shelf": (0.45, 0.55, 0.8),
+              "obs_goods": (0.75, 0.75, 0.8)}
+
+
+def obstacle_props_vrml(props: list) -> str:
+    out = []
+    for b in props:
+        m = b.meta
+        ch = ""
+        if b.kind == "obs_box":
+            ch = _tex_shape(_PROP_TINT["obs_box"], (b.sx, b.sy, b.h), scale=1.0)
+        elif b.kind == "obs_table":
+            ch = _tex_shape(_PROP_TINT["obs_table"], (b.sx, b.sy, 0.05), (0, 0, b.h / 2 - 0.025), scale=3.0)
+            for dx in (-1, 1):
+                for dy in (-1, 1):
+                    ch += _tex_shape(_PROP_TINT["obs_table"], (0.05, 0.05, b.h - 0.05),
+                                     (dx * (b.sx / 2 - 0.05), dy * (b.sy / 2 - 0.05), -0.025), scale=0.5)
+        else:  # shelf unit: 4 uprights, 4 boards, goods on the boards
+            for dx in (-1, 1):
+                for dy in (-1, 1):
+                    ch += _tex_shape(_PROP_TINT["obs_shelf"], (0.05, 0.05, b.h),
+                                     (dx * (b.sx / 2 - 0.025), dy * (b.sy / 2 - 0.025), 0), scale=0.5)
+            levels = (0.10, 0.65, 1.20, b.h - 0.03)
+            for z in levels:
+                ch += _tex_shape(_PROP_TINT["obs_shelf"], (b.sx, b.sy, 0.03), (0, 0, z - b.h / 2), scale=2.0)
+            for z0, z1 in zip(levels[:-1], levels[1:]):
+                gh = min(0.4, z1 - z0 - 0.08)
+                ch += _tex_shape(_PROP_TINT["obs_goods"], (b.sx - 0.2, b.sy - 0.1, gh),
+                                 (0, 0, z0 + 0.015 + gh / 2 - b.h / 2), scale=1.0)
+        out.append(_solid(b, None, ch, f"OBSTACLE TEST PROP {b.name}: {m['lane']} — route {m['route']} — "
+                                        f"expect {m['expect']}"))
+    return "".join(out)
+
+
+def write_prop_texture(path: str = PROP_TEXTURE) -> str:
+    """Deterministic multi-scale grey speckle (256 px, tiles cleanly enough at 1-3 repeats)."""
+    import numpy as np
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    rng = np.random.default_rng(20261002)
+    img = np.zeros((256, 256))
+    for cell, amp in ((4, 0.5), (16, 0.3), (64, 0.2)):
+        g = rng.random((256 // cell + 1, 256 // cell + 1))
+        img += amp * np.kron(g, np.ones((cell, cell)))[:256, :256]
+    img = 0.35 + 0.65 * (img - img.min()) / (img.max() - img.min())
+    from PIL import Image
+
+    Image.fromarray((img * 255).astype("uint8"), mode="L").convert("RGB").save(path, optimize=True)
+    return path
+
+
+def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str:
     sp = lay.sp
     app = _Apps()
     racks = lay.racks()
@@ -519,9 +634,16 @@ def warehouse_vrml(lay: Layout, staging: list) -> str:
                     ch += _shape(app, "table", (0.05, 0.05, b.h - 0.05),
                                  (dx * (b.sx / 2 - 0.05), dy * (b.sy / 2 - 0.05), -0.025), "        ")
         out.append(_solid(b, app, ch))
-    out.append("    # ---- PLACEHOLDER (next step): obstacles go here (none yet). Then stereo depth cameras on the\n"
-               "    #      robot, then radar. Shelves above are already Solids with boundingObjects for them.\n")
-    out.append("    DEF WH_OBSTACLES Group {\n      children [\n      ]\n    }\n")
+    if props:
+        out.append("    # ---- OBSTACLE TEST PROPS (scripts/warehouse_builder.py obstacle_props). Textured: block-matching\n"
+                   "    #      stereo needs texture. Delete one in the scene tree while the robot waits = 'removed'.\n")
+        out.append("    DEF WH_OBSTACLES Group {\n      children [\n")
+        out.append("".join("    " + ln + "\n" if ln else "\n" for ln in obstacle_props_vrml(props).rstrip("\n").split("\n")))
+        out.append("      ]\n    }\n")
+    else:
+        out.append("    # ---- obstacles: none in this world (butlerbot_warehouse_obstacles.wbt has the test props).\n"
+                   "    #      Shelves above are already Solids with boundingObjects for the stereo pair / radar.\n")
+        out.append("    DEF WH_OBSTACLES Group {\n      children [\n      ]\n    }\n")
     out.append("  ]\n}\n")
     out.append(f"{WH_END}\n")
     return "".join(out)
@@ -575,7 +697,7 @@ def follow_viewpoint_vrml(lay: Layout) -> str:
             "}\n")
 
 
-def build_world(lay: Layout, net, staging: list, template: str | None = None) -> str:
+def build_world(lay: Layout, net, staging: list, template: str | None = None, props: list | None = None) -> str:
     import track_builder as tb  # scripts/
 
     template = template or tb.TEMPLATE_WORLD
@@ -601,7 +723,7 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None) ->
     text = head + "\nRobot {" + rest
     pose = text.index("\nDEF TRACK Pose {") + 1
     rule2 = text.rindex(tb.BLOCK_RULE, 0, text.rindex(tb.BLOCK_RULE, 0, pose))
-    text = text[:rule2] + warehouse_vrml(lay, staging) + "\n" + text[rule2:]
+    text = text[:rule2] + warehouse_vrml(lay, staging, props) + "\n" + text[rule2:]
     text = tb.replace_track_block(text, tb.emit_track_vrml(net))
     lines = text.split("\n")
     for k, ln in enumerate(lines):
@@ -609,7 +731,13 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None) ->
             lines[k] = tb.info_line(net)
             lines.insert(k + 1, f'    "WAREHOUSE: {sp.width_m:g} x {sp.depth_m:g} m prototype, start inside receiving door RCV-1, '
                                 f'RBM_ROUTE per junction (see tracks/warehouse.json missions)"')
+            if props:
+                lines.insert(k + 2, '    "OBSTACLES: test props in WH_OBSTACLES (box in the odd aisle, table edge on the dock lane, '
+                                    'shelf beside the start lane); stereo obstacle sensing ON here (RBM_OBSTACLES=0 = off)"')
             break
+    if props:
+        lines.insert(1, "# OBSTACLES on   (controller: stereo obstacle sensing on by default in this world; "
+                        "RBM_OBSTACLES=0 turns it off). Generated by scripts/warehouse_builder.py.")
     return "\n".join(lines)
 
 
@@ -750,13 +878,14 @@ def draw_preview(lay: Layout, net, graph, staging: list, missions: list, path: s
 
 
 def build_all(sp: WarehouseSpec | None = None, *, track_path=TRACK_JSON, world_path=WORLD, preview_path=PREVIEW,
-              write=True):
+              write=True, obstacles_path=OBSTACLES_WORLD):
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
     sp = sp or WarehouseSpec()
     lay = Layout(sp)
     d, net, g, dflt = build_track(lay)
     staging = lay.staging(net)
-    res = {"layout": lay, "track": d, "net": net, "graph": g, "staging": staging, "default": dflt}
+    props = lay.obstacle_props(staging)
+    res = {"layout": lay, "track": d, "net": net, "graph": g, "staging": staging, "default": dflt, "props": props}
     if write:
         if track_path:
             write_track_json(d, track_path)
@@ -767,6 +896,11 @@ def build_all(sp: WarehouseSpec | None = None, *, track_path=TRACK_JSON, world_p
         if world_path:
             with open(world_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(build_world(lay, net, staging))
+        if obstacles_path:
+            if not os.path.isfile(PROP_TEXTURE):
+                write_prop_texture()
+            with open(obstacles_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(build_world(lay, net, staging, props=props))
         if preview_path:
             draw_preview(lay, net, g, staging, d["missions"], preview_path)
     return res
@@ -778,7 +912,8 @@ def main(argv=None) -> int:
     ap.add_argument("--preview", default=PREVIEW, help=f"preview PNG path (default {PREVIEW}; '' = none)")
     ap.add_argument("--no-world", action="store_true")
     a = ap.parse_args(argv)
-    res = build_all(write=not a.summary, preview_path=a.preview or None, world_path=None if a.no_world else WORLD)
+    res = build_all(write=not a.summary, preview_path=a.preview or None, world_path=None if a.no_world else WORLD,
+                    obstacles_path=None if a.no_world else OBSTACLES_WORLD)
     lay, d = res["layout"], res["track"]
     s = lay.summary(res["net"], res["graph"])
     s["staging_items"] = {"pallets": sum(1 for b in res["staging"] if b.kind == "pallet"),
@@ -788,8 +923,12 @@ def main(argv=None) -> int:
         print(f"mission {m['name']}: {m['length_m']} m, {m['junctions']} junctions, {m['corners']} corners -> "
               f"{m['to']}\n  set RBM_ROUTE={m['route']}")
     print(f"default (no RBM_ROUTE): {res['default'].note or res['default'].exit}")
+    for b in res["props"]:
+        print(f"obstacle prop {b.name}: x {b.rect[0]:.2f}..{b.rect[2]:.2f} y {b.rect[1]:.2f}..{b.rect[3]:.2f} h {b.h:g} — "
+              f"{b.meta['lane']}; route {b.meta['route']}: expect {b.meta['expect']}")
     if not a.summary:
-        print(f"wrote {TRACK_JSON}\nwrote {WORLD}" + (f"\nwrote {a.preview}" if a.preview else ""))
+        print(f"wrote {TRACK_JSON}\nwrote {WORLD}" + ("" if a.no_world else f"\nwrote {OBSTACLES_WORLD}")
+              + (f"\nwrote {a.preview}" if a.preview else ""))
     return 0
 
 

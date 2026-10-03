@@ -171,6 +171,6 @@
   "notes": [
     "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
     "Default route (no RBM_ROUTE): loops forever (default policy circles the network).",
-    "NEXT (not built yet): stereo depth cameras, then radar; then obstacles (WH_OBSTACLES group in the world)."
+    "Obstacles: stereo pair on ButlerBot (docs/OBSTACLES.md); test props only in butlerbot_warehouse_obstacles.wbt. Radar next."
   ]
 }

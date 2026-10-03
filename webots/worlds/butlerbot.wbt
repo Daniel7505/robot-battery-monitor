@@ -3313,6 +3313,64 @@ Robot {
       fieldOfView 1.2
       near 0.03
     }
+    # Forward STEREO pair for obstacles (docs/OBSTACLES.md). Mast and bar are
+    # visuals only (no boundingObject, no mass: physics unchanged). Lenses on the
+    # front face of STEREO_BAR: baseline 0.10 m (y +-0.05), z 0.78 m,
+    # pure pitch 0 1 0 0.3469 (19.9 deg down) from src/stereo_depth.py
+    # stereo_pitch_for_top(): the top row reaches 1.0 m height 1.0 m ahead of the
+    # lenses, the floor is seen from 0.75 m ahead of the axle. Identical rotations,
+    # baseline along the camera y axis = already rectified. Direct Robot children
+    # (the torso hinge does not tilt them). The controller reads the live pose
+    # (Supervisor) and only enables them when RBM_OBSTACLES is on. Do not File-Save.
+    DEF STEREO_MAST Transform {
+      translation 0.115 0 0.49
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.56
+            radius 0.01
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF STEREO_BAR Transform {
+      translation 0.12 0 0.78
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.03 0.16 0.03
+          }
+        }
+      ]
+    }
+    DEF STEREO_CAM_L Camera {
+      translation 0.14 0.05 0.78
+      rotation 0 1 0 0.3469
+      name "stereo_left"
+      width 320
+      height 240
+      fieldOfView 1.4
+      near 0.05
+    }
+    # Right lens: Y-mirror of STEREO_CAM_L (same pure pitch).
+    DEF STEREO_CAM_R Camera {
+      translation 0.14 -0.05 0.78
+      rotation 0 1 0 0.3469
+      name "stereo_right"
+      width 320
+      height 240
+      fieldOfView 1.4
+      near 0.05
+    }
     # Shoulder HUDs only.
     DEF HUD_NADIR Display {
       name "hud_nadir"

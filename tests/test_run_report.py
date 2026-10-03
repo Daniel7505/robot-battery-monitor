@@ -148,3 +148,37 @@ def test_guess_knows_the_warehouse():
     run = _rows_to_dicts(_warehouse_front("W", 100)
                          + [_row(200, -2.0, 36.0, "W", "LANE"), _row(201, -3.0, 36.0, "W", "GAP_CROSS")])
     assert rr.guess_track(run, {"plus": load_track("plus"), "warehouse": load_track("warehouse")}) == "warehouse"
+
+
+OBS_HDR = HDR + ",obstacle_state,obstacle_m,obstacle_band,obstacle_conf"
+
+
+def _obs_row(t, x, rid, state, obs_state, m="", band="", conf=""):
+    return _row(t, x, 0.0, rid, state) + f",{obs_state},{m},{band},{conf}"
+
+
+def test_report_summarizes_obstacle_stops(tmp_path, capsys):
+    rows = [_obs_row(100 + i, 0.5 * i, "A", "LANE", "CLEAR") for i in range(4)]
+    rows += [_obs_row(104, 2.0, "A", "LANE", "SLOW_FOR_OBSTACLE", 1.70, "low", 1.0),
+             _obs_row(105, 2.6, "A", "LANE", "SLOW_FOR_OBSTACLE", 1.05, "low", 1.0),
+             _obs_row(106, 3.1, "A", "LANE", "STOPPED_FOR_OBSTACLE", 0.56, "low", 1.0),
+             _obs_row(112, 3.1, "A", "LANE", "STOPPED_FOR_OBSTACLE", 0.55, "low", 1.0),
+             _obs_row(114, 3.1, "A", "LANE", "CLEAR"),
+             _obs_row(115, 3.5, "A", "LANE", "CLEAR")]
+    log = tmp_path / "lane-vision.csv"
+    log.write_text("\n".join([OBS_HDR] + rows) + "\n")
+    assert rr.main([str(log)]) == 0
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "obstacles:" in ln)
+    assert "1 stop(s), 1 slow-down(s)" in line and "nearest 0.55 m (low)" in line
+    assert "stop 1 at (3.10, 0.00): low obstacle 0.56 m ahead, waited 8.0 s, corridor cleared" in line
+
+
+def test_report_obstacles_off_and_old_logs(tmp_path, capsys):
+    log = tmp_path / "lane-vision.csv"
+    log.write_text("\n".join([OBS_HDR] + [_obs_row(100 + i, 0.5 * i, "A", "LANE", "") for i in range(5)]) + "\n")
+    assert rr.main([str(log)]) == 0
+    assert "obstacles: off" in capsys.readouterr().out
+    log.write_text("\n".join([HDR] + _plus_s("A", 100)) + "\n")  # pre-obstacle log: no line at all
+    assert rr.main([str(log)]) == 0
+    assert "obstacles:" not in capsys.readouterr().out

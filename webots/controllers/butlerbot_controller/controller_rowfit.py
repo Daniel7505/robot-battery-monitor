@@ -33,9 +33,11 @@ LANE_VISION_HEADER = (
     "unix_s,x_m,y_m,mode,offset_m,heading_rad,curvature,lookahead_m,confidence,"
     "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
     "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
-    "junction_type,junction_m,openings,route_choice,blind_m"
+    "junction_type,junction_m,openings,route_choice,blind_m,"
+    "obstacle_state,obstacle_m,obstacle_band,obstacle_conf"
 )
-# Corner columns sit AFTER run_id, junction columns after those, so rows
+# Corner columns sit AFTER run_id, junction columns after those, obstacle
+# columns (empty when RBM_OBSTACLES is off) last, so rows
 # appended to an older lane-vision.csv (old header) still line up for every
 # column the old header names.
 # One row per controller start (run_id) next to lane-vision.csv: which world /
@@ -182,6 +184,10 @@ class LaneVisionLog:
                 str(cmd.get("openings") or ""),
                 str(cmd.get("route_choice") or ""),
                 _fmt(cmd.get("blind_m"), 3),
+                str(cmd.get("obstacle_state") or ""),
+                _fmt(cmd.get("obstacle_m"), 3),
+                str(cmd.get("obstacle_band") or ""),
+                _fmt(cmd.get("obstacle_conf"), 2),
             ]
             with open(self.path, "a", encoding="ascii") as fh:
                 fh.write(",".join(vals) + "\n")
@@ -212,6 +218,7 @@ class RowfitRuntime:
         self.frames = 0
         self.route_text, self.route_warnings = "", []
         self.configure_route()
+        self.obstacles = None  # controller_obstacles.ObstacleRuntime when RBM_OBSTACLES is on
 
     def configure_route(self) -> None:
         """RBM_ROUTE (junction choices, e.g. S,L,R), RBM_MAX_BLIND_M (default 4.0),
@@ -340,6 +347,9 @@ class RowfitRuntime:
         self._frame_yaw = float(yaw)
         dx = self._odo_dx
         self._odo_dx = 0.0
+        if self.obstacles is not None:
+            self.obstacles.harvest(dx_m=dx, v_m_s=self.ctl.gov.v, kappa=self.ctl.kappa_cmd, frame_dt=self.frame_dt)
+            self.obstacles.apply(self.ctl)
         est = self.tracker.process(images, dx_m=dx, dyaw_rad=dyaw)
         self.est = est
         self._pending = est
@@ -356,6 +366,16 @@ class RowfitRuntime:
         self._has_pending = False
         self._pending = None
         cmd = self.ctl.step(est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw)
+        if self.obstacles is not None:
+            gate = self.obstacles.gate
+            if gate.emergency and not cmd.get("brake"):
+                # inside the ramp's braking distance: ABS stop now (the ramp would not make it)
+                gate.emergency = False
+                self.ctl.gov.v = 0.0
+                cmd = {**cmd, "left": 0.0, "right": 0.0, "brake": True, "phase": "rowfit_stop",
+                       "reason": "obstacle inside braking distance"}
+                log("OBSTACLE emergency stop — inside the braking distance, ABS")
+            cmd = {**cmd, **self.obstacles.fields()}
         for msg in self.ctl.drain_events():
             log(msg)
         self.last_cmd = cmd
@@ -400,6 +420,7 @@ class RowfitRuntime:
         lane_eyes["error_source"] = "rowfit"
         lane_eyes["rowfit_state"] = self.ctl.state
         state = self.state_line()
+        obs = [self.obstacles.hud_line()] if self.obstacles is not None else []
         corner = getattr(est, "corner", None) if est is not None else None
         # crossbar rows for the HUD: cam -> [(row, col, role)]
         lane_eyes["rowfit_corner"] = {} if corner is None else {
@@ -411,11 +432,11 @@ class RowfitRuntime:
                 "rowfit: HELD (fit rejected)",
                 (est.reject_reason or "")[:28],
                 f"off {est.offset_m * 100:+.0f}cm hd {math.degrees(est.heading_rad):+.0f}d",
-            ]
+            ] + obs
             lane_eyes["rowfit_px"] = {}
             return
         if est is None or not est.valid:
-            lane_eyes["rowfit_text"] = [state, "rowfit: no lane"]
+            lane_eyes["rowfit_text"] = [state, "rowfit: no lane"] + obs
             lane_eyes["rowfit_px"] = {}
             return
         lane_eyes["rowfit_px"] = est.pixels
@@ -424,5 +445,5 @@ class RowfitRuntime:
             f"off {est.offset_m * 100:+.0f}cm hd {math.degrees(est.heading_rad):+.0f}d",
             f"k {est.curvature_1pm:+.2f} conf {est.confidence:.2f}",
             f"L{est.n_left} R{est.n_right} look {est.lookahead_m:.1f}m",
-        ]
+        ] + obs
         lane_eyes["rowfit_offset_m"] = round(est.offset_m, 4)

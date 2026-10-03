@@ -120,6 +120,7 @@ from controller_keys import (
     bind_teleop as _bind_keys_teleop,
 )
 from controller_eyes import _nadir_lateral_from_cam
+from controller_obstacles import ObstacleRuntime, obstacles_mode as _obstacles_mode
 from controller_rowfit import (
     RUN_ID as _RUN_ID,
     LaneVisionLog,
@@ -756,6 +757,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     if rowfit_rt is not None:
         for msg in rowfit_rt.bind_cameras(robot, cams) + rowfit_rt.check_cameras(cams):
             print(f"WARNING rowfit camera model: {msg}")
+        # Stereo obstacles (RBM_OBSTACLES=1, or the world's '# OBSTACLES on' tag): slow / stop / resume
+        _obs_on, _obs_why = _obstacles_mode(robot)
+        print(f"OBSTACLES {'on' if _obs_on else 'off'} ({_obs_why})")
+        if _obs_on:
+            try:
+                _ort = ObstacleRuntime()
+                _msgs = _ort.enable_devices(robot, cam_period)
+                _msgs += _ort.bind(robot, rowfit_rt.cams_model)
+                for msg in _msgs:
+                    print(f"WARNING obstacles: {msg}")
+                if _ort.ok:
+                    rowfit_rt.obstacles = _ort
+            except Exception as exc:
+                print(f"WARNING: obstacle sensing not loaded ({type(exc).__name__}: {exc}) — driving without it")
     nadir_lobe_done = False
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
@@ -1675,6 +1690,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                                 "steer": lane_eyes.get("steer"),
                                 "target_speed": rowfit_rt.ctl.target_speed,
                                 **rowfit_rt.ctl.corner_fields(),
+                                **(rowfit_rt.obstacles.fields() if rowfit_rt.obstacles is not None else {}),
                             },
                             new_frame=False,
                             yaw=prev_yaw,

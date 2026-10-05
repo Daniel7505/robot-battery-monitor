@@ -140,7 +140,8 @@ def test_closed_loop_ninety_degree_turn():
     assert res["held_frames"] == 0  # plausibility gate stays quiet in a real bend
     assert res["pivots"] == [] and res["corner_first_seen"] is None  # 1 m radius: no corner cue
     assert res["min_v"] < 0.37  # slowed in the bend (after the start ramp)
-    assert res["max_v"] == pytest.approx(0.44, abs=0.01)
+    # straight lead-in / exit: straightaway cruise bump; the bend itself still slows (min_v above)
+    assert res["max_v"] == pytest.approx(rc.V_STRAIGHT_M_S, abs=0.01)
 
 
 # ---------------------------------------------------------- NadirGuard (bug b)
@@ -359,7 +360,7 @@ def test_lane_vision_log_header_and_run_id(monkeypatch, tmp_path):
         "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
         "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
         "junction_type,junction_m,openings,route_choice,blind_m,"
-        "obstacle_state,obstacle_m,obstacle_band,obstacle_conf"
+        "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving"
     )
     assert len(lines) == 3
     row = dict(zip(lines[0].split(","), lines[1].split(",")))
@@ -633,4 +634,4 @@ def test_s_track_does_not_regress_with_gate():
     res = _sim().run("s")
     assert res["finished"] and res["max_ct_m"] < 0.085 and res["held_frames"] == 0
     assert res["pivots"] == [] and res["corner_first_seen"] is None
-    assert res["max_v"] == pytest.approx(0.44, abs=0.01)
+    assert res["max_v"] == pytest.approx(rc.V_STRAIGHT_M_S, abs=0.01)  # straightaway cruise on the straights

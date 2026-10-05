@@ -64,9 +64,9 @@ def obstacles_mode(robot=None, env=None) -> tuple[bool, str]:
 class ObstacleRuntime:
     def __init__(self) -> None:
         from src.obstacle_gate import ObstacleFusion, ObstacleGate
-        from src.rowfit_control import DECEL_M_S2, V_CRUISE_M_S
+        from src.rowfit_control import DECEL_M_S2, V_MAX_M_S
 
-        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_CRUISE_M_S)
+        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_MAX_M_S)
         self.fusion = ObstacleFusion()
         self.sensor = None
         self.radar = None

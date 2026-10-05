@@ -22,7 +22,7 @@ from src.obstacle_gate import (
     ObstacleReport,
     stop_distance_m,
 )
-from src.rowfit_control import DECEL_M_S2, V_CRUISE_M_S, RowfitController
+from src.rowfit_control import DECEL_M_S2, V_CRUISE_M_S, V_STRAIGHT_M_S, RowfitController
 from src.stereo_depth import (
     HAVE_CV2,
     STEREO_BASELINE_M,
@@ -350,9 +350,10 @@ def test_rowfit_speed_cap_stops_and_releases_without_touching_the_lane_state():
     est = _Est()
     for i in range(600):
         cmd = ctl.step(est, new_frame=i % 40 == 0, dt=0.008)
-    assert ctl.gov.v == pytest.approx(V_CRUISE_M_S, abs=0.01)
+    # clean, sure straight with no cap: straightaway cruise bump (0.44 -> 0.50)
+    assert ctl.gov.v == pytest.approx(V_STRAIGHT_M_S, abs=0.01)
     ctl.obstacle_v_cap = 0.0
-    for i in range(100):  # 0.44 m/s at 0.8 m/s^2 -> 0.55 s
+    for i in range(100):  # 0.50 m/s at 0.8 m/s^2 -> 0.63 s
         cmd = ctl.step(est, new_frame=i % 40 == 0, dt=0.008)
     assert ctl.gov.v == pytest.approx(0.0, abs=1e-6) and abs(cmd["left"]) < 1e-6 and not cmd["brake"]
     assert ctl.state == "LANE"

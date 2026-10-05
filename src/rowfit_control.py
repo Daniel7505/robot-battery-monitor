@@ -65,6 +65,21 @@ APPROACH_STEER_MIN_CONF = 0.55  # steer on a fresh (non-held) fit while approach
 APPROACH_YAW_MIN_CONF = 0.55    # update lane_yaw from a fresh fit while approaching
 LOST_FRAMES_STOP = 3  # ~1 s at 320 ms frames
 
+# --- Straightaway cruise (light bump on long, clean straights only)
+# Plain LANE following tops out at V_CRUISE_M_S. On a straight with a sure fit,
+# a small steer, no corner / junction cue in view, no junction slow / cooldown and
+# no obstacle or pick cap (``obstacle_v_cap is None``), the target may rise to
+# V_STRAIGHT_M_S after STRAIGHT_FRAMES qualifying frames in a row. Any miss drops
+# straight back to the normal curve governor (decel 0.8 m/s^2: 0.50 -> 0.44 in
+# ~0.08 s). Junction / approach / pivot / reacquire / gap caps are untouched.
+V_STRAIGHT_M_S = 0.50  # = 6.25 rad/s hub (MAX_WHEEL_RAD_S 8.0 leaves steer headroom)
+STRAIGHT_MIN_CONF = 0.75
+STRAIGHT_MAX_KAPPA = 0.10  # 1/m: |pursuit/lane curvature| and |kappa_cmd| ("steer small")
+STRAIGHT_MAX_OFFSET_M = 0.08
+STRAIGHT_MAX_HEADING_RAD = math.radians(4.0)
+STRAIGHT_FRAMES = 3  # ~1 s of clean straight at 320 ms frames before the bump
+V_MAX_M_S = max(V_CRUISE_M_S, V_STRAIGHT_M_S)  # top forward speed (sizes the obstacle slow zone)
+
 # --- Sharp corners (lane_vision corner cue: "the line widens, then disappears")
 # LANE -> CORNER_APPROACH -> PIVOT -> REACQUIRE -> LANE. Distances come from
 # the cue and the measured lane width; nothing about the track is known.
@@ -187,6 +202,8 @@ class RowfitController:
         self.last_offset: float | None = None
         self.n_frames = 0
         self.held_frames = 0
+        self.straight_frames = 0  # qualifying straightaway frames in a row
+        self.straight_boost = False  # target raised to V_STRAIGHT_M_S this frame
         # corner state machine
         self.tracker = None  # LaneTracker (optional): told to re-acquire after a pivot
         self.state = STATE_LANE
@@ -274,6 +291,7 @@ class RowfitController:
             # by odometry/IMU, at reduced speed. Counts toward the lost-lane
             # brake unless the tracker says it is only a short view.
             self.held_frames += 1
+            self._straight_reset()
             if getattr(est, "counts_as_lost", True):
                 self.frames_lost += 1
             self.target_speed = min(self.target_speed, V_HELD_M_S)
@@ -282,6 +300,7 @@ class RowfitController:
             return
         if est is None or not getattr(est, "valid", False) or est.confidence < MIN_CONF:
             self.frames_lost += 1
+            self._straight_reset()
             self.target_speed = V_MIN_M_S
             self.last_offset = None
             return
@@ -300,6 +319,36 @@ class RowfitController:
             abs(k_pp),
         )
         self.target_speed = curve_speed(k_gov, est.confidence)
+        if self._straightaway_ok(est, k_gov):
+            self.straight_frames += 1
+        else:
+            self.straight_frames = 0
+        self.straight_boost = self.straight_frames >= STRAIGHT_FRAMES
+        if self.straight_boost:
+            self.target_speed = max(self.target_speed, V_STRAIGHT_M_S)
+
+    def _straight_reset(self) -> None:
+        self.straight_frames = 0
+        self.straight_boost = False
+
+    def _straightaway_ok(self, est, k_gov: float) -> bool:
+        """This frame qualifies for the straightaway cruise bump (see V_STRAIGHT_M_S)."""
+        if self.state != STATE_LANE or self.frames_lost:
+            return False
+        if self.obstacle_v_cap is not None:  # SLOW / STOPPED / WAITING or a pick hold
+            return False
+        if self.cooldown_m > 0.0 or self.jn_cooldown_m > 0.0 or self.jn_slow_m > 0.0:
+            return False
+        # any junction / opening / corner cue in view, even one not yet persistent
+        if getattr(est, "junction", None) is not None or getattr(est, "corner", None) is not None:
+            return False
+        return (
+            est.confidence >= STRAIGHT_MIN_CONF
+            and k_gov <= STRAIGHT_MAX_KAPPA
+            and abs(self.kappa_cmd) <= STRAIGHT_MAX_KAPPA
+            and abs(est.offset_m) <= STRAIGHT_MAX_OFFSET_M
+            and abs(est.heading_rad) <= STRAIGHT_MAX_HEADING_RAD
+        )
 
     # ------------------------------------------------------------------
     # corner state machine
@@ -443,6 +492,7 @@ class RowfitController:
             "kappa_cmd": round(self.kappa_cmd, 4),
             "lookahead_m": round(self.lookahead_used, 3),
             "new_frame": bool(new_frame),
+            "straight_boost": bool(self.straight_boost),
             **self.corner_fields(),
         }
 
@@ -543,6 +593,8 @@ class RowfitController:
         corner is still approached, but the robot brakes at the pivot point."""
         if new_frame:
             self._corner_frame(est, yaw)
+        if self.state != STATE_LANE:
+            self._straight_reset()  # the bump never outlives plain LANE following
         if self.state == STATE_PIVOT:
             if yaw is None:
                 self.state = STATE_LANE

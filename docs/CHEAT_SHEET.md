@@ -1,7 +1,8 @@
 # Cheat sheet: restart guide
 
 For Dan, or for a new assistant session picking this up cold. Last updated
-2026-10-05, after multi-trip shopping list (fill trolley → ship). Details in the linked docs.
+2026-10-05, after multi-trip shopping list (fill trolley → ship) and the
+straightaway cruise bump. Details in the linked docs.
 
 ## North star
 
@@ -58,6 +59,14 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
 * **`src/rowfit_control.py`.**
   * Pure pursuit on the fitted centre line, plus a curvature speed governor
     (0.44 m/s cruise, 0.20 min).
+  * **Straightaway cruise** (`V_STRAIGHT_M_S` 0.50): in plain `LANE` only, after
+    3 frames in a row (~1 s) with conf ≥ 0.75, |curvature| and |kappa_cmd| ≤ 0.10 1/m,
+    |offset| ≤ 8 cm, |heading| ≤ 4°, no corner / junction / opening cue, no
+    junction slow or cooldown, and `obstacle_v_cap is None` (gate CLEAR or sensing
+    off, no pick hold), v* rises 0.44 → 0.50. Any miss drops it the same frame.
+    Junction 0.25, approach 0.25, reacquire 0.20, gap 0.15, held 0.30, pivot and
+    pick stops are unchanged. The obstacle slow zone is sized at 0.50
+    (`V_MAX_M_S`). `target_speed` in `lane-vision.csv` shows 0.5 when it is on.
   * State machine `LANE → CORNER_APPROACH → PIVOT → REACQUIRE → LANE`:
     * It stops at the pivot point: outer line − lane width / 2.
     * It pivots in place on IMU yaw to ±90° (±1°, ≤ 0.9 rad/s).
@@ -259,6 +268,22 @@ set RBM_ROUTE=
 
 Unit tests: `python -m pytest tests\test_shopping_list.py tests\test_inventory_pick.py -q`
 
+Straightaway cruise retest (long straights at 0.50, turns unchanged). Watch
+the console `v*=` / HUD speed on straights, then slowing to 0.25 at the junction:
+
+```bat
+set RBM_ROUTE=R
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World t_end
+
+set RBM_ROUTE=L,S
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+set RBM_ROUTE=
+python scripts\run_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane-vision.csv" --last 1
+```
+
+Unit tests: `python -m pytest tests\test_straightaway_cruise.py -q`
+
 
 The warehouse main view is a top-down follow cam: straight down from 48.5 m, ~30 m of floor
 across, and the map doesn't rotate (dock wall at the bottom). It's not the 3.2 m chase; see `docs/WAREHOUSE.md`.
@@ -324,8 +349,10 @@ python -m pytest -q
 | `save-2026-10-05-pre-junction-turn-v1` | restore point before junction-turn confidence / remaining-m latency fix |
 | `save-2026-10-05-inventory-trolley-v1` | inventory cubes + hitch trolley + one-SKU pretend pick (PR #14) |
 | `save-2026-10-05-pre-shopping-list-v1` | restore point on main before multi-trip shopping list |
+| `save-2026-10-05-shopping-list-v1` | multi-trip shopping list merged (PR #15) |
+| `save-2026-10-05-pre-cruise-v1` | restore point on main before the straightaway cruise bump (same commit as shopping-list-v1) |
 
-To go back: `git checkout save-2026-10-05-pre-shopping-list-v1`. Return with `git checkout main`.
+To go back: `git checkout save-2026-10-05-pre-cruise-v1`. Return with `git checkout main`.
 
 ## Best scores
 

@@ -260,6 +260,33 @@ class PickCommand:
     dist_to_approach_m: float | None = None
 
 
+def apply_pick_speed_cap(
+    cmd_v_cap: float | None,
+    ctl_v_cap: float | None,
+    *,
+    holding: bool,
+    saved_cap: float | None,
+) -> tuple[float | None, bool, float | None]:
+    """Apply / release a pretend-pick stop on ``obstacle_v_cap``.
+
+    Returns ``(new_ctl_v_cap, holding, saved_cap)``.
+
+    While ``cmd_v_cap`` is 0 we force a stop (remembering the prior cap). When
+    the pick machine returns ``cmd_v_cap is None`` again we **restore** the
+    saved cap — leaving 0 sticky was stranding the bot mid-aisle forever
+    (obstacles off → nothing else clears ``obstacle_v_cap``).
+    """
+    if cmd_v_cap is not None:
+        if not holding:
+            saved_cap = ctl_v_cap
+        if ctl_v_cap is None:
+            return float(cmd_v_cap), True, saved_cap
+        return min(float(ctl_v_cap), float(cmd_v_cap)), True, saved_cap
+    if holding:
+        return saved_cap, False, None
+    return ctl_v_cap, False, saved_cap
+
+
 @dataclass
 class PickState:
     """One-SKU pretend-pick state machine (pure)."""
@@ -307,12 +334,18 @@ class PickState:
                 fire = True
                 self.pick_fired = True
                 self.picked = True
-            if self.dwell_s >= self.pick_dwell_s:
+            # Never hold longer than 2x dwell (resume even if a tick was missed)
+            hard_deadline = max(self.pick_dwell_s * 2.0, self.pick_dwell_s + 1.0)
+            if self.dwell_s >= self.pick_dwell_s or self.dwell_s >= hard_deadline:
+                if not self.pick_fired:
+                    fire = True
+                    self.pick_fired = True
+                    self.picked = True
                 self.state = ST_TO_SHIP
                 return PickCommand(
                     state=self.state,
-                    v_cap=None,
-                    pick_now=False,
+                    v_cap=None,  # caller MUST release the sticky stop (see apply_pick_speed_cap)
+                    pick_now=fire,
                     sku=self.sku,
                     note="pick done, resume to shipping",
                     approach_xy=self.approach_xy,
@@ -328,6 +361,7 @@ class PickState:
                 dist_to_approach_m=dist,
             )
         if self.state == ST_TO_SHIP:
+
             return PickCommand(
                 state=self.state,
                 v_cap=None,

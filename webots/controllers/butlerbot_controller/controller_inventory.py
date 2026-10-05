@@ -86,6 +86,8 @@ class InventoryRuntime:
         self.cargo_placed = False
         self.last_state = ""
         self.ok = False
+        self._pick_holding = False  # True while we forced obstacle_v_cap=0 for pick
+        self._pre_pick_cap = None  # obstacle_v_cap before we imposed the pick stop
 
     def enable(self, robot, track_name: str = "warehouse") -> list[str]:
         msgs: list[str] = []
@@ -146,7 +148,11 @@ class InventoryRuntime:
         """Pretend-pick state machine; may set ctl.obstacle_v_cap = 0 while stopped.
 
         Call this *after* obstacle apply so a pick stop is not overwritten by CLEAR.
+        On resume (cmd.v_cap is None) we **release** the stop via
+        :func:`apply_pick_speed_cap` — leaving 0 sticky stranded the bot mid-aisle.
         """
+        from src.inventory_pick import apply_pick_speed_cap
+
         if self.ok:
             self._follow_trolley(gps_xy, yaw)
         if self.pick is None or ctl is None:
@@ -156,12 +162,11 @@ class InventoryRuntime:
             print(f"PICK {self.last_state or 'START'} -> {cmd.state}"
                   + (f" ({cmd.note})" if cmd.note else ""))
             self.last_state = cmd.state
-        if cmd.v_cap is not None:
-            cur = getattr(ctl, "obstacle_v_cap", None)
-            if cur is None:
-                ctl.obstacle_v_cap = float(cmd.v_cap)
-            else:
-                ctl.obstacle_v_cap = min(float(cur), float(cmd.v_cap))
+        cur = getattr(ctl, "obstacle_v_cap", None)
+        new_cap, self._pick_holding, self._pre_pick_cap = apply_pick_speed_cap(
+            cmd.v_cap, cur, holding=self._pick_holding, saved_cap=self._pre_pick_cap
+        )
+        ctl.obstacle_v_cap = new_cap
         if cmd.pick_now:
             self._do_pick()
 
@@ -171,6 +176,8 @@ class InventoryRuntime:
             if self.last_state != "DONE":
                 print("PICK -> DONE (shipping exit)")
                 self.last_state = "DONE"
+            self._pick_holding = False
+            self._pre_pick_cap = None
 
     def fields(self) -> dict:
         """CSV / HUD extras (empty strings when idle)."""

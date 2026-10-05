@@ -24,6 +24,7 @@ from src.inventory_pick import (  # noqa: E402
     demo_sku,
     find_group,
     inventory_to_json,
+    apply_pick_speed_cap,
     make_pick_state,
     sku_id,
 )
@@ -157,3 +158,39 @@ def test_controller_resolve_sku(monkeypatch):
     assert sku is None and "not in inventory" in why
     assert mod.pick_sku_from_env({"RBM_PICK_SKU": ""}) is None
     assert mod.pick_sku_from_env({"RBM_PICK_SKU": "demo"}) == "demo"
+
+
+
+def test_apply_pick_speed_cap_releases_sticky_zero():
+    """Bug Dan hit: pick set obstacle_v_cap=0 and never cleared → v*=0 forever."""
+    cap, holding, saved = apply_pick_speed_cap(0.0, None, holding=False, saved_cap=None)
+    assert cap == 0.0 and holding and saved is None
+    # resume (cmd v_cap None) must restore, not leave 0 sticky
+    cap2, holding2, saved2 = apply_pick_speed_cap(None, cap, holding=holding, saved_cap=saved)
+    assert cap2 is None and not holding2 and saved2 is None
+
+
+def test_apply_pick_speed_cap_restores_prior_obstacle_cap():
+    cap, holding, saved = apply_pick_speed_cap(0.0, 0.20, holding=False, saved_cap=None)
+    assert cap == 0.0 and holding and saved == 0.20
+    cap2, holding2, saved2 = apply_pick_speed_cap(None, cap, holding=holding, saved_cap=saved)
+    assert cap2 == 0.20 and not holding2
+
+
+def test_pick_state_resume_clears_v_cap(lay):
+    groups = __import__("src.inventory_pick", fromlist=["build_inventory_groups"]).build_inventory_groups(lay)
+    demo = next(g for g in groups if g.meta.get("demo"))
+    ps = make_pick_state(demo, pick_radius_m=1.0, pick_dwell_s=0.5)
+    ax, ay = demo.approach_xy
+    cmd = ps.update((ax, ay), 0.1)
+    assert cmd.state == "PICKING" and cmd.v_cap == 0.0
+    # hold through dwell
+    for _ in range(20):
+        cmd = ps.update((ax, ay), 0.1)
+        if cmd.state == "DRIVING_TO_SHIP":
+            break
+    assert cmd.state == "DRIVING_TO_SHIP" and cmd.v_cap is None
+    # glue must release
+    cap, holding, saved = apply_pick_speed_cap(0.0, None, holding=False, saved_cap=None)
+    cap, holding, saved = apply_pick_speed_cap(cmd.v_cap, cap, holding=holding, saved_cap=saved)
+    assert cap is None and not holding

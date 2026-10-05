@@ -44,7 +44,8 @@ future shopping list — not picked in this PR.
    stops (`PICKING`), removes one `WH_INV_*` cube, raises `WH_TROLLEY_LOAD` onto
    the bed, then resumes (`DRIVING_TO_SHIP`) to SHP-1.
 4. Console: `INVENTORY on — …`, `PICK … -> PICKING`, `PICK: removed …`,
-   `PICK: WH_TROLLEY_LOAD raised onto bed`, then the usual finish line.
+   `PICK: WH_TROLLEY_LOAD raised onto bed`, `PICK … -> DRIVING_TO_SHIP`, then finish.
+   After pick, `v*` must leave 0 (a sticky `obstacle_v_cap=0` was a bug; fixed).
 
 The trolley Solid is **not** a Robot child (Robot block stays byte-identical
 across worlds). The controller teleports `WH_TROLLEY` behind the axle each tick

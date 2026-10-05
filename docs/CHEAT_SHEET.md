@@ -67,6 +67,9 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     side branch, or `GAP_CROSS` (blind 0.15 m/s on IMU heading, up to
     `RBM_MAX_BLIND_M`) → REACQUIRE. Nothing by then: `LOOK_AROUND` (+90°, −90°,
     0°) and `STOPPED`. Route = `RBM_ROUTE`, default straight-else-left.
+  * **Lining up a junction turn:** fresh fits need conf ≥ 0.55 to steer /
+    update `lane_yaw`; held (odometry) priors are preferred. Remaining to the
+    pivot centre never increases from a late vision frame.
 * **Controller glue** (`webots/controllers/butlerbot_controller/`):
   * `controller_rowfit.py`: `RowfitRuntime` and the `LaneVisionLog` writer.
   * `controller_hud.py`: shoulder HUDs (state line, fit dots, crossbar bar).
@@ -261,6 +264,7 @@ python -m pytest -q
 | `save-2026-10-01-rowfit-boxcams` | rowfit default, cameras in the shoulder boxes, plausibility gate (PR #7) |
 | `save-2026-10-01-corner90-v1` | waypoint tracks and worlds, sharp-corner pivot, post-pivot gate settling (PR #8) |
 | `save-2026-10-02-warehouse-v1` | warehouse merged (PR #10): 70 × 65 m layout, road-graph track, route planner; dock shuttle and odd-aisle-5 runs 4.7 / 5.2 cm max |
+| `save-2026-10-05-pre-junction-turn-v1` | restore point before junction-turn confidence / remaining-m latency fix |
 
 To go back: `git checkout save-2026-10-02-warehouse-v1`. Return with `git checkout main`.
 

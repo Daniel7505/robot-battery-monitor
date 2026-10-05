@@ -56,6 +56,13 @@ K_D_OFFSET = 0.6  # 1/m per (m/s) of offset rate
 KAPPA_MAX = 2.5
 STEER_CAP = 0.8
 MIN_CONF = 0.15
+# While lining up a junction/corner turn the near paint is often contaminated by
+# the cross-aisle. Fresh fits can stay valid=True at low confidence and pull
+# heading several degrees (warehouse aisle-8 miss ~6.8–9°). Held estimates carry
+# the last good lane moved by odometry — prefer those. Only trust a fresh fit
+# once it clears these thresholds:
+APPROACH_STEER_MIN_CONF = 0.55  # steer on a fresh (non-held) fit while approaching
+APPROACH_YAW_MIN_CONF = 0.55    # update lane_yaw from a fresh fit while approaching
 LOST_FRAMES_STOP = 3  # ~1 s at 320 ms frames
 
 # --- Sharp corners (lane_vision corner cue: "the line widens, then disappears")
@@ -313,7 +320,7 @@ class RowfitController:
                 self.lane_w_m = w
                 self._take_corner(corner)
                 self.lane_yaw = None
-                if yaw is not None and est is not None and (est.valid or getattr(est, "held", False)):
+                if yaw is not None and self._est_usable_for_lane_yaw(est):
                     self.lane_yaw = float(yaw) - float(est.heading_rad)
                 self._event(
                     f"CORNER seen {corner.side} {corner.distance_m:.2f} m conf {corner.confidence:.2f} "
@@ -338,12 +345,21 @@ class RowfitController:
                 j = getattr(est, "junction", None) if est is not None else None
                 if (j is not None and self.junction is not None and j.kind in _TURN_KINDS
                         and _family(j.kind) == _family(self.junction.kind)):
-                    self.remaining_m = float(j.center_m)
+                    # Vision centre may be one frame late: never push remaining back out
+                    # (that delayed the pivot ~v*frame_dt ≈ 8 cm at 0.25 m/s).
+                    new_rem = float(j.center_m)
+                    if self.remaining_m is None:
+                        self.remaining_m = new_rem
+                    else:
+                        self.remaining_m = min(float(self.remaining_m), new_rem)
             elif (self.turn_src == "corner" and corner is not None and corner.direction == self.corner_dir
                   and corner.confidence >= 0.4):
+                prev = self.remaining_m
                 self._take_corner(corner)
-            if est is not None and est.valid and yaw is not None:
-                # lane direction in IMU yaw, smoothed (the near lane is straight up to the corner)
+                if prev is not None and self.remaining_m is not None:
+                    self.remaining_m = min(float(prev), float(self.remaining_m))
+            if yaw is not None and self._est_usable_for_lane_yaw(est):
+                # Prefer held / high-conf fits; ignore low-conf fresh fits near the junction.
                 ly = float(yaw) - float(est.heading_rad)
                 if self.lane_yaw is None:
                     self.lane_yaw = ly
@@ -374,6 +390,31 @@ class RowfitController:
         if self.tracker is not None and getattr(self.tracker, "lane_w", None):
             w = self.tracker.lane_w
         return float(w) if w and 0.4 < w < 3.0 else 1.30
+
+
+    @staticmethod
+    def _est_usable_for_approach_steer(est) -> bool:
+        """May this estimate steer while lining up a turn?
+
+        Prefer held (odometry-propagated last-good lane). A fresh fit must clear
+        ``APPROACH_STEER_MIN_CONF`` so low-conf cross-aisle contamination is ignored.
+        """
+        if est is None:
+            return False
+        conf = float(getattr(est, "confidence", 0.0) or 0.0)
+        if getattr(est, "held", False):
+            return conf >= MIN_CONF
+        return bool(getattr(est, "valid", False)) and conf >= APPROACH_STEER_MIN_CONF
+
+    @staticmethod
+    def _est_usable_for_lane_yaw(est) -> bool:
+        """May this estimate update ``lane_yaw`` while lining up a turn?"""
+        if est is None:
+            return False
+        conf = float(getattr(est, "confidence", 0.0) or 0.0)
+        if getattr(est, "held", False):
+            return conf >= MIN_CONF
+        return bool(getattr(est, "valid", False)) and conf >= APPROACH_YAW_MIN_CONF
 
     def _take_corner(self, corner) -> None:
         self.corner_dist_m = float(corner.distance_m)
@@ -568,7 +609,7 @@ class RowfitController:
         if new_frame:
             # steer on the (clipped) lane fit; missing / held frames do not count
             # toward the lost-lane brake here: the lane is SUPPOSED to end ahead.
-            if est is not None and (est.valid or getattr(est, "held", False)) and est.confidence >= MIN_CONF:
+            if self._est_usable_for_approach_steer(est):
                 k_pp, d2 = self._pursuit(est, max(self.gov.v, 0.1))
                 self.kappa_cmd = max(-KAPPA_MAX, min(KAPPA_MAX, k_pp))
                 self.lookahead_used = math.sqrt(d2)
@@ -608,7 +649,7 @@ class RowfitController:
     # intersections
     # ------------------------------------------------------------------
     def _lane_yaw_update(self, est, yaw, gain: float = 0.3) -> None:
-        if est is None or not est.valid or yaw is None:
+        if yaw is None or not self._est_usable_for_lane_yaw(est):
             return
         ly = float(yaw) - float(est.heading_rad)
         if self.lane_yaw is None:
@@ -637,7 +678,7 @@ class RowfitController:
         self.jn_count += 1
         self.lane_w_m = self._lane_width(est)
         self.lane_yaw = None
-        if yaw is not None and est is not None and (est.valid or getattr(est, "held", False)):
+        if yaw is not None and self._est_usable_for_lane_yaw(est):
             self.lane_yaw = float(yaw) - float(est.heading_rad)
         far = "" if j.far_m is None else f", far side {j.far_m:.2f} m"
         self._event(
@@ -744,7 +785,8 @@ class RowfitController:
         if self.obstacle_v_cap is not None:
             v_cap = min(v_cap, max(0.0, float(self.obstacle_v_cap)))
         if new_frame:
-            if hold_yaw is None and est is not None and est.valid and est.confidence >= MIN_CONF:
+            # Junction/gap approach: same as CORNER_APPROACH — held ok, low-conf fresh ignored.
+            if hold_yaw is None and self._est_usable_for_approach_steer(est):
                 k_pp, d2 = self._pursuit(est, max(self.gov.v, 0.1))
                 self.kappa_cmd = max(-KAPPA_MAX, min(KAPPA_MAX, k_pp))
                 self.lookahead_used = math.sqrt(d2)

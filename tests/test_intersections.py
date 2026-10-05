@@ -235,3 +235,72 @@ def test_gap_gives_up_after_max_blind_and_looks_around():
     assert any(e.startswith("GAP no lane after 2.00 m") for e in ev)
     assert any(e.startswith("LOOK_AROUND done") for e in ev)
     assert r["braked_at"]["state"] == "LOOK_AROUND"
+
+# ---------------------------------------------------------------- approach confidence / latency
+def test_approach_ignores_low_conf_fresh_fit_but_uses_held():
+    """Lining up a turn: low-conf fresh fits must not pull lane_yaw; held may."""
+    from src import rowfit_control as rc
+    from src.lane_vision import LaneEstimate
+    from src.junction_vision import Junction
+
+    ctl = rc.RowfitController()
+    ctl.state = rc.STATE_APPROACH
+    ctl.turn_src = "junction"
+    ctl.remaining_m = 1.0
+    ctl.lane_yaw = 0.0
+    ctl.junction = Junction(kind="t_end", near_m=0.5, center_m=1.0, far_m=None,
+                            left=True, straight=False, right=True, confidence=0.9)
+
+    low = LaneEstimate(valid=True, held=False, confidence=0.30, heading_rad=math.radians(8),
+                       offset_m=-0.05, lookahead_m=1.0, n_left=20, n_right=10)
+    assert not ctl._est_usable_for_approach_steer(low)
+    assert not ctl._est_usable_for_lane_yaw(low)
+    ctl._corner_frame(low, yaw=0.0)
+    assert abs(ctl.lane_yaw) < 1e-12
+
+    held = LaneEstimate(valid=False, held=True, confidence=0.90, heading_rad=0.05,
+                        offset_m=0.0, lookahead_m=1.0, n_left=40, n_right=40)
+    assert ctl._est_usable_for_approach_steer(held)
+    assert ctl._est_usable_for_lane_yaw(held)
+    ctl._corner_frame(held, yaw=math.radians(2))
+    # gain 0.3 blend toward (yaw - heading)
+    expect = 0.3 * (math.radians(2) - 0.05)
+    assert abs(ctl.lane_yaw - expect) < 1e-9
+
+    hi = LaneEstimate(valid=True, held=False, confidence=0.80, heading_rad=math.radians(1),
+                      offset_m=0.0, lookahead_m=1.0, n_left=50, n_right=50)
+    assert ctl._est_usable_for_approach_steer(hi) and ctl._est_usable_for_lane_yaw(hi)
+
+
+def test_approach_remaining_never_increases_from_delayed_vision():
+    """One-frame-late junction centre must not push remaining back out."""
+    from src import rowfit_control as rc
+    from src.lane_vision import LaneEstimate
+    from src.junction_vision import Junction
+
+    ctl = rc.RowfitController()
+    ctl.state = rc.STATE_APPROACH
+    ctl.turn_src = "junction"
+    ctl.remaining_m = 0.70
+    ctl.junction = Junction(kind="t_end", near_m=0.5, center_m=1.0, far_m=None,
+                            left=True, straight=False, right=True, confidence=0.9)
+    delayed = LaneEstimate(valid=False, held=True, confidence=0.9, heading_rad=0.0,
+                           offset_m=0.0, lookahead_m=1.0, n_left=40, n_right=40)
+    delayed.junction = Junction(kind="t_end", near_m=0.6, center_m=0.85, far_m=None,
+                                left=True, straight=False, right=True, confidence=0.9)
+    ctl._corner_frame(delayed, yaw=0.0)
+    assert ctl.remaining_m == 0.70  # odometry kept
+
+    delayed.junction = Junction(kind="t_end", near_m=0.4, center_m=0.55, far_m=None,
+                                left=True, straight=False, right=True, confidence=0.9)
+    ctl._corner_frame(delayed, yaw=0.0)
+    assert ctl.remaining_m == 0.55  # vision may refine downward
+
+
+def test_closed_loop_junction_turn_with_one_frame_latency():
+    """1-frame camera latency: turn still finishes; pivot not a full frame late."""
+    r = sim.run("t_end", route="L", latency_frames=1, max_s=45.0)
+    assert r["ok"] and r["exit"] == "north", (r.get("exit"), r.get("junctions"), r.get("braked_at"))
+    # Before the remaining-m squash + conf gate this was ~10 cm (one frame late at 0.25 m/s).
+    assert r["max_lateral_m"] < 0.07, r["max_lateral_m"]
+    assert all(abs(p["true_err_deg"]) < 3.0 for p in r["pivots"])

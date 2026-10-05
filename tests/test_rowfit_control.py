@@ -359,7 +359,7 @@ def test_lane_vision_log_header_and_run_id(monkeypatch, tmp_path):
         "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
         "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
         "junction_type,junction_m,openings,route_choice,blind_m,"
-        "obstacle_state,obstacle_m,obstacle_band,obstacle_conf"
+        "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving"
     )
     assert len(lines) == 3
     row = dict(zip(lines[0].split(","), lines[1].split(",")))

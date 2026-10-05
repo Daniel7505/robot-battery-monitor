@@ -121,6 +121,7 @@ from controller_keys import (
 )
 from controller_eyes import _nadir_lateral_from_cam
 from controller_obstacles import ObstacleRuntime, obstacles_mode as _obstacles_mode
+from controller_inventory import InventoryRuntime
 from controller_rowfit import (
     RUN_ID as _RUN_ID,
     LaneVisionLog,
@@ -771,6 +772,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     rowfit_rt.obstacles = _ort
             except Exception as exc:
                 print(f"WARNING: obstacle sensing not loaded ({type(exc).__name__}: {exc}) — driving without it")
+        # Inventory + pull-behind trolley (warehouse worlds with WH_TROLLEY).
+        # Pretend pick when RBM_PICK_SKU is set (demo / SKU-A05-B0-L).
+        try:
+            _inv = InventoryRuntime()
+            _track = getattr(finish_ref, "name", None) or "warehouse"
+            for msg in _inv.enable(robot, track_name=str(_track)):
+                print(f"WARNING inventory: {msg}")
+            if _inv.ok or _inv.pick is not None:
+                rowfit_rt.inventory = _inv
+                print(_inv.describe())
+            else:
+                print(f"INVENTORY off ({_inv.why})")
+        except Exception as exc:
+            print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
@@ -839,6 +854,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             gps_xy = _gps_xy(gps)
             if rowfit_rt is not None:
                 rowfit_rt.odometry(left_wv_early, right_wv_early, dt, WHEEL_RADIUS_M)
+                # Pull-behind trolley hitch (every tick)
+                if getattr(rowfit_rt, "inventory", None) is not None:
+                    rowfit_rt.inventory.follow(gps_xy, prev_yaw)
 
             hubs_locked = (
                 abs(left_wv_early) < STOP_WHEEL_RAD_S
@@ -1057,6 +1075,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 rowfit_new = False
                 if rowfit_rt is not None:
                     rowfit_new = rowfit_rt._has_pending
+                    # Pretend-pick stop after obstacle apply (harvest), before wheel command
+                    if getattr(rowfit_rt, "inventory", None) is not None:
+                        rowfit_rt.inventory.update(gps_xy, prev_yaw, dt, ctl=rowfit_rt.ctl)
                     lk = rowfit_rt.command(dt, yaw=prev_yaw if imu is not None else None)
                 else:
                     if guard_kw:
@@ -1086,6 +1107,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
                             "GPS finish, not a red camera. Nadir was on the wheel."
                         )
+                        if getattr(rowfit_rt, "inventory", None) is not None:
+                            rowfit_rt.inventory.mark_shipped()
                     lane_keep_on = False
                     lk = {
                         "left": 0.0,

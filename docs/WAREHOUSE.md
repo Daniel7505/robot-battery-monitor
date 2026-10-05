@@ -1,7 +1,8 @@
 # Prototype warehouse course
 
-**Status: starting template, not the final design.** It has no obstacles and
-no new sensors yet. Next steps are listed at the end.
+**Status: starting template, not the final design.** Stereo + radar obstacle
+sensing and a one-SKU inventory/trolley pretend-pick slice are in; multi-trip
+shopping lists are next. See the end of this doc and `docs/INVENTORY_TROLLEY.md`.
 
 ![preview](warehouse_preview.png)
 
@@ -149,8 +150,17 @@ The clean `butlerbot_warehouse.wbt` keeps an empty `WH_OBSTACLES` group.
 The world's `# OBSTACLES on` tag turns stereo sensing on there. Details are
 in `docs/OBSTACLES.md`.
 
+## Inventory + trolley
+
+Both warehouse worlds carry placeholder inventory cubes (`DEF WH_INVENTORY`,
+grouped by aisle/block SKU) and a pull-behind trolley prop (`DEF WH_TROLLEY`).
+Mission `pick_one_sku_to_shipping` uses the same route as `odd_aisle_to_shipping`
+and stops at demo SKU `SKU-A05-B0-L` when `RBM_PICK_SKU=demo`. Full CMD steps:
+`docs/INVENTORY_TROLLEY.md` / `docs/CHEAT_SHEET.md`.
+
 ## Next steps
 
 1. **Stereo obstacle sensing**: first pass done (`docs/OBSTACLES.md`). Open: avoidance and re-routing around a blocked aisle.
-2. **Radar** through the `ObstacleSource` interface in `src/obstacle_gate.py`.
-3. Design: a second middle cross aisle (`n_mid_cross`), and realistic dock levelers / door states.
+2. **Radar**: first pass done (`docs/OBSTACLES.md`). Path-around still open.
+3. **Inventory / trolley**: one-SKU pretend pick done (`docs/INVENTORY_TROLLEY.md`). Next: multi-trip shopping list + route optimisation that fills the trolley before shipping; dashboard battery/time efficiency metrics (stub OK).
+4. Design: a second middle cross aisle (`n_mid_cross`), and realistic dock levelers / door states.

@@ -1,7 +1,7 @@
 # Cheat sheet: restart guide
 
 For Dan, or for a new assistant session picking this up cold. Last updated
-2026-10-01, after PR #8 (sharp corners) was merged. The details live in the linked docs.
+2026-10-05, after inventory + trolley (one-SKU pretend pick). The details live in the linked docs.
 
 ## North star
 
@@ -96,7 +96,9 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
   * `butlerbot_plus.wbt`, `butlerbot_t_end.wbt`, `butlerbot_gap45.wbt`
     (intersections; the referee reports which exit was crossed).
   * `butlerbot_warehouse.wbt`: the 70 × 65 m prototype warehouse. It has
-    6 m racks, dock doors and staging, all Solids with boundingObjects.
+    6 m racks, dock doors and staging, all Solids with boundingObjects, plus
+    placeholder inventory cubes (`WH_INVENTORY`) and a pull-behind trolley
+    (`WH_TROLLEY`). See `docs/INVENTORY_TROLLEY.md`.
   * `butlerbot_warehouse_obstacles.wbt`: the same warehouse plus three test
     props (box in aisle 5, waist-high table edge on the dock lane, shelf corner
     beside the start lane). Its `# OBSTACLES on` tag turns stereo+radar on.
@@ -127,6 +129,7 @@ repo `.env`. A value set with `set` wins.
 | `RBM_OBSTACLES` | `1` = stereo+radar obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`, `radar_motion`), off everywhere else. |
 | `RBM_STEREO_BACKEND` | `auto` (default: OpenCV StereoSGBM if `cv2` imports, else numpy), `sgbm` or `numpy`. numpy works without OpenCV but costs ~170 ms per frame. |
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |
+| `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube onto the trolley, then continues to shipping. Unset = trolley follow only (no pick). See `docs/INVENTORY_TROLLEY.md`. |
 | `RBM_NADIR_GUARD_PER_FRAME` | `1` = gap-mode NadirGuard counts per camera frame (opt-in; gap mode only) |
 
 ## Commands (Windows cmd, from the repo folder)
@@ -216,6 +219,22 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World r
 ```
 
 Unit tests (no Webots): `python -m pytest tests\test_radar_obstacles.py -q`
+
+Inventory + trolley (one-SKU pretend pick). Use the **clean** `warehouse` world
+(not `warehouse_obstacles` — that still has the aisle-5 box on the same spine).
+Console: `INVENTORY on …`, `PICK … -> PICKING`, cube removed, cargo on trolley,
+then finish at SHP-1. Details: `docs/INVENTORY_TROLLEY.md`.
+
+```bat
+set RBM_ROUTE=S,S,L,S,S,R,S,L,S,S,L,S,S,S
+set RBM_PICK_SKU=demo
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+set RBM_PICK_SKU=
+```
+
+Unit tests (no Webots): `python -m pytest tests\test_inventory_pick.py -q`
+
 
 The warehouse main view is a top-down follow cam: straight down from 48.5 m, ~30 m of floor
 across, and the map doesn't rotate (dock wall at the bottom). It's not the 3.2 m chase; see `docs/WAREHOUSE.md`.

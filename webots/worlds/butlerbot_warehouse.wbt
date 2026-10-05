@@ -60,6 +60,7 @@ WorldInfo {
     "Driven hip wheels + 4 catch casters; BNO085-class IMU pitch-hold (biped precursor)"
     "TRACK (ENU): warehouse  start (0,0)  exits receiving_2 shipping_2 shipping_1  file tracks/warehouse.json"
     "WAREHOUSE: 70 x 65 m prototype, start inside receiving door RCV-1, RBM_ROUTE per junction (see tracks/warehouse.json missions)"
+    "INVENTORY: placeholder cubes in WH_INVENTORY (aisle/block SKUs); pull-behind WH_TROLLEY; one-SKU pretend pick: set RBM_PICK_SKU (see tracks/warehouse.json inventory + docs/INVENTORY_TROLLEY.md)"
     "GPS on robot reports world translation (same frame as these markers)"
   ]
 }
@@ -9269,6 +9270,353 @@ DEF WAREHOUSE Group {
         }
       ]
       boundingObject Box { size 1.2 1 1.4 }
+    }
+    # ---- INVENTORY: placeholder cubes on rack faces (src/inventory_pick.py). Demo SKU is teal.
+    DEF WH_INVENTORY Group {
+      children [
+        # INVENTORY SKU-A05-B0-L cube 0 aisle 5 block 0 left
+        DEF WH_INV_SKU_A05_B0_L_0 Solid {
+          translation 27.545 19.99 1.64
+          name "inv_sku_a05_b0_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance DEF WH_APP_INV_CUBE_DEMO PBRAppearance {
+                    baseColor 0.22 0.45 0.55
+                    roughness 0.85
+                    metalness 0
+                  }
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B0-L cube 1 aisle 5 block 0 left
+        DEF WH_INV_SKU_A05_B0_L_1 Solid {
+          translation 28.025 19.99 1.64
+          name "inv_sku_a05_b0_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE_DEMO
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B0-L cube 2 aisle 5 block 0 left
+        DEF WH_INV_SKU_A05_B0_L_2 Solid {
+          translation 28.505 19.99 1.64
+          name "inv_sku_a05_b0_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE_DEMO
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B0-L cube 3 aisle 5 block 0 left
+        DEF WH_INV_SKU_A05_B0_L_3 Solid {
+          translation 28.985 19.99 1.64
+          name "inv_sku_a05_b0_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE_DEMO
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B0-L cube 0 aisle 3 block 0 left
+        DEF WH_INV_SKU_A03_B0_L_0 Solid {
+          translation 27.545 7.99 1.64
+          name "inv_sku_a03_b0_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance DEF WH_APP_INV_CUBE PBRAppearance {
+                    baseColor 0.55 0.28 0.22
+                    roughness 0.85
+                    metalness 0
+                  }
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B0-L cube 1 aisle 3 block 0 left
+        DEF WH_INV_SKU_A03_B0_L_1 Solid {
+          translation 28.025 7.99 1.64
+          name "inv_sku_a03_b0_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B0-L cube 2 aisle 3 block 0 left
+        DEF WH_INV_SKU_A03_B0_L_2 Solid {
+          translation 28.505 7.99 1.64
+          name "inv_sku_a03_b0_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B0-L cube 3 aisle 3 block 0 left
+        DEF WH_INV_SKU_A03_B0_L_3 Solid {
+          translation 28.985 7.99 1.64
+          name "inv_sku_a03_b0_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A07-B1-L cube 0 aisle 7 block 1 left
+        DEF WH_INV_SKU_A07_B1_L_0 Solid {
+          translation 47.795 31.99 1.64
+          name "inv_sku_a07_b1_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A07-B1-L cube 1 aisle 7 block 1 left
+        DEF WH_INV_SKU_A07_B1_L_1 Solid {
+          translation 48.275 31.99 1.64
+          name "inv_sku_a07_b1_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A07-B1-L cube 2 aisle 7 block 1 left
+        DEF WH_INV_SKU_A07_B1_L_2 Solid {
+          translation 48.755 31.99 1.64
+          name "inv_sku_a07_b1_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A07-B1-L cube 3 aisle 7 block 1 left
+        DEF WH_INV_SKU_A07_B1_L_3 Solid {
+          translation 49.235 31.99 1.64
+          name "inv_sku_a07_b1_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+      ]
+    }
+    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch 0.89 m).
+    # Visual only: no boundingObject / no Physics — a static BO here stalled the robot.
+    DEF WH_TROLLEY Solid {
+      translation -0.885 0 0.09
+      name "trolley"
+      radarCrossSection 1.5
+      children [
+        Pose {
+          translation 0 0 -0.07
+          children [
+            Shape {
+              appearance DEF WH_APP_TROLLEY_BED PBRAppearance {
+                baseColor 0.4 0.42 0.38
+                roughness 0.85
+                metalness 0
+              }
+              geometry Box { size 0.55 0.4 0.04 }
+            }
+          ]
+        }
+        Pose {
+          translation 0 -0.18 0.16
+          children [
+            Shape {
+              appearance DEF WH_APP_TROLLEY PBRAppearance {
+                baseColor 0.25 0.28 0.32
+                roughness 0.85
+                metalness 0
+              }
+              geometry Box { size 0.51 0.03 0.14 }
+            }
+          ]
+        }
+        Pose {
+          translation 0 0.18 0.16
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.51 0.03 0.14 }
+            }
+          ]
+        }
+        Pose {
+          translation 0.255 0 0.16
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.03 0.36 0.14 }
+            }
+          ]
+        }
+        Pose {
+          translation 0.415 0 -0.03
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.28 0.04 0.04 }
+            }
+          ]
+        }
+        Pose {
+          translation -0.175 -0.15 -0.05
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.08 0.04 0.08 }
+            }
+          ]
+        }
+        Pose {
+          translation -0.175 0.15 -0.05
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.08 0.04 0.08 }
+            }
+          ]
+        }
+        Pose {
+          translation 0.175 -0.15 -0.05
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.08 0.04 0.08 }
+            }
+          ]
+        }
+        Pose {
+          translation 0.175 0.15 -0.05
+          children [
+            Shape {
+              appearance USE WH_APP_TROLLEY
+              geometry Box { size 0.08 0.04 0.08 }
+            }
+          ]
+        }
+        DEF WH_TROLLEY_LOAD Solid {
+          translation 0 0 -2
+          name "trolley_load"
+          radarCrossSection 0.5
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance DEF WH_APP_TROLLEY_LOAD PBRAppearance {
+                    baseColor 0.55 0.28 0.22
+                    roughness 0.85
+                    metalness 0
+                  }
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
     # ---- obstacles: none in this world (butlerbot_warehouse_obstacles.wbt has the test props).
     #      Shelves above are already Solids with boundingObjects for the stereo pair / radar.

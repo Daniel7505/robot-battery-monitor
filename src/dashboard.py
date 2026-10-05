@@ -259,6 +259,10 @@ HTML_TEMPLATE = '''
         .twin-control-stat { background: #0d1117; border: 1px solid #2a3a4a; border-radius: 6px; padding: 8px 12px; }
         .twin-control-stat strong { color: #cde; display: block; margin-top: 2px; }
         .twin-control-stat span { color: #678; font-size: 0.82em; }
+        .efficiency-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 10px 0 4px; padding: 10px 12px; background: #0c1820; border: 1px solid #2a4a5a; border-radius: 8px; }
+        .efficiency-strip .eff-stat span { color: #6a9; font-size: 0.78em; display: block; }
+        .efficiency-strip .eff-stat strong { color: #cef; font-size: 1.05em; }
+        .efficiency-strip .eff-note { grid-column: 1 / -1; color: #678; font-size: 0.75em; margin-top: 2px; }
         .speedometer-card { grid-column: 1 / -1; text-align: center; padding: 14px 12px !important; background: #0a121c !important; border-color: #3a5a7a !important; }
         .speedometer-card .speed-value { font-size: 2.1em; font-weight: bold; color: #6ef; letter-spacing: 0.03em; line-height: 1.1; }
         .speedometer-card .speed-sub { font-size: 0.9em; color: #8ab; margin-top: 4px; }
@@ -385,6 +389,14 @@ HTML_TEMPLATE = '''
             <div class="twin-control-stat"><span>Position</span><strong id="twin-loco-meta">—</strong></div>
             <div class="twin-control-stat"><span>Loop Forecast</span><strong id="twin-loop-forecast">—</strong></div>
             <div class="twin-control-stat"><span>Hardware Profile</span><strong id="twin-hw-profile">—</strong></div>
+        </div>
+        <div id="efficiency-strip" class="efficiency-strip" title="Mission efficiency from twin telemetry (time, energy, distance)">
+            <div class="eff-stat"><span>Mission time</span><strong id="eff-elapsed">—</strong></div>
+            <div class="eff-stat"><span>Energy used</span><strong id="eff-energy">—</strong></div>
+            <div class="eff-stat"><span>Battery Δ</span><strong id="eff-batt-delta">—</strong></div>
+            <div class="eff-stat"><span>Distance</span><strong id="eff-distance">—</strong></div>
+            <div class="eff-stat"><span>Avg speed</span><strong id="eff-avg-speed">—</strong></div>
+            <div class="eff-note" id="eff-note">Efficiency arms on first Webots telemetry · resets with battery reset</div>
         </div>
         <div id="twin-loop-detail" class="twin-influence-bar" style="margin-top:8px;display:none"></div>
         <div id="agent-intervention-banner" class="agent-intervention-banner">
@@ -747,6 +759,54 @@ HTML_TEMPLATE = '''
             speedoCard.classList.remove('braking');
         }
         document.getElementById('twin-loco-meta').innerText = active ? pose : '—';
+
+        const eff = (tc && tc.efficiency) || {};
+        const effElapsed = document.getElementById('eff-elapsed');
+        const effEnergy = document.getElementById('eff-energy');
+        const effBatt = document.getElementById('eff-batt-delta');
+        const effDist = document.getElementById('eff-distance');
+        const effAvg = document.getElementById('eff-avg-speed');
+        const effNote = document.getElementById('eff-note');
+        if (effElapsed) {
+            const armed = !!(eff && eff.active);
+            effElapsed.innerText = armed && eff.elapsed_label ? eff.elapsed_label
+                : (armed && eff.elapsed_s != null ? (Number(eff.elapsed_s).toFixed(1) + ' s') : '—');
+            let eTxt = '—';
+            if (armed && eff.energy_wh_used != null) {
+                eTxt = Number(eff.energy_wh_used).toFixed(3) + ' Wh';
+                if (eff.energy_source === 'integrated_draw') eTxt += ' (∫P)';
+                else if (eff.energy_source === 'soc_delta') eTxt += ' (SoC)';
+            }
+            if (effEnergy) effEnergy.innerText = eTxt;
+            if (effBatt) {
+                if (armed && eff.battery_delta_pct != null) {
+                    const d = Number(eff.battery_delta_pct);
+                    effBatt.innerText = (d >= 0 ? '−' : '+') + Math.abs(d).toFixed(2) + '%';
+                } else {
+                    effBatt.innerText = '—';
+                }
+            }
+            if (effDist) {
+                effDist.innerText = (armed && eff.distance_m != null)
+                    ? Number(eff.distance_m).toFixed(2) + ' m' : '—';
+            }
+            if (effAvg) {
+                effAvg.innerText = (armed && eff.avg_speed_m_s != null)
+                    ? Number(eff.avg_speed_m_s).toFixed(2) + ' m/s' : '—';
+            }
+            if (effNote) {
+                if (!armed) {
+                    effNote.innerText = 'Waiting for twin telemetry to arm mission efficiency';
+                } else {
+                    const src = eff.energy_source === 'integrated_draw'
+                        ? 'energy from ∫ channel draws'
+                        : (eff.energy_source === 'soc_delta' ? 'energy from battery SoC Δ' : 'energy pending');
+                    const distN = eff.distance_m != null ? 'GPS path' : 'no pose yet';
+                    effNote.innerText = 'Mission running · ' + src + ' · distance: ' + distN
+                        + ' · samples ' + (eff.samples != null ? eff.samples : '—');
+                }
+            }
+        }
 
         const lkStatus = document.getElementById('lane-keep-status');
         const lkBtn = document.getElementById('lane-keep-btn');

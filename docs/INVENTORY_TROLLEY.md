@@ -92,7 +92,7 @@ python scripts\warehouse_builder.py --summary
    identical. A physics trailer hitch is a later option.
 3. **One SKU / one trolley trip** in this slice. Shopping-list fill-then-ship
    (3–4 trips) lives in `docs/SHOPPING_LIST.md`.
-4. **Dashboard battery/time** — shopping efficiency stub only; full UI later.
+4. **Dashboard battery/time** — live twin efficiency strip shipped (`mission_efficiency`); shopping plan stub still separate.
 5. Early corner clip on the flat squared warehouse remains noted; unchanged.
 
 ## Follow-on

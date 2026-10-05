@@ -1,8 +1,9 @@
 # Cheat sheet: restart guide
 
 For Dan, or for a new assistant session picking this up cold. Last updated
-2026-10-05, after multi-trip shopping list (fill trolley → ship) and the
-straightaway cruise bump. Details in the linked docs.
+2026-10-05, after dashboard mission efficiency metrics (time / Wh / distance
+on the Live Monitor). Cruise, shopping list, and inventory still as before.
+Details in the linked docs.
 
 ## North star
 
@@ -284,6 +285,25 @@ python scripts\run_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\lane
 
 Unit tests: `python -m pytest tests\test_straightaway_cruise.py -q`
 
+Dashboard efficiency (mission time / energy / distance on Live Monitor). Arms
+on the first Webots telemetry POST; resets with dashboard **battery reset**.
+SoC Δ → Wh when the pack moves; otherwise ∫ channel draws. Distance from GPS
+pose path when pose is present. Does **not** change PMS allocation.
+
+```bat
+REM dashboard: scripts\start.ps1 → http://127.0.0.1:5000
+REM then any twin world, e.g. short warehouse hop:
+set RBM_ROUTE=L,S
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+REM On the Live Monitor twin panel, watch the Efficiency strip:
+REM   Mission time · Energy used (Wh) · Battery Δ · Distance · Avg speed
+REM Or without Webots, inject once then again ~20 s later with a moved pose:
+curl -X POST http://127.0.0.1:5000/api/twin/telemetry?adapter=webots -H "Content-Type: application/json" -d "{\"source\":\"webots\",\"robot\":{\"main_battery_pct\":90},\"channel_draws\":{\"Legs\":20,\"Arms\":4,\"Torso\":3,\"Compute\":9},\"locomotion\":{\"gait\":\"drive\",\"phase\":\"drive_transit\",\"speed_m_s\":0.4},\"pose\":{\"x_m\":0,\"y_m\":0},\"mission\":{\"task\":\"moving\"}}"
+```
+
+Unit tests: `python -m pytest tests\test_mission_efficiency.py -q`
+
 
 The warehouse main view is a top-down follow cam: straight down from 48.5 m, ~30 m of floor
 across, and the map doesn't rotate (dock wall at the bottom). It's not the 3.2 m chase; see `docs/WAREHOUSE.md`.
@@ -351,8 +371,10 @@ python -m pytest -q
 | `save-2026-10-05-pre-shopping-list-v1` | restore point on main before multi-trip shopping list |
 | `save-2026-10-05-shopping-list-v1` | multi-trip shopping list merged (PR #15) |
 | `save-2026-10-05-pre-cruise-v1` | restore point on main before the straightaway cruise bump (same commit as shopping-list-v1) |
+| `save-2026-10-05-cruise-v1` | straightaway cruise 0.44→0.50 merged (PR #16) |
+| `save-2026-10-05-pre-efficiency-v1` | restore point on main before dashboard efficiency metrics |
 
-To go back: `git checkout save-2026-10-05-pre-cruise-v1`. Return with `git checkout main`.
+To go back: `git checkout save-2026-10-05-pre-efficiency-v1`. Return with `git checkout main`.
 
 ## Best scores
 
@@ -399,6 +421,10 @@ See `docs/RUN_HISTORY.md`.
 
 ## Open ideas / next steps
 
+* **Dashboard efficiency (done lightly).** Live Monitor strip shows mission
+  elapsed, Wh (SoC or ∫P), battery Δ, GPS distance, avg speed. Shopping stub
+  in `shopping_efficiency_metrics` is still plan-side only. Open: per-trip
+  reset at shipping, export to run_report, SoC vs ∫P preference.
 * **Camera yaw 10° toe-out** (`docs/CAMERA_YAW_STUDY.md`): it widens lane
   coverage. Dan has not applied it yet; he likes the current look-ahead.
 * **Gap mode:** retire it, or re-tune it for the box view.

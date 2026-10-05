@@ -4,8 +4,9 @@
 several SKUs across aisle groups is packed into **3–4 trolley trips** that fill
 capacity before shipping. Route order is a simple aisle sweep (optional
 nearest-neighbour). Reuses pretend pick + hitch trolley; clears the trolley
-load between trips. BoM held. Ultrasound / path-around deferred. Dashboard
-battery/time efficiency is a **light stub** (dict + track JSON), not a full UI.
+load between trips. BoM held. Ultrasound / path-around deferred. Plan-side battery/time efficiency remains a **light stub** (dict + track JSON).
+Live twin mission totals (time / Wh / distance) are on the Live Monitor
+efficiency strip — see `src/mission_efficiency.py` / CHEAT_SHEET.
 
 ## What you get
 
@@ -96,8 +97,9 @@ python scripts\warehouse_builder.py --summary
 `shopping_efficiency_metrics(plan)` returns `n_trips`, `total_units`, `path_m`
 (sum of trip lengths when routes attached), `est_drive_wh` (placeholder
 0.012 Wh/m), and a note. Written into `tracks/warehouse.json` →
-`shopping_list.efficiency`. **Not** wired into the dashboard UI yet — Dan's
-call whether to surface it on the battery card or a shopping panel.
+`shopping_list.efficiency` (plan stub). Live twin efficiency is a separate
+strip on the Live Monitor (`mission_efficiency`); shopping stub keys are
+not merged into that strip yet.
 
 ## Design choices needing Dan
 
@@ -105,7 +107,8 @@ call whether to surface it on the battery card or a shopping panel.
 2. **Webots one-trip-per-launch** vs continuous dock-return without finish —
    continuous needs finish-referee changes + return-to-aisles route.
 3. **Aisle sweep vs nearest** as the default order for the demo list.
-4. **Dashboard efficiency** — keep stub-only, or wire battery/time this PR?
+4. **Dashboard efficiency** — live twin strip shipped; merge shopping stub
+   into it, or keep plan-side only?
 5. Early corner clip on the flat squared warehouse still noted; unchanged.
 
 ## Deferred
@@ -113,5 +116,6 @@ call whether to surface it on the battery card or a shopping panel.
 * Continuous multi-trip in one Webots session (dock-return, no early finish)
 * Avoidance / re-route around a blocked aisle
 * Ultrasound
-* Full dashboard battery/time efficiency panel
+* Merge shopping-plan stub into the live efficiency strip
+* Per-shopping-trip efficiency reset at SHP
 * BoM / real pick hardware

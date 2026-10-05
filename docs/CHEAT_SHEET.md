@@ -1,7 +1,7 @@
 # Cheat sheet: restart guide
 
 For Dan, or for a new assistant session picking this up cold. Last updated
-2026-10-05, after inventory + trolley (one-SKU pretend pick). The details live in the linked docs.
+2026-10-05, after multi-trip shopping list (fill trolley → ship). Details in the linked docs.
 
 ## North star
 
@@ -98,7 +98,8 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
   * `butlerbot_warehouse.wbt`: the 70 × 65 m prototype warehouse. It has
     6 m racks, dock doors and staging, all Solids with boundingObjects, plus
     placeholder inventory cubes (`WH_INVENTORY`) and a pull-behind trolley
-    (`WH_TROLLEY`). See `docs/INVENTORY_TROLLEY.md`.
+    (`WH_TROLLEY`). One-SKU pick: `docs/INVENTORY_TROLLEY.md`. Multi-trip
+    shopping list: `docs/SHOPPING_LIST.md`.
   * `butlerbot_warehouse_obstacles.wbt`: the same warehouse plus three test
     props (box in aisle 5, waist-high table edge on the dock lane, shelf corner
     beside the start lane). Its `# OBSTACLES on` tag turns stereo+radar on.
@@ -129,7 +130,8 @@ repo `.env`. A value set with `set` wins.
 | `RBM_OBSTACLES` | `1` = stereo+radar obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`, `radar_motion`), off everywhere else. |
 | `RBM_STEREO_BACKEND` | `auto` (default: OpenCV StereoSGBM if `cv2` imports, else numpy), `sgbm` or `numpy`. numpy works without OpenCV but costs ~170 ms per frame. |
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |
-| `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube onto the trolley, then continues to shipping. Unset = trolley follow only (no pick). See `docs/INVENTORY_TROLLEY.md`. |
+| `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube onto the trolley, then continues to shipping. Ignored when `RBM_SHOPPING_LIST` is set. See `docs/INVENTORY_TROLLEY.md`. |
+| `RBM_SHOPPING_LIST` | Multi-trip shopping list: `demo`/`1`…`N` = that trip (use matching `shopping_list_trip_N` `RBM_ROUTE`); `all` = multi-trip state machine. Capacity 2, fill then ship. See `docs/SHOPPING_LIST.md`. |
 | `RBM_NADIR_GUARD_PER_FRAME` | `1` = gap-mode NadirGuard counts per camera frame (opt-in; gap mode only) |
 
 ## Commands (Windows cmd, from the repo folder)
@@ -235,6 +237,28 @@ set RBM_PICK_SKU=
 
 Unit tests (no Webots): `python -m pytest tests\test_inventory_pick.py -q`
 
+Shopping list (multi-trip, fill trolley then ship). Capacity 2 cubes; demo list
+is 7 SKUs → 4 trips. **One trip per Webots launch** (finish at SHP). Routes and
+SKU pairs: `tracks\warehouse.json` / `python scripts\warehouse_builder.py --summary`.
+Details: `docs/SHOPPING_LIST.md`.
+
+```bat
+REM trip 1
+set RBM_ROUTE=S,S,R,L,L,R,L,L,S,R,S,S,S,S,L,S
+set RBM_SHOPPING_LIST=1
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+REM trip 2
+set RBM_ROUTE=S,S,L,S,R,L,L,R,S,S,L,S
+set RBM_SHOPPING_LIST=2
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse
+
+set RBM_SHOPPING_LIST=
+set RBM_ROUTE=
+```
+
+Unit tests: `python -m pytest tests\test_shopping_list.py tests\test_inventory_pick.py -q`
+
 
 The warehouse main view is a top-down follow cam: straight down from 48.5 m, ~30 m of floor
 across, and the map doesn't rotate (dock wall at the bottom). It's not the 3.2 m chase; see `docs/WAREHOUSE.md`.
@@ -298,8 +322,10 @@ python -m pytest -q
 | `save-2026-10-01-corner90-v1` | waypoint tracks and worlds, sharp-corner pivot, post-pivot gate settling (PR #8) |
 | `save-2026-10-02-warehouse-v1` | warehouse merged (PR #10): 70 × 65 m layout, road-graph track, route planner; dock shuttle and odd-aisle-5 runs 4.7 / 5.2 cm max |
 | `save-2026-10-05-pre-junction-turn-v1` | restore point before junction-turn confidence / remaining-m latency fix |
+| `save-2026-10-05-inventory-trolley-v1` | inventory cubes + hitch trolley + one-SKU pretend pick (PR #14) |
+| `save-2026-10-05-pre-shopping-list-v1` | restore point on main before multi-trip shopping list |
 
-To go back: `git checkout save-2026-10-02-warehouse-v1`. Return with `git checkout main`.
+To go back: `git checkout save-2026-10-05-pre-shopping-list-v1`. Return with `git checkout main`.
 
 ## Best scores
 

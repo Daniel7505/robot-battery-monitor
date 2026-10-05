@@ -2,8 +2,7 @@
 
 Vertical slice after radar: locate one shelf SKU group, stop beside it, pretend
 to pick (caller removes / hides a cube and optionally shows trolley cargo), then
-continue to shipping. Multi-trip shopping lists and route optimisation that fill
-the trolley before shipping are deferred.
+continue to shipping. Multi-trip shopping lists live in ``src/shopping_list.py``.
 
 Geometry is derived from a warehouse layout (aisle centres, rack blocks, rack
 depth, beam pitch) — nothing aisle- or bay-hardcoded beyond which demo groups
@@ -114,8 +113,8 @@ def demo_group_specs(layout) -> list[dict]:
     """Which placeholder groups to seed. Derived from the live aisle / shipping layout.
 
     Primary demo SKU sits on the odd aisle used by ``odd_aisle_to_shipping`` so
-    one existing RBM_ROUTE already drives past it. Extra groups are visual
-    placeholders for a future multi-SKU shopping list (not picked in this PR).
+    one existing RBM_ROUTE already drives past it. Extra groups span other taped
+    inner aisles / rack blocks for the multi-trip shopping list.
     """
     n = layout.n_aisles - 1
     odds = [
@@ -124,14 +123,26 @@ def demo_group_specs(layout) -> list[dict]:
         if (i - layout.sp.main_aisle) % 2 and i in layout.taped and i != layout.ship_aisle
     ]
     odd = odds[len(odds) // 2] if odds else layout.ship_aisle
-    # a couple of neighbours for "inventory on shelves" look; not on the pick mission
-    extras = []
-    for i in (odd - 2, odd + 2):
-        if 1 <= i < layout.n_aisles - 1 and i != layout.ship_aisle and i in layout.taped:
-            extras.append(i)
-    specs = [{"aisle": odd, "block": 0, "side": "left", "demo": True}]
-    for i, aisle in enumerate(extras[:2]):
-        specs.append({"aisle": aisle, "block": i % len(layout.rack_blocks), "side": "left", "demo": False})
+    specs: list[dict] = [{"aisle": odd, "block": 0, "side": "left", "demo": True}]
+    seen = {(odd, 0, "left")}
+    candidates = [
+        i
+        for i in layout.taped
+        if i not in (0, layout.n_aisles - 1, layout.sp.main_aisle, layout.ship_aisle)
+    ]
+    n_blocks = len(layout.rack_blocks)
+    for i, aisle in enumerate(candidates):
+        block = i % n_blocks
+        key = (aisle, block, "left")
+        if key in seen:
+            block = (block + 1) % n_blocks
+            key = (aisle, block, "left")
+        if key in seen:
+            continue
+        seen.add(key)
+        specs.append({"aisle": aisle, "block": block, "side": "left", "demo": False})
+        if len(specs) >= 7:
+            break
     return specs
 
 

@@ -34,7 +34,7 @@ controller turns stereo obstacle sensing on there by default.
 Placeholder inventory cubes (grouped by aisle / block SKU) live in
 ``DEF WH_INVENTORY``; a pull-behind trolley prop ``DEF WH_TROLLEY`` starts
 behind the spawn and the controller keeps it hitched. See
-``src/inventory_pick.py`` and ``docs/INVENTORY_TROLLEY.md``.
+``src/inventory_pick.py``, ``src/shopping_list.py``, ``docs/INVENTORY_TROLLEY.md``, and ``docs/SHOPPING_LIST.md``.
 """
 from __future__ import annotations
 
@@ -262,7 +262,7 @@ class Layout:
         # an aisle an odd number of aisles from the start aisle (untaped while tape_every was 2): the middle one
         odds = [i for i in range(1, n) if (i - self.sp.main_aisle) % 2 and i in self.taped and i != self.ship_aisle]
         odd = odds[len(odds) // 2] if odds else self.ship_aisle
-        return [
+        out = [
             {"name": "far_aisle_to_shipping",
              "description": f"receiving RCV-1 -> far aisle {n} (back block) -> shipping SHP-1",
              "to": "shipping_1", "via": [[round((far_block[0] + far_block[1]) / 2, 2), round(self.aisle_y[n], 3)]]},
@@ -286,6 +286,23 @@ class Layout:
              "to": "shipping_1", "via": [[round((xa + xb) / 2, 2), round(self.aisle_y[odd], 3)] for xa, xb in self.rack_blocks] +
                                         [[round((far_block[0] + far_block[1]) / 2, 2), round(self.ship_y, 3)]]},
         ]
+        # multi-trip shopping list: one mission per trolley trip (via = stop approach points)
+        from src.shopping_list import demo_shopping_lines, plan_shopping_trips
+
+        groups = self.inventory_groups()
+        shop = plan_shopping_trips(demo_shopping_lines(groups), groups)
+        for trip in shop.trips:
+            out.append({
+                "name": f"shopping_list_trip_{trip.trip_index}",
+                "description": (
+                    f"shopping trip {trip.trip_index}/{shop.n_trips}: pick "
+                    + ", ".join(trip.skus)
+                    + f" (trolley cap {shop.capacity}) -> shipping SHP-1"
+                ),
+                "to": "shipping_1",
+                "via": [[round(float(v[0]), 3), round(float(v[1]), 3)] for v in trip.via],
+            })
+        return out
 
     # ---- walls / doors -------------------------------------------------------
     def walls_and_doors(self) -> list:
@@ -464,11 +481,29 @@ def build_track(lay: Layout):
     from src.inventory_pick import inventory_to_json
 
     d["inventory"] = inventory_to_json(lay.inventory_groups())
+    from src.shopping_list import (
+        attach_trip_routes,
+        demo_shopping_lines,
+        plan_shopping_trips,
+        plan_to_json,
+    )
+
+    shop = plan_shopping_trips(demo_shopping_lines(lay.inventory_groups()), lay.inventory_groups())
+    attach_trip_routes(shop, g)
+    # sync mission routes onto the shopping plan trips
+    by_name = {m["name"]: m for m in missions}
+    for trip in shop.trips:
+        m = by_name.get(f"shopping_list_trip_{trip.trip_index}")
+        if m:
+            trip.route = m["route"]
+            trip.length_m = m["length_m"]
+    d["shopping_list"] = plan_to_json(shop)
     d["notes"] = [
         "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
         f"Default route (no RBM_ROUTE): {dflt.note or ('ends at ' + str(dflt.exit))}.",
         "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
         "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md).",
+        "Shopping list: multi-trip fill-trolley-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N.",
     ]
     return d, TrackNetwork.from_dict(d, TRACK_JSON), g, dflt
 
@@ -1057,6 +1092,12 @@ def main(argv=None) -> int:
         mark = " DEMO" if g.meta.get("demo") else ""
         print(f"inventory{mark} {g.sku}: aisle {g.aisle} block {g.block} {g.side}, {g.n_cubes} cubes, "
               f"approach ({g.approach_xy[0]:.2f}, {g.approach_xy[1]:.2f})")
+    shop = d.get("shopping_list") or {}
+    if shop:
+        print(f"shopping_list: {shop.get('n_trips')} trips, capacity {shop.get('capacity')}, "
+              f"units {shop.get('total_units')}, order {shop.get('order_mode')}")
+        for t in shop.get("trips") or []:
+            print(f"  trip {t['trip_index']}: {t['skus']}  set RBM_ROUTE={t.get('route')}")
     if not a.summary:
         print(f"wrote {TRACK_JSON}\nwrote {WORLD}" + ("" if a.no_world else f"\nwrote {OBSTACLES_WORLD}")
               + (f"\nwrote {a.preview}" if a.preview else ""))

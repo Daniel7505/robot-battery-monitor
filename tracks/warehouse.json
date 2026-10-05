@@ -111,6 +111,10 @@
     "S,S,S,S,R,S,S,S,L,S,L": "receiving_2",
     "L,S": "shipping_2",
     "S,S,L,S,S,R,S,L,S,S,L,S,S,S": "shipping_1",
+    "S,S,R,L,L,R,L,L,S,R,S,S,S,S,L,S": "shipping_1",
+    "S,S,L,S,R,L,L,R,S,S,L,S": "shipping_1",
+    "S,S,L,S,S,R,S,L,L,S,R,S,L,S": "shipping_1",
+    "S,S,S,S,L,S,S,S,S,L,S,R,L,S": "shipping_1",
     "default": null
   },
   "missions": [
@@ -181,6 +185,61 @@
       "junctions": 14,
       "route_entries": 14,
       "corners": 0
+    },
+    {
+      "name": "shopping_list_trip_1",
+      "description": "shopping trip 1/4: pick SKU-A01-B0-L, SKU-A03-B1-L (trolley cap 2) -> shipping SHP-1",
+      "to": "shipping_1",
+      "via": [
+        [28.125, -6.0],
+        [48.375, 6.0]
+      ],
+      "route": "S,S,R,L,L,R,L,L,S,R,S,S,S,S,L,S",
+      "length_m": 168.0,
+      "junctions": 16,
+      "route_entries": 16,
+      "corners": 0
+    },
+    {
+      "name": "shopping_list_trip_2",
+      "description": "shopping trip 2/4: pick SKU-A04-B0-L, SKU-A05-B0-L (trolley cap 2) -> shipping SHP-1",
+      "to": "shipping_1",
+      "via": [
+        [28.125, 12.0],
+        [28.125, 18.0]
+      ],
+      "route": "S,S,L,S,R,L,L,R,S,S,L,S",
+      "length_m": 115.5,
+      "junctions": 12,
+      "route_entries": 12,
+      "corners": 0
+    },
+    {
+      "name": "shopping_list_trip_3",
+      "description": "shopping trip 3/4: pick SKU-A05-B1-L, SKU-A06-B0-L (trolley cap 2) -> shipping SHP-1",
+      "to": "shipping_1",
+      "via": [
+        [48.375, 18.0],
+        [28.125, 24.0]
+      ],
+      "route": "S,S,L,S,S,R,S,L,L,S,R,S,L,S",
+      "length_m": 156.0,
+      "junctions": 14,
+      "route_entries": 14,
+      "corners": 0
+    },
+    {
+      "name": "shopping_list_trip_4",
+      "description": "shopping trip 4/4: pick SKU-A07-B1-L (trolley cap 2) -> shipping SHP-1",
+      "to": "shipping_1",
+      "via": [
+        [48.375, 30.0]
+      ],
+      "route": "S,S,S,S,L,S,S,S,S,L,S,R,L,S",
+      "length_m": 156.0,
+      "junctions": 14,
+      "route_entries": 14,
+      "corners": 0
     }
   ],
   "inventory": [
@@ -202,18 +261,86 @@
       "mission": "pick_one_sku_to_shipping"
     },
     {
-      "sku": "SKU-A03-B0-L",
-      "aisle": 3,
+      "sku": "SKU-A01-B0-L",
+      "aisle": 1,
       "block": 0,
       "side": "left",
       "n_cubes": 4,
-      "approach_xy": [28.125, 6.0],
-      "centroid_xy": [28.265, 7.99],
+      "approach_xy": [28.125, -6.0],
+      "centroid_xy": [28.265, -4.01],
       "cube_defs": [
-        "WH_INV_SKU_A03_B0_L_0",
-        "WH_INV_SKU_A03_B0_L_1",
-        "WH_INV_SKU_A03_B0_L_2",
-        "WH_INV_SKU_A03_B0_L_3"
+        "WH_INV_SKU_A01_B0_L_0",
+        "WH_INV_SKU_A01_B0_L_1",
+        "WH_INV_SKU_A01_B0_L_2",
+        "WH_INV_SKU_A01_B0_L_3"
+      ],
+      "demo": false,
+      "mission": null
+    },
+    {
+      "sku": "SKU-A03-B1-L",
+      "aisle": 3,
+      "block": 1,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [48.375, 6.0],
+      "centroid_xy": [48.515, 7.99],
+      "cube_defs": [
+        "WH_INV_SKU_A03_B1_L_0",
+        "WH_INV_SKU_A03_B1_L_1",
+        "WH_INV_SKU_A03_B1_L_2",
+        "WH_INV_SKU_A03_B1_L_3"
+      ],
+      "demo": false,
+      "mission": null
+    },
+    {
+      "sku": "SKU-A04-B0-L",
+      "aisle": 4,
+      "block": 0,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [28.125, 12.0],
+      "centroid_xy": [28.265, 13.99],
+      "cube_defs": [
+        "WH_INV_SKU_A04_B0_L_0",
+        "WH_INV_SKU_A04_B0_L_1",
+        "WH_INV_SKU_A04_B0_L_2",
+        "WH_INV_SKU_A04_B0_L_3"
+      ],
+      "demo": false,
+      "mission": null
+    },
+    {
+      "sku": "SKU-A05-B1-L",
+      "aisle": 5,
+      "block": 1,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [48.375, 18.0],
+      "centroid_xy": [48.515, 19.99],
+      "cube_defs": [
+        "WH_INV_SKU_A05_B1_L_0",
+        "WH_INV_SKU_A05_B1_L_1",
+        "WH_INV_SKU_A05_B1_L_2",
+        "WH_INV_SKU_A05_B1_L_3"
+      ],
+      "demo": false,
+      "mission": null
+    },
+    {
+      "sku": "SKU-A06-B0-L",
+      "aisle": 6,
+      "block": 0,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [28.125, 24.0],
+      "centroid_xy": [28.265, 25.99],
+      "cube_defs": [
+        "WH_INV_SKU_A06_B0_L_0",
+        "WH_INV_SKU_A06_B0_L_1",
+        "WH_INV_SKU_A06_B0_L_2",
+        "WH_INV_SKU_A06_B0_L_3"
       ],
       "demo": false,
       "mission": null
@@ -236,10 +363,195 @@
       "mission": null
     }
   ],
+  "shopping_list": {
+    "capacity": 2,
+    "order_mode": "aisle",
+    "ship_exit": "shipping_1",
+    "n_trips": 4,
+    "total_units": 7,
+    "lines": [
+      {
+        "sku": "SKU-A05-B0-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A01-B0-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A03-B1-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A04-B0-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A05-B1-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A06-B0-L",
+        "qty": 1
+      },
+      {
+        "sku": "SKU-A07-B1-L",
+        "qty": 1
+      }
+    ],
+    "trips": [
+      {
+        "trip_index": 1,
+        "units": 2,
+        "skus": [
+          "SKU-A01-B0-L",
+          "SKU-A03-B1-L"
+        ],
+        "via": [
+          [28.125, -6.0],
+          [48.375, 6.0]
+        ],
+        "route": "S,S,R,L,L,R,L,L,S,R,S,S,S,S,L,S",
+        "length_m": 168.0,
+        "stops": [
+          {
+            "sku": "SKU-A01-B0-L",
+            "qty": 1,
+            "aisle": 1,
+            "block": 0,
+            "side": "left",
+            "approach_xy": [28.125, -6.0]
+          },
+          {
+            "sku": "SKU-A03-B1-L",
+            "qty": 1,
+            "aisle": 3,
+            "block": 1,
+            "side": "left",
+            "approach_xy": [48.375, 6.0]
+          }
+        ]
+      },
+      {
+        "trip_index": 2,
+        "units": 2,
+        "skus": [
+          "SKU-A04-B0-L",
+          "SKU-A05-B0-L"
+        ],
+        "via": [
+          [28.125, 12.0],
+          [28.125, 18.0]
+        ],
+        "route": "S,S,L,S,R,L,L,R,S,S,L,S",
+        "length_m": 115.5,
+        "stops": [
+          {
+            "sku": "SKU-A04-B0-L",
+            "qty": 1,
+            "aisle": 4,
+            "block": 0,
+            "side": "left",
+            "approach_xy": [28.125, 12.0]
+          },
+          {
+            "sku": "SKU-A05-B0-L",
+            "qty": 1,
+            "aisle": 5,
+            "block": 0,
+            "side": "left",
+            "approach_xy": [28.125, 18.0]
+          }
+        ]
+      },
+      {
+        "trip_index": 3,
+        "units": 2,
+        "skus": [
+          "SKU-A05-B1-L",
+          "SKU-A06-B0-L"
+        ],
+        "via": [
+          [48.375, 18.0],
+          [28.125, 24.0]
+        ],
+        "route": "S,S,L,S,S,R,S,L,L,S,R,S,L,S",
+        "length_m": 156.0,
+        "stops": [
+          {
+            "sku": "SKU-A05-B1-L",
+            "qty": 1,
+            "aisle": 5,
+            "block": 1,
+            "side": "left",
+            "approach_xy": [48.375, 18.0]
+          },
+          {
+            "sku": "SKU-A06-B0-L",
+            "qty": 1,
+            "aisle": 6,
+            "block": 0,
+            "side": "left",
+            "approach_xy": [28.125, 24.0]
+          }
+        ]
+      },
+      {
+        "trip_index": 4,
+        "units": 1,
+        "skus": [
+          "SKU-A07-B1-L"
+        ],
+        "via": [
+          [48.375, 30.0]
+        ],
+        "route": "S,S,S,S,L,S,S,S,S,L,S,R,L,S",
+        "length_m": 156.0,
+        "stops": [
+          {
+            "sku": "SKU-A07-B1-L",
+            "qty": 1,
+            "aisle": 7,
+            "block": 1,
+            "side": "left",
+            "approach_xy": [48.375, 30.0]
+          }
+        ]
+      }
+    ],
+    "assumptions": [
+      "Trolley capacity = floor cubes that fit on the bed (length\u00d7width / cube footprint), currently 2 \u2014 no stacking / no mass limit.",
+      "Each shopping line is one pretend-pick cube removal (qty counts cubes).",
+      "Trip packing is first-fit after visit ordering: fill to capacity, then ship.",
+      "Visit order default = aisle ascending, then block, then SKU (warehouse sweep). Optional nearest-neighbour from start_xy / last approach.",
+      "Per-trip RBM_ROUTE is planned once from receiving start \u2192 via approaches \u2192 shipping_1 (RoadGraph). No live re-route around blocked aisles.",
+      "Webots: one trip per launch (finish at SHP ends the run). Unload/reset between trips is modelled in the state machine for offline / future continuous dock-return.",
+      "Ultrasound and path-around remain deferred. BoM held."
+    ],
+    "efficiency": {
+      "kind": "shopping_efficiency_stub",
+      "n_trips": 4,
+      "total_units": 7,
+      "capacity": 2,
+      "order_mode": "aisle",
+      "path_m": 595.5,
+      "est_drive_wh": 7.146,
+      "battery_wh_start": null,
+      "elapsed_s": null,
+      "units_per_trip": [
+        2,
+        2,
+        2,
+        1
+      ],
+      "note": "Stub metrics only \u2014 wire dashboard battery/time when twin path lengths + SoC are logged per shopping trip. Ultrasound deferred."
+    }
+  },
   "notes": [
     "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
     "Default route (no RBM_ROUTE): loops forever (default policy circles the network).",
     "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
-    "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md)."
+    "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md).",
+    "Shopping list: multi-trip fill-trolley-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N."
   ]
 }

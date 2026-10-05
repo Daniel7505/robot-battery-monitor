@@ -220,6 +220,7 @@ class RowfitRuntime:
         self.route_text, self.route_warnings = "", []
         self.configure_route()
         self.obstacles = None  # controller_obstacles.ObstacleRuntime when RBM_OBSTACLES is on
+        self.inventory = None  # controller_inventory.InventoryRuntime (trolley + pretend pick)
 
     def configure_route(self) -> None:
         """RBM_ROUTE (junction choices, e.g. S,L,R), RBM_MAX_BLIND_M (default 4.0),

@@ -30,6 +30,11 @@ later see them. The clean world has an empty ``WH_OBSTACLES`` group; the
 ``_obstacles`` world fills it with three test props placed on known routes
 (:meth:`Layout.obstacle_props`) and carries ``# OBSTACLES on`` so the
 controller turns stereo obstacle sensing on there by default.
+
+Placeholder inventory cubes (grouped by aisle / block SKU) live in
+``DEF WH_INVENTORY``; a pull-behind trolley prop ``DEF WH_TROLLEY`` starts
+behind the spawn and the controller keeps it hitched. See
+``src/inventory_pick.py`` and ``docs/INVENTORY_TROLLEY.md``.
 """
 from __future__ import annotations
 
@@ -107,6 +112,15 @@ class WarehouseSpec:
     obs_shelf_m: tuple = (1.2, 0.6, 1.8)  # free-standing shelf unit x, y, height beside the start lane
     obs_shelf_gap_m: float = 0.10  # its corner this far OUTSIDE the lane edge (outside the corridor: pass)
     obs_shelf_x_m: float = 13.0  # its near corner x on the start lane (after the forklift crossing)
+    # placeholder inventory (grouped cubes on rack faces) + pull-behind trolley prop
+    inv_cube_m: tuple = (0.28, 0.28, 0.28)  # tote / carton placeholder
+    inv_cubes_per_group: int = 4
+    trolley_length_m: float = 0.55
+    trolley_width_m: float = 0.40
+    trolley_bed_h_m: float = 0.18
+    trolley_rail_h_m: float = 0.32
+    trolley_tongue_m: float = 0.28
+    chassis_length_m: float = 0.36  # ButlerBot wheeled chassis (profile); hitch derives from this
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +279,12 @@ class Layout:
                             f"front to back) -> back cross aisle -> down shipping aisle {self.ship_aisle} -> shipping SHP-1",
              "to": "shipping_1", "via": [[round((xa + xb) / 2, 2), round(self.aisle_y[odd], 3)] for xa, xb in self.rack_blocks] +
                                         [[round((far_block[0] + far_block[1]) / 2, 2), round(self.ship_y, 3)]]},
+            # one-SKU pretend pick: same spine as odd_aisle; controller stops at the demo group on aisle {odd}
+            {"name": "pick_one_sku_to_shipping",
+             "description": f"receiving RCV-1 -> aisle {odd} demo SKU group (pretend pick) -> shipping aisle "
+                            f"{self.ship_aisle} -> shipping SHP-1",
+             "to": "shipping_1", "via": [[round((xa + xb) / 2, 2), round(self.aisle_y[odd], 3)] for xa, xb in self.rack_blocks] +
+                                        [[round((far_block[0] + far_block[1]) / 2, 2), round(self.ship_y, 3)]]},
         ]
 
     # ---- walls / doors -------------------------------------------------------
@@ -375,6 +395,14 @@ class Layout:
                     raise ValueError(f"{b.name} overlaps {q.name}")
         return out
 
+    def inventory_groups(self):
+        """Placeholder inventory cube groups (by aisle / block SKU). See src.inventory_pick."""
+        from src.inventory_pick import build_inventory_groups
+
+        return build_inventory_groups(
+            self, cube_m=tuple(self.sp.inv_cube_m), cubes_per_group=int(self.sp.inv_cubes_per_group)
+        )
+
     def summary(self, net=None, graph=None) -> dict:
         sp = self.sp
         rows = self.rack_rows()
@@ -433,10 +461,14 @@ def build_track(lay: Layout):
     routes["default"] = dflt.exit  # None: the default (straight, else left) circles the perimeter
     d["routes"] = routes
     d["missions"] = missions
+    from src.inventory_pick import inventory_to_json
+
+    d["inventory"] = inventory_to_json(lay.inventory_groups())
     d["notes"] = [
         "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
         f"Default route (no RBM_ROUTE): {dflt.note or ('ends at ' + str(dflt.exit))}.",
         "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
+        "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md).",
     ]
     return d, TrackNetwork.from_dict(d, TRACK_JSON), g, dflt
 
@@ -471,6 +503,9 @@ _COLORS = {  # none of these pass the lane yellow test (min(R,G) - B >= 0.22)
     "wall": (0.78, 0.78, 0.76), "header": (0.78, 0.78, 0.76), "door": (0.45, 0.5, 0.56),
     "upright": (0.12, 0.22, 0.45), "beam": (0.15, 0.32, 0.62), "load": (0.58, 0.5, 0.42),
     "pallet_wood": (0.55, 0.45, 0.36), "pallet_load": (0.62, 0.58, 0.55), "table": (0.35, 0.37, 0.4),
+    "inv_cube": (0.55, 0.28, 0.22),  # terracotta tote — fails yellow (min-B = 0.06)
+    "inv_cube_demo": (0.22, 0.45, 0.55),  # teal demo SKU — fails yellow
+    "trolley": (0.25, 0.28, 0.32), "trolley_bed": (0.40, 0.42, 0.38), "trolley_load": (0.55, 0.28, 0.22),
 }
 WH_RULE = "# -----------------------------------------------------------------------------\n"
 WH_BEGIN = "# WAREHOUSE_BEGIN"
@@ -600,6 +635,83 @@ def write_prop_texture(path: str = PROP_TEXTURE) -> str:
     return path
 
 
+def inventory_props_vrml(groups: list, app) -> str:
+    """Placeholder cubes in DEF WH_INVENTORY (static Solids, RCS for radar)."""
+    out = []
+    for g in groups:
+        key = "inv_cube_demo" if g.meta.get("demo") else "inv_cube"
+        for c in g.cubes:
+            # DEF is WH_<name>; Box.name is without the WH_ prefix (_solid adds it)
+            name = c.def_name[3:] if c.def_name.startswith("WH_") else c.def_name
+            b = Box(name, "inv_cube", c.cx, c.cy, c.sx, c.sy, c.sz, z0=c.cz - c.sz / 2,
+                    meta={"sku": g.sku, "aisle": g.aisle, "block": g.block, "side": g.side,
+                          "demo": bool(g.meta.get("demo"))})
+            ch = _shape(app, key, (c.sx, c.sy, c.sz), (0, 0, 0), "        ")
+            comment = f"INVENTORY {g.sku} cube {c.index} aisle {g.aisle} block {g.block} {g.side}"
+            out.append(_solid(b, app, ch, comment))
+    return "".join(out)
+
+
+def trolley_vrml(lay: Layout, app) -> str:
+    """Pull-behind trolley prop at the spawn hitch pose (controller keeps it following).
+
+    Not a Robot child (Robot block stays byte-identical across worlds). Supervisor
+    teleports DEF WH_TROLLEY each frame. Cargo Pose WH_TROLLEY_LOAD starts under
+    the floor and is raised onto the bed after a pretend pick.
+    """
+    from src.inventory_pick import TrolleyGeom
+
+    sp = lay.sp
+    tg = TrolleyGeom(
+        chassis_length_m=sp.chassis_length_m,
+        tongue_m=sp.trolley_tongue_m,
+        length_m=sp.trolley_length_m,
+        width_m=sp.trolley_width_m,
+        bed_h_m=sp.trolley_bed_h_m,
+        rail_h_m=sp.trolley_rail_h_m,
+    )
+    # start pose: behind spawn facing +x (yaw 0)
+    x, y, _yaw = tg.world_pose((0.0, 0.0), 0.0)
+    L, W, bed_h, rail_h = tg.length_m, tg.width_m, tg.bed_h_m, tg.rail_h_m
+    tongue = tg.tongue_m
+    # solid centre at bed mid-height
+    zc = bed_h / 2
+    ch = ""
+    # bed deck
+    ch += _shape(app, "trolley_bed", (L, W, 0.04), (0, 0, -zc + 0.02), "        ")
+    # side rails
+    for dy in (-1, 1):
+        ch += _shape(app, "trolley", (L - 0.04, 0.03, rail_h - bed_h), (0, dy * (W / 2 - 0.02), -zc + bed_h + (rail_h - bed_h) / 2), "        ")
+    # front rail (toward the robot / hitch)
+    ch += _shape(app, "trolley", (0.03, W - 0.04, rail_h - bed_h), (L / 2 - 0.02, 0, -zc + bed_h + (rail_h - bed_h) / 2), "        ")
+    # tongue toward +x (robot)
+    ch += _shape(app, "trolley", (tongue, 0.04, 0.04), (L / 2 + tongue / 2, 0, -zc + 0.06), "        ")
+    # four small wheels (visual only; no physics)
+    for dx in (-1, 1):
+        for dy in (-1, 1):
+            ch += _shape(app, "trolley", (0.08, 0.04, 0.08), (dx * (L / 2 - 0.1), dy * (W / 2 - 0.05), -zc + 0.04), "        ")
+    # cargo placeholder (hidden under floor until pick); DEF via nested Solid name
+    ch += (
+        "        DEF WH_TROLLEY_LOAD Solid {\n"
+        "          translation 0 0 -2\n"
+        '          name "trolley_load"\n'
+        "          radarCrossSection 0.5\n"
+        "          children [\n"
+    )
+    ch += _shape(app, "trolley_load", (0.28, 0.28, 0.28), (0, 0, 0), "            ")
+    ch += (
+        "          ]\n"
+        "          boundingObject Box { size 0.28 0.28 0.28 }\n"
+        "        }\n"
+    )
+    # custom solid (RCS like other warehouse props); hitch from TrolleyGeom
+    s = f"    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch {tg.hitch_behind_m:.2f} m)\n"
+    s += f"    DEF WH_TROLLEY Solid {{\n      translation {_f(x)} {_f(y)} {_f(zc)}\n"
+    s += f'      name "trolley"\n      radarCrossSection 1.5\n      children [\n{ch}      ]\n'
+    s += f"      boundingObject Box {{ size {_f(L)} {_f(W)} {_f(rail_h)} }}\n    }}\n"
+    return s
+
+
 def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str:
     sp = lay.sp
     app = _Apps()
@@ -636,6 +748,16 @@ def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str
                     ch += _shape(app, "table", (0.05, 0.05, b.h - 0.05),
                                  (dx * (b.sx / 2 - 0.05), dy * (b.sy / 2 - 0.05), -0.025), "        ")
         out.append(_solid(b, app, ch))
+    # ---- placeholder inventory cubes (grouped by aisle/block SKU) + pull-behind trolley ----
+    groups = lay.inventory_groups()
+    out.append(
+        "    # ---- INVENTORY: placeholder cubes on rack faces (src/inventory_pick.py). Demo SKU is teal.\n"
+    )
+    out.append("    DEF WH_INVENTORY Group {\n      children [\n")
+    inv = inventory_props_vrml(groups, app)
+    out.append("".join(("    " + ln + "\n") if ln else "\n" for ln in inv.rstrip("\n").split("\n")))
+    out.append("      ]\n    }\n")
+    out.append(trolley_vrml(lay, app))
     if props:
         out.append("    # ---- OBSTACLE TEST PROPS (scripts/warehouse_builder.py obstacle_props). Textured: block-matching\n"
                    "    #      stereo needs texture. Delete one in the scene tree while the robot waits = 'removed'.\n")
@@ -733,8 +855,11 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None, pr
             lines[k] = tb.info_line(net)
             lines.insert(k + 1, f'    "WAREHOUSE: {sp.width_m:g} x {sp.depth_m:g} m prototype, start inside receiving door RCV-1, '
                                 f'RBM_ROUTE per junction (see tracks/warehouse.json missions)"')
+            lines.insert(k + 2, '    "INVENTORY: placeholder cubes in WH_INVENTORY (aisle/block SKUs); '
+                                   'pull-behind WH_TROLLEY; one-SKU pretend pick: set RBM_PICK_SKU '
+                                   '(see tracks/warehouse.json inventory + docs/INVENTORY_TROLLEY.md)"')
             if props:
-                lines.insert(k + 2, '    "OBSTACLES: test props in WH_OBSTACLES (box in the odd aisle, table edge on the dock lane, '
+                lines.insert(k + 3, '    "OBSTACLES: test props in WH_OBSTACLES (box in the odd aisle, table edge on the dock lane, '
                                     'shelf beside the start lane); stereo obstacle sensing ON here (RBM_OBSTACLES=0 = off)"')
             break
     if props:
@@ -887,7 +1012,9 @@ def build_all(sp: WarehouseSpec | None = None, *, track_path=TRACK_JSON, world_p
     d, net, g, dflt = build_track(lay)
     staging = lay.staging(net)
     props = lay.obstacle_props(staging)
-    res = {"layout": lay, "track": d, "net": net, "graph": g, "staging": staging, "default": dflt, "props": props}
+    inventory = lay.inventory_groups()
+    res = {"layout": lay, "track": d, "net": net, "graph": g, "staging": staging, "default": dflt,
+           "props": props, "inventory": inventory}
     if write:
         if track_path:
             write_track_json(d, track_path)
@@ -928,6 +1055,10 @@ def main(argv=None) -> int:
     for b in res["props"]:
         print(f"obstacle prop {b.name}: x {b.rect[0]:.2f}..{b.rect[2]:.2f} y {b.rect[1]:.2f}..{b.rect[3]:.2f} h {b.h:g} — "
               f"{b.meta['lane']}; route {b.meta['route']}: expect {b.meta['expect']}")
+    for g in res["inventory"]:
+        mark = " DEMO" if g.meta.get("demo") else ""
+        print(f"inventory{mark} {g.sku}: aisle {g.aisle} block {g.block} {g.side}, {g.n_cubes} cubes, "
+              f"approach ({g.approach_xy[0]:.2f}, {g.approach_xy[1]:.2f})")
     if not a.summary:
         print(f"wrote {TRACK_JSON}\nwrote {WORLD}" + ("" if a.no_world else f"\nwrote {OBSTACLES_WORLD}")
               + (f"\nwrote {a.preview}" if a.preview else ""))

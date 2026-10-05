@@ -166,11 +166,80 @@
       "junctions": 14,
       "route_entries": 14,
       "corners": 0
+    },
+    {
+      "name": "pick_one_sku_to_shipping",
+      "description": "receiving RCV-1 -> aisle 5 demo SKU group (pretend pick) -> shipping aisle 8 -> shipping SHP-1",
+      "to": "shipping_1",
+      "via": [
+        [28.12, 18.0],
+        [48.38, 18.0],
+        [48.38, 36.0]
+      ],
+      "route": "S,S,L,S,S,R,S,L,S,S,L,S,S,S",
+      "length_m": 156.0,
+      "junctions": 14,
+      "route_entries": 14,
+      "corners": 0
+    }
+  ],
+  "inventory": [
+    {
+      "sku": "SKU-A05-B0-L",
+      "aisle": 5,
+      "block": 0,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [28.125, 18.0],
+      "centroid_xy": [28.265, 19.99],
+      "cube_defs": [
+        "WH_INV_SKU_A05_B0_L_0",
+        "WH_INV_SKU_A05_B0_L_1",
+        "WH_INV_SKU_A05_B0_L_2",
+        "WH_INV_SKU_A05_B0_L_3"
+      ],
+      "demo": true,
+      "mission": "pick_one_sku_to_shipping"
+    },
+    {
+      "sku": "SKU-A03-B0-L",
+      "aisle": 3,
+      "block": 0,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [28.125, 6.0],
+      "centroid_xy": [28.265, 7.99],
+      "cube_defs": [
+        "WH_INV_SKU_A03_B0_L_0",
+        "WH_INV_SKU_A03_B0_L_1",
+        "WH_INV_SKU_A03_B0_L_2",
+        "WH_INV_SKU_A03_B0_L_3"
+      ],
+      "demo": false,
+      "mission": null
+    },
+    {
+      "sku": "SKU-A07-B1-L",
+      "aisle": 7,
+      "block": 1,
+      "side": "left",
+      "n_cubes": 4,
+      "approach_xy": [48.375, 30.0],
+      "centroid_xy": [48.515, 31.99],
+      "cube_defs": [
+        "WH_INV_SKU_A07_B1_L_0",
+        "WH_INV_SKU_A07_B1_L_1",
+        "WH_INV_SKU_A07_B1_L_2",
+        "WH_INV_SKU_A07_B1_L_3"
+      ],
+      "demo": false,
+      "mission": null
     }
   ],
   "notes": [
     "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
     "Default route (no RBM_ROUTE): loops forever (default policy circles the network).",
-    "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt."
+    "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
+    "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md)."
   ]
 }

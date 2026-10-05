@@ -123,6 +123,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_RIGHT Solid {
       translation 28.5 -17.15 4.5
       name "wall_right"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -143,6 +144,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_LEFT Solid {
       translation 28.5 53.15 4.5
       name "wall_left"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -159,6 +161,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_BACK Solid {
       translation 61.15 18 4.5
       name "wall_back"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -175,6 +178,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_1 Solid {
       translation -4.15 -13.75 4.5
       name "wall_dock_1"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -191,6 +195,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_RCV4 Solid {
       translation -4.15 -9 6.1
       name "header_rcv4"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -212,6 +217,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_RCV4 Solid {
       translation -4.2 -9 1.6
       name "door_rcv4"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -232,6 +238,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_2 Solid {
       translation -4.15 -6.75 4.5
       name "wall_dock_2"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -248,6 +255,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_RCV2 Solid {
       translation -4.15 -4.5 6.1
       name "header_rcv2"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -265,6 +273,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_RCV2 Solid {
       translation -4.2 -4.5 1.6
       name "door_rcv2"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -281,6 +290,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_3 Solid {
       translation -4.15 -2.25 4.5
       name "wall_dock_3"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -297,6 +307,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_RCV1 Solid {
       translation -4.15 0 6.1
       name "header_rcv1"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -314,6 +325,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_RCV1 Solid {
       translation -4.2 0 1.6
       name "door_rcv1"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -330,6 +342,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_4 Solid {
       translation -4.15 2.25 4.5
       name "wall_dock_4"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -346,6 +359,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_RCV3 Solid {
       translation -4.15 4.5 6.1
       name "header_rcv3"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -363,6 +377,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_RCV3 Solid {
       translation -4.2 4.5 1.6
       name "door_rcv3"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -379,6 +394,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_5 Solid {
       translation -4.15 18 4.5
       name "wall_dock_5"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -395,6 +411,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_SHP3 Solid {
       translation -4.15 31.5 6.1
       name "header_shp3"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -412,6 +429,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_SHP3 Solid {
       translation -4.2 31.5 1.6
       name "door_shp3"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -428,6 +446,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_6 Solid {
       translation -4.15 33.75 4.5
       name "wall_dock_6"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -444,6 +463,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_SHP1 Solid {
       translation -4.15 36 6.1
       name "header_shp1"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -461,6 +481,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_SHP1 Solid {
       translation -4.2 36 1.6
       name "door_shp1"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -477,6 +498,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_7 Solid {
       translation -4.15 38.25 4.5
       name "wall_dock_7"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -493,6 +515,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_SHP2 Solid {
       translation -4.15 40.5 6.1
       name "header_shp2"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -510,6 +533,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_SHP2 Solid {
       translation -4.2 40.5 1.6
       name "door_shp2"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -526,6 +550,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_8 Solid {
       translation -4.15 42.75 4.5
       name "wall_dock_8"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -542,6 +567,7 @@ DEF WAREHOUSE Group {
     DEF WH_HEADER_SHP4 Solid {
       translation -4.15 45 6.1
       name "header_shp4"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -559,6 +585,7 @@ DEF WAREHOUSE Group {
     DEF WH_DOOR_SHP4 Solid {
       translation -4.2 45 1.6
       name "door_shp4"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -575,6 +602,7 @@ DEF WAREHOUSE Group {
     DEF WH_WALL_DOCK_9 Solid {
       translation -4.15 49.75 4.5
       name "wall_dock_9"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0
@@ -593,6 +621,7 @@ DEF WAREHOUSE Group {
     DEF WH_R01A Solid {
       translation 28.125 -14.35 3
       name "r01a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -820,6 +849,7 @@ DEF WAREHOUSE Group {
     DEF WH_R01B Solid {
       translation 48.375 -14.35 3
       name "r01b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -1035,6 +1065,7 @@ DEF WAREHOUSE Group {
     DEF WH_R02A Solid {
       translation 28.125 -9 3
       name "r02a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -1250,6 +1281,7 @@ DEF WAREHOUSE Group {
     DEF WH_R02B Solid {
       translation 48.375 -9 3
       name "r02b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -1465,6 +1497,7 @@ DEF WAREHOUSE Group {
     DEF WH_R03A Solid {
       translation 28.125 -3 3
       name "r03a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -1680,6 +1713,7 @@ DEF WAREHOUSE Group {
     DEF WH_R03B Solid {
       translation 48.375 -3 3
       name "r03b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -1895,6 +1929,7 @@ DEF WAREHOUSE Group {
     DEF WH_R04A Solid {
       translation 28.125 3 3
       name "r04a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -2110,6 +2145,7 @@ DEF WAREHOUSE Group {
     DEF WH_R04B Solid {
       translation 48.375 3 3
       name "r04b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -2325,6 +2361,7 @@ DEF WAREHOUSE Group {
     DEF WH_R05A Solid {
       translation 28.125 9 3
       name "r05a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -2540,6 +2577,7 @@ DEF WAREHOUSE Group {
     DEF WH_R05B Solid {
       translation 48.375 9 3
       name "r05b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -2755,6 +2793,7 @@ DEF WAREHOUSE Group {
     DEF WH_R06A Solid {
       translation 28.125 15 3
       name "r06a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -2970,6 +3009,7 @@ DEF WAREHOUSE Group {
     DEF WH_R06B Solid {
       translation 48.375 15 3
       name "r06b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -3185,6 +3225,7 @@ DEF WAREHOUSE Group {
     DEF WH_R07A Solid {
       translation 28.125 21 3
       name "r07a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -3400,6 +3441,7 @@ DEF WAREHOUSE Group {
     DEF WH_R07B Solid {
       translation 48.375 21 3
       name "r07b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -3615,6 +3657,7 @@ DEF WAREHOUSE Group {
     DEF WH_R08A Solid {
       translation 28.125 27 3
       name "r08a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -3830,6 +3873,7 @@ DEF WAREHOUSE Group {
     DEF WH_R08B Solid {
       translation 48.375 27 3
       name "r08b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -4045,6 +4089,7 @@ DEF WAREHOUSE Group {
     DEF WH_R09A Solid {
       translation 28.125 33 3
       name "r09a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -4260,6 +4305,7 @@ DEF WAREHOUSE Group {
     DEF WH_R09B Solid {
       translation 48.375 33 3
       name "r09b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -4475,6 +4521,7 @@ DEF WAREHOUSE Group {
     DEF WH_R10A Solid {
       translation 28.125 39 3
       name "r10a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -4690,6 +4737,7 @@ DEF WAREHOUSE Group {
     DEF WH_R10B Solid {
       translation 48.375 39 3
       name "r10b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -4905,6 +4953,7 @@ DEF WAREHOUSE Group {
     DEF WH_R11A Solid {
       translation 28.125 45 3
       name "r11a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -5120,6 +5169,7 @@ DEF WAREHOUSE Group {
     DEF WH_R11B Solid {
       translation 48.375 45 3
       name "r11b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -5335,6 +5385,7 @@ DEF WAREHOUSE Group {
     DEF WH_R12A Solid {
       translation 28.125 50.35 3
       name "r12a"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -5550,6 +5601,7 @@ DEF WAREHOUSE Group {
     DEF WH_R12B Solid {
       translation 48.375 50.35 3
       name "r12b"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.05
@@ -5765,6 +5817,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_001 Solid {
       translation 6.15 -15.5 0.6
       name "pallet_001"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -5798,6 +5851,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_002 Solid {
       translation 7.45 -15.5 0.7
       name "pallet_002"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -5823,6 +5877,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_003 Solid {
       translation 8.75 -15.5 0.55
       name "pallet_003"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -5848,6 +5903,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_004 Solid {
       translation 10.05 -15.5 0.5
       name "pallet_004"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -5873,6 +5929,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_005 Solid {
       translation 11.35 -15.5 0.6
       name "pallet_005"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -5898,6 +5955,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_006 Solid {
       translation 12.65 -15.5 0.7
       name "pallet_006"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -5923,6 +5981,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_007 Solid {
       translation 13.95 -15.5 0.55
       name "pallet_007"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -5948,6 +6007,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_008 Solid {
       translation 6.15 -14.3 0.5
       name "pallet_008"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -5973,6 +6033,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_009 Solid {
       translation 7.45 -14.3 0.6
       name "pallet_009"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -5998,6 +6059,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_010 Solid {
       translation 8.75 -14.3 0.7
       name "pallet_010"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6023,6 +6085,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_011 Solid {
       translation 10.05 -14.3 0.55
       name "pallet_011"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6048,6 +6111,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_012 Solid {
       translation 11.35 -14.3 0.5
       name "pallet_012"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6073,6 +6137,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_013 Solid {
       translation 12.65 -14.3 0.6
       name "pallet_013"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6098,6 +6163,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_014 Solid {
       translation 13.95 -14.3 0.7
       name "pallet_014"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6123,6 +6189,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_015 Solid {
       translation 6.15 -10.9 0.5
       name "pallet_015"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6148,6 +6215,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_016 Solid {
       translation 7.45 -10.9 0.6
       name "pallet_016"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6173,6 +6241,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_017 Solid {
       translation 8.75 -10.9 0.7
       name "pallet_017"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6198,6 +6267,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_018 Solid {
       translation 10.05 -10.9 0.55
       name "pallet_018"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6223,6 +6293,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_019 Solid {
       translation 11.35 -10.9 0.5
       name "pallet_019"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6248,6 +6319,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_020 Solid {
       translation 12.65 -10.9 0.6
       name "pallet_020"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6273,6 +6345,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_021 Solid {
       translation 13.95 -10.9 0.7
       name "pallet_021"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6298,6 +6371,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_022 Solid {
       translation 6.15 -9.7 0.55
       name "pallet_022"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6323,6 +6397,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_023 Solid {
       translation 7.45 -9.7 0.5
       name "pallet_023"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6348,6 +6423,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_024 Solid {
       translation 8.75 -9.7 0.6
       name "pallet_024"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6373,6 +6449,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_025 Solid {
       translation 10.05 -9.7 0.7
       name "pallet_025"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6398,6 +6475,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_026 Solid {
       translation 11.35 -9.7 0.55
       name "pallet_026"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6423,6 +6501,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_027 Solid {
       translation 12.65 -9.7 0.5
       name "pallet_027"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6448,6 +6527,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_028 Solid {
       translation 13.95 -9.7 0.6
       name "pallet_028"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6473,6 +6553,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_029 Solid {
       translation 6.15 -6.3 0.55
       name "pallet_029"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6498,6 +6579,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_030 Solid {
       translation 7.45 -6.3 0.5
       name "pallet_030"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6523,6 +6605,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_031 Solid {
       translation 12.65 -6.3 0.6
       name "pallet_031"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6548,6 +6631,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_032 Solid {
       translation 13.95 -6.3 0.7
       name "pallet_032"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6573,6 +6657,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_033 Solid {
       translation 6.15 -5.1 0.55
       name "pallet_033"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6598,6 +6683,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_034 Solid {
       translation 13.95 -5.1 0.5
       name "pallet_034"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6623,6 +6709,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_035 Solid {
       translation 6.15 2.9 0.55
       name "pallet_035"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6648,6 +6735,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_036 Solid {
       translation 13.95 2.9 0.5
       name "pallet_036"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6673,6 +6761,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_037 Solid {
       translation 6.15 4.1 0.6
       name "pallet_037"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6698,6 +6787,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_038 Solid {
       translation 13.95 4.1 0.7
       name "pallet_038"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6723,6 +6813,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_039 Solid {
       translation 6.15 7.5 0.5
       name "pallet_039"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6748,6 +6839,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_040 Solid {
       translation 7.45 7.5 0.6
       name "pallet_040"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6773,6 +6865,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_041 Solid {
       translation 8.75 7.5 0.7
       name "pallet_041"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6798,6 +6891,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_042 Solid {
       translation 10.05 7.5 0.55
       name "pallet_042"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6823,6 +6917,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_043 Solid {
       translation 11.35 7.5 0.5
       name "pallet_043"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6848,6 +6943,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_044 Solid {
       translation 12.65 7.5 0.6
       name "pallet_044"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6873,6 +6969,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_045 Solid {
       translation 13.95 7.5 0.7
       name "pallet_045"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6898,6 +6995,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_046 Solid {
       translation 6.15 8.7 0.55
       name "pallet_046"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -6923,6 +7021,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_047 Solid {
       translation 7.45 8.7 0.5
       name "pallet_047"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -6948,6 +7047,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_048 Solid {
       translation 8.75 8.7 0.6
       name "pallet_048"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -6973,6 +7073,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_049 Solid {
       translation 10.05 8.7 0.7
       name "pallet_049"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -6998,6 +7099,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_050 Solid {
       translation 11.35 8.7 0.55
       name "pallet_050"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -7023,6 +7125,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_051 Solid {
       translation 12.65 8.7 0.5
       name "pallet_051"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -7048,6 +7151,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_052 Solid {
       translation 13.95 8.7 0.6
       name "pallet_052"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -7073,6 +7177,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_01 Solid {
       translation 6.75 12.45 0.45
       name "table_01"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7129,6 +7234,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_02 Solid {
       translation 9.75 12.45 0.45
       name "table_02"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7181,6 +7287,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_03 Solid {
       translation 12.75 12.45 0.45
       name "table_03"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7233,6 +7340,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_04 Solid {
       translation 6.75 17.05 0.45
       name "table_04"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7285,6 +7393,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_05 Solid {
       translation 9.75 17.05 0.45
       name "table_05"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7337,6 +7446,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_06 Solid {
       translation 12.75 17.05 0.45
       name "table_06"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7389,6 +7499,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_07 Solid {
       translation 6.75 21.65 0.45
       name "table_07"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7441,6 +7552,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_08 Solid {
       translation 9.75 21.65 0.45
       name "table_08"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7493,6 +7605,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_09 Solid {
       translation 12.75 21.65 0.45
       name "table_09"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7545,6 +7658,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_10 Solid {
       translation 6.75 26.25 0.45
       name "table_10"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7597,6 +7711,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_11 Solid {
       translation 9.75 26.25 0.45
       name "table_11"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7649,6 +7764,7 @@ DEF WAREHOUSE Group {
     DEF WH_TABLE_12 Solid {
       translation 12.75 26.25 0.45
       name "table_12"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 0.425
@@ -7701,6 +7817,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_053 Solid {
       translation 6.15 30.5 0.55
       name "pallet_053"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -7726,6 +7843,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_054 Solid {
       translation 7.45 30.5 0.5
       name "pallet_054"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -7751,6 +7869,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_055 Solid {
       translation 8.75 30.5 0.6
       name "pallet_055"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -7776,6 +7895,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_056 Solid {
       translation 10.05 30.5 0.7
       name "pallet_056"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -7801,6 +7921,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_057 Solid {
       translation 11.35 30.5 0.55
       name "pallet_057"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -7826,6 +7947,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_058 Solid {
       translation 12.65 30.5 0.5
       name "pallet_058"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -7851,6 +7973,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_059 Solid {
       translation 13.95 30.5 0.6
       name "pallet_059"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -7876,6 +7999,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_060 Solid {
       translation 6.15 31.7 0.7
       name "pallet_060"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -7901,6 +8025,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_061 Solid {
       translation 7.45 31.7 0.55
       name "pallet_061"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -7926,6 +8051,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_062 Solid {
       translation 8.75 31.7 0.5
       name "pallet_062"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -7951,6 +8077,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_063 Solid {
       translation 10.05 31.7 0.6
       name "pallet_063"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -7976,6 +8103,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_064 Solid {
       translation 11.35 31.7 0.7
       name "pallet_064"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8001,6 +8129,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_065 Solid {
       translation 12.65 31.7 0.55
       name "pallet_065"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8026,6 +8155,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_066 Solid {
       translation 13.95 31.7 0.5
       name "pallet_066"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8051,6 +8181,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_067 Solid {
       translation 6.15 39.7 0.55
       name "pallet_067"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8076,6 +8207,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_068 Solid {
       translation 7.45 39.7 0.5
       name "pallet_068"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8101,6 +8233,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_069 Solid {
       translation 8.75 39.7 0.6
       name "pallet_069"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8126,6 +8259,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_070 Solid {
       translation 10.05 39.7 0.7
       name "pallet_070"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8151,6 +8285,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_071 Solid {
       translation 11.35 39.7 0.55
       name "pallet_071"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8176,6 +8311,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_072 Solid {
       translation 12.65 39.7 0.5
       name "pallet_072"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8201,6 +8337,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_073 Solid {
       translation 13.95 39.7 0.6
       name "pallet_073"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8226,6 +8363,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_074 Solid {
       translation 6.15 40.9 0.7
       name "pallet_074"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8251,6 +8389,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_075 Solid {
       translation 7.45 40.9 0.55
       name "pallet_075"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8276,6 +8415,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_076 Solid {
       translation 8.75 40.9 0.5
       name "pallet_076"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8301,6 +8441,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_077 Solid {
       translation 10.05 40.9 0.6
       name "pallet_077"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8326,6 +8467,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_078 Solid {
       translation 11.35 40.9 0.7
       name "pallet_078"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8351,6 +8493,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_079 Solid {
       translation 12.65 40.9 0.55
       name "pallet_079"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8376,6 +8519,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_080 Solid {
       translation 13.95 40.9 0.5
       name "pallet_080"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8401,6 +8545,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_081 Solid {
       translation 6.15 44.3 0.7
       name "pallet_081"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8426,6 +8571,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_082 Solid {
       translation 7.45 44.3 0.55
       name "pallet_082"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8451,6 +8597,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_083 Solid {
       translation 8.75 44.3 0.5
       name "pallet_083"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8476,6 +8623,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_084 Solid {
       translation 10.05 44.3 0.6
       name "pallet_084"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8501,6 +8649,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_085 Solid {
       translation 11.35 44.3 0.7
       name "pallet_085"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8526,6 +8675,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_086 Solid {
       translation 12.65 44.3 0.55
       name "pallet_086"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8551,6 +8701,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_087 Solid {
       translation 13.95 44.3 0.5
       name "pallet_087"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8576,6 +8727,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_088 Solid {
       translation 6.15 45.5 0.6
       name "pallet_088"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8601,6 +8753,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_089 Solid {
       translation 7.45 45.5 0.7
       name "pallet_089"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8626,6 +8779,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_090 Solid {
       translation 8.75 45.5 0.55
       name "pallet_090"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8651,6 +8805,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_091 Solid {
       translation 10.05 45.5 0.5
       name "pallet_091"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8676,6 +8831,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_092 Solid {
       translation 11.35 45.5 0.6
       name "pallet_092"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8701,6 +8857,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_093 Solid {
       translation 12.65 45.5 0.7
       name "pallet_093"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8726,6 +8883,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_094 Solid {
       translation 13.95 45.5 0.55
       name "pallet_094"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8751,6 +8909,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_095 Solid {
       translation 6.15 48.9 0.6
       name "pallet_095"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8776,6 +8935,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_096 Solid {
       translation 7.45 48.9 0.7
       name "pallet_096"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8801,6 +8961,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_097 Solid {
       translation 8.75 48.9 0.55
       name "pallet_097"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8826,6 +8987,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_098 Solid {
       translation 10.05 48.9 0.5
       name "pallet_098"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8851,6 +9013,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_099 Solid {
       translation 11.35 48.9 0.6
       name "pallet_099"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8876,6 +9039,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_100 Solid {
       translation 12.65 48.9 0.7
       name "pallet_100"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -8901,6 +9065,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_101 Solid {
       translation 13.95 48.9 0.55
       name "pallet_101"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -8926,6 +9091,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_102 Solid {
       translation 6.15 50.1 0.5
       name "pallet_102"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -8951,6 +9117,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_103 Solid {
       translation 7.45 50.1 0.6
       name "pallet_103"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -8976,6 +9143,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_104 Solid {
       translation 8.75 50.1 0.7
       name "pallet_104"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -9001,6 +9169,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_105 Solid {
       translation 10.05 50.1 0.55
       name "pallet_105"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.48
@@ -9026,6 +9195,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_106 Solid {
       translation 11.35 50.1 0.5
       name "pallet_106"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.43
@@ -9051,6 +9221,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_107 Solid {
       translation 12.65 50.1 0.6
       name "pallet_107"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.53
@@ -9076,6 +9247,7 @@ DEF WAREHOUSE Group {
     DEF WH_PALLET_108 Solid {
       translation 13.95 50.1 0.7
       name "pallet_108"
+      radarCrossSection 1
       children [
         Pose {
           translation 0 0 -0.63
@@ -10186,6 +10358,27 @@ Robot {
       height 240
       fieldOfView 1.4
       near 0.05
+    }
+    # Forward radar (docs/OBSTACLES.md): moving objects in the lane corridor.
+    # Looks along -Z; rotation 0 1 0 pi/2 aims it along robot +x. Height 0.45 m
+    # (bumper / cart-radar height) so a rolling ball and a pallet face both return.
+    # Ranges / FOV sized for the stereo corridor (~±0.54 m half-width out to 8 m).
+    DEF RADAR_FWD Radar {
+      translation 0.16 0 0.45
+      rotation 0 1 0 1.5708
+      name "radar_fwd"
+      minRange 0.15
+      maxRange 8
+      horizontalFieldOfView 1.0
+      verticalFieldOfView 0.7
+      minAbsoluteRadialSpeed 0
+      minRadialSpeed 0
+      maxRadialSpeed 0
+      occlusion TRUE
+      antennaGain 20
+      frequency 77
+      transmittedPower 10
+      minDetectableSignal -90
     }
     # Shoulder HUDs only.
     DEF HUD_NADIR Display {

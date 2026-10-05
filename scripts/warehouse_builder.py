@@ -436,7 +436,7 @@ def build_track(lay: Layout):
     d["notes"] = [
         "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
         f"Default route (no RBM_ROUTE): {dflt.note or ('ends at ' + str(dflt.exit))}.",
-        "Obstacles: stereo pair on ButlerBot (docs/OBSTACLES.md); test props only in butlerbot_warehouse_obstacles.wbt. Radar next.",
+        "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
     ]
     return d, TrackNetwork.from_dict(d, TRACK_JSON), g, dflt
 
@@ -506,7 +506,9 @@ def _solid(b: Box, app, children: str, comment: str = "") -> str:
     zc = b.z0 + b.h / 2
     s = f"    # {comment}\n" if comment else ""
     s += f"    DEF WH_{b.name} Solid {{\n      translation {_f(b.cx)} {_f(b.cy)} {_f(zc)}\n"
-    s += f"      name \"{b.name.lower()}\"\n      children [\n{children}      ]\n"
+    # radarCrossSection > 0 so Webots Radar can see the solid (0 = invisible to radar).
+    rcs = 2.0 if b.kind.startswith("obs_") else 1.0
+    s += f"      name \"{b.name.lower()}\"\n      radarCrossSection {rcs:g}\n      children [\n{children}      ]\n"
     s += f"      boundingObject Box {{ size {_f(b.sx)} {_f(b.sy)} {_f(b.h)} }}\n    }}\n"
     return s
 

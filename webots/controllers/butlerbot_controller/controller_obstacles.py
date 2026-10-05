@@ -3,11 +3,12 @@
 * :func:`obstacles_mode` — on / off: ``RBM_OBSTACLES`` (1 / 0) wins; unset ->
   the loaded world's ``# OBSTACLES on`` tag (only
   ``butlerbot_warehouse_obstacles.wbt`` has it) -> off.
-* :class:`ObstacleRuntime` — enables the two stereo cameras, builds the rig
-  from their LIVE pose (Supervisor, like the shoulder cams), derives the
-  corridor from the live robot (shoulder-camera width, stereo-bar height),
-  runs ``StereoObstacleSensor`` on every camera harvest and feeds the
-  ``ObstacleGate``; the gate's speed cap goes to ``RowfitController``.
+* :class:`ObstacleRuntime` — enables the two stereo cameras and the forward
+  ``radar_fwd`` Radar, builds the stereo rig from LIVE pose, derives the
+  corridor from the live robot, runs ``StereoObstacleSensor`` +
+  ``RadarObstacleSensor`` each harvest into ``ObstacleFusion`` →
+  ``ObstacleGate`` (CLEAR / SLOW / STOPPED / WAITING_FOR_MOVING). The gate's
+  speed cap goes to ``RowfitController``.
 """
 from __future__ import annotations
 
@@ -68,6 +69,7 @@ class ObstacleRuntime:
         self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_CRUISE_M_S)
         self.fusion = ObstacleFusion()
         self.sensor = None
+        self.radar = None
         self.rig = None
         self.devs: dict = {}
         self.report = None
@@ -85,6 +87,7 @@ class ObstacleRuntime:
 
     # ---- devices ------------------------------------------------------------
     def enable_devices(self, robot, period_ms: int) -> list[str]:
+        from src.radar_sense import RADAR_NAME
         from src.stereo_depth import STEREO_NAMES
 
         msgs = []
@@ -99,6 +102,16 @@ class ObstacleRuntime:
             else:
                 dev.enable(int(period_ms))
             self.devs[name] = dev
+        radar = None
+        try:
+            radar = robot.getDevice(RADAR_NAME)
+        except Exception:
+            radar = None
+        if radar is None:
+            msgs.append(f"radar '{RADAR_NAME}' not in this world — radar motion sense off (stereo only)")
+        else:
+            radar.enable(int(period_ms))
+        self.devs[RADAR_NAME] = radar
         return msgs
 
     @property
@@ -144,6 +157,18 @@ class ObstacleRuntime:
                              clearance_h_m=round(top + HEADROOM_MARGIN_M, 3))
         backend = (project_env("RBM_STEREO_BACKEND", "auto") or "auto").strip().lower()
         self.sensor = StereoObstacleSensor(self.rig, prm, backend=backend if backend in ("auto", "sgbm", "numpy") else "auto")
+        from src.radar_sense import RADAR_NAME, RADAR_X_M, RadarObstacleSensor, RadarParams
+
+        radar_dev = self.devs.get(RADAR_NAME)
+        if radar_dev is not None:
+            self.radar = RadarObstacleSensor(RadarParams(
+                radar_x_m=RADAR_X_M,
+                front_x_m=prm.x_front_m,
+                half_width_m=prm.half_width_m,
+                max_range_m=max(prm.max_range_m, 8.0),
+            ))
+        else:
+            self.radar = None
         log(self.rig.describe())
         g = self.gate
         log(f"OBSTACLES ON — backend {self.sensor.backend}"
@@ -151,7 +176,8 @@ class ObstacleRuntime:
             + f", {self.sensor.num_disp} disparities; corridor +-{prm.half_width_m:.2f} m (robot half width "
             f"{body_half:.3f} + {CORRIDOR_MARGIN_M:.2f}), x {prm.x_front_m:.2f}..{prm.max_range_m:.1f} m, headroom "
             f"{prm.clearance_h_m:.2f} m; stop = {g.standoff_m:.2f} m + v*latency + v^2/(2*{g.decel:.2f}) "
-            f"({g.stop_distance(g.v_cruise):.2f} m at {g.v_cruise:.2f} m/s), slow zone {g.slow_distance:.2f} m")
+            f"({g.stop_distance(g.v_cruise):.2f} m at {g.v_cruise:.2f} m/s), slow zone {g.slow_distance:.2f} m"
+            + (f"; radar {RADAR_NAME} ON (moving → WAITING_FOR_MOVING)" if self.radar else "; radar OFF"))
         return msgs
 
     # ---- per frame ----------------------------------------------------------
@@ -170,8 +196,19 @@ class ObstacleRuntime:
         self.frames += 1
         self.report = rep
         self.fusion.add_report(rep)
-        # radar later: self.fusion.add_source(radar) here; the gate takes the fused report
-        fused = self.fusion.fused() if rep is not None else None
+        radar_rep = None
+        if self.radar is not None:
+            from src.radar_sense import RADAR_NAME, targets_from_webots_device
+
+            try:
+                tgts = targets_from_webots_device(self.devs.get(RADAR_NAME), log=log)
+                radar_rep = self.radar.process(tgts, v_ego_m_s=v_m_s)
+                self.fusion.add_report(radar_rep)
+            except Exception as exc:
+                self.errors += 1
+                if self.errors <= 3:
+                    log(f"WARNING radar frame failed: {type(exc).__name__}: {exc}")
+        fused = self.fusion.fused() if (rep is not None or radar_rep is not None) else None
         self.gate.on_frame(fused, v_m_s=v_m_s, dx_m=dx_m, frame_dt_s=frame_dt)
         for e in self.gate.drain_events():
             log(e)
@@ -219,4 +256,5 @@ class ObstacleRuntime:
 
 
 def no_obstacle_fields() -> dict:
-    return {"obstacle_state": "", "obstacle_m": None, "obstacle_band": "", "obstacle_conf": None}
+    return {"obstacle_state": "", "obstacle_m": None, "obstacle_band": "", "obstacle_conf": None,
+            "obstacle_moving": False}

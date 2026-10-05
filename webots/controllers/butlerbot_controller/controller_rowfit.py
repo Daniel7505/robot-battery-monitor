@@ -34,7 +34,7 @@ LANE_VISION_HEADER = (
     "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
     "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
     "junction_type,junction_m,openings,route_choice,blind_m,"
-    "obstacle_state,obstacle_m,obstacle_band,obstacle_conf"
+    "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving"
 )
 # Corner columns sit AFTER run_id, junction columns after those, obstacle
 # columns (empty when RBM_OBSTACLES is off) last, so rows
@@ -188,6 +188,7 @@ class LaneVisionLog:
                 _fmt(cmd.get("obstacle_m"), 3),
                 str(cmd.get("obstacle_band") or ""),
                 _fmt(cmd.get("obstacle_conf"), 2),
+                ("1" if cmd.get("obstacle_moving") else ""),
             ]
             with open(self.path, "a", encoding="ascii") as fh:
                 fh.write(",".join(vals) + "\n")

@@ -6,7 +6,7 @@ states visited, junction classifications / openings seen, route choices
 (every decision, S,S included) vs. junctions driven through, blind distance, max / mean cross-track error, time and the outcome (exit
 crossed or where it stopped). ``drift_report.py`` scores drift only; this
 one is for the intersection runs. Runs logged with the obstacle columns
-(``obstacle_state, obstacle_m, obstacle_band, obstacle_conf``; empty when
+(``obstacle_state, obstacle_m, obstacle_band, obstacle_conf, obstacle_moving``; empty when
 RBM_OBSTACLES was off) also get an ``obstacles:`` line: every slow / stop
 with where, how far, which height band, how long it waited and how it
 resumed.
@@ -156,7 +156,7 @@ def obstacle_events(run) -> dict | None:
     if not any("obstacle_state" in r for r in run):
         return None
     on = any(r.get("obstacle_state") for r in run)
-    stops, slows = [], 0
+    stops, slows, waits = [], 0, 0
     prev = ""
     cur = None
     dists = [d for d in (_f(r.get("obstacle_m")) for r in run) if d is not None]
@@ -168,8 +168,10 @@ def obstacle_events(run) -> dict | None:
             bands.append(b)
         if st != prev:
             t = _f(r.get("unix_s"))
-            if st == "SLOW_FOR_OBSTACLE" and prev != "STOPPED_FOR_OBSTACLE":
+            if st == "SLOW_FOR_OBSTACLE" and prev not in ("STOPPED_FOR_OBSTACLE", "WAITING_FOR_MOVING"):
                 slows += 1
+            if st == "WAITING_FOR_MOVING":
+                waits += 1
             if st == "STOPPED_FOR_OBSTACLE":
                 cur = {"t": t, "x": _f(r.get("x_m")), "y": _f(r.get("y_m")), "m": _f(r.get("obstacle_m")),
                        "band": b, "wait_s": None, "how": "still stopped at the end of the log"}
@@ -181,8 +183,8 @@ def obstacle_events(run) -> dict | None:
         prev = st
     if cur is not None and cur["t"] is not None:
         cur["wait_s"] = round((_f(run[-1].get("unix_s")) or cur["t"]) - cur["t"], 1)
-    return {"on": on, "slows": slows, "stops": stops, "nearest_m": round(min(dists), 2) if dists else None,
-            "bands": bands}
+    return {"on": on, "slows": slows, "waits": waits, "stops": stops,
+            "nearest_m": round(min(dists), 2) if dists else None, "bands": bands}
 
 
 def obstacle_line(o: dict | None) -> str | None:
@@ -190,7 +192,9 @@ def obstacle_line(o: dict | None) -> str | None:
         return None
     if not o["on"]:
         return "obstacles: off (RBM_OBSTACLES)"
-    parts = [f"{len(o['stops'])} stop(s), {o['slows']} slow-down(s)"]
+    waits = o.get("waits", 0)
+    parts = [f"{len(o['stops'])} stop(s), {o['slows']} slow-down(s)"
+             + (f", {waits} wait(s) for moving" if waits else "")]
     if o["nearest_m"] is not None:
         parts.append(f"nearest {o['nearest_m']} m ({'/'.join(o['bands']) or '-'})")
     for k, st in enumerate(o["stops"], 1):

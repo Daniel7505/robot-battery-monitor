@@ -99,13 +99,14 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     6 m racks, dock doors and staging, all Solids with boundingObjects.
   * `butlerbot_warehouse_obstacles.wbt`: the same warehouse plus three test
     props (box in aisle 5, waist-high table edge on the dock lane, shelf corner
-    beside the start lane). Its `# OBSTACLES on` tag turns stereo sensing on.
-* **Stereo obstacle sensing** (first pass, `docs/OBSTACLES.md`): a forward
-  stereo pair (`stereo_left` / `stereo_right`, 10 cm baseline, 0.78 m high,
-  pitched 19.9° down) in every world → `src/stereo_depth.py` (disparity →
-  depth → points → lane-corridor check) → `src/obstacle_gate.py`
-  (`SLOW_FOR_OBSTACLE` / `STOPPED_FOR_OBSTACLE`). No avoidance yet. Off by
-  default except in the obstacles world.
+    beside the start lane). Its `# OBSTACLES on` tag turns stereo+radar on.
+  * `butlerbot_radar_motion.wbt`: S track + rolling ball into the lane
+    (`# OBSTACLES on`). Expect `WAITING_FOR_MOVING` then stop/clear.
+* **Obstacle sensing** (`docs/OBSTACLES.md`): forward stereo pair (static
+  height/depth) + `radar_fwd` (moving objects) in every world →
+  `ObstacleFusion` → `ObstacleGate` states `CLEAR` /
+  `SLOW_FOR_OBSTACLE` / `STOPPED_FOR_OBSTACLE` / `WAITING_FOR_MOVING`.
+  Off by default except worlds tagged `# OBSTACLES on`.
 * **Offline sim.** `scripts/rowfit_sim.py`: kinematic diff-drive, the same
   camera model and tracker, a simulated IMU, and pivots.
 
@@ -118,12 +119,12 @@ repo `.env`. A value set with `set` wins.
 |---|---|
 | `RBM_LANE_MODE` | `rowfit` (default when unset) or `gap`, the old pixel-gap lane keep, not re-tuned for the box cameras |
 | `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value (never steering). The launcher sets it from the world's `# TRACK_FILE` tag; a different value left in the cmd window is overridden with a loud `WARNING`, and the controller does the same. Only needed when the world has no tag. |
-| `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles` or a `.wbt` file. Same as `-World`. |
+| `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion` or a `.wbt` file. Same as `-World`. |
 | `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
 | `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
 | `RBM_LOOK_AROUND` | `0` = after the max blind distance just stop (no +90/−90 look-around). Default on. |
 | `RBM_LOG_DIR` | Folder for `lane-vision.csv` and `steer-actions.csv`. Default: `%USERPROFILE%\OneDrive\Desktop\Grok Workspace` |
-| `RBM_OBSTACLES` | `1` = stereo obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`), off everywhere else. |
+| `RBM_OBSTACLES` | `1` = stereo+radar obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`, `radar_motion`), off everywhere else. |
 | `RBM_STEREO_BACKEND` | `auto` (default: OpenCV StereoSGBM if `cv2` imports, else numpy), `sgbm` or `numpy`. numpy works without OpenCV but costs ~170 ms per frame. |
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |
 | `RBM_NADIR_GUARD_PER_FRAME` | `1` = gap-mode NadirGuard counts per camera frame (opt-in; gap mode only) |
@@ -202,6 +203,19 @@ set RBM_OBS_REMOVE_AFTER_S=
 Without `RBM_OBS_REMOVE_AFTER_S` it waits at the obstacle; delete
 `WH_OBS_BOX` / `WH_OBS_TABLE` in the scene tree (under `WH_OBSTACLES`) to
 make it resume. `set RBM_OBSTACLES=1` turns sensing on in any world.
+
+Radar motion (ball rolls *across* the start-straight lane). Console should show
+`radar radar_fwd ON`, `OBSTACLE … -> WAITING_FOR_MOVING`, HUD `OBS WAIT … mov`.
+The red ball starts left of the yellow lane at about (2.2, 1.15) m and rolls
+toward −y across the path ~1.5–2 s after start — you should see it cut in front
+of the bot while the bot is still on the straight:
+
+```bat
+set RBM_OBSTACLES=
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World radar_motion
+```
+
+Unit tests (no Webots): `python -m pytest tests\test_radar_obstacles.py -q`
 
 The warehouse main view is a top-down follow cam: straight down from 48.5 m, ~30 m of floor
 across, and the map doesn't rotate (dock wall at the bottom). It's not the 3.2 m chase; see `docs/WAREHOUSE.md`.
@@ -323,10 +337,10 @@ See `docs/RUN_HISTORY.md`.
   case is Dan's). Open: oblique (non-90°) branches, back-to-back junctions,
   heading correction while blind (a drifting gyro limits the widest plaza),
   wide T junctions in a test course, a world for `t_left` / `t_right`.
-* **Obstacles, next steps** (`docs/OBSTACLES.md`): radar through
-  `ObstacleSource` / `ObstacleFusion` (moving objects, confirmation),
-  avoidance / re-route around a blocked aisle, IMU tilt compensation of the
-  ground plane, tuning on Webots images.
+* **Obstacles, next steps** (`docs/OBSTACLES.md`): path-around / re-route
+  within the lane after a still stop, ultrasound short-range backup, IMU
+  tilt compensation of the ground plane, tuning radar RCS / thresholds on
+  Webots runs.
 * **Bot-body reference in the frame.** Use the robot's own visible parts
   (front caster or wheel corner) as an in-image calibration reference.
 * **480 Wh hardcode.** `BATTERY_CAPACITY_WH = 480.0` at

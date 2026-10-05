@@ -46,6 +46,29 @@ def _stereo_img(name):
     return _STEREO[name]
 
 
+class RadarTarget:
+    def __init__(self, distance=2.0, received_power=-40.0, speed=0.0, azimuth=0.0):
+        self.distance = distance
+        self.received_power = received_power
+        self.speed = speed
+        self.azimuth = azimuth
+
+class Radar(_Any):
+    """Empty radar (no targets) unless FAKE_WEBOTS_RADAR_TARGETS is set."""
+    def getNumberOfTargets(self):
+        return len(self.getTargets())
+    def getTargets(self):
+        raw = os.environ.get("FAKE_WEBOTS_RADAR_TARGETS", "").strip()
+        if not raw:
+            return []
+        out = []
+        for part in raw.split(";"):
+            # distance,speed,azimuth
+            bits = [float(x) for x in part.split(",")]
+            out.append(RadarTarget(bits[0], -40.0, bits[1] if len(bits) > 1 else 0.0,
+                                   bits[2] if len(bits) > 2 else 0.0))
+        return out
+
 class Camera(_Any):
     def getImage(self): return _stereo_img(self.name) if self.name.startswith("stereo") else _IMG[self.name]
     def getWidth(self): return 320 if self.name.startswith("stereo") else 128
@@ -68,6 +91,7 @@ class Robot:
     def getDevice(self, name):
         if name not in self.devs:
             if name.startswith(("nadir", "stereo")): d = Camera(name)
+            elif name.startswith("radar"): d = Radar(name)
             elif name.startswith("hud"): d = Display(name)
             elif name in ("gps", "gps_head"): d = GPS(name)
             elif name == "imu": d = InertialUnit(name)

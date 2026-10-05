@@ -905,6 +905,27 @@ Robot {
       fieldOfView 1.4
       near 0.05
     }
+    # Forward radar (docs/OBSTACLES.md): moving objects in the lane corridor.
+    # Looks along -Z; rotation 0 1 0 pi/2 aims it along robot +x. Height 0.45 m
+    # (bumper / cart-radar height) so a rolling ball and a pallet face both return.
+    # Ranges / FOV sized for the stereo corridor (~±0.54 m half-width out to 8 m).
+    DEF RADAR_FWD Radar {
+      translation 0.16 0 0.45
+      rotation 0 1 0 1.5708
+      name "radar_fwd"
+      minRange 0.15
+      maxRange 8
+      horizontalFieldOfView 1.0
+      verticalFieldOfView 0.7
+      minAbsoluteRadialSpeed 0
+      minRadialSpeed 0
+      maxRadialSpeed 0
+      occlusion TRUE
+      antennaGain 20
+      frequency 77
+      transmittedPower 10
+      minDetectableSignal -90
+    }
     # Shoulder HUDs only.
     DEF HUD_NADIR Display {
       name "hud_nadir"

@@ -3,21 +3,24 @@
 Layering (see docs/OBSTACLES.md)::
 
     stereo (src.stereo_depth)  ─┐
-    radar  (later)             ─┼─> ObstacleFusion ──> ObstacleGate ──> RowfitController.obstacle_v_cap
+    radar  (src.radar_sense)   ─┼─> ObstacleFusion ──> ObstacleGate ──> RowfitController.obstacle_v_cap
     any other ObstacleSource   ─┘      (nearest           (CLEAR / SLOW_FOR_OBSTACLE /
-                                        confirmed)          STOPPED_FOR_OBSTACLE)
+                                        confirmed)          STOPPED_FOR_OBSTACLE /
+                                                            WAITING_FOR_MOVING)
 
 * :class:`ObstacleReport` is the ONE thing every sensor produces: nearest
   obstacle in the robot's lane corridor, in the bot frame (x forward from the
-  axle, y left, z up from the floor). Radar adds ``velocity_m_s``; stereo
-  leaves it ``None``.
+  axle, y left, z up from the floor). Radar fills ``velocity_m_s`` (closing
+  speed, + = approaching) and ``notes["moving"]``; stereo leaves velocity
+  ``None``.
 * :class:`ObstacleFusion` keeps the latest report per source and hands the
-  gate the nearest one (a radar source is added with ``fusion.add_source``;
-  nothing else changes).
+  gate the nearest one (radar via ``fusion.add_source`` / ``add_report``).
 * :class:`ObstacleGate` turns reports + current speed into a state and a
-  speed cap. Nothing about obstacle positions is known in advance: every
-  number comes from the sensor, the robot's live speed and the deceleration
-  limit of the speed governor.
+  speed cap. A moving hit (``notes["moving"]`` or |target radial| above the
+  threshold) yields ``WAITING_FOR_MOVING`` (hold). When the object is still,
+  the existing slow / stop / resume path applies. Nothing about obstacle
+  positions is known in advance: every number comes from the sensor, the
+  robot's live speed and the deceleration limit of the speed governor.
 
 The lane / junction state machine is NOT replaced: the gate only caps the
 forward speed, so a stop in the middle of a corner approach or a gap
@@ -32,6 +35,7 @@ from dataclasses import dataclass, field
 STATE_CLEAR = "CLEAR"
 STATE_SLOW = "SLOW_FOR_OBSTACLE"
 STATE_STOPPED = "STOPPED_FOR_OBSTACLE"
+STATE_WAITING = "WAITING_FOR_MOVING"  # object in lane is moving — hold until still
 
 BAND_LOW = "low"  # pallet / box / tote: top below the waist
 BAND_WAIST = "waist"  # table / cart / loaded pallet
@@ -50,6 +54,8 @@ TRACK_MATCH_M = 0.40  # |new - predicted| inside this = same obstacle
 CLEAR_FRAMES = 3  # visible-and-empty frames in a row before resuming (~1 s at 320 ms)
 RESUME_HYST_M = 0.25  # an obstacle that moved this far past the stop distance also releases
 MIN_CONF = 0.35  # reports below this confidence are ignored
+MOVING_SPEED_M_S = 0.12  # |target radial| (m/s) to treat a hit as moving
+MOVING_CLEAR_FRAMES = 2  # still frames in a row before leaving WAITING
 
 
 @dataclass
@@ -129,6 +135,17 @@ def height_band(z_top: float) -> str:
     return BAND_LOW
 
 
+
+def _report_is_moving(rep: ObstacleReport) -> bool:
+    """True when the sensor marked the hit as moving (radar) or closing hard."""
+    notes = rep.notes or {}
+    if "moving" in notes:
+        return bool(notes["moving"])
+    radial = notes.get("target_radial_m_s")
+    if radial is not None:
+        return abs(float(radial)) >= MOVING_SPEED_M_S
+    return False
+
 class ObstacleSource:
     """Interface for anything that sees obstacles (stereo now, radar later).
 
@@ -146,8 +163,8 @@ class ObstacleFusion:
     """Latest report per source -> one report for the gate (nearest detection).
 
     First pass rule: a detection from any source wins over 'clear' (safe
-    side); among detections the nearest wins. Radar later: give its report
-    ``velocity_m_s`` and use it for confirmation / moving objects here.
+    side); among detections the nearest wins. A moving radar hit (same
+    distance band) is preferred over a static one so the gate can wait.
     """
 
     def __init__(self) -> None:
@@ -165,7 +182,12 @@ class ObstacleFusion:
             return None
         hits = [r for r in self.reports.values() if r.detected and r.confidence >= MIN_CONF]
         if hits:
-            return min(hits, key=lambda r: r.distance_m)
+            def _key(r: ObstacleReport):
+                notes = r.notes or {}
+                moving = bool(notes.get("moving")) or abs(float(notes.get("target_radial_m_s", 0.0) or 0.0)) >= MOVING_SPEED_M_S
+                # moving first, then nearest
+                return (0 if moving else 1, float(r.distance_m))
+            return min(hits, key=_key)
         return max(self.reports.values(), key=lambda r: r.range_m)
 
 
@@ -176,7 +198,7 @@ def stop_distance_m(v_m_s: float, decel_m_s2: float, latency_s: float, standoff_
 
 
 class ObstacleGate:
-    """CLEAR / SLOW_FOR_OBSTACLE / STOPPED_FOR_OBSTACLE with hysteresis.
+    """CLEAR / SLOW / STOPPED / WAITING_FOR_MOVING with hysteresis.
 
     Call :meth:`on_frame` once per sensor frame (with the distance driven
     since the previous frame), read :attr:`v_cap` (``None`` = no cap) every
@@ -225,14 +247,20 @@ class ObstacleGate:
         if tr is not None:
             tr["clear"] -= max(0.0, float(dx_m))  # dead-reckon the remembered obstacle
         if hit:
+            moving = _report_is_moving(rep)
             if tr is not None and abs(rep.clearance_m - tr["clear"]) <= TRACK_MATCH_M + abs(dx_m):
-                tr.update(clear=float(rep.clearance_m), hits=tr["hits"] + 1, misses=0, band=higher_band(tr["band"], rep.band),
-                          rep=rep, z_top=max(tr["z_top"], float(rep.z_top_m or 0.0)))
+                still_n = 0 if moving else tr.get("still", 0) + 1
+                tr.update(clear=float(rep.clearance_m), hits=tr["hits"] + 1, misses=0,
+                          band=higher_band(tr["band"], rep.band),
+                          rep=rep, z_top=max(tr["z_top"], float(rep.z_top_m or 0.0)),
+                          moving=moving if moving else (tr.get("moving") and still_n < MOVING_CLEAR_FRAMES),
+                          still=still_n)
             else:
                 nearer = tr is None or rep.clearance_m < tr["clear"]
                 if nearer or tr["hits"] < CONFIRM_FRAMES:
                     self.track = tr = {"clear": float(rep.clearance_m), "hits": 1, "misses": 0, "band": rep.band,
-                                       "rep": rep, "z_top": float(rep.z_top_m or 0.0)}
+                                       "rep": rep, "z_top": float(rep.z_top_m or 0.0),
+                                       "moving": moving, "still": 0 if moving else 1}
                 else:  # a farther, different detection while a confirmed one is held: keep the near one
                     tr["misses"] = 0
             self.blind_hold = False
@@ -252,14 +280,29 @@ class ObstacleGate:
         tr = self.track
         confirmed = tr is not None and tr["hits"] >= CONFIRM_FRAMES
         clear_m = tr["clear"] if tr is not None else None
+        moving = bool(tr and tr.get("moving"))
         prev = self.state
         self.emergency = False
         d_stop = self.stop_distance(v)
         if not confirmed:
             if self.state != STATE_CLEAR and tr is None:
-                self._set(STATE_CLEAR, "corridor clear" + (" (obstacle gone)" if prev == STATE_STOPPED else ""))
+                why = "corridor clear"
+                if prev in (STATE_STOPPED, STATE_WAITING):
+                    why += " (obstacle gone)"
+                self._set(STATE_CLEAR, why)
         else:
-            if self.state == STATE_STOPPED:
+            # Moving object in the lane: hold (wait) until it is still.
+            if moving:
+                self._set(STATE_WAITING, f"wait: moving object at clearance {clear_m:.2f} m")
+            elif self.state == STATE_WAITING:
+                # Just went still — drop into the usual slow/stop path below.
+                if clear_m <= d_stop + 0.02 or clear_m <= self.standoff_m + 0.02:
+                    self._set(STATE_STOPPED, f"stop: moving object now still at {clear_m:.2f} m")
+                elif clear_m <= self.slow_distance:
+                    self._set(STATE_SLOW, f"slow: moving object now still at {clear_m:.2f} m")
+                else:
+                    self._set(STATE_CLEAR, f"moving object now still and beyond slow zone ({clear_m:.2f} m)")
+            elif self.state == STATE_STOPPED:
                 if clear_m > self.stop_distance(0.0) + RESUME_HYST_M:
                     self._set(STATE_SLOW, f"obstacle moved off to {clear_m:.2f} m — resuming slow")
             elif clear_m <= d_stop + 0.02 or clear_m <= self.standoff_m + 0.02:
@@ -272,7 +315,7 @@ class ObstacleGate:
             elif self.state == STATE_SLOW and clear_m > self.slow_distance + RESUME_HYST_M:
                 self._set(STATE_CLEAR, f"obstacle beyond the slow zone ({clear_m:.2f} m)")
         # speed cap
-        if self.state == STATE_STOPPED:
+        if self.state in (STATE_STOPPED, STATE_WAITING):
             self.v_cap = 0.0
         elif self.state == STATE_SLOW and clear_m is not None:
             room = max(0.0, clear_m - self.standoff_m)
@@ -315,13 +358,16 @@ class ObstacleGate:
             "obstacle_clear_m": None if tr is None else round(tr["clear"], 3),
             "obstacle_band": "" if tr is None else tr["band"],
             "obstacle_conf": None if rep is None else round(rep.confidence, 2),
+            "obstacle_moving": bool(tr.get("moving")) if tr is not None else False,
         }
 
     def hud_line(self) -> str:
         f = self.fields()
-        short = {STATE_CLEAR: "OBS clear", STATE_SLOW: "OBS SLOW", STATE_STOPPED: "OBS STOP"}[self.state]
+        short = {STATE_CLEAR: "OBS clear", STATE_SLOW: "OBS SLOW", STATE_STOPPED: "OBS STOP",
+                 STATE_WAITING: "OBS WAIT"}[self.state]
         if f["obstacle_m"] is None:
             rep = self.report
             return short + ("" if rep is None else f" to {rep.range_m:.1f}m")
         hold = " blind" if self.blind_hold else ""
-        return f"{short} {f['obstacle_m']:.2f}m {f['obstacle_band']} c{f['obstacle_conf'] or 0:.1f}{hold}"
+        moving = " mov" if (self.track and self.track.get("moving")) else ""
+        return f"{short} {f['obstacle_m']:.2f}m {f['obstacle_band']} c{f['obstacle_conf'] or 0:.1f}{moving}{hold}"

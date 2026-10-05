@@ -53,7 +53,7 @@ def test_controller_loop_runs(tmp_path, mode):
         log = (tmp_path / "lane-vision.csv").read_text().splitlines()
         assert "new_frame,run_id," in log[0] and log[0].endswith(
             "yaw_deg,yaw_target_deg,junction_type,junction_m,openings,route_choice,blind_m,"
-            "obstacle_state,obstacle_m,obstacle_band,obstacle_conf")
+            "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving")
         assert "OBSTACLES off (RBM_OBSTACLES unset" in text, text
         row = dict(zip(log[0].split(","), log[1].split(",")))
         assert row["state"] in ("LANE", "CORNER_APPROACH", "PIVOT", "REACQUIRE")

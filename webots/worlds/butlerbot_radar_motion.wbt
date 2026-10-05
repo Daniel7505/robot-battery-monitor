@@ -1,4 +1,6 @@
 #VRML_SIM R2025a utf8
+# OBSTACLES on   (radar motion test world: stereo+radar on; RBM_OBSTACLES=0 turns both off)
+# RADAR on       (controller: forward radar_fwd enabled with obstacles)
 
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto"
@@ -109,6 +111,47 @@ Floor {
 # walls, end caps; two-sided via walls). Lines top 0.013, ticks 0.015, bars
 # 0.025 above the floor. Do not hand-edit: change the track file and regenerate.
 # =============================================================================
+
+# ---- RADAR MOTION TEST PROP: ball rolls into the lane toward the robot ----
+# Start ~5 m ahead on the centre line, with initial -x velocity so it closes.
+# radarCrossSection > 0 is required for Webots Radar to see it. Physics damping
+# lets it stop after a few metres so the gate can leave WAITING_FOR_MOVING.
+DEF WH_OBSTACLES Group {
+  children [
+    DEF WH_MOVING_BALL Solid {
+      translation 5.0 0.0 0.12
+      name "moving_ball"
+      radarCrossSection 1.0
+      linearVelocity -0.55 0 0
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.75 0.25 0.2
+            roughness 0.6
+            metalness 0
+          }
+          geometry Sphere {
+            radius 0.12
+            subdivision 3
+          }
+        }
+      ]
+      boundingObject Sphere {
+        radius 0.12
+      }
+      physics Physics {
+        density -1
+        mass 0.8
+        damping Damping {
+          linear 0.4
+          angular 0.4
+        }
+      }
+    }
+  ]
+}
+
+
 DEF TRACK Pose {
   children [
     # Left lane line (yellow, 6 cm): centreline offset +0.65 m, top z 0.013; one continuous ribbon along the offset curve

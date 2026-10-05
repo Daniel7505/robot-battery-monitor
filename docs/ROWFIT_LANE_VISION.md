@@ -573,6 +573,13 @@ straight). For `lane-vision.csv`, runs are split by `run_id`.
   resets and it can never fire. Off by default because turning it on can
   add new stops to the gap mode.
 
+## Obstacles (stereo + radar)
+
+Lane keep itself is unchanged. When obstacle sensing is on (`docs/OBSTACLES.md`),
+the gate only caps forward speed: `CLEAR` / `SLOW_FOR_OBSTACLE` /
+`STOPPED_FOR_OBSTACLE` / `WAITING_FOR_MOVING` (radar saw a moving hit).
+HUD line `OBS …`; CSV columns `obstacle_*`. Path-around is not in this pass.
+
 ## Not checked without Webots
 
 * Real rendered colours: the parquet floor under the grey `colorOverride`,

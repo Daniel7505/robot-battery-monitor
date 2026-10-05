@@ -1,19 +1,24 @@
-# Stereo obstacle sensing (first pass)
+# Obstacle sensing: stereo (static) + radar (moving)
 
 Goal: the bot sees what is in its lane ahead (height and depth, no SLAM, no
 pretraining, no map of obstacles), slows down, stops at a braking distance
 derived from its speed and deceleration, and resumes when the lane clears.
-No avoidance or dodging yet. Radar plugs in later through the same interface.
+Stereo handles **static** nearby height/depth. Radar handles **moving** objects
+(and can confirm stereo). No path-around yet — a moving hit waits; a still hit
+slows then stops.
 
 ```
 stereo_left / stereo_right (Webots Camera, 320x240)
-  -> rectify (homography from the live poses; identity on the current mount)
-  -> disparity (OpenCV StereoSGBM, or numpy block matching without OpenCV)
-  -> depth -> 3D points in the bot frame (x forward, y left, z up, floor z = 0)
-  -> ground-plane filter (floor + tape dropped) -> lane corridor check
-  -> ObstacleReport (distance, lateral extent, height band, confidence)
-  -> ObstacleFusion (stereo now, radar later) -> ObstacleGate
-  -> CLEAR / SLOW_FOR_OBSTACLE / STOPPED_FOR_OBSTACLE -> speed cap on RowfitController
+  -> rectify / disparity / depth / corridor  -> ObstacleReport (static height/depth)
+
+radar_fwd (Webots Radar, bumper height)
+  -> targets (range, relative radial speed, azimuth)
+  -> corridor filter + ego-speed compensation
+  -> ObstacleReport (velocity_m_s, notes.moving)
+
+  -> ObstacleFusion (nearest; prefer moving) -> ObstacleGate
+  -> CLEAR / SLOW_FOR_OBSTACLE / STOPPED_FOR_OBSTACLE / WAITING_FOR_MOVING
+  -> speed cap on RowfitController
 ```
 
 Files:
@@ -22,10 +27,12 @@ Files:
   `points_from_disparity`, `CorridorParams`, `detect_obstacle`,
   `StereoObstacleSensor`.
 * `src/obstacle_gate.py`: `ObstacleReport`, height bands, `ObstacleSource` /
-  `ObstacleFusion` (the radar hook), `stop_distance_m`, `ObstacleGate`.
+  `ObstacleFusion`, `stop_distance_m`, `ObstacleGate` (incl. `WAITING_FOR_MOVING`).
+* `src/radar_sense.py`: `RadarTarget`, ego-compensated motion classify,
+  `RadarObstacleSensor` (`ObstacleSource` name `"radar"`).
 * `webots/controllers/butlerbot_controller/controller_obstacles.py`: on/off
-  decision, device enable, live pose binding, per-frame harvest, HUD / CSV
-  fields, the `RBM_OBS_REMOVE_AFTER_S` test harness.
+  decision, stereo + radar enable, live pose binding, per-frame harvest / fusion,
+  HUD / CSV fields, the `RBM_OBS_REMOVE_AFTER_S` test harness.
 * `src/stereo_synth.py`: numpy raycaster for synthetic stereo pairs (tests,
   offline sim, `scripts/stereo_accuracy.py`).
 * `scripts/rowfit_sim.py --obstacles` / `--obstacle X,Y,SX,SY,H`: the same
@@ -94,8 +101,8 @@ blocks the robot); front = max(0.15, lens x + 0.01).
 
 ## The gate (behaviour)
 
-States: `CLEAR`, `SLOW_FOR_OBSTACLE`, `STOPPED_FOR_OBSTACLE`. Numbers at the
-current rowfit governor (cruise 0.44 m/s, decel 0.8 m/s²):
+States: `CLEAR`, `SLOW_FOR_OBSTACLE`, `STOPPED_FOR_OBSTACLE`, `WAITING_FOR_MOVING`.
+Numbers at the current rowfit governor (cruise 0.44 m/s, decel 0.8 m/s²):
 
 | quantity | formula | value |
 |---|---|---|
@@ -108,6 +115,14 @@ current rowfit governor (cruise 0.44 m/s, decel 0.8 m/s²):
 
 latency = the measured camera frame period. Clearance is measured from the
 robot's front (x = 0.15 m), not the axle.
+
+Behaviour target for this pass:
+
+* lane clear → drive (`CLEAR`)
+* something still in lane → slow then stop (`SLOW_FOR_OBSTACLE` / `STOPPED_FOR_OBSTACLE`)
+* object **moving** in lane → wait (`WAITING_FOR_MOVING`, `v_cap = 0`) until still
+* still again → same slow/stop path (path-around within the lane is a later PR)
+
 
 * A detection must be seen in **2 frames** (matched within 0.4 m after
   odometry) before it counts; a one-frame false positive does nothing.
@@ -147,13 +162,14 @@ unset, world has no '# OBSTACLES on' tag)` or `OBSTACLES on (world tag
 ## Logs and HUD
 
 * HUD (rowfit text block): `OBS clear to 4.0m`, `OBS SLOW 1.42m low c1.0`,
-  `OBS STOP 0.57m waist c1.0` (`blind` appended while holding).
+  `OBS STOP 0.57m waist c1.0`, `OBS WAIT 1.20m low c0.9 mov` (`blind` / `mov`
+  suffixes while holding / moving).
 * Console: every state change, e.g. `OBSTACLE SLOW_FOR_OBSTACLE ->
   STOPPED_FOR_OBSTACLE: stop: clearance 0.45 m <= stop distance 0.44 m
   (v 0.20 m/s) [stereo: low/pallet obstacle at 0.60 m ...]`.
 * `lane-vision.csv`: four columns **appended** after the existing ones:
-  `obstacle_state,obstacle_m,obstacle_band,obstacle_conf` (obstacle_m is
-  measured from the axle; empty when clear or off). Rename an old
+  `obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving`
+  (obstacle_m from the axle; empty when clear or off). Rename an old
   `lane-vision.csv` before the first run so the new header is written.
 * `scripts\run_report.py` adds an `obstacles:` line per run: number of
   stops and slow-downs, nearest obstacle, and for each stop its position,
@@ -194,16 +210,33 @@ Box height was measured 0.50–0.53 m (true 0.50). Time per frame: sgbm
 8–20 ms, numpy 160–190 ms (box CPU). Stops happen at 0.4–0.6 m, where the
 error is well under 2 cm. These are synthetic images, not Webots renders.
 
-## Adding radar later
+## Radar (moving objects)
 
-Write a class with `name = "radar"` and `latest() -> ObstacleReport | None`
-(`ObstacleSource`), fill `distance_m`, `clearance_m`, lateral extent,
-`confidence` and `velocity_m_s` (closing speed), and add it to the runtime's
-`ObstacleFusion` next to the stereo sensor. The first-pass fusion rule is
-"any confident detection wins over clear; the nearest wins". Radar is the
-place for moving objects (people, forklifts: use `velocity_m_s` to stop
-earlier), and for confirming stereo on textureless surfaces. The gate,
-HUD, CSV and report need no change.
+Mount (every `butlerbot*.wbt`): `DEF RADAR_FWD Radar` named `radar_fwd` at
+translation `(0.16, 0, 0.45)`, rotation `0 1 0 π/2` (Webots Radar looks along
+`-Z`; that rotation aims it along robot `+x`). Ranges 0.15–8 m, HFOV 1.0 rad,
+VFOV 0.7 rad. Solids need `radarCrossSection > 0` to be visible (warehouse
+builder sets 1.0 on racks / staging and 2.0 on `obs_*` props; the rolling-ball
+world sets 1.0 on `WH_MOVING_BALL`).
+
+### Motion algorithm
+
+1. Read Webots targets (`distance`, `speed`, `azimuth`). Webots `speed` is
+   radial along the radar→target LOS (**+ = receding**).
+2. Keep targets whose `|distance · sin(azimuth)|` is inside the live corridor
+   half-width (same number stereo uses, from shoulder-cam width).
+3. Closing relative to the robot = `-speed`. Subtract ego:  
+   `target_radial = closing − v_ego · cos(azimuth)`.  
+   `|target_radial| ≥ 0.12 m/s` ⇒ **moving** (`notes["moving"]=True`);
+   otherwise still. A static wall while cruising cancels to ~0; a ball rolling
+   toward the robot does not.
+4. Emit `ObstacleReport(source="radar", velocity_m_s=closing, …)`. Fusion
+   prefers a moving hit over a static one at similar range; the gate enters
+   `WAITING_FOR_MOVING` (hold) until still frames clear the flag, then the
+   usual slow/stop path.
+
+Test world: `butlerbot_radar_motion.wbt` (S track + `# OBSTACLES on` + a
+physics ball at x=5 m with initial `-x` velocity). See `docs/CHEAT_SHEET.md`.
 
 ## Known limits
 
@@ -235,5 +268,5 @@ HUD, CSV and report need no change.
 * **numpy backend is slow** (~170 ms / frame). Install OpenCV.
 * **Stop standoff.** The robot stops ~0.35–0.45 m before the obstacle face
   (standoff 0.35 m plus the last frame's travel at creep speed).
-* Static obstacles only. Something moving toward the robot is handled only
-  as a series of static positions (radar later).
+* Path-around / re-route is not in this pass: a still blocked lane stays
+  stopped; a moving hit waits. Ultrasound is a later short-range backup.

@@ -1,10 +1,9 @@
 # Inventory cubes + pull-behind trolley (one-SKU pretend pick)
 
-**Status: first vertical slice after radar.** Placeholder inventory on shelves,
-a hitch-following trolley prop, and a pretend pick for **one** demo SKU, then
-drive to shipping. Multi-trip shopping lists, route optimisation that fills the
-trolley before shipping, and dashboard battery/time efficiency metrics are
-**deferred** (stubs only). BoM still held. Ultrasound deferred.
+**Status: first vertical slice after radar** (merged). Placeholder inventory on
+shelves, a hitch-following trolley prop, and a pretend pick for **one** demo
+SKU, then drive to shipping. **Multi-trip shopping list** is the next slice —
+see `docs/SHOPPING_LIST.md`. BoM still held. Ultrasound deferred.
 
 ## What you get
 
@@ -32,8 +31,8 @@ Default seed puts the demo group on the **odd aisle** used by
 * Cubes: four 0.28 m placeholders on the lowest beam shelf, inset into the rack
   (off the taped lane)
 
-Two extra groups (`SKU-A03-B0-L`, `SKU-A07-B1-L`) are visual placeholders for a
-future shopping list — not picked in this PR.
+Extra groups across aisles 1–7 seed the multi-trip shopping list
+(`docs/SHOPPING_LIST.md`). One-SKU demo still only picks the demo group.
 
 ## One-SKU demo (what happens)
 
@@ -56,7 +55,7 @@ stalling the bot (not trolley mass — there is no physics mass).
 ## CMD (Windows)
 
 ```bat
-git checkout feature/inventory-trolley
+git checkout main
 git pull
 pip install -r requirements.txt
 
@@ -91,15 +90,13 @@ python scripts\warehouse_builder.py --summary
    cargo on the trolley. Real pick hardware stays north-star / BoM later.
 2. **Trolley is a world Solid**, hitch-followed — keeps the shared Robot block
    identical. A physics trailer hitch is a later option.
-3. **One SKU / one trolley trip** this PR. Shopping-list route optimisation
-   (fill trolley, then ship; 3–4 trips) is the next roadmap item.
-4. **Dashboard battery/time as efficiency metrics** — stub OK; not wired here.
+3. **One SKU / one trolley trip** in this slice. Shopping-list fill-then-ship
+   (3–4 trips) lives in `docs/SHOPPING_LIST.md`.
+4. **Dashboard battery/time** — shopping efficiency stub only; full UI later.
 5. Early corner clip on the flat squared warehouse remains noted; unchanged.
 
-## Deferred (next PR)
+## Follow-on
 
-* Multi-SKU shopping list (3–4 trolley trips)
-* Route optimisation that fills the trolley before shipping
-* Efficiency metrics on the dashboard (battery / time)
+* Multi-trip shopping list — `docs/SHOPPING_LIST.md` / `src/shopping_list.py`
 * Avoidance / re-route around a blocked aisle (still open from obstacles)
 * Ultrasound

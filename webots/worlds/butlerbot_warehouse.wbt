@@ -9350,10 +9350,10 @@ DEF WAREHOUSE Group {
           ]
           boundingObject Box { size 0.28 0.28 0.28 }
         }
-        # INVENTORY SKU-A03-B0-L cube 0 aisle 3 block 0 left
-        DEF WH_INV_SKU_A03_B0_L_0 Solid {
-          translation 27.545 7.99 1.64
-          name "inv_sku_a03_b0_l_0"
+        # INVENTORY SKU-A01-B0-L cube 0 aisle 1 block 0 left
+        DEF WH_INV_SKU_A01_B0_L_0 Solid {
+          translation 27.545 -4.01 1.64
+          name "inv_sku_a01_b0_l_0"
           radarCrossSection 1
           children [
             Pose {
@@ -9372,10 +9372,10 @@ DEF WAREHOUSE Group {
           ]
           boundingObject Box { size 0.28 0.28 0.28 }
         }
-        # INVENTORY SKU-A03-B0-L cube 1 aisle 3 block 0 left
-        DEF WH_INV_SKU_A03_B0_L_1 Solid {
-          translation 28.025 7.99 1.64
-          name "inv_sku_a03_b0_l_1"
+        # INVENTORY SKU-A01-B0-L cube 1 aisle 1 block 0 left
+        DEF WH_INV_SKU_A01_B0_L_1 Solid {
+          translation 28.025 -4.01 1.64
+          name "inv_sku_a01_b0_l_1"
           radarCrossSection 1
           children [
             Pose {
@@ -9390,10 +9390,10 @@ DEF WAREHOUSE Group {
           ]
           boundingObject Box { size 0.28 0.28 0.28 }
         }
-        # INVENTORY SKU-A03-B0-L cube 2 aisle 3 block 0 left
-        DEF WH_INV_SKU_A03_B0_L_2 Solid {
-          translation 28.505 7.99 1.64
-          name "inv_sku_a03_b0_l_2"
+        # INVENTORY SKU-A01-B0-L cube 2 aisle 1 block 0 left
+        DEF WH_INV_SKU_A01_B0_L_2 Solid {
+          translation 28.505 -4.01 1.64
+          name "inv_sku_a01_b0_l_2"
           radarCrossSection 1
           children [
             Pose {
@@ -9408,10 +9408,298 @@ DEF WAREHOUSE Group {
           ]
           boundingObject Box { size 0.28 0.28 0.28 }
         }
-        # INVENTORY SKU-A03-B0-L cube 3 aisle 3 block 0 left
-        DEF WH_INV_SKU_A03_B0_L_3 Solid {
-          translation 28.985 7.99 1.64
-          name "inv_sku_a03_b0_l_3"
+        # INVENTORY SKU-A01-B0-L cube 3 aisle 1 block 0 left
+        DEF WH_INV_SKU_A01_B0_L_3 Solid {
+          translation 28.985 -4.01 1.64
+          name "inv_sku_a01_b0_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B1-L cube 0 aisle 3 block 1 left
+        DEF WH_INV_SKU_A03_B1_L_0 Solid {
+          translation 47.795 7.99 1.64
+          name "inv_sku_a03_b1_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B1-L cube 1 aisle 3 block 1 left
+        DEF WH_INV_SKU_A03_B1_L_1 Solid {
+          translation 48.275 7.99 1.64
+          name "inv_sku_a03_b1_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B1-L cube 2 aisle 3 block 1 left
+        DEF WH_INV_SKU_A03_B1_L_2 Solid {
+          translation 48.755 7.99 1.64
+          name "inv_sku_a03_b1_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A03-B1-L cube 3 aisle 3 block 1 left
+        DEF WH_INV_SKU_A03_B1_L_3 Solid {
+          translation 49.235 7.99 1.64
+          name "inv_sku_a03_b1_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A04-B0-L cube 0 aisle 4 block 0 left
+        DEF WH_INV_SKU_A04_B0_L_0 Solid {
+          translation 27.545 13.99 1.64
+          name "inv_sku_a04_b0_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A04-B0-L cube 1 aisle 4 block 0 left
+        DEF WH_INV_SKU_A04_B0_L_1 Solid {
+          translation 28.025 13.99 1.64
+          name "inv_sku_a04_b0_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A04-B0-L cube 2 aisle 4 block 0 left
+        DEF WH_INV_SKU_A04_B0_L_2 Solid {
+          translation 28.505 13.99 1.64
+          name "inv_sku_a04_b0_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A04-B0-L cube 3 aisle 4 block 0 left
+        DEF WH_INV_SKU_A04_B0_L_3 Solid {
+          translation 28.985 13.99 1.64
+          name "inv_sku_a04_b0_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B1-L cube 0 aisle 5 block 1 left
+        DEF WH_INV_SKU_A05_B1_L_0 Solid {
+          translation 47.795 19.99 1.64
+          name "inv_sku_a05_b1_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B1-L cube 1 aisle 5 block 1 left
+        DEF WH_INV_SKU_A05_B1_L_1 Solid {
+          translation 48.275 19.99 1.64
+          name "inv_sku_a05_b1_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B1-L cube 2 aisle 5 block 1 left
+        DEF WH_INV_SKU_A05_B1_L_2 Solid {
+          translation 48.755 19.99 1.64
+          name "inv_sku_a05_b1_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A05-B1-L cube 3 aisle 5 block 1 left
+        DEF WH_INV_SKU_A05_B1_L_3 Solid {
+          translation 49.235 19.99 1.64
+          name "inv_sku_a05_b1_l_3"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A06-B0-L cube 0 aisle 6 block 0 left
+        DEF WH_INV_SKU_A06_B0_L_0 Solid {
+          translation 27.545 25.99 1.64
+          name "inv_sku_a06_b0_l_0"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A06-B0-L cube 1 aisle 6 block 0 left
+        DEF WH_INV_SKU_A06_B0_L_1 Solid {
+          translation 28.025 25.99 1.64
+          name "inv_sku_a06_b0_l_1"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A06-B0-L cube 2 aisle 6 block 0 left
+        DEF WH_INV_SKU_A06_B0_L_2 Solid {
+          translation 28.505 25.99 1.64
+          name "inv_sku_a06_b0_l_2"
+          radarCrossSection 1
+          children [
+            Pose {
+              translation 0 0 0
+              children [
+                Shape {
+                  appearance USE WH_APP_INV_CUBE
+                  geometry Box { size 0.28 0.28 0.28 }
+                }
+              ]
+            }
+          ]
+          boundingObject Box { size 0.28 0.28 0.28 }
+        }
+        # INVENTORY SKU-A06-B0-L cube 3 aisle 6 block 0 left
+        DEF WH_INV_SKU_A06_B0_L_3 Solid {
+          translation 28.985 25.99 1.64
+          name "inv_sku_a06_b0_l_3"
           radarCrossSection 1
           children [
             Pose {

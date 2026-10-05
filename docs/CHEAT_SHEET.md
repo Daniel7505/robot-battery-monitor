@@ -204,9 +204,11 @@ Without `RBM_OBS_REMOVE_AFTER_S` it waits at the obstacle; delete
 `WH_OBS_BOX` / `WH_OBS_TABLE` in the scene tree (under `WH_OBSTACLES`) to
 make it resume. `set RBM_OBSTACLES=1` turns sensing on in any world.
 
-Radar motion (rolling ball on the S). Console should show `radar radar_fwd ON`,
-`OBSTACLE … -> WAITING_FOR_MOVING`, HUD `OBS WAIT … mov`. The ball starts at
-x≈5 m with an initial −x velocity and damps to a stop:
+Radar motion (ball rolls *across* the start-straight lane). Console should show
+`radar radar_fwd ON`, `OBSTACLE … -> WAITING_FOR_MOVING`, HUD `OBS WAIT … mov`.
+The red ball starts left of the yellow lane at about (2.2, 1.15) m and rolls
+toward −y across the path ~1.5–2 s after start — you should see it cut in front
+of the bot while the bot is still on the straight:
 
 ```bat
 set RBM_OBSTACLES=

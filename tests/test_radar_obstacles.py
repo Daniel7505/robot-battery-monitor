@@ -46,13 +46,34 @@ def test_every_butlerbot_world_has_forward_radar(world):
 
 
 def test_radar_motion_world_has_rolling_ball_and_obstacles_on():
+    """Ball must cross the S *start straight* (y=0 for x<=3), not sit on the lobe."""
+    import re
+    import sys
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from s_track import START_STRAIGHT_M, centerline
+
     p = ROOT / "webots" / "worlds" / "butlerbot_radar_motion.wbt"
     assert p.is_file()
     text = p.read_text(encoding="utf-8")
     assert "# OBSTACLES on" in text
     assert "DEF WH_MOVING_BALL Solid" in text
     assert "radarCrossSection" in text
-    assert "linearVelocity" in text
+    m = re.search(
+        r"DEF WH_MOVING_BALL Solid \{\s*translation ([\d.+-]+) ([\d.+-]+) ([\d.+-]+).*?"
+        r"linearVelocity ([\d.+-]+) ([\d.+-]+) ([\d.+-]+)",
+        text,
+        re.S,
+    )
+    assert m, "ball translation/velocity missing"
+    x, y, z = map(float, m.group(1, 2, 3))
+    vx, vy, vz = map(float, m.group(4, 5, 6))
+    assert 0.5 < x < START_STRAIGHT_M, f"ball x={x} must be on the start straight (<{START_STRAIGHT_M})"
+    assert centerline(x)[0] == 0.0
+    # Starts outside the corridor half-width and rolls toward lane centre (vy toward 0)
+    assert abs(y) > 0.7, f"ball should start clearly outside the lane (y={y})"
+    assert vy * y < 0, f"velocity must aim toward y=0 (y={y}, vy={vy})"
+    assert abs(vy) >= 0.5, f"need a decisive cross-lane speed, got vy={vy}"
 
 
 def test_warehouse_obstacle_props_have_radar_cross_section():

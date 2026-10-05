@@ -236,7 +236,10 @@ world sets 1.0 on `WH_MOVING_BALL`).
    usual slow/stop path.
 
 Test world: `butlerbot_radar_motion.wbt` (S track + `# OBSTACLES on` + a
-physics ball at x=5 m with initial `-x` velocity). See `docs/CHEAT_SHEET.md`.
+physics ball that starts **left of the start-straight lane** at ~(2.2, 1.15) m
+and rolls across y=0 in front of the bot). An earlier (5, 0) placement sat on
+the S lobe outside the yellow lines and never produced `WAITING_FOR_MOVING`.
+See `docs/CHEAT_SHEET.md`.
 
 ## Known limits
 

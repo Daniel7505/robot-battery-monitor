@@ -112,39 +112,44 @@ Floor {
 # 0.025 above the floor. Do not hand-edit: change the track file and regenerate.
 # =============================================================================
 
-# ---- RADAR MOTION TEST PROP: ball rolls into the lane toward the robot ----
-# Start ~5 m ahead on the centre line, with initial -x velocity so it closes.
-# radarCrossSection > 0 is required for Webots Radar to see it. Physics damping
-# lets it stop after a few metres so the gate can leave WAITING_FOR_MOVING.
+# ---- RADAR MOTION TEST PROP -----------------------------------------------
+# The S start straight is y=0 for x in [0, 3] m (scripts/s_track.py START_STRAIGHT_M).
+# Previous demo put the ball at (5, 0) on the first S lobe (centerline y ≈ -0.9),
+# so it sat OUTSIDE the yellow lane and, with heavy damping, never clearly crossed
+# the bot path — Dan saw no WAITING_FOR_MOVING (20261005-110637 = CLEAR only).
+#
+# Fix: ball starts LEFT of the lane on the start straight and rolls across +x=2.2 m
+# (in front of the bot) with light damping so it is still MOVING while in the
+# corridor. Expect HUD "OBS WAIT … mov" / obstacle_state=WAITING_FOR_MOVING.
 DEF WH_OBSTACLES Group {
   children [
     DEF WH_MOVING_BALL Solid {
-      translation 5.0 0.0 0.12
+      translation 2.2 1.15 0.15
       name "moving_ball"
-      radarCrossSection 1.0
-      linearVelocity -0.55 0 0
+      radarCrossSection 1
+      linearVelocity 0 -0.85 0
       children [
         Shape {
           appearance PBRAppearance {
-            baseColor 0.75 0.25 0.2
-            roughness 0.6
+            baseColor 0.85 0.15 0.1
+            roughness 0.55
             metalness 0
           }
           geometry Sphere {
-            radius 0.12
+            radius 0.15
             subdivision 3
           }
         }
       ]
       boundingObject Sphere {
-        radius 0.12
+        radius 0.15
       }
       physics Physics {
         density -1
-        mass 0.8
+        mass 1.2
         damping Damping {
-          linear 0.4
-          angular 0.4
+          linear 0.05
+          angular 0.05
         }
       }
     }

@@ -72,6 +72,7 @@ from src.mission_tasks import TASK_PROFILES
 from src.twin.adapters import get_adapter, registered_adapters
 from src.twin.butlerbot import butlerbot_flow_description
 from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
+from src.mission_efficiency import MissionEfficiencyTracker
 from src.twin.power_feed import PowerFeed, power_feed_from_telemetry
 
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
@@ -122,6 +123,8 @@ class DigitalTwinBridge:
         }
         # Monotonic stop handshake; bumped on every drive_stop command.
         self._webots_stop_seq = 0
+        # Live mission efficiency (time / Wh / distance) for the dashboard.
+        self._efficiency = MissionEfficiencyTracker(capacity_wh=float(self._battery_wh or 480))
 
     @property
     def enabled(self) -> bool:
@@ -170,6 +173,9 @@ class DigitalTwinBridge:
         self._last_telemetry = telemetry
         self._telemetry_count += 1
         self._active_source = telemetry.source
+        # Skip internal/sim noise; only arm efficiency on real external feeds.
+        if telemetry.source != "internal":
+            self._efficiency.update_from_telemetry(telemetry)
         logger.info(
             f"DigitalTwinBridge ingest [{telemetry.source}/{adapter_impl.name}] "
             f"task={telemetry.task} draws={len(telemetry.channel_draws)}"
@@ -181,6 +187,7 @@ class DigitalTwinBridge:
             "task": telemetry.task,
             "channel_count": len(telemetry.channel_draws),
             "timestamp": telemetry.timestamp.isoformat(),
+            "efficiency": self._efficiency.snapshot(),
         }
 
     def get_power_feed(self) -> PowerFeed | None:
@@ -478,6 +485,8 @@ class DigitalTwinBridge:
                 # Park one-shot for Webots poll (cleared in _export_teleop).
                 self._webots_teleop["battery_pct"] = pct
                 self._webots_teleop["reset_thermal"] = True
+                # Fresh pack → fresh mission efficiency baseline.
+                self._efficiency.reset(capacity_wh=float(self._battery_wh or 480))
                 applied.append(f"battery_reset={pct:.0f}%")
 
         drive = command.get("drive")
@@ -542,6 +551,12 @@ class DigitalTwinBridge:
             "timestamp": self._last_command_at.isoformat(),
         }
 
+    def reset_efficiency(self, *, capacity_wh: float | None = None) -> dict:
+        """Clear mission efficiency totals (also called on battery_reset)."""
+        cap = capacity_wh if capacity_wh is not None else float(self._battery_wh or 480)
+        self._efficiency.reset(capacity_wh=cap)
+        return self._efficiency.snapshot()
+
     def status(self) -> dict:
         """Compact bridge health for dashboard twin panel and export_state."""
         tel = self._last_telemetry
@@ -570,6 +585,7 @@ class DigitalTwinBridge:
                 self._last_command_at.isoformat() if self._last_command_at else None
             ),
             "registered_adapters": registered_adapters(),
+            "efficiency": self._efficiency.snapshot(),
         }
 
     def schema(self) -> dict:

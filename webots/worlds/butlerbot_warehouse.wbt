@@ -9500,9 +9500,10 @@ DEF WAREHOUSE Group {
         }
       ]
     }
-    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch 0.74 m)
+    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch 0.89 m).
+    # Visual only: no boundingObject / no Physics — a static BO here stalled the robot.
     DEF WH_TROLLEY Solid {
-      translation -0.735 0 0.09
+      translation -0.885 0 0.09
       name "trolley"
       radarCrossSection 1.5
       children [
@@ -9614,10 +9615,8 @@ DEF WAREHOUSE Group {
               ]
             }
           ]
-          boundingObject Box { size 0.28 0.28 0.28 }
         }
       ]
-      boundingObject Box { size 0.55 0.4 0.32 }
     }
     # ---- obstacles: none in this world (butlerbot_warehouse_obstacles.wbt has the test props).
     #      Shelves above are already Solids with boundingObjects for the stereo pair / radar.

@@ -91,7 +91,7 @@ def test_trolley_hitch_behind_robot():
     assert y2 == pytest.approx(5.0 - tg.hitch_behind_m)
     assert yaw2 == pytest.approx(math.pi / 2)
     assert tg.hitch_behind_m == pytest.approx(
-        tg.chassis_length_m / 2 + tg.tongue_m + tg.length_m / 2
+        tg.chassis_length_m / 2 + tg.hitch_clear_m + tg.tongue_m + tg.length_m / 2
     )
 
 

@@ -48,7 +48,9 @@ future shopping list — not picked in this PR.
 
 The trolley Solid is **not** a Robot child (Robot block stays byte-identical
 across worlds). The controller teleports `WH_TROLLEY` behind the axle each tick
-(hitch ≈ chassis/2 + tongue + half bed ≈ 0.74 m).
+(hitch ≈ chassis/2 + clear + tongue + half bed ≈ 0.89 m). It is **visual-only**
+(no `boundingObject` / no Physics): a static collision box on the hitch was
+stalling the bot (not trolley mass — there is no physics mass).
 
 ## CMD (Windows)
 

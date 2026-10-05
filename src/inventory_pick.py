@@ -26,6 +26,7 @@ ST_DONE = "DONE"
 # a short tongue; the controller may override hitch from the live robot.
 DEFAULT_CHASSIS_LENGTH_M = 0.36
 DEFAULT_TONGUE_M = 0.28
+DEFAULT_HITCH_CLEAR_M = 0.15  # extra gap axle-rear → tongue tip so the cart never kisses the body
 DEFAULT_TROLLEY_LENGTH_M = 0.55
 DEFAULT_TROLLEY_WIDTH_M = 0.40
 DEFAULT_TROLLEY_BED_H_M = 0.18
@@ -84,6 +85,7 @@ class TrolleyGeom:
 
     chassis_length_m: float = DEFAULT_CHASSIS_LENGTH_M
     tongue_m: float = DEFAULT_TONGUE_M
+    hitch_clear_m: float = DEFAULT_HITCH_CLEAR_M
     length_m: float = DEFAULT_TROLLEY_LENGTH_M
     width_m: float = DEFAULT_TROLLEY_WIDTH_M
     bed_h_m: float = DEFAULT_TROLLEY_BED_H_M
@@ -92,7 +94,7 @@ class TrolleyGeom:
     @property
     def hitch_behind_m(self) -> float:
         """Axle → trolley bed centre, along −x in the robot frame."""
-        return self.chassis_length_m / 2.0 + self.tongue_m + self.length_m / 2.0
+        return (self.chassis_length_m / 2.0 + self.hitch_clear_m + self.tongue_m + self.length_m / 2.0)
 
     def world_pose(self, robot_xy: tuple[float, float], yaw: float) -> tuple[float, float, float]:
         """Trolley bed centre (x, y, yaw) behind the robot, same heading."""

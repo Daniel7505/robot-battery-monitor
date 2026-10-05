@@ -656,8 +656,13 @@ def trolley_vrml(lay: Layout, app) -> str:
     """Pull-behind trolley prop at the spawn hitch pose (controller keeps it following).
 
     Not a Robot child (Robot block stays byte-identical across worlds). Supervisor
-    teleports DEF WH_TROLLEY each frame. Cargo Pose WH_TROLLEY_LOAD starts under
-    the floor and is raised onto the bed after a pretend pick.
+    teleports DEF WH_TROLLEY each frame. Cargo WH_TROLLEY_LOAD starts under the
+    floor and is raised onto the bed after a pretend pick.
+
+    Visual-only: **no boundingObject / no Physics**. A static Solid with a
+    boundingObject behind the bot (clipping the floor) was stalling forward
+    motion — Webots treated it as an immovable hitch / contact sink. There is no
+    physics mass to lighten; collision geometry was the bug.
     """
     from src.inventory_pick import TrolleyGeom
 
@@ -674,23 +679,16 @@ def trolley_vrml(lay: Layout, app) -> str:
     x, y, _yaw = tg.world_pose((0.0, 0.0), 0.0)
     L, W, bed_h, rail_h = tg.length_m, tg.width_m, tg.bed_h_m, tg.rail_h_m
     tongue = tg.tongue_m
-    # solid centre at bed mid-height
     zc = bed_h / 2
     ch = ""
-    # bed deck
     ch += _shape(app, "trolley_bed", (L, W, 0.04), (0, 0, -zc + 0.02), "        ")
-    # side rails
     for dy in (-1, 1):
         ch += _shape(app, "trolley", (L - 0.04, 0.03, rail_h - bed_h), (0, dy * (W / 2 - 0.02), -zc + bed_h + (rail_h - bed_h) / 2), "        ")
-    # front rail (toward the robot / hitch)
     ch += _shape(app, "trolley", (0.03, W - 0.04, rail_h - bed_h), (L / 2 - 0.02, 0, -zc + bed_h + (rail_h - bed_h) / 2), "        ")
-    # tongue toward +x (robot)
     ch += _shape(app, "trolley", (tongue, 0.04, 0.04), (L / 2 + tongue / 2, 0, -zc + 0.06), "        ")
-    # four small wheels (visual only; no physics)
     for dx in (-1, 1):
         for dy in (-1, 1):
             ch += _shape(app, "trolley", (0.08, 0.04, 0.08), (dx * (L / 2 - 0.1), dy * (W / 2 - 0.05), -zc + 0.04), "        ")
-    # cargo placeholder (hidden under floor until pick); DEF via nested Solid name
     ch += (
         "        DEF WH_TROLLEY_LOAD Solid {\n"
         "          translation 0 0 -2\n"
@@ -701,15 +699,15 @@ def trolley_vrml(lay: Layout, app) -> str:
     ch += _shape(app, "trolley_load", (0.28, 0.28, 0.28), (0, 0, 0), "            ")
     ch += (
         "          ]\n"
-        "          boundingObject Box { size 0.28 0.28 0.28 }\n"
         "        }\n"
     )
-    # custom solid (RCS like other warehouse props); hitch from TrolleyGeom
-    s = f"    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch {tg.hitch_behind_m:.2f} m)\n"
+    s = (f"    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch {tg.hitch_behind_m:.2f} m).\n"
+         f"    # Visual only: no boundingObject / no Physics — a static BO here stalled the robot.\n")
     s += f"    DEF WH_TROLLEY Solid {{\n      translation {_f(x)} {_f(y)} {_f(zc)}\n"
     s += f'      name "trolley"\n      radarCrossSection 1.5\n      children [\n{ch}      ]\n'
-    s += f"      boundingObject Box {{ size {_f(L)} {_f(W)} {_f(rail_h)} }}\n    }}\n"
+    s += "    }\n"
     return s
+
 
 
 def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str:

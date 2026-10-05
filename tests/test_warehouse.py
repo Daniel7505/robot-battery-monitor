@@ -138,12 +138,13 @@ def test_world_shape(built):
     solids = re.findall(r"DEF (WH_\w+) Solid \{", wh)
     lay = built["layout"]
     n_inv = sum(g.n_cubes for g in built["inventory"])
-    n_trolley = 2  # WH_TROLLEY + nested WH_TROLLEY_LOAD
+    n_trolley = 2  # WH_TROLLEY + nested WH_TROLLEY_LOAD (visual-only, no boundingObject)
     assert len(solids) == (
         len(lay.racks()) + len(lay.walls_and_doors()) + len(built["staging"]) + n_inv + n_trolley
     )
     assert len(set(solids)) == len(solids)
-    assert wh.count("boundingObject Box") == len(solids)
+    # trolley + load are visual hitch props (no BO) so they cannot stall the robot
+    assert wh.count("boundingObject Box") == len(solids) - n_trolley
     names = re.findall(r'^\s+name "([^"]+)"', wh, re.M)
     assert len(names) == len(set(names)) == len(solids)
     assert "DEF WH_OBSTACLES Group" in wh  # placeholder, empty

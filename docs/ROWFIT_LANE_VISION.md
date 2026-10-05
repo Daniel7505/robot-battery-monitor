@@ -386,7 +386,15 @@ LANE -> JUNCTION_APPROACH -(L/R)-> CORNER_APPROACH -> PIVOT -> REACQUIRE -> LANE
   openings are known, at the latest 0.35 m before the near line
   (odometry-dead-reckoned if vision loses it).
 * **Turns** reuse CORNER_APPROACH / PIVOT / REACQUIRE, pivot point = the
-  junction centre, refreshed from each new sighting.
+  junction centre. While lining up:
+  * Fresh lane fits need **conf ≥ 0.55** (`APPROACH_STEER_MIN_CONF` /
+    `APPROACH_YAW_MIN_CONF`) to steer or update `lane_yaw`. Held estimates
+    (odometry-propagated last-good lane) are always usable at `MIN_CONF`
+    (0.15). Low-conf fresh fits near the cross-aisle paint are ignored — they
+    used to pull the pivot base by several degrees (warehouse aisle-8 miss).
+  * The remaining distance to the junction centre is refreshed from vision but
+    **never pushed back out** (odometry countdown wins over a one-frame-late
+    centre). That used to delay the pivot by ~v·frame_dt ≈ 8 cm at 0.25 m/s.
 * **GAP_CROSS.** Lane pursuit up to the near line, then blind: 0.15 m/s,
   heading held on the IMU (the lane direction measured on the approach),
   distance counted by odometry. Every frame without a lane the tracker forgets
@@ -475,7 +483,7 @@ Robustness (plus S/L, t_end R, t_left L, t_right S, gap25, gap45):
 | start offset +15 cm, or −15 cm and +5° yaw | 14/14 OK (worst = the start offset) |
 | IMU drift +0.25°/s | 7/7 OK; gap45 ends 24 cm off after 24 s blind |
 | IMU drift ±0.5°/s (and 0.3° noise) | 6/7 OK; **gap45 fails**: 12° of heading drift over 3.5 m blind puts the robot 0.58 m off, the far lane does not pass the reacquire check, it gives up at 4.0 m and stops safely. gap25 OK (14 cm). |
-| one frame extra camera latency | 11/11 OK; turns end 8–11 cm off (the pivot point is one frame late) |
+| one frame extra camera latency | 11/11 OK; junction turns ~5–8 cm (remaining no longer delayed by a late centre); was 8–11 cm |
 
 So the gap crossed reliably is 4.5 m with an IMU drifting ≤ 0.25°/s and
 2.5 m at 0.5°/s. Webots' InertialUnit has no drift; a real gyro's does matter

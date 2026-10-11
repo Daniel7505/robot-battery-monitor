@@ -25,6 +25,8 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://robot:robot@localhost:5432/robot_battery_test
+      # Fail (never skip) if Postgres is missing in CI.
+      RBM_REQUIRE_DB: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

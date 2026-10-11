@@ -27,7 +27,7 @@ Credit matters: this system was **co-built**. Daniel directed goals and rejected
 5. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — system map of **today’s** stack  
 6. [`docs/STABILITY.md`](STABILITY.md) — residual spin / stop lessons  
 7. [`docs/TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md) — power feed contract  
-8. Root [`README.md`](../README.md) — code tour + boot path  
+8. Root [`README.md`](../README.md) — setup paths, file list, boot path; [`JOURNEY.md`](../JOURNEY.md) — project log  
 9. Then code (prefer pure math + bridge before god files)
 
 **Wrong tree warning:** ignore Desktop copies named like `robot-battery-monitor-main` unless they match GitHub `main`. Only the path above (or a fresh clone of GitHub) is canonical.

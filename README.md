@@ -1,528 +1,489 @@
-# Robot Battery Monitor
+# ButlerBot (repo: robot-battery-monitor)
 
-**Co-built with Grok Build** · Owner: [Daniel7505](https://github.com/Daniel7505) · Kickoff: Grok Web  
-**North star:** [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) · **Review fence:** [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)
+**A simulated delivery robot plus a live "car dashboard" for its battery and power use.**
+Owner: [Daniel7505](https://github.com/Daniel7505) · Co-built with Grok Build · Standing goals: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) · Review rules: [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) · Project story: [`JOURNEY.md`](JOURNEY.md)
 
-The repo name is leftover. **What we are building:** an onboard agent that catalogs real purchasable parts, takes a mission, designs the cheapest robot that can finish it, evaluates that design in a Webots twin, and later transfers it to hardware.
-
-What you can run *today* is the **scaffolding** — a power-aware dashboard plus a wheeled ButlerBot twin that can follow a painted S and park at GPS finish ``x=16.5`` m (double-S, ~17.4 m along the lane; set by the red line in `webots/worlds/butlerbot.wbt`). Runs logged before 2026-09-04 that reach x≈24 m were on the earlier, longer 24.5 m S. That drive stack is the evaluation harness (“can this config go A to B?”), not the product.
-
-Standing map: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md). Drive baseline: [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md).
-
-You do not need a real robot to try the harness. The app runs on simulated data, a Webots twin, or a ROS2-mock path.
+> **About the name.** The repo is still called "robot-battery-monitor" because that is how it started. It has grown into a full robot simulation project. The name is leftover.
 
 ---
 
-## What does this project do today?
+## Contents
 
-The live demo is still a robot “car dashboard”:
-
-- Main battery level (percentage) and watts per body part (legs, arms, torso, compute, cooling)
-- Warnings when draw, pack, or heat look unsafe
-- How long the pack might last; history in Postgres
-- Webots twin: **lane-keep** on a painted corridor (travel-band, not docking-grade), API drive commands for the agent, ABS stop
-
-**Next harness work:** parts catalog (`python -m src.parts_db`) and a thin design agent (`python -m src.design_agent`). Twin eval of those BOMs is not wired yet. No more lane-keep knobs unless asked.
+1. [What is this, in plain English?](#1-what-is-this-in-plain-english)
+2. [What you'll see](#2-what-youll-see)
+3. [Where the project stands (honest status)](#3-where-the-project-stands-honest-status)
+4. [How it fits together (diagrams)](#4-how-it-fits-together-diagrams)
+5. [Pick your setup](#5-pick-your-setup)
+   - [A. Just look around (no install)](#a-just-look-around-no-install)
+   - [B. Run the lightweight simulator and tests (no Webots)](#b-run-the-lightweight-simulator-and-tests-no-webots)
+   - [C. Full Windows setup: dashboard + Webots robot](#c-full-windows-setup-dashboard--webots-robot)
+   - [D. Linux or macOS (untested)](#d-linux-or-macos-untested)
+   - [E. Developer / contributor workflow](#e-developer--contributor-workflow)
+6. [Reading the dashboard](#6-reading-the-dashboard)
+7. [Settings you might change](#7-settings-you-might-change)
+8. [Common problems](#8-common-problems)
+9. [Where things live (folder map)](#9-where-things-live-folder-map)
+10. [Credits and AI collaboration](#10-credits-and-ai-collaboration)
+11. [Project journey](#11-project-journey)
 
 ---
 
-## Architecture (high level — start here for reviews)
+## 1. What is this, in plain English?
 
-**Future AI models / cold reviewers:** read **[`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)** then **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)** — what we are actually building, ownership, do/don’t fence, blast-radius list, and credits. Then architecture.
+Imagine a small wheeled robot that carries things around a warehouse. Before anyone buys parts and builds it, this project lets you:
 
-If you want to understand **how the system fits together** before reading code, open:
+- **Drive it in a 3D simulator** ([Webots](https://cyberbotics.com/), free). The robot follows yellow painted lanes using two downward-facing cameras, turns at corners and intersections, slows for obstacles, and stops cleanly.
+- **Watch its "fuel gauge" live** in a web page: battery %, how many watts each body part uses (wheels, arms, torso, computer, cooling), safety warnings, and how long the battery should last.
+- **Save the history** in a database so you can look back at past runs.
+- **Test ideas without the simulator**: a fast "offline" lane-following simulator and about 630 automated tests.
+- **Start designing real robots**: a small catalog of real, buyable parts and a first-draft "design agent" that suggests the cheapest parts list for a mission.
 
-**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — pyramid breakdown, layered stack, PMS hub interactions, live-twin sequence, stop handshake, and deploy swimlanes (Mermaid, renders on GitHub).
+The long-term goal ([`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)) is an agent that picks real parts, designs the cheapest robot that can finish a mission, tests it in the simulator, and then builds it for real. Today's robot and dashboard are the **test bench** for that goal. The north star may evolve as the project learns; `NORTH_STAR.md` is the current version.
 
-**Pyramid idea (one glance):** ButlerBot as a whole → operator UI / PMS / twin / hardware / data → channels, safety, agent, motion control → concrete files in this repo.
+You **do not need a real robot**. Everything runs on a normal PC.
+
+---
+
+## 2. What you'll see
+
+| Where | What it looks like |
+|-------|--------------------|
+| **Browser** at `http://127.0.0.1:5000` | A page titled **"ButlerBot Live Monitor"** with a big battery %, power per channel, green/yellow/red safety status, forecast, mission info and history charts. Numbers update by themselves every second or two. |
+| **Webots window** | ButlerBot (wheeled base, torso, two arms) driving along a yellow lane: by default a double S-curve (about 17.4 m along the lane) that ends at a red finish line at GPS x=16.5 m, or corners, intersections, or a warehouse with boxes and a pull-behind trolley. Small camera overlays show what the robot sees. |
+| **Dashboard while Webots runs** | The **Digital Twin Bridge** panel changes from `SOURCE: INTERNAL` to **`FEED: webots`**. Battery and watts now come from the simulated robot. A strip shows mission time, energy used (Wh) and distance. |
+| **Terminal (no Webots)** | `rowfit_sim.py` prints a small table: did the robot finish the course, how far off the lane it drifted (cm), and how long it took. |
+
+---
+
+## 3. Where the project stands (honest status)
+
+**Works today**
+
+- Live power dashboard with safety rules, forecasts and an "onboard agent" that throttles the robot if you push it too hard.
+- Webots robot that lane-keeps on its own, handles 90° corners, T-junctions and crossroads, detects obstacles (stereo cameras + radar) in obstacle worlds, and runs multi-trip "shopping list" pick runs in the warehouse world.
+- A reliable stop (ABS, no wheel spin after stopping). See [`docs/STABILITY.md`](docs/STABILITY.md).
+- Docker one-command startup, Postgres history, automated tests on every push (GitHub Actions).
+
+**Limitations (please read)**
+
+- **Simulation only.** There is no real robot or battery hardware connected. "Real" in settings like `HARDWARE_MODE=real` means "the full, realistic software path," **not** a physical robot.
+- **Lane accuracy is a simulator number** (about 3 cm in ideal Webots). Real cameras, lighting and floors will be worse.
+- **"Legs" means wheels.** The power channels are named Legs / Arms / Torso / Compute / Cooling because a walking robot was planned. On the wheeled ButlerBot, "Legs" is the drive wheels. A biped profile exists but the wheeled one is the trusted baseline.
+- **ROS 2 is mocked by default.** No ROS install is needed; real ROS 2 is optional and less tested.
+- **Design agent is a first draft.** The parts catalog has about 10 parts, and the suggested designs are **not** yet test-driven in Webots automatically.
+- **Developed and tested on Windows 10/11 only.** Linux/macOS scripts exist but are **untested**.
+
+---
+
+## 4. How it fits together (diagrams)
+
+### The simple picture
+
+Three things run on your computer: the **Webots simulator** (optional), the **dashboard app**, and a **database**. Your browser talks to the dashboard. The robot in Webots reports its battery and power to the dashboard, and gets "drive", "stop" or "slow down" back.
+
+```mermaid
+flowchart LR
+    YOU["👤 You<br/>web browser<br/>http://127.0.0.1:5000"]
+
+    subgraph PC["Your computer"]
+        WEBOTS["🤖 Webots robot simulator<br/>ButlerBot drives a painted lane<br/>(optional)"]
+        subgraph DOCKER["Docker (or plain Python)"]
+            DASH["📊 Dashboard app<br/>run_dashboard.py<br/>power math · safety · agent"]
+            DB[("🗄️ Postgres<br/>history")]
+        end
+    end
+
+    OFFLINE["🧪 Offline tools - no Webots needed<br/>tests · rowfit_sim.py · parts catalog"]
+
+    YOU -- "watch live numbers,<br/>press Drive / Stop" --> DASH
+    WEBOTS -- "battery, power, position" --> DASH
+    DASH -- "drive, stop, slow down" --> WEBOTS
+    DASH -- "saves readings" --> DB
+    OFFLINE -. "same robot code,<br/>runs by itself" .- WEBOTS
+```
+
+### What actually flows where (for the curious)
+
+Each box names the file that does the job. Items marked * only switch on in the obstacle or warehouse worlds.
 
 ```mermaid
 flowchart TB
-    ROBOT["ButlerBot system"]
-    ROBOT --> OPS["Operator dashboard"]
-    ROBOT --> PMS["Power Management System"]
-    ROBOT --> TWIN["Webots digital twin"]
-    ROBOT --> HW["Hardware abstraction"]
-    ROBOT --> DATA["Postgres history"]
-    PMS --> CH["Legs · Arms · Torso · Compute · Cooling"]
-    TWIN --> BR["HTTP Twin Bridge"]
-    BR <-->|"telemetry / state / commands"| PMS
+    subgraph HOST["① Webots process on your PC - webots/controllers/butlerbot_controller/"]
+        direction LR
+        SENS["Sensors<br/>GPS · IMU · encoders<br/>nadir cameras L/R<br/>stereo + radar*"]
+        VIS["Lane vision<br/>src/lane_vision.py<br/>src/junction_vision.py"]
+        OBS["Obstacles*<br/>controller_obstacles.py<br/>src/obstacle_gate.py"]
+        INV["Pick list*<br/>controller_inventory.py<br/>src/shopping_list.py"]
+        DRIVE["Steer + speed<br/>controller_rowfit.py<br/>src/rowfit_control.py"]
+        WHEELS["Wheels · ABS · stop<br/>controller_wheels.py"]
+        POWER["Power estimate<br/>src/twin/webots_power.py"]
+        PUB["twin_publisher.py"]
+        SENS --> VIS --> DRIVE
+        SENS --> OBS -- "speed cap" --> DRIVE
+        INV -- "stop / slow" --> DRIVE
+        DRIVE --> WHEELS --> POWER --> PUB
+    end
+
+    subgraph APP["② Dashboard process - run_dashboard.py (Docker 'dashboard' container, or local Python)"]
+        direction LR
+        API["Flask + SocketIO<br/>src/dashboard.py"]
+        BRIDGE["DigitalTwinBridge<br/>src/twin/bridge.py<br/>latest feed · stop_epoch"]
+        TICK["PMS tick<br/>src/hardware_ros2.py"]
+        PMS["Allocator · safety · LRU<br/>forecast · mission<br/>src/onboard_agent.py"]
+        API <--> BRIDGE
+        BRIDGE -- "Webots feed if fresh,<br/>else internal sim" --> TICK
+        TICK <--> PMS
+        PMS -- "agent throttle" --> BRIDGE
+        TICK -- "live state" --> API
+    end
+
+    subgraph OUT["③ Storage and screens"]
+        direction LR
+        DB[("Postgres 16<br/>Docker 'postgres'<br/>src/database.py")]
+        BROWSER["Browser<br/>ButlerBot Live Monitor"]
+        CLI["robot_battery_monitor.py<br/>terminal reports"]
+    end
+
+    PUB -- "POST /api/twin/telemetry" --> API
+    API -- "GET /api/twin/state:<br/>drive · stop_epoch · throttle" --> PUB
+    TICK -- "write readings" --> DB
+    DB -- "history / analytics" --> API
+    DB --> CLI
+    API -- "SocketIO battery_update" --> BROWSER
+    BROWSER -- "POST /api/twin/command:<br/>drive · drive_stop · battery_reset" --> API
 ```
 
-**Data path when Webots is live:**
+How to read it:
 
-```
-Webots controller  --POST /api/twin/telemetry-->  DigitalTwinBridge  -->  PMS (channels, agent, DB)
-Webots controller  <--GET  /api/twin/state-------  (drive, stop_epoch, throttle, battery reset)
-Browser            <--SocketIO battery_update----  dashboard broadcast loop
-```
+1. **Inside Webots** (top): the cameras see the yellow lane, `lane_vision` turns pixels into "where is the lane", `rowfit_control` turns that into steering and speed, and `controller_wheels` drives the motors and handles stopping. The power estimate is computed from what the motors are doing.
+2. **Over HTTP** (middle arrows): about twice a second the robot **POSTs** its readings to the dashboard and **GETs** back any commands (drive, stop, throttle). This is plain web traffic. ROS 2 is not needed for it.
+3. **Inside the dashboard app**: the Twin Bridge keeps the latest robot reading. The PMS tick (Power Management System) uses that reading when it is fresh, or its own built-in simulation when Webots is not running, then runs the budget, safety and agent rules and saves a snapshot to Postgres.
+4. **Out to you**: the browser gets a live push (`battery_update`) and its Drive/Stop buttons send commands back the same way.
 
-**Do not save the Webots world on exit** — it can pollute `butlerbot.wbt` with sim state.
+More diagrams (stop handshake, per-tick sequence, deployment): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
-## Code tour (for first-time readers)
+## 5. Pick your setup
 
-If you are opening this repo cold (code review, portfolio, or family showcase), start here after the architecture page. Modules have long docstrings that explain **role, data flow, and non-obvious design choices** — especially stop/spin handling and the Webots twin bridge.
+| I want to... | Go to | Install | Time |
+|--------------|-------|---------|------|
+| Understand the project without installing anything | [A](#a-just-look-around-no-install) | Nothing | 10 min |
+| Run the offline robot simulator and tests | [B](#b-run-the-lightweight-simulator-and-tests-no-webots) | Git, Python 3.12 (Docker optional, for the database tests) | 20-30 min |
+| See the robot drive and the dashboard live (Windows) | [C](#c-full-windows-setup-dashboard--webots-robot) | Git, Docker Desktop, Webots, Python | 45-60 min (mostly downloads) |
+| Same on Linux or Mac (**untested**) | [D](#d-linux-or-macos-untested) | Git, Docker, Webots | 45-60 min |
+| Change code and send it back | [E](#e-developer--contributor-workflow) | All of B | - |
 
-| Start here | Why |
-|------------|-----|
-| [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) | **What we are building** — harness vs product, next work |
-| [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) | **AI + human review fence** — do/don’t, stop/power sacred list, credits |
-| [`docs/LANE_KEEP_BASELINE_2026-08-17.md`](docs/LANE_KEEP_BASELINE_2026-08-17.md) | Frozen drive card + historical 64 champion |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | High-level diagrams of **today’s** stack (pyramid, layers, sequences) |
-| [`docs/TRACKS.md`](docs/TRACKS.md) | Waypoint track files (`tracks/*.json`), test worlds (sharp 90°, widening lane), launching a world, finish referee, offline baseline |
-| [`docs/CAMERA_YAW_STUDY.md`](docs/CAMERA_YAW_STUDY.md) | Toe-out yaw study for the box cameras (analysis only, recommendation 10°) |
-| [`docs/PARTS_CATALOG.md`](docs/PARTS_CATALOG.md) | Design-agent SQLite catalog (`src/parts_db.py`) |
-| [`docs/DESIGN_AGENT.md`](docs/DESIGN_AGENT.md) | Thin BOM proposer (`src/design_agent.py`) |
-| `src/__init__.py` | Package map of the whole PMS |
-| `run_dashboard.py` | Process boot: DB → hardware → Flask dashboard |
-| `src/dashboard.py` | Operator UI + REST twin APIs + SocketIO broadcast |
-| `src/twin/bridge.py` | Arbitration: external Webots vs internal sim; `stop_epoch`; battery override |
-| `src/teleop_agent.py` | Pure drive/ABS/throttle math (testable without Webots) |
-| `src/onboard_agent.py` | Rules that intervene when the operator pushes power/heat too hard |
-| `src/hardware_ros2.py` | Production-like tick: allocate, safety, twin, agent, log |
-| `webots/.../butlerbot_controller.py` | Sim step loop, rowfit lane keep, API drive/stop, ABS / residual-spin fixes |
-| `config/config.yaml` | Knobs for twin, agent, mission, hardware profile |
-| `docs/STABILITY.md` | Why the robot used to spin after stop, and what fixed it |
+Ports used: **5000** (dashboard) and **5432** (database), both only reachable from your own computer.
 
 ---
 
-## What you need (prerequisites)
+### A. Just look around (no install)
 
-Visitors often assume “clone and go.” In practice, what you install depends on **how deep** you want to go. Use the table first, then the notes.
+1. Read [Section 1](#1-what-is-this-in-plain-english) and the [diagrams](#4-how-it-fits-together-diagrams) above.
+2. Open [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md): the "why" and the build order.
+3. Open [`docs/CHEAT_SHEET.md`](docs/CHEAT_SHEET.md): the latest state of the robot's driving brain.
+4. Browse [`webots/README.md`](webots/README.md) for the simulator side and [`docs/TRACKS.md`](docs/TRACKS.md) for the test tracks.
+5. Want to read code? Start with these, in order:
 
-### Quick matrix
-
-| Tool | Dashboard only (Docker) | Full digital twin (recommended demo) | Dev / no Docker | Notes |
-|------|-------------------------|--------------------------------------|-----------------|-------|
-| **Git** | Required | Required | Required | Clone this repo |
-| **Web browser** | Required | Required | Required | Chrome, Firefox, Edge, etc. |
-| **Docker Desktop** | Required | Required | Optional | Runs dashboard + Postgres for you |
-| **Webots** | Not needed | **Required** | Optional | Physics twin; runs **on the host**, not in Docker |
-| **Python 3.12+** | Not needed* | Not needed* | Required | \*Bundled inside the dashboard image |
-| **pip** | Not needed* | Not needed* | Required | Installs `requirements.txt` on host |
-| **PostgreSQL** | Not needed* | Not needed* | Required (or Docker just for DB) | \*Compose starts `postgres:16` for you |
-| **ROS 2** | Not needed | Not needed | Optional | Default path uses **ROS2_MOCK=true** — no `rclpy` install |
-| **Real robot / BMS** | Not needed | Not needed | Not needed | Hardware is simulated or mocked |
-
-\* “Not needed on your machine” because Docker already provides it inside containers.
-
-### Minimum path — live dashboard in a browser
-
-Good for “does this project run?” at someone else’s house.
-
-1. **Git** — [https://git-scm.com/downloads](https://git-scm.com/downloads)  
-2. **Docker Desktop** — [https://www.docker.com/products/docker-desktop/](https://www.docker.com/products/docker-desktop/)  
-   - Install, reboot if asked, **start Docker Desktop** and wait until it says running  
-   - Windows: WSL2 backend is normal; first engine start can take a few minutes  
-3. **A browser**  
-4. Clone + start (see [How to run with Docker](#how-to-run-with-docker-recommended))  
-5. Open `http://127.0.0.1:5000`
-
-You do **not** need a separate Postgres installer, a host Python install, or ROS 2 for this path.
-
-### Full path — dashboard + ButlerBot in Webots
-
-Everything in the minimum path, **plus**:
-
-5. **Webots** (Cyberbotics) — [https://cyberbotics.com/](https://cyberbotics.com/)  
-   - Install on Windows/macOS/Linux  
-   - Open the world file: `webots/worlds/butlerbot.wbt`  
-   - Or use `.\scripts\launch_webots_twin.ps1` / `./scripts/launch_webots_twin.sh` after the dashboard is up  
-6. **Dashboard must already be running** on port **5000** so the controller can POST/GET twin APIs  
-7. On Webots exit: **do not save the world** (avoids polluting `butlerbot.wbt` with sim pose)
-
-Webots is the piece people forget when they only install Docker.
-
-### Optional / advanced
-
-| Want… | Also install / enable |
-|-------|------------------------|
-| Edit Python on the host, run tests | **Python 3.12+**, `pip install -r requirements.txt`, often **pytest** |
-| Host Postgres without Docker | **PostgreSQL 16** (or close) and set `DATABASE_URL` / `.env` |
-| Real ROS 2 topics (not mock) | A **ROS 2** distro on Linux (or the compose `full` profile with `ros2-sim`); set `ROS2_MOCK=false` only if you know what you are doing |
-| Compose “full” profile | Still Docker; adds the optional ROS2 sim container — **not** a substitute for Webots |
-
-### Security defaults
-
-- The dashboard binds **127.0.0.1** when run directly (`DASHBOARD_HOST` overrides). In Docker it listens on `0.0.0.0` inside the container, but compose publishes `127.0.0.1:5000` only.
-- SocketIO accepts browsers from `http://127.0.0.1:5000` and `http://localhost:5000` (`RBM_CORS_ORIGINS` adds more, comma-separated).
-- **Optional API token:** set `RBM_API_TOKEN` in `.env` (or your shell). Then every POST/PUT/PATCH/DELETE needs the header `X-API-Token`. The Webots controller (env var, or the repo `.env`) and `scripts/*.py` (env var) send it automatically. In the browser, open `http://127.0.0.1:5000/?token=<value>` once to unlock the buttons; that sets an HttpOnly, SameSite=Strict cookie. If it is unset, writes are open and the dashboard logs a warning.
-- `/api/demo/launch-webots` only answers requests from 127.0.0.1 / ::1.
-- The Postgres password comes from `POSTGRES_PASSWORD` / `PGPASSWORD` / `DATABASE_URL`. There is no hard-coded default; `.env.example` has the dev value `robot`.
-
-### Disk / ports / OS reality check
-
-- **Ports used:** `5000` (dashboard), `5432` (Postgres), both published on **127.0.0.1 only** (not reachable from other machines). Free them or change values in `.env`.  
-- **Disk:** Docker images + Webots are the large downloads (multi‑GB combined is normal).  
-- **OS:** Developed and demoed on **Windows 10/11** with Docker Desktop; Linux/macOS work for Docker scripts; Webots is cross‑platform.  
-- **GitHub account:** only needed if you fork/push — **cloning a public repo does not require login**.
-
-### What this project is *not* asking you to buy
-
-- No real humanoid / wheeled hardware  
-- No paid cloud GPU  
-- No separate “ROS for Windows” install for the default mock demo  
-
-If you only remember three words for a laptop bag visit: **Git, Docker, Webots** (Webots only if you want the moving robot).
+| File | What it does |
+|------|--------------|
+| `run_dashboard.py` | Starts everything: database → power loop → web dashboard |
+| `src/dashboard.py` | The web page, the `/api/twin/*` endpoints and the live push |
+| `src/twin/bridge.py` | The "post office" between Webots and the dashboard |
+| `src/hardware_ros2.py` | The main power loop: budget, safety, agent, database |
+| `webots/controllers/butlerbot_controller/butlerbot_controller.py` | The robot's main loop inside Webots |
+| `src/lane_vision.py`, `src/rowfit_control.py` | How the robot sees the lane and steers |
+| `config/config.yaml` | Most settings |
 
 ---
 
-## How to run with Docker (recommended)
+### B. Run the lightweight simulator and tests (no Webots)
 
-This is the best option for beginners. Docker starts the database and the app for you.  
-Prerequisites: see **[What you need](#what-you-need-prerequisites)** (at least **Git + Docker Desktop + browser**).
+Good for checking the project works on your machine, or trying a driving change quickly.
 
-### Step 0 — Get the code
+**You need:** [Git](https://git-scm.com/downloads) and [Python 3.12](https://www.python.org/downloads/) (tested with 3.12.10 on Windows; CI uses 3.12; on Windows tick **"Add python.exe to PATH"** during install). Optional: a Postgres database for the ~30 database tests; the easiest way is [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+**Step 1. Get the code**
 
 ```
 git clone https://github.com/Daniel7505/robot-battery-monitor.git
 cd robot-battery-monitor
 ```
 
-(If you already have a local copy, just `cd` into that folder.)
-
-### Step 1 — Open a terminal in the project folder
-
-On Windows, open PowerShell in the project folder.
-
-On Mac or Linux, open Terminal in the project folder.
-
-Confirm **Docker Desktop is running** before the next step (whale icon / engine ready).
-
-### Step 2 — Run the start script
-
-Windows:
-```
-.\scripts\start.ps1
-```
-
-Mac or Linux:
-```
-./scripts/start.sh
-```
-
-The first time may take a few minutes while Docker downloads and builds things. That is normal.
-
-### Step 3 — Open the dashboard
-
-When the script finishes, open this address in your browser:
-
-```
-http://127.0.0.1:5000
-```
-
-You should see a page titled something like "Optimus Unit 1 Live Monitor" with numbers updating on their own.
-
-### Step 4 (optional) — Webots digital twin
-
-Install Webots if you have not already, start it after the dashboard is healthy, and open:
-
-```
-webots/worlds/butlerbot.wbt
-```
-
-Or from the project folder:
-
-Windows: `.\scripts\launch_webots_twin.ps1`  
-Mac/Linux: `./scripts/launch_webots_twin.sh`
-
-### Step 5 — Stop everything when you are done
-
-Windows:
-```
-.\scripts\stop.ps1
-```
-
-Mac or Linux:
-```
-./scripts/stop.sh
-```
-
-Close the Webots window separately (do **not** save the world on exit).
-
-### Optional: run with a ROS2 simulator container too
-
-If you want the extra ROS2 test container (not required for beginners):
-
-Windows:
-```
-.\scripts\start.ps1 -Profile full
-```
-
-Mac or Linux:
-```
-./scripts/start.sh full
-```
-
-### Manual Docker commands (if you prefer)
-
-```
-copy .env.example .env
-docker compose up --build -d
-```
-
-Then open http://127.0.0.1:5000
-
-To stop:
-```
-docker compose down
-```
-
----
-
-## How to run without Docker
-
-Use this if you want to run Python directly on your computer.
-
-### Step 1 — Install Python packages
-
-```
-pip install -r requirements.txt
-```
-
-### Step 2 — Start the database
-
-The easiest way is to use Docker for just the database:
-
-```
-docker compose up -d postgres
-```
-
-Wait about 10 seconds, then set up the database tables (the password must match `POSTGRES_PASSWORD` in `.env`):
-
-```
-# PowerShell:  $env:PGPASSWORD="robot"
-export PGPASSWORD=robot
-python scripts/setup_postgres.py
-```
-
-### Step 3 — Tell the app how to connect to the database
+**Step 2. Make a private Python environment and install the packages**
 
 Windows (PowerShell):
 ```
-$env:DATABASE_URL="postgresql://robot:robot@localhost:5432/robot_battery"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt pytest
 ```
 
-Mac or Linux:
+Mac / Linux:
 ```
-export DATABASE_URL=postgresql://robot:robot@localhost:5432/robot_battery
-```
-
-### Step 4 — Start the app
-
-```
-python run_dashboard.py
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt pytest
 ```
 
-### Step 5 — Open the dashboard
+Your prompt now starts with `(.venv)`. Run the activate line again whenever you open a new terminal.
+
+**Step 3. Run the offline lane-following simulator** (no database, no Webots)
 
 ```
-http://127.0.0.1:5000
+python scripts/rowfit_sim.py --table
 ```
 
-Press Ctrl+C in the terminal to stop the app.
+It takes about 15 seconds. ✅ **It worked if** the last lines look like this (numbers may differ slightly):
+
+```
+course          finish time_s worst_cm mean_cm min_v pivots  pivot_err_deg(imu/true) pivot_s  stop
+s               yes      40.8      7.8     2.9  0.20      0                        -       -  finish
+turn90          yes      15.7      7.4     3.0  0.20      0                        -       -  finish
+```
+
+`finish yes` means the robot completed the course; `worst_cm` is the furthest it drifted from the lane centre.
+
+More to try:
+
+```
+python scripts/rowfit_sim.py corner90 --table --quiet       # a sharp 90° corner
+python scripts/rowfit_sim.py --help                          # every option
+python -m src.parts_db                                       # list the parts catalog
+python -m src.design_agent --length 17                       # suggest cheapest parts list for a 17 m track
+```
+
+Any file in `tracks/` (for example `corner_mix`, `plus`, `t_end`, `widen`) can be used as a course name.
+
+**Step 4. Run the automated tests**
+
+```
+python -m pytest
+```
+
+That works with or without a database:
+
+- **No Postgres running:** the ~30 tests marked `db` are **skipped** with a note at the end, and everything else runs (about 600 tests). ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
+- **With Postgres:** every test runs. ✅ **It worked if** the last line says roughly `629 passed, 1 skipped` (the count grows over time; the one skip is a Docker check that only runs when the `docker` command is available).
+
+The full run takes about 5 minutes. To run just one file: `python -m pytest tests/test_lane_keep.py`.
+
+**Optional: run the database tests too**
+
+1. Copy the settings file once (Windows: `copy .env.example .env`, Mac/Linux: `cp .env.example .env`).
+2. Start just the database with Docker and create the tables (this also creates the test database `robot_battery_test`):
+
+   ```
+   docker compose up -d postgres
+   ```
+   Wait about 10 seconds, then:
+
+   Windows (PowerShell):
+   ```
+   $env:PGPASSWORD="robot"
+   python scripts/setup_postgres.py
+   ```
+   Mac / Linux:
+   ```
+   export PGPASSWORD=robot
+   python scripts/setup_postgres.py
+   ```
+3. Run `python -m pytest` again.
+
+The tests empty the tables of `robot_battery_test` only. Your dashboard history in `robot_battery` is not touched.
+
+Already have Postgres installed without Docker? Create a `robot` user (password `robot`) with permission to create databases and run `scripts/setup_postgres.py` as above, or point the tests elsewhere with `TEST_DATABASE_URL=postgresql://user:pass@host:5432/robot_battery_test`.
 
 ---
 
-## Hardware profile (wheeled)
+### C. Full Windows setup: dashboard + Webots robot
 
-Power estimates for the Webots twin are grounded in:
+This is the main demo: the robot drives in Webots and the dashboard shows its battery live.
 
+**You need**
+
+| Tool | Why | Link |
+|------|-----|------|
+| Git | Download the code | https://git-scm.com/downloads |
+| Docker Desktop | Runs the dashboard and database for you (no Python needed for that part) | https://www.docker.com/products/docker-desktop/ |
+| Webots R2025a (R2023b or newer) | The 3D robot simulator. Runs on Windows, **not** in Docker | https://cyberbotics.com/ |
+| Python 3.12 (tested with 3.12.10 on Windows) | Webots runs the robot's controller code with the Python on your PC. After installing, check **Webots → Tools → Preferences → Python command** points at it | https://www.python.org/downloads/ (tick "Add python.exe to PATH") |
+| A browser | To view the dashboard | Chrome, Edge, Firefox |
+
+About 5-10 GB of downloads in total.
+
+**Step 1. Install and start Docker Desktop.** Reboot if asked. Start it and wait until it says **Engine running** (the first start can take a few minutes; WSL2 is normal).
+
+**Step 2. Get the code** (PowerShell):
 ```
-config/hardware_profiles/butlerbot_wheeled.yaml
+git clone https://github.com/Daniel7505/robot-battery-monitor.git
+cd robot-battery-monitor
 ```
 
-Drive motors, stabilizers, compute/sensors, and battery Wh are defined there. See [docs/HARDWARE_PROFILE.md](docs/HARDWARE_PROFILE.md).
-
----
-
-## Webots twin power bridge
-
-When the Webots ButlerBot twin is running, battery % and channel watts on the dashboard can come **from Webots** instead of the internal simulator.
-
-- **Contract + enable + verify:** [docs/TWIN_POWER_BRIDGE.md](docs/TWIN_POWER_BRIDGE.md)
-- **Config:** `digital_twin.prefer_external` + `apply_battery_override` (see `config/config.yaml`)
-- **API:** `POST /api/twin/telemetry` → updates `hardware.last_readings` immediately
-- **Fallback:** no live twin feed → internal mission simulation continues as before
-
-```powershell
+**Step 3. Start the dashboard and database**
+```
 .\scripts\start.ps1
+```
+The first run builds the app and takes a few minutes. It copies `.env.example` to `.env` for you if you don't have one.
+
+✅ **It worked if** it prints `Dashboard ready: http://127.0.0.1:5000`. Open that address: you should see **ButlerBot Live Monitor** with numbers changing on their own.
+
+**Step 4. Start the robot in Webots** (with the dashboard still running)
+```
 .\scripts\launch_webots_twin.ps1
-# Dashboard: power_source should show "webots" while the twin is posting
 ```
+Other worlds:
+```
+.\scripts\launch_webots_twin.ps1 -World corner90      # sharp corner
+.\scripts\launch_webots_twin.ps1 -World plus          # crossroads
+.\scripts\launch_webots_twin.ps1 -World warehouse     # warehouse + trolley
+```
+Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play.
+
+✅ **It worked if** the robot starts driving along the yellow lane and the dashboard's **Digital Twin Bridge** panel shows **`FEED: webots`**.
+
+**Step 5. Stop everything**
+
+1. Close Webots. When it asks to save the world, choose **No / Don't save** (saving writes the robot's position into the world file).
+2. Stop the dashboard and database:
+   ```
+   .\scripts\stop.ps1
+   ```
+
+**Optional extras**
+- One-click demo (starts the dashboard if needed, turns on demo highlighting, opens Webots): `.\scripts\launch_demo.ps1`
+- Extra ROS 2 test container (not needed for the demo): `.\scripts\start.ps1 -Profile full`
+- Run the dashboard without Docker: follow [B](#b-run-the-lightweight-simulator-and-tests-no-webots) steps 1-2 and "Optional: run the database tests too" steps 1-2, then:
+  ```
+  $env:DATABASE_URL="postgresql://robot:robot@localhost:5432/robot_battery"
+  python run_dashboard.py
+  ```
+  Press Ctrl+C to stop it.
+- Terminal summary of the latest readings (needs the database running and `DATABASE_URL` set as above): `python robot_battery_monitor.py --summary`
 
 ---
 
-## Basic usage — what am I looking at?
+### D. Linux or macOS (untested)
 
-Once the dashboard is open, here is what each section means.
+> **Untested.** The project has only been run on Windows. These scripts exist and should work, but nobody has run this path end to end yet. If you try it, please open an issue with what happened.
 
-**ROS2 Integration**
-Shows whether the app is talking to ROS2 (a common robot software system). In most beginner setups this will say "MOCK" — that is fine. It means the app is using built-in test data.
+Same as C, with these differences:
 
-**Safety and Thermal**
-Shows if the robot is in a safe power range. Green means OK. Yellow or red means something needs attention (high power draw, low battery, heat, etc.).
-
-**LRU Hierarchy and Requirements**
-Groups robot parts into categories and shows if power use fits the expected limits for the current task. LRU just means "a group of related parts treated as one unit."
-
-**Mission**
-Shows what the robot is doing right now (idle, moving, high load, etc.) and how much time or battery might be left for that task.
-
-**Energy Forecast**
-A short-term guess of future power use and battery level. Helpful for planning.
-
-**Main Battery**
-The big battery percentage number.
-
-**Power Allocation**
-How the total power budget is split across parts of the robot.
-
-**Historical Analytics**
-Summary of saved data from the database (snapshots, averages, etc.).
-
-**Power Channels**
-The raw numbers for each channel: Legs, Arms, Torso, and Compute. Shows watts, amps, and status for each.
-
-The page updates automatically. You do not need to refresh it.
+1. Install [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on Mac), [Webots](https://cyberbotics.com/) and Python 3.12. On Linux the launcher looks for `webots` on your PATH or in `/usr/local/webots` (`WEBOTS_HOME` overrides it).
+2. Use the `.sh` scripts:
+   ```
+   ./scripts/start.sh                    # dashboard + database
+   ./scripts/launch_webots_twin.sh       # robot (default S world)
+   ./scripts/launch_webots_twin.sh http://127.0.0.1:5000 corner90   # another world
+   ./scripts/stop.sh                     # stop dashboard + database
+   ```
+3. `./scripts/start.sh full` adds the optional ROS 2 container.
+4. Note: `launch_webots_twin.sh` closes any Webots window that is already open before starting a new one.
 
 ---
 
-## How to switch modes (simulator vs ROS2)
+### E. Developer / contributor workflow
 
-The app has two main hardware modes. You pick one depending on what you are testing.
+**Before you change anything** read [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md). It lists the parts that must not be rewritten casually (stop/ABS and power core) and how credits are recorded.
 
-### Simulator mode (simplest — good for first day)
-
-Uses completely fake random-ish data. No ROS2 needed. Easiest to understand.
-
-**Without Docker (Windows PowerShell):**
-```
-$env:HARDWARE_MODE="simulator"
-python run_dashboard.py
-```
-
-**Without Docker (Mac/Linux):**
-```
-export HARDWARE_MODE=simulator
-python run_dashboard.py
-```
-
-**With Docker:** edit the `.env` file in the project folder:
-```
-HARDWARE_MODE=simulator
-```
-Then restart:
-```
-docker compose down
-docker compose up --build -d
-```
-
-### ROS2 mode (more realistic — still works without a real robot)
-
-Uses a built-in physics simulation that acts more like a real robot. Can connect to ROS2 topics when available. On Windows and in Docker, it usually runs in "mock" ROS2 mode, which still works well for learning.
-
-**Without Docker (Windows PowerShell):**
-```
-$env:HARDWARE_MODE="real"
-$env:HARDWARE_TYPE="ros2"
-$env:ROS2_MOCK="true"
-python run_dashboard.py
-```
-
-**Without Docker (Mac/Linux):**
-```
-export HARDWARE_MODE=real
-export HARDWARE_TYPE=ros2
-export ROS2_MOCK=true
-python run_dashboard.py
-```
-
-**With Docker:** the `.env` file already defaults to ROS2 mode with mock enabled:
-```
-HARDWARE_MODE=real
-HARDWARE_TYPE=ros2
-ROS2_MOCK=true
-```
-
-### Quick comparison
-
-Simulator mode:
-- Easiest
-- Fake data
-- Good for "does the dashboard work?"
-
-ROS2 mode (with mock):
-- More realistic behavior
-- Mission tasks, predictions, safety rules all active
-- Good for "how would this work on a real robot?"
-
-You can also change the default in `config/config.yaml` under the `hardware:` section, but using environment variables (shown above) is usually easier.
+1. **Set up** as in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) (venv, `pip install -r requirements.txt pytest`, Postgres up).
+2. **Branch** from `main` with a descriptive name, following the existing pattern:
+   ```
+   git checkout main && git pull
+   git checkout -b feature/my-change
+   ```
+3. **Make one coherent change at a time.** Driving changes should be checked offline first:
+   ```
+   python scripts/rowfit_sim.py corner90 corner_mix --table --quiet
+   ```
+   then in Webots on the matching world.
+4. **Run the tests** before pushing: `python -m pytest` (or one file: `python -m pytest tests/test_lane_keep.py`). New tests that need Postgres should use the `clean_database` fixture or `@pytest.mark.db` so they skip cleanly on machines without a database.
+5. **Open a pull request into `main`.** GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the full test suite on Python 3.12 against a Postgres 16 service for every push and pull request to `main`. In CI a missing database is an error, never a skip (`RBM_REQUIRE_DB=1`). Merge only when it is green.
+6. **Restore points:** before and after a feature, the project tags `main` as `save-YYYY-MM-DD-<name>` (for example `save-2026-10-05-pre-cruise-v1` and `save-2026-10-05-cruise-v1`). To look at an old state: `git checkout save-2026-10-05-cruise-v1`. To list them: `git tag -l "save-*"`.
+7. **Webots worlds are generated.** Track worlds come from `tracks/*.json` via `scripts/track_builder.py`, the S from `scripts/s_track.py --write-world`, and the warehouse from `scripts/warehouse_builder.py` (see [`docs/TRACKS.md`](docs/TRACKS.md), [`docs/WAREHOUSE.md`](docs/WAREHOUSE.md)). Regenerate instead of hand-editing, and never save a world from the Webots exit prompt.
+8. **Never commit secrets.** Settings go in `.env` (ignored by git); `.env.example` is the template.
+9. **Log the story.** When you finish a meaningful arc (or get stuck on one), add an entry to [`JOURNEY.md`](JOURNEY.md).
 
 ---
 
-## Other useful commands
+## 6. Reading the dashboard
 
-**Run tests (for developers):**
-```
-python -m pytest tests/ -q --ignore=tests/test_websocket.py
-```
-
-**Command-line summary (without opening the browser):**
-```
-python robot_battery_monitor.py --summary
-```
-
-**View history for one channel:**
-```
-python robot_battery_monitor.py --history Legs
-```
+| Panel | Meaning |
+|-------|---------|
+| **Main Battery** | The big battery % for the whole robot |
+| **Power Channels** | Watts, amps and status for Legs (drive wheels), Arms, Torso, Compute, Cooling |
+| **Safety & Thermal Status** | Green = OK. Yellow/red = high draw, low battery or heat |
+| **Power Allocation** | How the power budget is split across channels |
+| **LRU / Requirements** | Parts grouped into units ("Line Replaceable Units") and whether each is within its limit for the current task |
+| **Mission / Energy Forecast** | What the robot is doing and how long the battery should last at this rate |
+| **Digital Twin Bridge** | Where the numbers come from: `SOURCE: INTERNAL` (built-in simulation) or `FEED: webots` (the Webots robot) |
+| **Efficiency strip** | Mission time, energy used (Wh) and distance; starts with the first Webots reading, resets with a battery reset |
+| **ROS2** | Usually says MOCK. That is normal |
+| **History charts** | Trends saved in Postgres (power, battery, missions, anomalies) |
 
 ---
 
-## Project folders (short guide)
+## 7. Settings you might change
 
-- `config/config.yaml` — main settings file
-- `run_dashboard.py` — starts the app
-- `src/dashboard.py` — the web page and live updates
-- `src/hardware.py` — simulator and hardware switching
-- `scripts/` — helper scripts for Docker startup
-- `tests/` — automated tests
-- `docker-compose.yml` — defines the Docker setup
+All in `.env` (copied from [`.env.example`](.env.example)). After editing, restart: `.\scripts\stop.ps1` then `.\scripts\start.ps1` (or the `.sh` versions).
 
----
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| `HARDWARE_MODE` / `HARDWARE_TYPE` / `ROS2_MOCK` | `real` / `ros2` / `true` | The full realistic power loop with mocked ROS 2. **Use this with Webots.** Set `HARDWARE_MODE=simulator` for simple random numbers (dashboard check only; Webots readings are not used) |
+| `DASHBOARD_PORT` | `5000` | Change if port 5000 is busy |
+| `POSTGRES_PASSWORD` | `robot` | Dev-only password. Change it (and `DATABASE_URL`) for anything beyond your own laptop |
+| `RBM_API_TOKEN` | empty | Optional lock on the buttons and API. If set, open `http://127.0.0.1:5000/?token=<value>` once in the browser. Webots and the scripts pick it up automatically |
+| `RBM_ROUTE` | unset | Which way the robot goes at each junction, e.g. `L,S,R` |
+| `RBM_LANE_MODE` | `rowfit` | Lane-following method (leave as is) |
 
-## Common problems
+Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware profiles in `config/hardware_profiles/`.
 
-**"Port 5000 already in use"**
-Something else is using that port. Stop the other program, or change `DASHBOARD_PORT` in `.env` to something like `5001`.
-
-**Dashboard page does not load**
-Wait 30 seconds after starting Docker, then try again. Check logs:
-```
-docker compose logs dashboard
-```
-
-**Database connection error (running without Docker)**
-Make sure Postgres is running and you set `DATABASE_URL` correctly (see steps above).
+**Security defaults:** the dashboard and database listen on `127.0.0.1` only (not reachable from other computers). `/api/demo/launch-webots` only answers local requests.
 
 ---
 
-## Summary
+## 8. Common problems
 
-1. Install Docker Desktop
-2. Run `.\scripts\start.ps1` (Windows) or `./scripts/start.sh` (Mac/Linux)
-3. Open http://127.0.0.1:5000
-4. Watch the live power and battery data
-5. Try simulator mode first, then ROS2 mode when you are ready
-
-That is it. You do not need to understand every file in the project on day one. Start the app, open the dashboard, and explore.
+| Problem | Fix |
+|---------|-----|
+| `start.ps1 cannot be loaded because running scripts is disabled` | Run it as `powershell -ExecutionPolicy Bypass -File scripts\start.ps1` (same for the other `.ps1` scripts), or once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| `./scripts/start.sh: Permission denied` (Mac/Linux) | Run `chmod +x scripts/*.sh` once (or use `sh scripts/start.sh` / `bash scripts/launch_webots_twin.sh`) |
+| `docker: command not found` / "Cannot connect to the Docker daemon" | Start Docker Desktop and wait for **Engine running** |
+| `Port 5000 already in use` | Close the other program, or set `DASHBOARD_PORT=5001` in `.env` and open `http://127.0.0.1:5001` |
+| `set POSTGRES_PASSWORD in .env` error from Docker | You have no `.env`. Run `copy .env.example .env` (Windows) or `cp .env.example .env` |
+| Dashboard page doesn't load | Wait 30 s and refresh. Check `docker compose logs dashboard` |
+| Many tests `skipped` with "Postgres test database not reachable" | Normal without a database. To run them, see "Optional: run the database tests too" in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) |
+| Twin panel stays `SOURCE: INTERNAL` while Webots runs | Start the dashboard **before** Webots. Check `http://127.0.0.1:5000/api/twin/schema` opens in the browser. Make sure `HARDWARE_MODE` is not `simulator` |
+| Webots console: `Twin publish failed` | Same as above: the dashboard isn't reachable |
+| Webots: controller fails to start / Python not found | Install Python 3.12 (64-bit) and make sure `python` works in a new terminal; in Webots check **Tools → Preferences → Python command** |
+| Obstacle or warehouse worlds error on `numpy` | `pip install numpy` (and optionally `opencv-python`) for the Python that Webots uses |
+| Robot falls through the floor | Reset the simulation (Ctrl+Shift+T) |
+| `git status` shows a changed `.wbt` file | You saved the world on exit. Undo with `git checkout -- webots/worlds/<file>.wbt` |
 
 ---
 
-## Credits & AI collaboration
+## 9. Where things live (folder map)
+
+| Folder / file | Contents |
+|---------------|----------|
+| `run_dashboard.py` | Starts the dashboard app (database → power loop → web page) |
+| `robot_battery_monitor.py` | Terminal reports from the database (`--summary`, `--history Legs`, `--report`) |
+| `src/` | All the Python logic: dashboard, power loop, safety, agent, lane vision, steering, obstacles, parts catalog |
+| `src/twin/` | The Webots ↔ dashboard bridge and power model |
+| `webots/` | Simulator worlds and the robot controller ([`webots/README.md`](webots/README.md)) |
+| `tracks/` | Test track definitions (JSON) |
+| `scripts/` | Start/stop scripts, Webots launchers, offline simulator, measurement tools, world builders |
+| `config/` | `config.yaml` settings and hardware profiles |
+| `data/parts.db` | The parts catalog (SQLite) |
+| `tests/` | Automated tests (`tests/fake_webots/` stands in for Webots) |
+| `docs/` | Design notes, baselines, run history and architecture |
+| `JOURNEY.md` | Dated project log: how the project was built with AI tools, what went wrong, what worked |
+| `docker-compose.yml`, `Dockerfile` | The Docker setup (dashboard + Postgres, optional ROS 2) |
+
+---
+
+## 10. Credits and AI collaboration
 
 This repo is a **human + AI co-build** (credit where credit is due):
 
@@ -530,8 +491,15 @@ This repo is a **human + AI co-build** (credit where credit is due):
 |-----|------|
 | **Daniel** ([Daniel7505](https://github.com/Daniel7505)) | Owner — goals, visual ground truth, pacing, final say |
 | **Grok Build 4.5** (xAI) | Majority of the deep build — twin bridge, teleop/ABS/stop reliability, power feed, agent, Webots controller work, tests, architecture docs |
+| **Grok Bot** | Repo review, tests and CI, security hardening, navigation features (junctions, radar, warehouse), and this documentation refresh (Oct 2026 onward) |
 | **Grok Web ~4.4 → 4.5** (xAI) | Project kickoff and early product framing |
 
 For future models (and humans doing a serious review), the standing fence is:
 
 **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)** — look here first; do not silently rewrite the stop/power core; append your lineage row when you ship a meaningful arc.
+
+---
+
+## 11. Project journey
+
+How this project got here (copy-paste chat sessions → repo-aware chat → a coding agent in the terminal → a full agent with GitHub and CI), with dated milestones, the problems along the way, and what each step taught: **[`JOURNEY.md`](JOURNEY.md)**.

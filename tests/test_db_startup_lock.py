@@ -247,6 +247,7 @@ def test_init_db_does_not_kill_unrelated_lock_holders(clean_database, monkeypatc
     database.init_db()  # recovers once the lock is gone
 
 
+@pytest.mark.db
 def test_schema_has_fk_lookup_indexes():
     with db_cursor() as (conn, cur):
         cur.execute(

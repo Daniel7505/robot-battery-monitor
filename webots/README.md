@@ -20,7 +20,7 @@ This twin is the **evaluation harness** for the north star (parts catalog → de
 
 1. **Webots** R2023b or newer (tested with **R2025a**) — [cyberbotics.com/download](https://cyberbotics.com/download)
 2. **Dashboard running** at `http://127.0.0.1:5000` (Docker or local)
-3. Python 3 (bundled with Webots is fine for the controller)
+3. **Python 3.12** installed on your PC (tested with 3.12.10 on Windows). Webots runs the controller with your system Python, not a bundled one; check **Tools → Preferences → Python command**. Obstacle / warehouse worlds also need `numpy` in that Python (`opencv-python` optional).
 
 ## Quick start (Windows)
 
@@ -34,7 +34,7 @@ This twin is the **evaluation harness** for the north star (parts catalog → de
 
 Open **http://127.0.0.1:5000** → **Digital Twin Bridge** panel should show `FEED: WEBOTS`.
 
-## Quick start (Linux / macOS)
+## Quick start (Linux / macOS, untested)
 
 ```bash
 ./scripts/start.sh
@@ -46,7 +46,7 @@ Open **http://127.0.0.1:5000** → **Digital Twin Bridge** panel should show `FE
 ```bash
 # 1. Start dashboard first
 docker compose up -d
-# or: python src/dashboard.py
+# or: python run_dashboard.py
 
 # 2. Open world in Webots
 cd webots
@@ -66,6 +66,8 @@ Webots ButlerBot controller
   → PMS dashboard (live power, LRU, agent, safety)
 ```
 
+Full picture with file names: [`docs/ARCHITECTURE.md` §2](../docs/ARCHITECTURE.md#2-data-flow--what-actually-flows-where).
+
 ### Example payload (abbreviated)
 
 ```json
@@ -75,7 +77,7 @@ Webots ButlerBot controller
   "motor_power_w": {"left_wheel": 4.2, "right_wheel": 4.1, "torso_joint": 2.0},
   "channel_draws": {"Legs": 8.3, "Arms": 3.1, "Torso": 2.0, "Compute": 9.0},
   "joints": [{"name": "left_wheel", "velocity": 4.5, "torque": 0.3}],
-  "locomotion": {"gait": "walk", "speed_m_s": 0.32, "phase": "walk_transit"}
+  "locomotion": {"gait": "drive", "speed_m_s": 0.32, "phase": "drive_transit"}
 }
 ```
 
@@ -108,7 +110,7 @@ Set via `controllerArgs` in the world file or environment:
 The robot cycles automatically:
 
 1. **standby** — idle, motors off  
-2. **walk_transit** — drive forward (moving)  
+2. **drive_transit** — drive forward (moving)  
 3. **patrol** — slow weave (balanced)  
 4. **manipulate** — arm motion, wheels stopped (high_load)  
 5. **return_idle** — idle  

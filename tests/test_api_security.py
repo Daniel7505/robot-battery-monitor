@@ -88,6 +88,7 @@ def test_browser_bootstrap_sets_strict_httponly_cookie(client, token):
     assert "SameSite=Strict" in cookie
 
 
+@pytest.mark.db  # GET / renders the page, which reads Postgres
 def test_bootstrap_with_wrong_token_sets_no_cookie(client, token):
     resp = client.get("/?token=wrong")
     assert "Set-Cookie" not in resp.headers

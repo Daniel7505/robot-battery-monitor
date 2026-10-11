@@ -5,8 +5,9 @@ These diagrams describe **what the repo actually does today**. The long-term pro
 
 | Diagram | Type | Best question it answers |
 |---------|------|---------------------------|
+| [0. Overview](#0-overview--the-simple-picture) | Context | “What runs where, in plain words?” (same as the README) |
 | [1. Pyramid hierarchy](#1-pyramid-hierarchy--how-the-unit-breaks-down) | Hierarchy / decomposition | “What are the major pieces of the robot system?” |
-| [2. Layered stack](#2-layered-stack--where-software-sits) | Layered architecture | “How do sensors, twin, PMS, and UI stack?” |
+| [2. Data flow](#2-data-flow--what-actually-flows-where) | Data flow by process | “Which file sends what to whom?” (same as the README) |
 | [3. PMS hub interactions](#3-pms-hub-interactions--who-talks-to-whom) | Systems interaction | “Where does power data and command authority live?” |
 | [4. Live twin tick](#4-live-twin-tick-sequence) | Sequence | “What happens every simulation step when Webots is live?” |
 | [5. Stop handshake](#5-stop-handshake-sequence) | Sequence | “How does ABS / dashboard Stop actually halt the robot?” |
@@ -19,7 +20,7 @@ Related deep dives:
 - Twin power contract: [`TWIN_POWER_BRIDGE.md`](TWIN_POWER_BRIDGE.md)
 - Residual spin / stop reliability: [`STABILITY.md`](STABILITY.md)
 - Wheeled energy baseline: [`V1_WHEELED_ENERGY_BASELINE.md`](V1_WHEELED_ENERGY_BASELINE.md)
-- Code entry points: root [`README.md`](../README.md) “Code tour”
+- Code entry points: root [`README.md`](../README.md) setup A (“Just look around”)
 
 ---
 
@@ -34,6 +35,35 @@ Related deep dives:
 | **Swimlanes** | Same flow, lanes = process / person / machine |
 
 Mermaid is the text format GitHub renders automatically in Markdown.
+
+**Arrow rule used on this page:** in the pyramid (§1) an arrow means *“is made of”*. In every other diagram an arrow means *“sends data or commands to”*. Do not mix the two in one diagram.
+
+---
+
+## 0. Overview — the simple picture
+
+The same diagram as the root README. Three things run on your computer; the browser talks to the dashboard; Webots and the dashboard exchange readings and commands over HTTP.
+
+```mermaid
+flowchart LR
+    YOU["👤 You<br/>web browser<br/>http://127.0.0.1:5000"]
+
+    subgraph PC["Your computer"]
+        WEBOTS["🤖 Webots robot simulator<br/>ButlerBot drives a painted lane<br/>(optional)"]
+        subgraph DOCKER["Docker (or plain Python)"]
+            DASH["📊 Dashboard app<br/>run_dashboard.py<br/>power math · safety · agent"]
+            DB[("🗄️ Postgres<br/>history")]
+        end
+    end
+
+    OFFLINE["🧪 Offline tools - no Webots needed<br/>tests · rowfit_sim.py · parts catalog"]
+
+    YOU -- "watch live numbers,<br/>press Drive / Stop" --> DASH
+    WEBOTS -- "battery, power, position" --> DASH
+    DASH -- "drive, stop, slow down" --> WEBOTS
+    DASH -- "saves readings" --> DB
+    OFFLINE -. "same robot code,<br/>runs by itself" .- WEBOTS
+```
 
 ---
 
@@ -57,17 +87,21 @@ flowchart TB
     end
 
     subgraph L2["Level 2 — Major subsystems"]
-        CH["Power channels<br/>Legs · Arms · Torso · Compute · Cooling"]
+        CH["Power channels<br/>Legs (= drive wheels) · Arms · Torso · Compute · Cooling"]
         SAFE["Safety + thermal<br/>throttle · degrade · alerts"]
         AGENT["Onboard agent<br/>rules · mission stress · intervention"]
-        CTRL["Motion control<br/>teleop · ABS · stop_epoch"]
+        CTRL["Motion control<br/>lane keep · teleop · ABS · stop_epoch"]
         SENS["Sensing model<br/>battery · IMU/GPS/encoders · draws"]
         BR["Twin bridge<br/>telemetry in · state/cmd out"]
     end
 
     subgraph L3["Level 3 — Implementation anchors in this repo"]
         DASH["src/dashboard.py"]
-        HAL["src/hardware*.py"]
+        HAL["src/hardware.py (factory)<br/>src/hardware_ros2.py (PMS tick)"]
+        PWR["src/power_allocator.py<br/>src/cooling_channel.py"]
+        SAF["src/safety_monitor.py<br/>src/lru_monitor.py"]
+        DBF["src/database.py<br/>src/analytics.py"]
+        VISF["src/lane_vision.py<br/>src/rowfit_control.py"]
         TWINPKG["src/twin/*"]
         TELE["src/teleop_agent.py"]
         OBA["src/onboard_agent.py"]
@@ -80,74 +114,76 @@ flowchart TB
     PMS --> CH & SAFE & AGENT
     TWIN --> BR & CTRL & SENS
     HW --> HAL
-    DATA --> DASH
-    CH --> HAL
-    SAFE --> HAL
+    DATA --> DBF
+    CH --> PWR
+    SAFE --> SAF
     AGENT --> OBA
-    CTRL --> TELE & WCTRL
+    CTRL --> TELE & WCTRL & VISF
     SENS --> WCTRL & TWINPKG
     BR --> TWINPKG
     CFG -.-> PMS & TWIN & HW
 ```
 
-**Plain English:** Level 0 is “the robot project as a whole.” Level 1 is the five big boxes a defense/tech visitor should remember. Level 2 is what those boxes contain. Level 3 is “where do I open a file?”
+**Plain English:** every arrow here means “is made of”, not “sends data to” (for data, see §2). Level 0 is “the robot project as a whole.” Level 1 is the five big boxes a defense/tech visitor should remember. Level 2 is what those boxes contain. Level 3 is “where do I open a file?”
 
 ---
 
-## 2. Layered stack — where software sits
+## 2. Data flow — what actually flows where
 
-Inspired by layered architecture sketches, **aligned to this codebase** (Docker PMS + host Webots is the common demo).
+Replaces the older “layered stack” sketch, which showed hardware sensors that do not exist yet, drew the telemetry POST twice, and left out lane vision. Each box names its real file; each arrow is a real call. Items marked * switch on only in the obstacle / warehouse worlds.
 
 ```mermaid
 flowchart TB
-    subgraph HWLAYER["Hardware intent layer (real robot later · sim today)"]
-        S1["Channel current/voltage model<br/>Legs · Arms · Torso · Compute"]
-        S2["Motion sensors<br/>GPS · IMU · wheel encoders"]
-        S3["Energy store<br/>main pack model · capacity Wh"]
+    subgraph HOST["① Webots process on your PC - webots/controllers/butlerbot_controller/"]
+        direction LR
+        SENS["Sensors<br/>GPS · IMU · encoders<br/>nadir cameras L/R<br/>stereo + radar*"]
+        VIS["Lane vision<br/>src/lane_vision.py<br/>src/junction_vision.py"]
+        OBS["Obstacles*<br/>controller_obstacles.py<br/>src/obstacle_gate.py"]
+        INV["Pick list*<br/>controller_inventory.py<br/>src/shopping_list.py"]
+        DRIVE["Steer + speed<br/>controller_rowfit.py<br/>src/rowfit_control.py"]
+        WHEELS["Wheels · ABS · stop<br/>controller_wheels.py"]
+        POWER["Power estimate<br/>src/twin/webots_power.py"]
+        PUB["twin_publisher.py"]
+        SENS --> VIS --> DRIVE
+        SENS --> OBS -- "speed cap" --> DRIVE
+        INV -- "stop / slow" --> DRIVE
+        DRIVE --> WHEELS --> POWER --> PUB
     end
 
-    subgraph EDGE["Edge / on-robot software path"]
-        ROS["ROS2 bridge path<br/>live or MOCK topics"]
-        CTRL2["Webots controller<br/>teleop · ABS · power estimate"]
-        BR2["ROS2 ↔ Webots / twin feed<br/>optional; HTTP twin is primary today"]
+    subgraph APP["② Dashboard process - run_dashboard.py (Docker 'dashboard' container, or local Python)"]
+        direction LR
+        API["Flask + SocketIO<br/>src/dashboard.py"]
+        BRIDGE["DigitalTwinBridge<br/>src/twin/bridge.py<br/>latest feed · stop_epoch"]
+        TICK["PMS tick<br/>src/hardware_ros2.py"]
+        PMS["Allocator · safety · LRU<br/>forecast · mission<br/>src/onboard_agent.py"]
+        API <--> BRIDGE
+        BRIDGE -- "Webots feed if fresh,<br/>else internal sim" --> TICK
+        TICK <--> PMS
+        PMS -- "agent throttle" --> BRIDGE
+        TICK -- "live state" --> API
     end
 
-    subgraph TWINL["Digital twin / simulation"]
-        WEB["Webots physics<br/>butlerbot.wbt wheeled model"]
-        POW["Motion-aware power model<br/>src/twin/webots_power.py"]
+    subgraph OUT["③ Storage and screens"]
+        direction LR
+        DB[("Postgres 16<br/>Docker 'postgres'<br/>src/database.py")]
+        BROWSER["Browser<br/>ButlerBot Live Monitor"]
+        CLI["robot_battery_monitor.py<br/>terminal reports"]
     end
 
-    subgraph PMSL["PMS core — Python process in Docker"]
-        HAL2["Hardware tick<br/>src/hardware_ros2.py"]
-        ALLOC["Power allocator + requirements"]
-        SAFE2["Safety / LRU / thermal"]
-        AGENT2["Onboard agent"]
-        BRIDGE["DigitalTwinBridge<br/>src/twin/bridge.py"]
-    end
-
-    subgraph UIL["Dashboard and data"]
-        FLASK["Flask + SocketIO<br/>src/dashboard.py"]
-        PG["Postgres<br/>readings · allocations · analytics"]
-        BROW["Browser operator UI"]
-    end
-
-    S1 & S2 & S3 --> ROS & CTRL2
-    WEB --> CTRL2
-    CTRL2 --> POW
-    POW --> BRIDGE
-    CTRL2 -->|"POST /api/twin/telemetry"| BRIDGE
-    BRIDGE -->|"GET /api/twin/state<br/>drive · stop_epoch · throttle"| CTRL2
-    ROS --> HAL2
-    BRIDGE --> HAL2
-    HAL2 --> ALLOC --> SAFE2 --> AGENT2
-    HAL2 --> PG
-    FLASK --> BRIDGE
-    FLASK --> BROW
-    HAL2 --> FLASK
-    PG --> FLASK
+    PUB -- "POST /api/twin/telemetry" --> API
+    API -- "GET /api/twin/state:<br/>drive · stop_epoch · throttle" --> PUB
+    TICK -- "write readings" --> DB
+    DB -- "history / analytics" --> API
+    DB --> CLI
+    API -- "SocketIO battery_update" --> BROWSER
+    BROWSER -- "POST /api/twin/command:<br/>drive · drive_stop · battery_reset" --> API
 ```
 
-**Compared to older concept sketches:** this project’s live twin path is primarily **HTTP** (`/api/twin/*`), not a mandatory ROS2 bus between Webots and the dashboard. ROS2 is a **hardware mode** for more realistic ticks; Webots is the **physics twin**. Postgres is the Docker-backed store (not a parts catalog SQLite optimizer — that remains future work).
+Notes:
+
+- The live twin path is **HTTP** (`/api/twin/*`), not ROS 2. ROS 2 is a **hardware mode** of the dashboard process (`ROS2_MOCK=true` by default); the optional `ros2-sim` container (`--profile full`) is a topic-level test peer, not a kinematic twin.
+- With `HARDWARE_MODE=simulator` the dashboard uses `SimulatorSource` (random draws) and does not use the Webots power feed. Use the default `real` / `ros2` / mock mode with Webots.
+- Postgres stores readings and analytics. The design-agent parts catalog is a separate SQLite file (`data/parts.db`).
 
 ---
 
@@ -159,7 +195,7 @@ Pyramid-style **relationship** view: PMS near the center of authority for power 
 flowchart TB
     AGENT["Onboard agent<br/>throttle / intervene / mission stress"]
     WEB["Webots digital twin<br/>physics + local teleop/ABS"]
-    PMS["Power Monitoring System<br/>PMS core"]
+    PMS["Power Management System<br/>PMS core"]
 
     BAT["Battery pack model"]
     ARMS["Arms channel"]
@@ -178,7 +214,7 @@ flowchart TB
     PMS <--> DASH
     PMS <--> ROS
     WEB --> MOTORS
-    LEGS -.->|"draw estimates"| WEB
+    WEB -.->|"draw estimates"| LEGS
     DASH -->|"drive / drive_stop / battery_reset"| WEB
 ```
 
@@ -313,7 +349,11 @@ Stop quality suite (longer drives + hard park + diag print):
 | ABS / residual-spin hardened stop path | **Implemented** |
 | ROS2 mock/real hardware mode | **Implemented** (depth varies) |
 | Real physical BMS / motor controllers | **Interface intent only** |
-| Parts catalog + optimizer from DB | **Not implemented** (older concept art) |
+| Parts catalog + design agent | **First cut:** `src/parts_db.py` + `data/parts.db` (~10 parts), heuristic BOMs in `src/design_agent.py`; twin evaluation of BOMs **not wired yet** |
+| Rowfit lane vision + pure-pursuit drive | **Implemented** (sim; `src/lane_vision.py`, `src/rowfit_control.py`) |
+| Sharp corners, junctions, routes | **Implemented** (sim; `src/junction_vision.py`, `src/route_policy.py`) |
+| Stereo + radar obstacle gate | **Implemented, first pass** (obstacle worlds) |
+| Warehouse, trolley, multi-trip shopping list | **Implemented, prototype** (warehouse worlds) |
 | Bipedal multi-DOF primary model | **Profile exists; wheeled is the trusted baseline** |
 | Regenerative braking energy recovery stack | **Not a first-class subsystem today** |
 
@@ -323,7 +363,7 @@ Keeping diagrams honest helps reviewers trust the rest of the engineering narrat
 
 ## Suggested reading order for a 10-minute review
 
-1. This page — pyramid + PMS hub  
+1. This page — §0 overview + §2 data flow  
 2. Sequence §4 (live tick)  
 3. Sequence §5 + [`STABILITY.md`](STABILITY.md) if control reliability matters  
-4. README code tour → open `src/twin/bridge.py` and `src/dashboard.py`
+4. README setup A file list → open `src/twin/bridge.py` and `src/dashboard.py`

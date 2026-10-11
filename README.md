@@ -489,11 +489,14 @@ This repo is a **human + AI co-build** (credit where credit is due):
 
 | Who | Role |
 |-----|------|
-| **Daniel** ([Daniel7505](https://github.com/Daniel7505)) | Owner: goals, visual ground truth, pacing, final say |
-| **Grok Build 4.5** (xAI) | Majority of the deep build: twin bridge, teleop/ABS/stop reliability, power feed, agent, Webots controller work, tests, architecture docs |
+| **Daniel** ([Daniel7505](https://github.com/Daniel7505)) | Owner — goals, visual ground truth, pacing, final say |
+| **Grok Build 4.5** (xAI) | Majority of the deep build — twin bridge, teleop/ABS/stop reliability, power feed, agent, Webots controller work, tests, architecture docs |
+| **Grok Bot** | Repo review, tests and CI, security hardening, navigation features (junctions, radar, warehouse), and this documentation refresh (Oct 2026 onward) |
 | **Grok Web ~4.4 → 4.5** (xAI) | Project kickoff and early product framing |
 
-For future models (and humans doing a serious review), the standing fence is **[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)**: look there first, do not silently rewrite the stop/power core, and append your lineage row when you ship a meaningful arc.
+For future models (and humans doing a serious review), the standing fence is:
+
+**[`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md)** — look here first; do not silently rewrite the stop/power core; append your lineage row when you ship a meaningful arc.
 
 ---
 

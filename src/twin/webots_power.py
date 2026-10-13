@@ -487,9 +487,10 @@ def _linear_wheel_electrical_w(
     speed rises.
 
     The worlds set ``dampingConstant 0.15`` on a 0.08 m wheel, so
-    viscous torque is ``0.15 · v / 0.08``. Put through this motor line
-    it rises with speed and is about 6 Wh at that run's average speed,
-    still short of 14.5 Wh. The remainder is tire contact (friction and
+    viscous torque is ``0.15 · v / 0.08``. Put through the motor line
+    at that hinge rate it rises with speed and is about 4.2 Wh together
+    with rolling at that run's average speed, still short of 14.5 Wh.
+    The remainder is tire contact (friction and
     force-dependent slip). That is not one published torque, and a
     straight-line fit of the log is not a bill. The mission energy
     model adds only the published damping, as ``wh_visc``. This

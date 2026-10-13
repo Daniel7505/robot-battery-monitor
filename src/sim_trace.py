@@ -11,6 +11,10 @@ with Start-Process stays a 0-byte file, so printing is not a log.
 Console lines are off unless asked. The CSV is ``logs/speed_trace_<timestamp>.csv``
 under the repo (or ``RBM_LOG_DIR``), gitignored. Rows are written only
 while the robot is moving, and they stop when the mission ends.
+``STEER_SPLIT`` ``mean_rtf`` is the time-weighted realtime factor of
+those written 0.1 s rows (sum of their sim deltas over sum of their
+wall deltas). It is not the median of the ``rtf`` column and not an
+average of every 8 ms controller step.
 
 Straight-line contact above the published hinge damping is not given a
 coefficient here. See ``assumptions.notes.straight_contact`` in
@@ -212,6 +216,11 @@ def format_steer_split(
     Splits are signed ``left − right`` in rad/s, over controller steps
     that were actually moving. Variance is the population variance
     (divide by n). ``mean_abs_*`` is the mean of the absolute split.
+    ``mean_rtf`` is ``sum(dt_sim) / sum(dt_wall)`` over the ``SPEED_TRACE``
+    rows written for this lap, the same 0.1 s bins as the CSV ``rtf``
+    column. A hitch pulls that time-weighted value below the median of
+    the ratios. A controller step whose wall clock did not move is not
+    its own sample: dropping it used to throw away that step's sim time.
     A 0.2 rad/s split is under 1% of electrical power. This line is how
     a HUD-on lap is compared with a HUD-off lap. It is not billed.
     """
@@ -327,10 +336,7 @@ class SpeedTrace:
         self._v_sum = 0.0
         self._move_sim = 0.0
         self._move_wall = 0.0
-        self._prev_moving = False
         self._last_sim: float | None = None
-        self._last_wall: float | None = None
-        self._last_emit_sim = 0.0
         if self.enabled and (path or log_dir is not None):
             self._open(path=path, log_dir=log_dir)
 
@@ -388,23 +394,11 @@ class SpeedTrace:
         self,
         *,
         t_sim: float,
-        t_wall: float,
         v_body: float,
         moving: bool,
         cmd_split: float,
         hub_split: float,
     ) -> None:
-        if (
-            moving
-            and self._prev_moving
-            and self._last_sim is not None
-            and self._last_wall is not None
-        ):
-            ds = t_sim - self._last_sim
-            dw = t_wall - self._last_wall
-            if ds > 0.0 and dw > 0.0:
-                self._move_sim += ds
-                self._move_wall += dw
         if moving:
             self._steer_n, self._cmd_mean, self._cmd_m2 = _welford_add(
                 self._steer_n, self._cmd_mean, self._cmd_m2, cmd_split
@@ -417,9 +411,7 @@ class SpeedTrace:
             self._abs_cmd += abs(cmd_split)
             self._abs_hub += abs(hub_split)
             self._v_sum += abs(v_body)
-        self._prev_moving = moving
         self._last_sim = t_sim
-        self._last_wall = t_wall
 
     def steer_split_line(self) -> str:
         n = self._steer_n
@@ -537,7 +529,6 @@ class SpeedTrace:
         )
         self._note_sample(
             t_sim=t_sim,
-            t_wall=t_wall,
             v_body=v_body,
             moving=moving,
             cmd_split=w_l_cmd - w_r_cmd,
@@ -559,6 +550,11 @@ class SpeedTrace:
             dt_wall = t_wall - self._prev_wall
             dt_sim = t_sim - self._prev_sim
             rtf = (dt_sim / dt_wall) if dt_wall > 1e-9 else None
+            # Same bins as the CSV rtf column. A step with a stuck wall
+            # clock is inside the bin, not a dropped sim delta.
+            if moving and dt_sim > 0.0 and dt_wall > 1e-9:
+                self._move_sim += dt_sim
+                self._move_wall += dt_wall
             out.append(
                 format_speed_trace(
                     t_sim=t_sim,

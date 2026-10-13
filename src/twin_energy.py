@@ -153,6 +153,7 @@ def brushed_drive_point(
     n_motors: int = 2,
     extra_force_n: float = 0.0,
     extra_torque_nm: float = 0.0,
+    electrical_omega_rad_s: float | None = None,
 ) -> dict:
     """Linear brushed-DC point from bom.json ``formulas``.
 
@@ -165,8 +166,13 @@ def brushed_drive_point(
     together), used for the acceleration term. ``extra_torque_nm`` is an
     added shaft torque on each motor. Both default to zero, which is the
     rolling-only point (light build ~3.43 W and ~0.0066 Wh per 10 ft at
-    0.44 m/s).     Torque is clamped to stall so a hard accel does not invent
+    0.44 m/s). Torque is clamped to stall so a hard accel does not invent
     a current past the datasheet.
+
+    ``electrical_omega_rad_s``, when set, replaces ``speed / wheel_radius``
+    in the duty term only. The torque lever stays ``wheel_radius_m``.
+    The design bill leaves it unset, so that rate is body speed / 0.04 m.
+    The sim viscous bill passes the drawn hinge rate, body speed / 0.08 m.
 
     Pack watts are ``electrical_from_shaft_w`` on each motor: the same
     speed-and-torque line as the measured hinge conversion. Driver
@@ -179,7 +185,12 @@ def brushed_drive_point(
     force_n = float(crr) * float(mass_kg) * GRAVITY_M_S2 + max(0.0, float(extra_force_n))
     added = max(0.0, float(extra_torque_nm))
     tau = force_n * radius / float(motors) + added
-    omega = speed / radius
+    # Design bill: ω = v / BoM radius. A caller can pass the hinge rate
+    # without moving the rolling lever arm.
+    if electrical_omega_rad_s is None:
+        omega = speed / radius
+    else:
+        omega = max(0.0, float(electrical_omega_rad_s))
     omega0 = float(no_load_rpm) * 2.0 * math.pi / 60.0
     tau_stall = float(stall_torque_nm)
     if omega0 <= 0 or tau_stall <= 0 or speed <= 0:
@@ -570,12 +581,14 @@ def bom_drive_terms(
     mass_kg: float | None = None,
     extra_force_n: float = 0.0,
     extra_torque_nm: float = 0.0,
+    electrical_omega_rad_s: float | None = None,
 ) -> dict:
     """Drive Wh at ``speed_m_s`` for a BoM profile, from the motor formula.
 
     ``extra_torque_nm`` defaults to 0. The shift table and the 3.43 W
-    light-build figure use that default. The sim hinge term passes the
-    published damping torque instead.
+    light-build figure use that default, with electrical speed
+    ``v / 0.04``. The sim hinge term passes the published damping torque
+    and the 0.08 m hinge rate.
     """
     assumptions = profile.get("assumptions") or {}
     spec = (profile.get("motors") or {}).get("left_wheel") or {}
@@ -595,16 +608,24 @@ def bom_drive_terms(
         n_motors=2,
         extra_force_n=extra_force_n,
         extra_torque_nm=extra_torque_nm,
+        electrical_omega_rad_s=electrical_omega_rad_s,
     )
 
 
 def sim_hinge_torque_nm(speed_m_s: float) -> float:
     """One drive hinge's viscous torque at body speed, from the world file.
 
-    ``dampingConstant`` is 0.15 N·m·s/rad on the 0.08 m wheel, so
-    τ = 0.15 · v / 0.08. Tire contact (friction, force-dependent slip)
-    is not in this number: the world file does not publish one torque
-    for it.
+    Webots ``JointParameters.dampingConstant`` for a rotational motor is
+    in N·m·s/rad. The joint torque is ``τ = −c · ω``, applied in addition
+    to the motor torque. ``c`` is 0.15 and the drawn wheel is 0.08 m, so
+    the magnitude is ``0.15 · v / 0.08``. Tire contact is not in this
+    number: the world file does not publish one torque for it.
+
+    ``getTorqueFeedback`` is the motor's own effort. The motor page says
+    it does not add spring or damping force on top of that effort. The
+    velocity controller still has to produce torque against the damper,
+    so the reading contains that load once. The measured column is not
+    increased by this torque a second time.
     """
     speed = max(0.0, float(speed_m_s))
     if speed <= 0.0 or SIM_WHEEL_RADIUS_M <= 0.0:
@@ -618,17 +639,27 @@ def sim_drive_terms(
     mass_kg: float | None = None,
     extra_force_n: float = 0.0,
 ) -> dict:
-    """Rolling resistance plus published hinge damping, same motor line.
+    """Rolling resistance plus published hinge damping.
 
-    This is the sim drive bill. ``bom_drive_terms`` with no extra torque
-    stays the design bill. The difference is ``wh_visc``.
+    Rolling torque still uses the BoM radius (0.04 m). Damping torque is
+    ``c · ω`` on the drawn hinge, ``ω = v / 0.08``. Electrical speed for
+    this combined point is that same hinge rate. ``bom_drive_terms`` with
+    no extra torque stays the design bill at ``v / 0.04``, so the 3.43 W
+    figure does not move. ``wh_visc`` is this point minus that bill.
+
+    Run #12 billed the damper at ``v / 0.08`` and then ran the motor line
+    at ``v / 0.04``. That is two different shaft speeds for one hinge.
+    The hinge and the torque feedback turn at ``v / 0.08``.
     """
+    speed = max(0.0, float(speed_m_s))
+    omega = speed / SIM_WHEEL_RADIUS_M if SIM_WHEEL_RADIUS_M > 0.0 else 0.0
     return bom_drive_terms(
         profile,
         speed_m_s,
         mass_kg=mass_kg,
         extra_force_n=extra_force_n,
-        extra_torque_nm=sim_hinge_torque_nm(speed_m_s),
+        extra_torque_nm=sim_hinge_torque_nm(speed),
+        electrical_omega_rad_s=omega,
     )
 
 
@@ -689,9 +720,11 @@ def _profile_motor_args(profile: dict) -> dict:
 def _hub_electrical_w(args: dict, mass_kg: float, speed_m_s: float, tau_scrub_nm: float) -> tuple[float, bool]:
     """One hub's pack watts at body speed, plus an optional scrub torque.
 
-    Electrical speed is body speed / BoM radius, the same convention as
-    ``brushed_drive_point``. A hub at 0 m/s bills 0 W, same as that line.
-    Scrub torque is clamped by ``electrical_from_shaft_w`` at stall.
+    Electrical speed stays body speed / BoM radius. ``turning_scrub_point``
+    bills only the difference between a yawed pair and this straight pair,
+    which is the turn term already checked on warehouse laps. The straight
+    viscous bill is ``sim_drive_terms`` at the hinge rate, not this helper.
+    A hub at 0 m/s bills 0 W. Scrub torque is clamped at stall.
     """
     speed = float(speed_m_s)
     if speed <= 1e-9:
@@ -871,9 +904,11 @@ def segment_model_terms(
 ) -> dict:
     """Model split for one segment.
 
-    ``wh_roll`` is the rolling-only motor line. ``wh_visc`` is the extra
-    electrical energy from the published hinge damping on that same line
-    (the cross term included, so roll + visc is the combined point).
+    ``wh_roll`` is the rolling-only motor line at ``v / 0.04``. ``wh_visc``
+    is the hinge-rate combined point (rolling torque on 0.04 m, damping
+    torque ``c·v/0.08``, electrical speed ``v/0.08``) minus that roll
+    bill, so roll + visc is the sim point and the printed roll does not
+    move.
     ``wh_turn`` is ``turning_scrub_wh`` for this piece's heading, at the
     piece's average speed. Zero heading bills zero. Rolling per 10 ft
     does not change.
@@ -990,8 +1025,9 @@ def bom_run_energy_wh(
 
     ``idle_w_known × hours`` is the compute/sensor idle from the BoM (9.96 W
     on the light build). Drive is the brushed-DC line at the run's average
-    speed. ``wh_model_roll`` is rolling resistance only. ``wh_model_visc``
-    is the extra from ``dampingConstant 0.15`` on the 0.08 m sim wheel.
+    speed. ``wh_model_roll`` is rolling resistance only, at ``v / 0.04``.
+    ``wh_model_visc`` is the extra from ``dampingConstant 0.15`` evaluated
+    at the 0.08 m hinge rate (``τ = c·ω``, electrical ``ω = v/0.08``).
     ``wh_model_turn`` is the track/FDS scrub term. Passed ``wh_turn`` wins:
     the live log integrates each sample, because one average yaw rate over
     a whole lap under-bills a short corner. Otherwise the term uses

@@ -71,10 +71,17 @@ the electrical ones.
 * ``wh_model_roll`` — predicted brushed-DC electrical energy at
   rolling resistance. On the light build that is about 0.0066 Wh
   per 10 ft near 0.44 m/s. The design shift table uses only this.
-* ``wh_model_visc`` — predicted extra electrical energy from the
-  published Webots hinge (``dampingConstant 0.15`` on the 0.08 m
-  wheel) through that same motor line. It rises with speed. It is
-  not a coefficient fitted to a log.
+* ``wh_model_visc`` — extra electrical energy from the published
+  hinge damper. ``dampingConstant`` 0.15 is N·m·s/rad (Webots
+  JointParameters): each drive hinge gets ``τ = −c·ω`` with
+  ``ω = v / 0.08``, in addition to the motor torque. That torque is
+  converted at the same hinge rate. The rolling design bill stays at
+  ``ω = v / 0.04``, and this column is the difference, so the printed
+  roll number does not move. ``getTorqueFeedback`` is motor effort and
+  does not add the damper on top of that effort, so the measured shaft
+  already contains the load once. This column is not subtracted from
+  measured torque. It rises with speed. It is not a coefficient fitted
+  to a log.
 * ``wh_model_turn`` — extra electrical watt-hours while yawing.
   Each hub sits half the axle track off the chassis centre. Its
   ground-speed offset is ``(track/2)·|ω|``. The world contact
@@ -176,8 +183,9 @@ prediction: 121 segments, 369 m, 2145 s. The old locomotion integral
 0.15–0.25 → 0.103; 0.25–0.35 → 0.126; over 0.35 → 0.153. Totals
 from that integral: drive 14.5 Wh, idle 5.9 Wh. Idle matches
 9.96 W × 2145 s. Rolling-only does not: it is about 0.8 Wh and it
-falls slightly as speed rises. Published damping rises with speed
-and is about 6 Wh at the run's average speed, short of 14.5 Wh.
+falls slightly as speed rises. Published damping, converted at the
+hinge rate ``v / 0.08``, is about 4.2 Wh together with rolling at the
+run's average speed, short of 14.5 Wh.
 The remainder is sim tire contact. That torque is not one published
 number, and a straight-line fit of the log is not pasted in as a
 bill. That 0.120 Wh figure is not copied into

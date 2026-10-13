@@ -156,8 +156,8 @@ def test_speed_trace_file_skips_parked_rows_and_stops_at_mission_end(tmp_path):
     assert float(fields["var_cmd_split"]) == pytest.approx(0.04, abs=1e-9)
     assert float(fields["var_hub_split"]) == pytest.approx(0.01, abs=1e-9)
     assert float(fields["mean_abs_cmd_split"]) == pytest.approx(0.2, abs=1e-9)
-    # Second step only: 0.1 s sim / 0.2 s wall.
-    assert fields["mean_rtf"] == "0.500"
+    # Two written 0.1 s bins: 0.1/0.1 then 0.1/0.2. Time-weighted, 0.2/0.3.
+    assert fields["mean_rtf"] == "0.667"
     closed = path.read_text(encoding="utf-8")
     assert "steer," in closed
     trace.lines(
@@ -166,3 +166,23 @@ def test_speed_trace_file_skips_parked_rows_and_stops_at_mission_end(tmp_path):
     )
     assert path.read_text(encoding="utf-8") == closed
     assert trace.finish() == line
+
+
+def test_mean_rtf_keeps_sim_time_when_a_step_wall_clock_sticks(tmp_path):
+    """Run #12 printed mean_rtf 0.419 against a trace median near 0.95.
+
+    The old average dropped any controller step whose wall delta was not
+    positive, and did not put that step's sim time into the next step.
+    The CSV rtf column is the 0.1 s bin, which still contains the step.
+    """
+    path = tmp_path / "speed_trace_rtf.csv"
+    trace = SpeedTrace(True, step_s=0.1, rtf_period_s=100.0, path=str(path))
+    moving = dict(v_body=0.30, v_odo=0.30, w_l_cmd=3.0, w_r_cmd=3.0, w_l=3.0, w_r=3.0)
+    trace.lines(t_sim=0.0, t_wall=100.0, **moving)
+    trace.lines(t_sim=0.05, t_wall=100.0, **moving)
+    trace.lines(t_sim=0.10, t_wall=100.2, **moving)
+    trace.lines(t_sim=0.20, t_wall=100.5, **moving)
+    line = trace.finish()
+    fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+    # Bins 0.10/0.20 and 0.10/0.30. A dropped 0.05 s step would print 0.300.
+    assert fields["mean_rtf"] == "0.400"

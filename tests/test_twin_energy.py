@@ -337,18 +337,21 @@ def test_turning_scrub_uses_world_contact_and_the_4693_curve():
         tau_scrub = force * SIM_WHEEL_RADIUS_M
         assert tau_scrub < float(spec["stall_torque_nm"])
 
-        def one(speed: float, scrub: float) -> float:
+        def one(speed: float, scrub: float, radius: float) -> float:
             tau = crr * mass * g * r_bom / 2.0 + SIM_HINGE_DAMPING_NM_S_RAD * speed / SIM_WHEEL_RADIUS_M + scrub
-            omega = speed / r_bom
+            omega = speed / radius
             omega0 = 200.0 * 2.0 * math.pi / 60.0
             duty = omega / omega0 + tau / 2.256
             current = 0.1 + (3.0 - 0.1) * (tau / 2.256)
             assert current < 3.0
             return duty * 24.0 * current / 0.92
 
-        straight = 2.0 * one(v, 0.0)
-        turned = one(v - v_slip, tau_scrub) + one(v + v_slip, tau_scrub)
-        assert sim_drive_terms(prof, v)["drive_w"] == pytest.approx(straight, rel=1e-9)
+        # Turn delta stays at the BoM electrical rate. The straight visc
+        # bill is the same torque at the hinge rate.
+        straight = 2.0 * one(v, 0.0, r_bom)
+        turned = one(v - v_slip, tau_scrub, r_bom) + one(v + v_slip, tau_scrub, r_bom)
+        hinge = 2.0 * one(v, 0.0, SIM_WHEEL_RADIUS_M)
+        assert sim_drive_terms(prof, v)["drive_w"] == pytest.approx(hinge, rel=1e-9)
         point = electrical_from_shaft_w(
             crr * mass * g * r_bom / 2.0 + SIM_HINGE_DAMPING_NM_S_RAD * v / SIM_WHEEL_RADIUS_M,
             v / r_bom,
@@ -416,7 +419,7 @@ def test_straight_bill_stays_rolling_plus_hinge_damping():
             )
             point = electrical_from_shaft_w(
                 tau,
-                v / args["wheel_radius_m"],
+                v / SIM_WHEEL_RADIUS_M,
                 voltage_v=args["voltage_v"],
                 no_load_rpm=args["no_load_rpm"],
                 no_load_current_a=args["no_load_current_a"],

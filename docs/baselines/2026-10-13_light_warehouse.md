@@ -1,7 +1,8 @@
 # Light warehouse lap, 2026-10-13
 
 Reference for the model-versus-measured comparison. This file records
-Dan's run #8. It is not a coefficient in the energy model.
+Dan's run #8. Run #12, at the end, is the sim-time reference. None of
+these laps is a coefficient in the energy model.
 
 ## Run
 
@@ -176,3 +177,77 @@ interval, seconds over 15 s, and the watt-hours in that hole
 (`cumulative=1` means they were kept). `err_pct` will not match
 −11.0: the old number scaled with wall time. `STEER_SPLIT` is the
 left/right variance for a later HUD-on comparison. It is not billed.
+
+## Run #12, sim-time reference
+
+Dan's light warehouse lap on `2040e34` (1 lap, HUD paint off, fresh
+dashboard build). This is the sim-time reference. It does not replace
+run #8, run #9, or the run #11 wall-clock section.
+
+| Field | Value |
+| --- | --- |
+| duration_s | 662.0 (sim) |
+| dist_m | 200.91 |
+| turns | 13 |
+| soc | 100 → 97.68 |
+| wh_model | 7.054 |
+| wh_model_idle | 1.832 |
+| wh_model_drive | 5.222 |
+| wh_model_roll | 0.438 |
+| wh_model_visc | 4.667 |
+| wh_model_turn | 0.110 |
+| wh_model_accel | 0.007 |
+| wh_measured_drive_shaft | 0.866 |
+| wh_measured_drive_elec | 3.742 |
+| eta_avg | 0.232 |
+| wh_measured | 5.556 |
+| wh_measured_soc | 5.568 |
+| err_pct (MISSION_SUMMARY, drive only) | −28.3 |
+| err_pct (MISSION_ENERGY, drive + idle) | −21.2 |
+
+`wh_measured_soc` is `240 × (100 − 97.68) / 100 = 5.568`. It agrees
+with `wh_measured` 5.556. Idle is `9.96 W × 662 s`. `TELEMETRY_GAPS`
+was n=1606, mean 0.464 s, max 0.810 s, skipped 0, wall 744.7 s, sim
+662.0 s. The cumulative pack counter kept the energy.
+
+`MISSION_SUMMARY` err_pct is drive only:
+`(3.742 − 5.222) / 5.222` is −28.3%. `MISSION_ENERGY` includes idle:
+`(5.556 − 7.054) / 7.054` is −21.2%. Those two lines are not a mismatch.
+
+The speed-trace CSV (6675 rows) had `v_body` mean 0.304 m/s, max
+0.500 m/s. `|dv|` per 0.1 s averaged 0.0022, with 40 jumps over
+0.05 m/s. Trace `rtf` median 0.95, p10 0.61, p90 1.52, min 0.31.
+Mission sim/wall is `662 / 744.7 = 0.89`. The stutter is render and
+realtime factor, not the body speed. `STEER_SPLIT` on that lap:
+`mean_abs_cmd_split` 0.0479, `var_cmd_split` 0.1065, `mean_rtf` 0.419,
+`mean_v_body` 0.304. `mean_rtf` was summing every controller step and
+dropping a step whose wall clock did not advance, which threw away
+that step's sim time. It now uses the same 0.1 s bins as the CSV.
+The next lap's `mean_rtf` should sit near sim/wall (about 0.89 on a
+lap like this), not near 0.42, and not necessarily on the median.
+
+Viscous audit, from this lap. `dampingConstant` 0.15 is N·m·s/rad.
+Webots applies `τ = −c·ω` on the hinge, per joint, in addition to the
+motor torque. `ω` for the drawn wheel is `v / 0.08`. At the trace mean
+0.304 m/s that is 3.80 rad/s, 0.570 N·m per hinge, and
+`2·c·ω² = 4.33 W`. Measured shaft is 0.866 Wh / 662 s = 4.71 W.
+`getTorqueFeedback` reports motor effort and does not add the damper
+again (Webots motor page). The match says the feedback already
+contains the motor's load against the damper, once. `wh_visc` is not
+subtracted from measured torque; the two columns are separate.
+
+The 28% over-prediction was the electrical speed. The model took that
+hinge torque and ran the 4693 line at `v / 0.04` (7.6 rad/s). The hinge
+turns at half that. Roll stayed the design bill (0.438 Wh, about
+2.38 W, the 0.04 m rolling line). Visc was the rest of a duty cycle
+computed at the doubled rate (4.667 Wh, about 25 W). Measured
+electrical drive was 3.742 Wh, about 20 W.
+
+The viscous bill now uses the hinge rate for both the damper torque
+and the motor line. Roll stays `v / 0.04`. Turn and accel are
+unchanged. Prediction, not a fit, at this lap's average speed: visc
+falls from 4.667 Wh to about 3.2 Wh, model drive from 5.222 Wh to
+about 3.7 Wh, near the 3.742 Wh already measured. One average speed
+under-bills a `v²` damper, so the rerun can sit a few percent off
+that. It should not stay near −28%. `wh_model_roll` stays about
+0.44 Wh. `wh_model_turn` stays about 0.11 Wh.

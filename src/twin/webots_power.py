@@ -256,21 +256,97 @@ def reported_wheel_torque_nm(
     *,
     bom: bool,
 ) -> float:
-    """Torque sample the power model should see.
+    """Torque the electrical BoM line is allowed to use as a load.
 
-    A BoM build always returns 0. Webots ``getTorqueFeedback`` on these
-    hinges is the motor effort against ``dampingConstant`` and the tire
-    contact, not a load cell, and the linear model would treat it as
-    shaft torque. With no reading, 0 lets that model use rolling
-    resistance (Crr · m · g · r / 2). The YAML profile still keeps a real
-    feedback reading, and with no reading it keeps the old ``|ω| × 0.45``
-    stand-in.
+    A BoM build returns 0 so Legs stay on rolling resistance. Live
+    ``getTorqueFeedback`` is not that load. The measured column does
+    not use this helper: it reads ``torque_feedback_nm`` and integrates
+    |τ|·|ω|. The YAML profile still keeps a real feedback reading, and
+    with no reading it keeps the old ``|ω| × 0.45`` stand-in.
     """
     if bom:
         return 0.0
     if feedback_nm is not None and abs(float(feedback_nm)) > 1e-4:
         return abs(float(feedback_nm))
     return abs(float(velocity)) * 0.45
+
+
+def wheel_torque_feedback_nm(feedback_nm) -> float | None:
+    """Signed Webots ``getTorqueFeedback``, or None when it did not report.
+
+    A numeric 0 is a real reading (parked hinge). None, blank, and
+    non-finite values are unusable. Callers log ``na`` and do not
+    substitute rolling resistance or ``|ω| × 0.45``.
+    """
+    if feedback_nm is None or feedback_nm == "":
+        return None
+    try:
+        value = float(feedback_nm)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def measured_drive_w(
+    joints: list[dict] | None,
+    speed_m_s: float | None = None,
+) -> float | None:
+    """Mechanical drive watts from the sim hinges: sum of |τ| · |ω|.
+
+    τ is ``torque_feedback_nm`` only. The ``torque`` field is the load
+    the electrical model used, and a BoM build stores 0 there, so it is
+    not a measurement. ω is the wheel position-sensor rate (rad/s of the
+    0.08 m world wheel). When that rate is missing and the body is
+    moving, ω = speed / 0.08. The BoM radius 0.04 m is not used.
+
+    Returns None when any drive wheel has no torque feedback. The energy
+    log writes ``na`` in that case.
+    """
+    wheels = [
+        joint
+        for joint in (joints or [])
+        if isinstance(joint, dict) and "wheel" in str(joint.get("name") or "").lower()
+    ]
+    if not wheels:
+        return None
+    total = 0.0
+    for joint in wheels:
+        if "torque_feedback_nm" not in joint:
+            return None
+        tau = wheel_torque_feedback_nm(joint.get("torque_feedback_nm"))
+        if tau is None:
+            return None
+        omega = _hinge_rad_s(joint, speed_m_s)
+        if omega is None:
+            return None
+        total += abs(tau) * abs(omega)
+    return total
+
+
+def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
+    """Hinge rate in rad/s. Body speed converts through the 0.08 m wheel."""
+    omega = None
+    if joint.get("velocity") is not None and joint.get("velocity") != "":
+        try:
+            omega = abs(float(joint.get("velocity")))
+        except (TypeError, ValueError):
+            omega = None
+        if omega is not None and not math.isfinite(omega):
+            omega = None
+    speed = None
+    if speed_m_s is not None and speed_m_s != "":
+        try:
+            speed = abs(float(speed_m_s))
+        except (TypeError, ValueError):
+            speed = None
+        if speed is not None and not math.isfinite(speed):
+            speed = None
+    # Encoder quiet while the body is moving: use the drawn wheel, not 0.04 m.
+    if speed is not None and speed > 0.02 and (omega is None or omega < 1e-3):
+        return speed / SIM_WHEEL_RADIUS_M
+    return omega
 
 
 def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
@@ -301,7 +377,9 @@ def _linear_wheel_electrical_w(
 
     Driver efficiency is applied later, once, in ``aggregate_channel_draws``,
     so this is not divided by eta here. Load torque is rolling resistance
-    (Crr · m · g · r / 2 on the BoM radius). ``torque`` is ignored on purpose.
+    (Crr · m · g · r / 2 on the BoM radius). ``torque`` is ignored on this
+    predicted line. The measured column is ``measured_drive_w`` (|τ|·|ω|
+    from ``torque_feedback_nm``), not this function.
 
     Why the logged drive was ~16× this line
     ---------------------------------------
@@ -769,9 +847,11 @@ def restamp_active_bom(payload: dict) -> dict:
     The dashboard and the controller do not share a working directory.
     Webots used to miss ``config/config.yaml``, post the YAML profile
     (arms and torso watts, ``sensors=na``, ``build=default``), while the
-    dashboard log said ``BOM build=light``. With a build selected, joint
-    samples are recomputed on the BoM line even if the controller already
-    stamped that build: hinge torque feedback is not the motor load.
+    dashboard log said ``BOM build=light``.     With a build selected, joint samples are recomputed on the BoM line
+    even if the controller already stamped that build. That rebuild is
+    the predicted Legs bill. ``measured_drive_w`` is separate: |τ|·|ω|
+    from ``torque_feedback_nm`` on the 0.08 m hinge. Missing feedback
+    is None, and the rolling line is not written in its place.
     """
     from src.hardware_profile import active_bom_build
 
@@ -782,10 +862,9 @@ def restamp_active_bom(payload: dict) -> dict:
         return payload
     loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
     hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
-    # Always recompute when joints are present. A controller that already
-    # stamped this build may still have billed Webots hinge torque as the
-    # motor load. The linear line ignores that torque; rebuilding is what
-    # makes the logged watts match wh_roll.
+    # Always recompute when joints are present. Channel Legs stay on the
+    # rolling line. Measured shaft power is captured first, from
+    # torque_feedback_nm, and is not replaced by that line.
     joints = [j for j in (payload.get("joints") or []) if isinstance(j, dict)]
     if not joints:
         out = dict(payload)
@@ -817,6 +896,7 @@ def restamp_active_bom(payload: dict) -> dict:
         speed_f = float(speed)
     except (TypeError, ValueError):
         speed_f = 0.0
+    measured = measured_drive_w(joints, speed_f)
     rebuilt = build_webots_telemetry(
         joints=clean,
         gait=str(payload.get("gait") or loc.get("gait") or "stand"),
@@ -830,4 +910,27 @@ def restamp_active_bom(payload: dict) -> dict:
     )
     if payload.get("timestamp"):
         rebuilt["timestamp"] = payload["timestamp"]
+    loco = rebuilt.get("locomotion") if isinstance(rebuilt.get("locomotion"), dict) else {}
+    loco = dict(loco)
+    loco["measured_drive_w"] = measured
+    rebuilt["locomotion"] = loco
+    rebuilt["measured_drive_w"] = measured
+    # Keep the feedback on the joints the model rebuild stored, so a later
+    # reader can see the raw hinge torque next to the zero model load.
+    feedback_by_name = {
+        str(joint.get("name") or ""): joint.get("torque_feedback_nm")
+        for joint in joints
+        if "torque_feedback_nm" in joint
+    }
+    stamped_joints = []
+    for joint in rebuilt.get("joints") or []:
+        if not isinstance(joint, dict):
+            stamped_joints.append(joint)
+            continue
+        copied = dict(joint)
+        name = str(copied.get("name") or "")
+        if name in feedback_by_name:
+            copied["torque_feedback_nm"] = feedback_by_name[name]
+        stamped_joints.append(copied)
+    rebuilt["joints"] = stamped_joints
     return rebuilt

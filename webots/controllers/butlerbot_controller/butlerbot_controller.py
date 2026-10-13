@@ -1976,30 +1976,41 @@ def _read_joints(
         feedback = None
         if hasattr(motor, "getTorqueFeedback"):
             try:
-                tf = abs(float(motor.getTorqueFeedback()))
-                if tf > 1e-4:
+                tf = float(motor.getTorqueFeedback())
+                if math.isfinite(tf):
                     feedback = tf
             except Exception:
                 feedback = None
         try:
             from src.twin.webots_power import reported_wheel_torque_nm
 
+            # Model load. A BoM build passes 0 so Legs stay on rolling
+            # resistance. The raw hinge reading is torque_feedback_nm,
+            # which the energy log integrates as |τ|·|ω|.
             torque = reported_wheel_torque_nm(
                 velocity, feedback, bom=_uses_bom_pack()
             )
         except Exception:
-            torque = feedback if feedback is not None else abs(velocity) * 0.45
+            torque = 0.0 if _uses_bom_pack() else (
+                abs(feedback) if feedback is not None else abs(velocity) * 0.45
+            )
         joint_speed = speed_m_s if (abs(velocity) < 0.2 and cmd_v > 0.05) else 0.0
         power_w = _estimate_joint_power(
             motor_name, velocity, torque, speed_m_s=joint_speed
         )
-        joints.append({
+        joint = {
             "name": motor_name,
             "position": round(position, 4),
             "velocity": round(velocity, 4),
             "torque": round(torque, 4),
             "power_w": power_w,
-        })
+        }
+        if "wheel" in motor_name:
+            # None when getTorqueFeedback did not report. 0.0 is a reading.
+            joint["torque_feedback_nm"] = (
+                None if feedback is None else round(feedback, 4)
+            )
+        joints.append(joint)
     return joints
 
 

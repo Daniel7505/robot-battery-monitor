@@ -50,6 +50,8 @@ def _sample(
     subs: dict | None = None,
     channels: dict | None = None,
     include_subs: bool = True,
+    measured_drive_w: float | None = None,
+    report_measured: bool = False,
 ) -> dict:
     sample = {
         "timestamp": _T0 + timedelta(seconds=t_s),
@@ -66,6 +68,8 @@ def _sample(
         sample["subsystem_draws"] = _SUBS if subs is None else subs
     if event:
         sample["mission_event"] = event
+    if report_measured:
+        sample["measured_drive_w"] = measured_drive_w
     return sample
 
 
@@ -75,9 +79,12 @@ def _fields(line: str) -> dict[str, str]:
 
 def test_segment_closes_every_ten_feet_from_measured_draws():
     log = MissionEnergyLog()
-    assert log.observe(_sample(0.0, 0.0)) == []
+    # 12 W is a twin shaft-power reading. It is not the 3.43 W Legs bill.
+    assert log.observe(_sample(0.0, 0.0, report_measured=True, measured_drive_w=12.0)) == []
     dt = TEN_FT_M / 0.44
-    lines = log.observe(_sample(dt, TEN_FT_M, heading=math.radians(90.0)))
+    lines = log.observe(
+        _sample(dt, TEN_FT_M, heading=math.radians(90.0), report_measured=True, measured_drive_w=12.0)
+    )
     segments = [line for line in lines if line.startswith("SEGMENT_ENERGY")]
     assert len(segments) == 1
     fields = _fields(segments[0])
@@ -89,11 +96,15 @@ def test_segment_closes_every_ten_feet_from_measured_draws():
     assert float(fields["heading_change_deg"]) == pytest.approx(90.0, abs=0.2)
     assert fields["accel_events"] == "0"
     assert fields["payload_kg"] == "0"
-    wh_drive = 3.43 * dt / 3600.0
+    wh_measured = 12.0 * dt / 3600.0
     wh_idle = (7.20 + 2.66) * dt / 3600.0
-    assert float(fields["wh_drive"]) == pytest.approx(wh_drive, abs=1e-4)
+    assert float(fields["wh_measured_drive"]) == pytest.approx(wh_measured, abs=1e-4)
+    assert float(fields["wh_measured_drive"]) != pytest.approx(3.43 * dt / 3600.0, abs=1e-4)
+    assert "wh_model_drive" in fields
+    assert "wh_model_roll" in fields
+    assert "err_pct" in fields
     assert float(fields["wh_idle"]) == pytest.approx(wh_idle, abs=1e-4)
-    assert float(fields["wh_drive"]) + float(fields["wh_idle"]) == pytest.approx(
+    assert float(fields["wh_measured_drive"]) + float(fields["wh_idle"]) == pytest.approx(
         float(fields["wh_total"]), abs=1e-4
     )
     # A short step stays open. No second segment line.
@@ -205,12 +216,22 @@ def test_mission_summary_fires_once_when_the_track_parks():
     old = _use_bom("light")
     try:
         log = MissionEnergyLog()
-        log.observe(_sample(0.0, 0.0, heading=0.0, battery=100.0))
+        log.observe(
+            _sample(0.0, 0.0, heading=0.0, battery=100.0, report_measured=True, measured_drive_w=3.43)
+        )
         # Two 90° turns, 10 m, 20 s. No end event yet.
-        mid = log.observe(_sample(10.0, 5.0, heading=math.radians(90.0), battery=99.5))
+        mid = log.observe(
+            _sample(
+                10.0, 5.0, heading=math.radians(90.0), battery=99.5,
+                report_measured=True, measured_drive_w=3.43,
+            )
+        )
         assert not any(line.startswith("MISSION_SUMMARY") for line in mid)
         done = log.observe(
-            _sample(20.0, 10.0, heading=math.radians(180.0), battery=99.0, event="complete")
+            _sample(
+                20.0, 10.0, heading=math.radians(180.0), battery=99.0, event="complete",
+                report_measured=True, measured_drive_w=3.43,
+            )
         )
         summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
         energy = next(line for line in done if line.startswith("MISSION_ENERGY"))
@@ -233,7 +254,11 @@ def test_mission_summary_fires_once_when_the_track_parks():
         )
         measured = float(fields["wh_measured"])
         assert measured == pytest.approx((7.20 + 2.66 + 3.43) * 20.0 / 3600.0, abs=0.002)
-        assert fields["err_pct"] != ""
+        assert float(fields["wh_measured_drive"]) == pytest.approx(3.43 * 20.0 / 3600.0, abs=0.002)
+        assert fields["err_pct"] != "na"
+        assert float(fields["wh_measured_drive"]) != pytest.approx(
+            float(fields["wh_model_drive"]), abs=0.01
+        )
         assert float(fields["wh_measured_soc"]) == pytest.approx(240.0 * 1.0 / 100.0, abs=0.01)
         assert "wh_measured=" in energy and "wh_measured= " not in energy
         assert "wh_model=" in energy
@@ -518,11 +543,17 @@ def test_segment_logs_roll_turn_and_accel_from_the_model():
         dt = TEN_FT_M / 0.44
         straight = log.observe(_sample(dt, TEN_FT_M, heading=0.0, speed=0.44))
         seg = _fields(next(line for line in straight if line.startswith("SEGMENT_ENERGY")))
-        assert float(seg["wh_turn"]) == pytest.approx(0.0, abs=1e-6)
-        assert float(seg["wh_accel"]) == pytest.approx(0.0, abs=1e-6)
-        assert float(seg["wh_roll"]) == pytest.approx(0.0066, abs=0.0003)
-        assert float(seg["wh_visc"]) > float(seg["wh_roll"])
-        assert float(seg["wh_drive"]) == pytest.approx(3.43 * dt / 3600.0, abs=1e-4)
+        assert float(seg["wh_model_turn"]) == pytest.approx(0.0, abs=1e-6)
+        assert float(seg["wh_model_accel"]) == pytest.approx(0.0, abs=1e-6)
+        assert float(seg["wh_model_roll"]) == pytest.approx(0.0066, abs=0.0003)
+        assert float(seg["wh_model_visc"]) > float(seg["wh_model_roll"])
+        assert float(seg["wh_model_drive"]) == pytest.approx(
+            float(seg["wh_model_roll"]) + float(seg["wh_model_visc"]) + float(seg["wh_model_accel"]),
+            abs=1e-4,
+        )
+        # No torque feedback on the sample: measured stays na, not wh_model_roll.
+        assert seg["wh_measured_drive"] == "na"
+        assert seg["err_pct"] == "na"
 
         curve = MissionEnergyLog()
         curve.observe(_sample(0.0, 0.0, heading=0.0, speed=0.0))
@@ -538,10 +569,11 @@ def test_segment_logs_roll_turn_and_accel_from_the_model():
         )
         fields = _fields(next(line for line in closed if line.startswith("SEGMENT_ENERGY")))
         assert float(fields["heading_change_deg"]) == pytest.approx(61.6, abs=0.2)
-        assert float(fields["wh_turn"]) == 0.0
-        assert float(fields["wh_accel"]) > 0
-        assert float(fields["wh_roll"]) == pytest.approx(0.0066, abs=0.0004)
-        assert float(fields["wh_visc"]) > float(fields["wh_roll"])
+        assert float(fields["wh_model_turn"]) == 0.0
+        assert float(fields["wh_model_accel"]) > 0
+        assert float(fields["wh_model_roll"]) == pytest.approx(0.0066, abs=0.0004)
+        assert float(fields["wh_model_visc"]) > float(fields["wh_model_roll"])
+        assert fields["wh_measured_drive"] == "na"
     finally:
         _restore_bom(old)
 
@@ -602,5 +634,95 @@ def test_hinge_torque_does_not_inflate_bom_locomotion():
             joints=joints, gait="drive", phase="teleop", speed_m_s=v, profile=prof
         )
         assert billed["channel_draws"]["Legs"] == pytest.approx(roll["drive_w"], abs=0.15)
+    finally:
+        _restore_bom(old)
+
+
+def test_measured_drive_is_hinge_power_not_the_bom_line():
+    """Shaft power |τ|·|ω| on the 0.08 m wheel, kept off the Legs bill.
+
+    A missing ``torque_feedback_nm`` is na. The model ``torque`` field
+    is not a substitute, and body speed is not divided by the 0.04 m
+    BoM radius.
+    """
+    from src.hardware_profile import get_active_profile
+    from src.twin.webots_power import (
+        build_webots_telemetry,
+        measured_drive_w,
+        restamp_active_bom,
+    )
+    from src.twin_energy import bom_drive_terms
+
+    v = 0.16
+    omega = v / 0.08
+    tau = 0.4
+    quiet = [
+        {"name": "left_wheel", "velocity": 0.0, "torque": 0.0, "torque_feedback_nm": tau},
+        {"name": "right_wheel", "velocity": 0.0, "torque": 0.0, "torque_feedback_nm": tau},
+    ]
+    assert measured_drive_w(quiet, v) == pytest.approx(2 * tau * omega, abs=1e-9)
+    assert measured_drive_w(quiet, v) != pytest.approx(2 * tau * (v / 0.04), abs=1e-3)
+
+    sensed = [
+        {"name": "left_wheel", "velocity": omega, "torque": 0.0, "torque_feedback_nm": tau},
+        {"name": "right_wheel", "velocity": omega, "torque": 0.0, "torque_feedback_nm": -tau},
+    ]
+    assert measured_drive_w(sensed, v) == pytest.approx(2 * abs(tau) * omega, abs=1e-9)
+    invented = [
+        {"name": "left_wheel", "velocity": omega, "torque": 0.5},
+        {"name": "right_wheel", "velocity": omega, "torque": 0.5},
+    ]
+    assert measured_drive_w(invented, v) is None
+    half = [
+        sensed[0],
+        {"name": "right_wheel", "velocity": omega, "torque": 0.0, "torque_feedback_nm": None},
+    ]
+    assert measured_drive_w(half, v) is None
+
+    old = _use_bom("light")
+    try:
+        prof = get_active_profile()
+        roll = bom_drive_terms(prof, v)
+        payload = build_webots_telemetry(
+            joints=sensed, gait="drive", phase="teleop", speed_m_s=v, profile=prof
+        )
+        stamped = restamp_active_bom(payload)
+        assert stamped["channel_draws"]["Legs"] == pytest.approx(roll["drive_w"], abs=0.15)
+        assert stamped["locomotion"]["measured_drive_w"] == pytest.approx(2 * tau * omega, abs=1e-6)
+        assert stamped["measured_drive_w"] == pytest.approx(2 * tau * omega, abs=1e-6)
+
+        blank = build_webots_telemetry(
+            joints=invented, gait="drive", phase="teleop", speed_m_s=v, profile=prof
+        )
+        assert restamp_active_bom(blank)["locomotion"]["measured_drive_w"] is None
+
+        log = MissionEnergyLog()
+        shaft_w = 2 * tau * omega
+        # Two steps stay under the 15 s stall guard. 0.16 m/s × 20 s clears 10 ft.
+        log.observe(_sample(0.0, 0.0, speed=v, report_measured=True, measured_drive_w=shaft_w))
+        log.observe(_sample(10.0, 1.6, speed=v, report_measured=True, measured_drive_w=shaft_w))
+        lines = log.observe(
+            _sample(20.0, 3.2, speed=v, report_measured=True, measured_drive_w=shaft_w)
+        )
+        seg = _fields(next(line for line in lines if line.startswith("SEGMENT_ENERGY")))
+        assert float(seg["wh_measured_drive"]) == pytest.approx(shaft_w * 20.0 / 3600.0 * (TEN_FT_M / 3.2), abs=1e-4)
+        assert float(seg["wh_model_roll"]) == pytest.approx(roll["drive_wh_per_10ft"], abs=0.0004)
+        assert float(seg["wh_measured_drive"]) != pytest.approx(float(seg["wh_model_roll"]), abs=0.001)
+        assert float(seg["wh_model_drive"]) == pytest.approx(
+            float(seg["wh_model_roll"]) + float(seg["wh_model_visc"]) + float(seg["wh_model_accel"]),
+            abs=1e-4,
+        )
+        assert seg["err_pct"] != "na"
+
+        missing = MissionEnergyLog()
+        missing.observe(_sample(0.0, 0.0, speed=v, report_measured=True, measured_drive_w=None))
+        missing.observe(_sample(10.0, 1.6, speed=v, report_measured=True, measured_drive_w=None))
+        gone = missing.observe(
+            _sample(20.0, 3.2, speed=v, report_measured=True, measured_drive_w=None)
+        )
+        na_seg = _fields(next(line for line in gone if line.startswith("SEGMENT_ENERGY")))
+        assert na_seg["wh_measured_drive"] == "na"
+        assert na_seg["err_pct"] == "na"
+        assert float(na_seg["wh_model_roll"]) > 0
     finally:
         _restore_bom(old)

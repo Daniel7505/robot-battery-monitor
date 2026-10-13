@@ -35,13 +35,26 @@ load:
   20.3 W × 8:47 (~2.97 Wh) could not equal 0.864 Wh.
 
 With a BoM selected, channel draws, the pack drain, and these log lines
-all use the published idle plus the rolling-resistance motor model, and
-the controller drains that same total against the BoM pack. ``wh_model``
-is idle over the whole run plus drive for the distance. It still has no
-turn or acceleration term; ``err_pct`` is the difference from the
-integrated channel watts (``wh_measured``). ``wh_measured_soc`` is
-``capacity × (start% − end%) / 100`` so a remaining pack mismatch stays
-visible.
+all use the published idle plus the motor model, and the controller
+drains that same total against the BoM pack. ``wh_model`` is idle over
+the whole run plus drive. Drive is three terms, also logged on each
+``SEGMENT_ENERGY`` line:
+
+* ``wh_roll`` — rolling-resistance electrical energy from the BoM formula
+* ``wh_turn`` — skid-steer yaw, ``fitted-from-twin`` (light S, 0.12 Wh
+  per 10 ft at 61.6° of heading, minus the 0.0066 Wh rolling term).
+  A straight segment is zero. The geometry-only scrub
+  ``Crr·m·g·track·|Δθ|`` is about 0.0001 Wh for that same yaw and is not
+  what we bill; the BoM has no sliding μ.
+* ``wh_accel`` — extra motor-line watts while speeding up (``m·a`` on
+  top of rolling torque). Slowing down is zero (no regen). Wheel spin
+  inertia is not in the BoM.
+
+``wh_drive`` on the segment stays the measured locomotion integral.
+The three terms are the model, so they are not forced to add up to
+``wh_drive``. ``err_pct`` is still model versus integrated channel
+watts (``wh_measured``). ``wh_measured_soc`` is
+``capacity × (start% − end%) / 100``.
 """
 
 from __future__ import annotations
@@ -56,7 +69,9 @@ POWER_PERIOD_S = 10.0
 # A speed change steeper than this, from one sample to the next, counts
 # as one acceleration event. It is not a planned accel profile.
 ACCEL_EVENT_M_S2 = 0.4
-# Net heading change that counts as one turn.
+# One turn per this many degrees of accumulated |heading change|.
+# A bend that later straightens still counts: the old net-from-anchor
+# counter stayed at 0 on the S while segments logged 61.6° and 32.3°.
 TURN_DEG = 30.0
 # Same stall guard as the efficiency tracker: do not bill a paused Webots.
 MAX_DT_S = 15.0
@@ -98,7 +113,7 @@ class MissionEnergyLog:
         self._last_xy: tuple[float, float] | None = None
         self._last_heading: float | None = None
         self._last_speed: float | None = None
-        self._turn_anchor: float | None = None
+        self._heading_accum_deg = 0.0
         self._turns = 0
         self._soc_start: float | None = None
         self._soc_end: float | None = None
@@ -109,6 +124,7 @@ class MissionEnergyLog:
         self._mission_dist = 0.0
         self._mission_wh_drive = 0.0
         self._mission_wh_idle = 0.0
+        self._mission_wh_accel = 0.0
         self._clear_segment()
         self._clear_power()
 
@@ -118,6 +134,7 @@ class MissionEnergyLog:
         self._seg_dt = 0.0
         self._seg_wh_drive = 0.0
         self._seg_wh_idle = 0.0
+        self._seg_wh_accel = 0.0
         self._seg_heading_deg = 0.0
         self._seg_accel = 0
 
@@ -152,17 +169,21 @@ class MissionEnergyLog:
         wh_drive = drive_w * dt / 3600.0
         wh_idle = idle_w * dt / 3600.0
         accel = 0
+        wh_accel_step = 0.0
         if self._last_speed is not None and abs(speed - self._last_speed) / dt >= ACCEL_EVENT_M_S2:
             accel = 1
+        if trusted and self._last_speed is not None and speed > self._last_speed:
+            wh_accel_step = _accel_step_wh(self._last_speed, speed, dt, self._payload_kg)
         self._last_speed = speed
 
         self._mission_dt += dt
         self._mission_dist += step_m
         self._mission_wh_drive += wh_drive
         self._mission_wh_idle += wh_idle
+        self._mission_wh_accel += wh_accel_step
         self._note_soc(sample)
         if trusted:
-            self._note_turn(sample)
+            self._note_turn(heading_deg)
 
         self._power_dt += dt
         for key, watts in subs.items():
@@ -180,6 +201,7 @@ class MissionEnergyLog:
             self._seg_dt += dt
             self._seg_wh_drive += wh_drive
             self._seg_wh_idle += wh_idle
+            self._seg_wh_accel += wh_accel_step
             self._seg_heading_deg += abs(heading_deg)
             if accel:
                 self._seg_accel += accel
@@ -191,11 +213,13 @@ class MissionEnergyLog:
             closed_dt = self._seg_dt
             closed_drive = self._seg_wh_drive
             closed_idle = self._seg_wh_idle
+            closed_accel = self._seg_wh_accel
             closed_head = self._seg_heading_deg
             self._seg_dist = closed_dist * frac
             self._seg_dt = closed_dt * frac
             self._seg_wh_drive = closed_drive * frac
             self._seg_wh_idle = closed_idle * frac
+            self._seg_wh_accel = closed_accel * frac
             self._seg_heading_deg = closed_head * frac
             lines.append(self._segment_line())
             self._seg_idx += 1
@@ -204,6 +228,7 @@ class MissionEnergyLog:
             self._seg_dt = closed_dt * keep
             self._seg_wh_drive = closed_drive * keep
             self._seg_wh_idle = closed_idle * keep
+            self._seg_wh_accel = closed_accel * keep
             self._seg_heading_deg = closed_head * keep
             self._seg_accel = 0
 
@@ -226,7 +251,6 @@ class MissionEnergyLog:
         self._note_pose(sample)
         heading = _heading_rad(sample)
         if heading is not None:
-            self._turn_anchor = heading
             self._last_heading = heading
         speed = _as_float(sample.get("speed_m_s"))
         if speed is not None:
@@ -254,16 +278,10 @@ class MissionEnergyLog:
         if heading is not None:
             self._last_heading = heading
 
-    def _note_turn(self, sample: dict) -> None:
-        heading = _heading_rad(sample)
-        if heading is None or self._turn_anchor is None:
-            if heading is not None:
-                self._turn_anchor = heading
-            return
-        delta_deg = abs(math.degrees(_wrap_rad(heading - self._turn_anchor)))
-        if delta_deg >= TURN_DEG:
-            self._turns += 1
-            self._turn_anchor = heading
+    def _note_turn(self, heading_deg: float) -> None:
+        """Count every ``TURN_DEG`` of accumulated yaw, including a bend that unwinds."""
+        self._heading_accum_deg += abs(float(heading_deg))
+        self._turns = int((self._heading_accum_deg + 1e-6) // TURN_DEG)
 
     def _step_motion(self, sample: dict, dt: float) -> tuple[float, float, float, bool]:
         xy = _xy(sample.get("pose") or {})
@@ -295,12 +313,22 @@ class MissionEnergyLog:
     def _segment_line(self) -> str:
         avg = (self._seg_dist / self._seg_dt) if self._seg_dt > 0 else 0.0
         total = self._seg_wh_drive + self._seg_wh_idle
+        terms = _drive_breakdown(
+            self._seg_dist,
+            avg,
+            self._seg_heading_deg,
+            self._seg_wh_accel,
+            self._payload_kg,
+        )
         return (
             f"SEGMENT_ENERGY build={self._build} seg_idx={self._seg_idx} "
             f"dist_m={self._seg_dist:.3f} dt_s={self._seg_dt:.2f} "
             f"avg_speed={avg:.3f} heading_change_deg={self._seg_heading_deg:.1f} "
             f"accel_events={self._seg_accel} payload_kg={self._payload_kg:g} "
-            f"wh_drive={self._seg_wh_drive:.4f} wh_idle={self._seg_wh_idle:.4f} "
+            f"wh_drive={self._seg_wh_drive:.4f} "
+            f"wh_roll={terms['wh_roll']:.4f} wh_turn={terms['wh_turn']:.4f} "
+            f"wh_accel={terms['wh_accel']:.4f} "
+            f"wh_idle={self._seg_wh_idle:.4f} "
             f"wh_total={total:.4f}"
         )
 
@@ -338,10 +366,19 @@ class MissionEnergyLog:
 
     def _summary_line(self) -> str:
         measured = self._mission_wh_drive + self._mission_wh_idle
-        model = _model(self._mission_dist, self._mission_dt, self._payload_kg)
+        model = _model(
+            self._mission_dist,
+            self._mission_dt,
+            self._payload_kg,
+            self._heading_accum_deg,
+            self._mission_wh_accel,
+        )
         wh_model = None if model is None else model["wh_model"]
         idle = None if model is None else model["wh_model_idle"]
         drive = None if model is None else model["wh_model_drive"]
+        roll = None if model is None else model.get("wh_model_roll")
+        turn = None if model is None else model.get("wh_model_turn")
+        accel_wh = None if model is None else model.get("wh_model_accel")
         soc_wh = None
         if (
             self._soc_start is not None
@@ -358,7 +395,10 @@ class MissionEnergyLog:
             f"turns={self._turns} payload_kg={self._payload_kg:g} "
             f"soc_start={_fmt(self._soc_start, 2)} soc_end={_fmt(self._soc_end, 2)} "
             f"wh_model={_fmt(wh_model, 3)} wh_model_idle={_fmt(idle, 3)} "
-            f"wh_model_drive={_fmt(drive, 3)} wh_measured={measured:.3f} "
+            f"wh_model_drive={_fmt(drive, 3)} "
+            f"wh_model_roll={_fmt(roll, 3)} wh_model_turn={_fmt(turn, 3)} "
+            f"wh_model_accel={_fmt(accel_wh, 3)} "
+            f"wh_measured={measured:.3f} "
             f"wh_measured_soc={_fmt(None if soc_wh is None else round(soc_wh, 3), 3)} "
             f"err_pct={err}"
         )
@@ -372,6 +412,8 @@ class MissionEnergyLog:
             payload_kg=self._payload_kg,
             wh_measured=measured,
             duration_s=self._mission_dt,
+            heading_change_deg=self._heading_accum_deg,
+            wh_accel=self._mission_wh_accel,
         )
 
 
@@ -452,13 +494,56 @@ def resolve_log_build(stamped) -> str:
     return text
 
 
-def _model(dist_m: float, duration_s: float, payload_kg: float) -> dict | None:
+def _accel_step_wh(v0: float, v1: float, dt: float, payload_kg: float) -> float:
+    try:
+        from src.hardware_profile import active_bom_build, get_active_profile
+        from src.twin_energy import accel_electrical_wh
+
+        if not active_bom_build():
+            return 0.0
+        return accel_electrical_wh(get_active_profile(), v0, v1, dt, payload_kg)
+    except Exception:
+        return 0.0
+
+
+def _drive_breakdown(
+    dist_m: float,
+    avg_speed: float,
+    heading_deg: float,
+    wh_accel: float,
+    payload_kg: float,
+) -> dict:
+    zeros = {"wh_roll": 0.0, "wh_turn": 0.0, "wh_accel": max(0.0, float(wh_accel))}
+    try:
+        from src.hardware_profile import active_bom_build
+        from src.twin_energy import segment_model_terms
+
+        if not active_bom_build():
+            return zeros
+        return segment_model_terms(dist_m, avg_speed, heading_deg, wh_accel, payload_kg)
+    except Exception:
+        return zeros
+
+
+def _model(
+    dist_m: float,
+    duration_s: float,
+    payload_kg: float,
+    heading_deg: float,
+    wh_accel: float,
+) -> dict | None:
     try:
         from src.hardware_profile import active_bom_build
         from src.twin_energy import bom_run_energy_wh
 
         if not active_bom_build():
             return None
-        return bom_run_energy_wh(dist_m, duration_s, payload_kg)
+        return bom_run_energy_wh(
+            dist_m,
+            duration_s,
+            payload_kg,
+            heading_change_deg=heading_deg,
+            wh_accel=wh_accel,
+        )
     except Exception:
         return None

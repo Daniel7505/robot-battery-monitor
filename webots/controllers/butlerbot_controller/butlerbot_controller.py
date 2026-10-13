@@ -1624,6 +1624,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         and abs(left_v) < 0.05
                         and abs(right_v) < 0.05
                     )
+                    # nadir_lobe_done is set only on FULL S DONE / route end.
+                    # A no-drive pause before that must not complete the mission.
                     if mission_should_complete(
                         track_done=nadir_lobe_done,
                         already_complete=False,

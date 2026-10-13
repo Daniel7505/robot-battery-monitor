@@ -5,11 +5,18 @@ import pytest
 from src.design_agent import Mission, propose
 from src.hardware_profile import clear_profile_cache
 from src.twin_energy import (
+    FITTED_CURVE_HEADING_DEG,
+    FITTED_CURVE_ROLL_WH,
+    FITTED_CURVE_WH,
     TEN_FT_M,
+    accel_electrical_wh,
+    bom_drive_terms,
     bom_run_energy_wh,
     brushed_drive_point,
     estimate_mission_energy,
+    fitted_turn_wh,
     format_mission_energy_line,
+    geometry_scrub_wh,
     paper_energy,
     shift_energy_wh,
     straight_wh_per_m,
@@ -154,6 +161,52 @@ def test_mission_energy_over_a_duration_includes_idle():
         moving = bom_run_energy_wh(TEN_FT_M, 450.0, 0.0)
         assert moving["wh_model"] > moving["wh_model_drive"] > 0
         assert moving["wh_model_idle"] == pytest.approx(1.245, abs=0.001)
+    finally:
+        _restore_bom(old)
+
+
+def test_straight_run_stays_rolling_and_a_curve_adds_the_fitted_yaw():
+    """61.6° of yaw on 10 ft is the live light-S fit (~0.12 Wh). No yaw stays ~0.0066."""
+    import math
+
+    from src.hardware_profile import get_active_profile, load_hardware_profile
+
+    old = _use_bom("light")
+    try:
+        prof = get_active_profile()
+        dt = TEN_FT_M / 0.44
+        straight = bom_run_energy_wh(TEN_FT_M, dt, 0.0)
+        terms = bom_drive_terms(prof, 0.44)
+        assert terms["drive_wh_per_10ft"] == pytest.approx(0.0066, abs=0.00015)
+        assert straight["wh_model_turn"] == 0.0
+        assert straight["wh_model_accel"] == 0.0
+        assert straight["wh_model_drive"] == pytest.approx(straight["wh_model_roll"], abs=1e-6)
+        # Logged to 0.001 Wh, so 0.0066 becomes 0.007.
+        assert straight["wh_model_drive"] == pytest.approx(round(terms["drive_wh_per_10ft"], 3), abs=1e-6)
+        assert straight["turn_source"] == "fitted-from-twin"
+
+        curved = bom_run_energy_wh(TEN_FT_M, dt, 0.0, heading_change_deg=61.6)
+        per_rad = (FITTED_CURVE_WH - FITTED_CURVE_ROLL_WH) / math.radians(FITTED_CURVE_HEADING_DEG)
+        scale = terms["drive_wh_per_10ft"] / FITTED_CURVE_ROLL_WH
+        expect_turn = per_rad * math.radians(61.6) * scale
+        assert fitted_turn_wh(prof, 61.6, 0.44, 0.0) == pytest.approx(expect_turn, rel=1e-6)
+        assert curved["wh_model_turn"] == pytest.approx(expect_turn, abs=0.001)
+        assert curved["wh_model_roll"] == pytest.approx(straight["wh_model_roll"], abs=0.001)
+        # The fit's target: rolling term + yaw term ≈ the logged 0.12 Wh.
+        assert curved["wh_model_drive"] == pytest.approx(0.12, abs=0.002)
+        assert fitted_turn_wh(prof, 0.0, 0.44) == 0.0
+
+        track = float(load_hardware_profile("butlerbot_wheeled")["geometry"]["track_width_m"])
+        assert track == pytest.approx(0.34)
+        scrub = geometry_scrub_wh(
+            6.142, 61.6, crr=0.015, track_width_m=track, eta_driver=0.92
+        )
+        assert 0 < scrub < 0.001
+        assert expect_turn > 100.0 * scrub
+
+        sped_up = accel_electrical_wh(prof, 0.0, 0.44, 1.0, 0.0)
+        assert 0 < sped_up < 0.01
+        assert accel_electrical_wh(prof, 0.44, 0.0, 1.0, 0.0) == 0.0
     finally:
         _restore_bom(old)
 

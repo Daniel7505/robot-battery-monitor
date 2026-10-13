@@ -215,11 +215,19 @@ def test_mission_summary_fires_once_when_the_track_parks():
         fields = _fields(summary)
         assert float(fields["duration_s"]) == pytest.approx(20.0, abs=0.1)
         assert float(fields["dist_m"]) == pytest.approx(10.0, abs=0.05)
-        assert fields["turns"] == "2"
+        # 0° → 90° → 180° is 180° of yaw. One turn is 30° of that sum.
+        assert fields["turns"] == "6"
         assert float(fields["soc_start"]) == pytest.approx(100.0)
         assert float(fields["soc_end"]) == pytest.approx(99.0)
         assert float(fields["wh_model_idle"]) == pytest.approx(9.96 * 20.0 / 3600.0, abs=0.002)
         assert float(fields["wh_model"]) > float(fields["wh_model_drive"]) > 0
+        assert float(fields["wh_model_turn"]) > 0
+        assert float(fields["wh_model_drive"]) == pytest.approx(
+            float(fields["wh_model_roll"])
+            + float(fields["wh_model_turn"])
+            + float(fields["wh_model_accel"]),
+            abs=0.003,
+        )
         measured = float(fields["wh_measured"])
         assert measured == pytest.approx((7.20 + 2.66 + 3.43) * 20.0 / 3600.0, abs=0.002)
         assert fields["err_pct"] != ""
@@ -371,9 +379,18 @@ def test_mission_complete_does_not_wait_forever_on_gps_noise():
     assert mission_should_complete(
         **common, hubs_quiet=True, finish_age_s=1.0
     ) is True
+    # The old 12 s no-drive timeout must not complete the mission.
+    # A slow start (hubs quiet or not, track not finished) must not either.
     assert mission_should_complete(
         **common, hubs_quiet=False, finish_age_s=12.0
-    ) is True
+    ) is False
+    assert mission_should_complete(
+        **common, hubs_quiet=False, finish_age_s=90.0
+    ) is False
+    assert mission_should_complete(
+        track_done=False, already_complete=False, abs_done=False,
+        hubs_quiet=True, no_drive_command=True, finish_age_s=90.0,
+    ) is False
     assert mission_should_complete(
         track_done=True, already_complete=False, abs_done=True,
         hubs_quiet=False, no_drive_command=False, finish_age_s=0.1,
@@ -413,3 +430,67 @@ def test_live_twin_ignores_ros2_mission_override():
     source._ros2.inject_command(mission="idle")
     source._apply_ros2_commands()
     assert source._mission.task_id == "high_load"
+
+
+def test_turn_counter_counts_yaw_that_straightens_out():
+    # Peaks stay under 30° from the start, so the old net-anchor counter
+    # stayed at 0. The segment sums are the live 61.6° then 32.3°.
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, heading=0.0, speed=0.2))
+    headings = (20.0, 0.0, 21.6, 0.0, 10.7)
+    # 20+20+21.6 = 61.6, then 21.6+10.7 = 32.3. Total 93.9° → 3 turns.
+    lines: list[str] = []
+    x = 0.0
+    for i, deg in enumerate(headings, start=1):
+        x += 0.2
+        lines.extend(log.observe(_sample(float(i), x, heading=math.radians(deg), speed=0.2)))
+    lines.extend(
+        log.observe(_sample(6.0, x + 0.2, heading=math.radians(10.7), speed=0.2, event="complete"))
+    )
+    summary = next(line for line in lines if line.startswith("MISSION_SUMMARY"))
+    assert _fields(summary)["turns"] == "3"
+
+
+def test_pose_jump_does_not_count_as_a_turn():
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, heading=0.0, speed=0.0))
+    log.observe(_sample(1.0, 10.0, heading=math.radians(90.0), speed=2.0))
+    done = log.observe(
+        _sample(2.0, 10.2, heading=math.radians(90.0), speed=0.2, event="complete")
+    )
+    summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
+    assert _fields(summary)["turns"] == "0"
+
+
+def test_segment_logs_roll_turn_and_accel_from_the_model():
+    old = _use_bom("light")
+    try:
+        log = MissionEnergyLog()
+        log.observe(_sample(0.0, 0.0, heading=0.0, speed=0.44))
+        dt = TEN_FT_M / 0.44
+        straight = log.observe(_sample(dt, TEN_FT_M, heading=0.0, speed=0.44))
+        seg = _fields(next(line for line in straight if line.startswith("SEGMENT_ENERGY")))
+        assert float(seg["wh_turn"]) == pytest.approx(0.0, abs=1e-6)
+        assert float(seg["wh_accel"]) == pytest.approx(0.0, abs=1e-6)
+        assert float(seg["wh_roll"]) == pytest.approx(0.0066, abs=0.0003)
+        assert float(seg["wh_drive"]) == pytest.approx(3.43 * dt / 3600.0, abs=1e-4)
+
+        curve = MissionEnergyLog()
+        curve.observe(_sample(0.0, 0.0, heading=0.0, speed=0.0))
+        curve.observe(_sample(1.0, 0.22, heading=0.0, speed=0.44))
+        remain = TEN_FT_M - 0.22
+        closed = curve.observe(
+            _sample(
+                1.0 + remain / 0.44,
+                TEN_FT_M,
+                heading=math.radians(61.6),
+                speed=0.44,
+            )
+        )
+        fields = _fields(next(line for line in closed if line.startswith("SEGMENT_ENERGY")))
+        assert float(fields["heading_change_deg"]) == pytest.approx(61.6, abs=0.2)
+        assert float(fields["wh_turn"]) == pytest.approx(0.1134, abs=0.005)
+        assert float(fields["wh_accel"]) > 0
+        assert float(fields["wh_roll"]) == pytest.approx(0.0066, abs=0.0004)
+    finally:
+        _restore_bom(old)

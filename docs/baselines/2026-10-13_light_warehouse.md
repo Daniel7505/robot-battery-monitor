@@ -126,3 +126,53 @@ No straight-line coefficient was added.
 
 The next lap should still show straights in that 10–40% band.
 `wh_model_turn` should stay near 0.096 Wh on a similar lap.
+
+## Run #11, HUD paint off, wall clock
+
+Dan's light warehouse lap on `fc55ab7` (1 lap, HUD paint off, dashboard
+restarted before the lap). This does not replace run #8 or run #9.
+Run #10 was the same commit without a dashboard restart, so it never
+printed `MISSION_SUMMARY`. Its segments summed to about 4.19 Wh
+electrical against 4.74 Wh model (−11.5%), and segment 65 carried
+about 1500 s parked.
+
+| Field | Value |
+| --- | --- |
+| duration_s | 764.8 |
+| dist_m | 205.19 |
+| turns | 13 |
+| soc | 100 → 96.99 |
+| wh_model | 6.930 |
+| wh_model_idle | 2.116 |
+| wh_model_drive | 4.814 |
+| wh_model_roll | 0.448 |
+| wh_model_visc | 4.256 |
+| wh_model_turn | 0.103 |
+| wh_model_accel | 0.007 |
+| wh_measured_drive_shaft | 0.992 |
+| wh_measured_drive_elec | 4.287 |
+| eta_avg | 0.231 |
+| wh_measured | 6.381 |
+| wh_measured_soc | 7.224 |
+| err_pct (MISSION_SUMMARY, drive only) | −11.0 |
+| err_pct (MISSION_ENERGY, drive + idle) | −7.9 |
+
+`wh_measured_soc` is `240 × (100 − 96.99) / 100 = 7.224`. The 0.843 Wh
+gap is about 101 s at ~30 W. Posts were about every 3 s. The log
+dropped any timestamp gap over 15 s. The controller drained every
+step's wall gap, including gaps under 15 s while a POST failed or the
+dashboard was down. An aborted 29.9 m mission at 22:31 is not inside
+this summary (`dist_m` is one lap and `soc_start` is 100).
+
+Drive watts were about 20 W on both run #9 (5.075 Wh / 896 s) and
+run #11 (4.287 Wh / 765 s). HUD paint off shortened the wall clock.
+The watt-hours fell with it. That is not a lower sim torque and not
+a new coefficient.
+
+The next lap bills the controller's simulation-step counters
+(`energy_wh_*`). `wh_measured` and `wh_measured_soc` should agree.
+`duration_s` is sim seconds. `TELEMETRY_GAPS` reports the post
+interval, seconds over 15 s, and the watt-hours in that hole
+(`cumulative=1` means they were kept). `err_pct` will not match
+−11.0: the old number scaled with wall time. `STEER_SPLIT` is the
+left/right variance for a later HUD-on comparison. It is not billed.

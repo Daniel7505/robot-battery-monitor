@@ -128,13 +128,45 @@ point drop, not the 0.94 points observed. The log's clock is the gap
 between telemetry timestamps. Those two integrals are not the same
 load and not the same clock.
 
-``wh_measured`` is now electrical drive plus the same non-drive
-channels. The controller drains that same pack draw, on wall-clock
-gaps, and drops a gap longer than 15 s the way this log does. The
-next run's ``wh_measured_soc`` matches ``wh_measured`` when torque
-feedback is present for the whole mission. A sample with no feedback
-leaves the measured fields ``na`` and does not bill the rolling line
-in their place.
+``wh_measured`` is electrical drive plus the same non-drive channels.
+The controller integrates that pack draw on the simulation step
+(``SimPackMeter``) and posts the running totals
+(``energy_wh_shaft``, ``energy_wh_elec``, ``energy_wh_idle``,
+``energy_wh_pack``, ``energy_sim_s``). This log bills the positive
+delta. A late, coalesced, or dropped POST cannot lose watt-hours,
+and the percent is drained from the same step, so
+``wh_measured_soc`` matches ``wh_measured``. A sample with no
+feedback adds no drive watts for that step (``energy_elec_gaps``)
+and does not substitute the rolling line.
+
+Run #11 (fc55ab7, HUD paint off) split the two totals again:
+``wh_measured`` 6.381 and ``wh_measured_soc`` 7.224, which is
+``240 × (100 − 96.99) / 100``. The 0.843 Wh is about 101 s at the
+log's average pack power (~30 W). Telemetry was arriving about
+every 3 s. This log integrated the timestamp gap and dropped any
+gap over 15 s. The controller drained every physics step's wall
+gap, including each gap under 15 s while a POST was failing or the
+dashboard had just restarted. Those seconds moved the percent and
+never entered ``wh_measured``. Runs #8 and #9 matched within 0.1%
+because no such hole landed between arm and summary.
+
+The same wall clock made HUD paint look like an energy change.
+Run #9 (HUD on, 0.70× realtime, 896 s) measured 5.075 Wh of drive.
+Run #11 (HUD off, 765 s) measured 4.287 Wh. Instantaneous drive was
+about 20 W either way; the watt-hours scaled with wall duration.
+Both clocks are now simulation time, so a faster realtime factor
+does not shrink the bill. ``TELEMETRY_GAPS`` still counts intervals,
+the mean and max gap, seconds the old 15 s rule would skip, and the
+watt-hours in that skipped time. ``cumulative=1`` means those
+watt-hours were kept via the controller counter.
+
+A new ``controller_run_id`` closes the previous mission. Webots
+restarted without a dashboard restart used to keep the old log, so
+a parked stretch (run #10, segment 65, about 1500 s) never got a
+``MISSION_SUMMARY`` and the next lap inherited it. A real previous
+mission is summarized, then the log arms on the new id. A trivial
+previous run (under 0.5 m and under 2 s) is dropped without a
+summary, same as a killed process.
 
 A full warehouse run (no finish; stopped by hand) checked the
 prediction: 121 segments, 369 m, 2145 s. The old locomotion integral
@@ -166,7 +198,7 @@ import math
 from datetime import datetime, timezone
 
 from src.teleop_agent import plausible_travel_m
-from src.twin_energy import TEN_FT_M
+from src.twin_energy import ENERGY_COUNTER_KEYS, TEN_FT_M
 
 POWER_PERIOD_S = 10.0
 # A speed change steeper than this, from one sample to the next, counts
@@ -182,6 +214,21 @@ MAX_DT_S = 15.0
 # and a few centimetres. That is not a mission summary.
 MIN_SUMMARY_DIST_M = 0.5
 MIN_SUMMARY_DURATION_S = 2.0
+
+
+def _has_energy_counter(sample: dict) -> bool:
+    return any(key in sample for key in ENERGY_COUNTER_KEYS)
+
+
+def _counter_went_backwards(deltas: dict) -> bool:
+    """A new controller whose counters were not tagged with a new run id."""
+    sim = deltas.get("energy_sim_s")
+    pack = deltas.get("energy_wh_pack")
+    if sim is not None and float(sim) < -1e-4:
+        return True
+    if pack is not None and float(pack) < -1e-4:
+        return True
+    return False
 
 
 def _as_float(value) -> float | None:
@@ -245,6 +292,16 @@ class MissionEnergyLog:
         self._mission_wh_turn = 0.0
         self._clear_segment()
         self._clear_power()
+        self._run_id = ""
+        self._cum: dict | None = None
+        self._used_cumulative = False
+        self._n_intervals = 0
+        self._interval_sum = 0.0
+        self._interval_max = 0.0
+        self._skipped_s = 0.0
+        self._skipped_wh = 0.0
+        self._steer_split = ""
+        self._elec_gaps: int | None = None
 
     def _clear_segment(self) -> None:
         self._seg_idx = 0
@@ -275,14 +332,53 @@ class MissionEnergyLog:
             ts = ts.replace(tzinfo=timezone.utc)
 
         lines: list[str] = []
+        run_id = str(sample.get("controller_run_id") or "").strip()
+        if self._armed and run_id and self._run_id and run_id != self._run_id:
+            # Webots restarted. Summarize the open mission, then arm the new id.
+            lines.extend(self._summarize_open_mission())
+            self.reset()
         if not self._armed:
             self._arm(sample, ts)
+            self._run_id = run_id
+            self._remember_cumulative(sample)
+            self._remember_steer(sample)
             return lines
 
-        dt = (ts - self._last_ts).total_seconds() if self._last_ts else 0.0
+        wall_dt = (ts - self._last_ts).total_seconds() if self._last_ts else 0.0
         self._last_ts = ts
-        if dt <= 0 or dt > MAX_DT_S:
+        deltas = self._take_deltas(sample)
+        if deltas is not None and _counter_went_backwards(deltas):
+            lines.extend(self._summarize_open_mission())
+            self.reset()
+            self._arm(sample, ts)
+            self._run_id = run_id
+            self._remember_cumulative(sample)
+            self._remember_steer(sample)
+            return lines
+        self._note_interval(wall_dt, sample, deltas)
+        self._remember_steer(sample)
+
+        if deltas is not None:
+            self._used_cumulative = True
+            sim_dt = deltas.get("energy_sim_s")
+            dt = 0.0 if sim_dt is None else max(0.0, float(sim_dt))
+        elif self._used_cumulative:
+            # Counters disappeared. Do not also bill timestamp watts.
             self._note_pose(sample)
+            lines.extend(self._maybe_summary(sample))
+            return lines
+        else:
+            dt = wall_dt
+            if dt <= 0 or dt > MAX_DT_S:
+                self._note_pose(sample)
+                lines.extend(self._maybe_summary(sample))
+                return lines
+
+        if dt <= 0:
+            # Duplicate post, or sim time did not advance. Keep the pose
+            # anchor and do not bill a wall gap the counter did not.
+            self._note_pose(sample)
+            self._note_soc(sample)
             lines.extend(self._maybe_summary(sample))
             return lines
 
@@ -300,12 +396,28 @@ class MissionEnergyLog:
             if not shaft_known:
                 self._power_loco_gap = True
         idle_w = _idle_w(sample, subs)
-        wh_shaft = 0.0 if shaft_w is None else shaft_w * dt / 3600.0
-        wh_elec = 0.0 if elec_w is None else elec_w * dt / 3600.0
-        wh_idle = idle_w * dt / 3600.0
+        if deltas is not None:
+            d_shaft = deltas.get("energy_wh_shaft")
+            d_elec = deltas.get("energy_wh_elec")
+            d_idle = deltas.get("energy_wh_idle")
+            shaft_known = d_shaft is not None
+            elec_known = d_elec is not None
+            wh_shaft = 0.0 if d_shaft is None else max(0.0, float(d_shaft))
+            wh_elec = 0.0 if d_elec is None else max(0.0, float(d_elec))
+            wh_idle = 0.0 if d_idle is None else max(0.0, float(d_idle))
+            if not elec_known:
+                self._power_loco_gap = True
+        else:
+            wh_shaft = 0.0 if shaft_w is None else shaft_w * dt / 3600.0
+            wh_elec = 0.0 if elec_w is None else elec_w * dt / 3600.0
+            wh_idle = idle_w * dt / 3600.0
         accel = 0
         wh_accel_step = 0.0
-        if self._last_speed is not None and abs(speed - self._last_speed) / dt >= ACCEL_EVENT_M_S2:
+        if (
+            dt > 0
+            and self._last_speed is not None
+            and abs(speed - self._last_speed) / dt >= ACCEL_EVENT_M_S2
+        ):
             accel = 1
         if trusted and self._last_speed is not None and speed > self._last_speed:
             wh_accel_step = _accel_step_wh(self._last_speed, speed, dt, self._payload_kg)
@@ -405,6 +517,67 @@ class MissionEnergyLog:
 
         lines.extend(self._maybe_summary(sample))
         return lines
+
+    def _remember_cumulative(self, sample: dict) -> None:
+        if not _has_energy_counter(sample):
+            return
+        self._cum = {key: _as_float(sample.get(key)) for key in ENERGY_COUNTER_KEYS}
+        self._used_cumulative = True
+        gaps = _as_float(sample.get("energy_elec_gaps"))
+        if gaps is not None:
+            self._elec_gaps = int(gaps)
+
+    def _take_deltas(self, sample: dict) -> dict | None:
+        """Positive change in the controller counters since the last sample.
+
+        The first time the counters show up, that sample is the baseline
+        and the delta is zero. Billing it would count energy from the
+        start of the process, which the percent has already absorbed.
+        """
+        if not _has_energy_counter(sample):
+            return None
+        cur = {key: _as_float(sample.get(key)) for key in ENERGY_COUNTER_KEYS}
+        gaps = _as_float(sample.get("energy_elec_gaps"))
+        if gaps is not None:
+            self._elec_gaps = int(gaps)
+        if self._cum is None:
+            self._cum = cur
+            self._used_cumulative = True
+            return {key: (0.0 if cur[key] is not None else None) for key in ENERGY_COUNTER_KEYS}
+        deltas = {}
+        for key in ENERGY_COUNTER_KEYS:
+            prev = self._cum.get(key)
+            value = cur.get(key)
+            if prev is None or value is None:
+                deltas[key] = None
+            else:
+                deltas[key] = float(value) - float(prev)
+        self._cum = cur
+        return deltas
+
+    def _remember_steer(self, sample: dict) -> None:
+        text = sample.get("steer_split")
+        if text:
+            self._steer_split = str(text).strip()
+
+    def _note_interval(self, wall_dt: float, sample: dict, deltas: dict | None) -> None:
+        """Count one telemetry gap, including one the old 15 s rule skips."""
+        if wall_dt <= 0.0:
+            return
+        self._n_intervals += 1
+        self._interval_sum += wall_dt
+        if wall_dt > self._interval_max:
+            self._interval_max = wall_dt
+        if wall_dt <= MAX_DT_S:
+            return
+        self._skipped_s += wall_dt
+        pack = None if deltas is None else deltas.get("energy_wh_pack")
+        if pack is None:
+            elec_w, _known = _metered_w(sample, "measured_drive_elec_w")
+            idle = _idle_w(sample, _subsystems(sample))
+            drive = 0.0 if elec_w is None else float(elec_w)
+            pack = (drive + idle) * wall_dt / 3600.0
+        self._skipped_wh += max(0.0, float(pack))
 
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
@@ -566,7 +739,43 @@ class MissionEnergyLog:
             return []
         self._summarized = True
         self._note_soc(sample)
-        return [self._summary_line(), self._mission_energy_line()]
+        return self._summary_bundle()
+
+    def _summarize_open_mission(self) -> list[str]:
+        """Close a real mission that never posted ``complete``.
+
+        A Webots restart used to leave the dashboard log armed, so the
+        next lap inherited a parked stretch and never printed a summary.
+        """
+        if self._summarized:
+            return []
+        if (
+            self._mission_dist < MIN_SUMMARY_DIST_M
+            and self._mission_dt < MIN_SUMMARY_DURATION_S
+        ):
+            return []
+        self._summarized = True
+        return self._summary_bundle()
+
+    def _summary_bundle(self) -> list[str]:
+        lines = [self._summary_line(), self._mission_energy_line(), self._gaps_line()]
+        if self._steer_split:
+            lines.append(self._steer_split)
+        return lines
+
+    def _gaps_line(self) -> str:
+        n = self._n_intervals
+        mean = (self._interval_sum / n) if n else 0.0
+        sim = self._mission_dt if self._used_cumulative else None
+        gaps = "" if self._elec_gaps is None else f" elec_gaps={self._elec_gaps}"
+        return (
+            f"TELEMETRY_GAPS n={n} mean_s={mean:.3f} max_s={self._interval_max:.3f} "
+            f"skipped_s={self._skipped_s:.3f} skipped_wh={self._skipped_wh:.3f} "
+            f"wall_s={self._interval_sum:.3f} "
+            f"sim_s={_na(None if sim is None else round(sim, 3), 3)} "
+            f"cumulative={'1' if self._used_cumulative else '0'}"
+            f"{gaps}"
+        )
 
     def _summary_line(self) -> str:
         shaft = self._mission_wh_shaft if self._mission_shaft_known else None

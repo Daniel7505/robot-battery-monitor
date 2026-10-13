@@ -75,6 +75,7 @@ from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
 from src.mission_efficiency import MissionEfficiencyTracker
 from src.mission_energy_log import MissionEnergyLog
 from src.twin.power_feed import PowerFeed, power_feed_from_telemetry
+from src.twin_energy import LOCO_PASSTHROUGH_KEYS
 
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
 
@@ -228,6 +229,15 @@ class DigitalTwinBridge:
                 "mission_event": sensors.get("mission_event"),
             }
             for key in ("measured_drive_w", "measured_drive_elec_w"):
+                if key in loc:
+                    sample[key] = loc.get(key)
+            run_id = loc.get("controller_run_id") or sensors.get("controller_run_id")
+            if run_id:
+                sample["controller_run_id"] = run_id
+            steer = loc.get("steer_split") or sensors.get("steer_split")
+            if steer:
+                sample["steer_split"] = steer
+            for key in LOCO_PASSTHROUGH_KEYS:
                 if key in loc:
                     sample[key] = loc.get(key)
             for line in self._energy_log.observe(sample):

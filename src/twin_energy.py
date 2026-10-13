@@ -244,6 +244,21 @@ def brushed_drive_point(
 LIGHT_MOTOR_PART_ID = "mot_pololu_4693"
 # Same stall guard as the mission energy log: a paused Webots gap is not a drain.
 PACK_DRAW_MAX_DT_S = 15.0
+# Posted on locomotion. The dashboard bills the positive delta of these
+# running totals. They are sim-time integrals, not wall-clock gaps.
+ENERGY_COUNTER_KEYS = (
+    "energy_sim_s",
+    "energy_wh_shaft",
+    "energy_wh_elec",
+    "energy_wh_idle",
+    "energy_wh_pack",
+)
+# Copied through the Webots adapter even though restamp rebuilds locomotion.
+LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
+    "controller_run_id",
+    "steer_split",
+    "energy_elec_gaps",
+)
 
 
 def published_motor_circuit(
@@ -437,14 +452,15 @@ def pack_drain_dt_s(
     sim_dt_s: float,
     max_dt_s: float = PACK_DRAW_MAX_DT_S,
 ) -> float:
-    """Seconds to bill so SoC matches the energy log's clock.
+    """Old wall-gap drain clock. The live BoM path does not call this.
 
-    The log integrates the gap between telemetry timestamps and drops a
-    gap longer than 15 s. The controller used to multiply watts by the
-    simulation timestep instead, so a warehouse step slower than realtime
-    moved the percent less than the logged watt-hours. The first step has
-    no wall gap yet and uses the simulation step. A non-positive gap or a
-    gap past ``max_dt_s`` bills nothing.
+    The log used to integrate the gap between telemetry timestamps and
+    drop a gap longer than 15 s, and the controller used this same rule
+    on ``time.monotonic``. A POST that blocked for a few seconds billed
+    those seconds of sim watts. A hole longer than 15 s billed on the
+    controller (each step was under 15 s) and was dropped by the log.
+    Run #11's 0.84 Wh split was that hole. ``SimPackMeter`` integrates
+    the simulation step instead and posts the running total.
     """
     if wall_gap_s is None:
         dt = float(sim_dt_s)
@@ -453,6 +469,79 @@ def pack_drain_dt_s(
     if dt <= 0.0 or dt > float(max_dt_s):
         return 0.0
     return dt
+
+
+class SimPackMeter:
+    """Pack watt-hours on the simulation clock, one physics step at a time.
+
+    Shaft, electrical drive, idle, and the pack total (drive + idle) share
+    this step. The controller drains the percent from ``last_step_wh`` and
+    posts ``snapshot`` on telemetry. The dashboard reads the delta, so a
+    late or dropped POST cannot move SoC without moving ``wh_measured``.
+
+    A missing electrical sample adds no drive watts and increments
+    ``elec_gaps``. Idle is still billed. The rolling prediction is not
+    written in place of the missing drive. A single step longer than
+    ``PACK_DRAW_MAX_DT_S`` adds nothing: a physics step is 8 ms, so that
+    guard is only a bad clock.
+    """
+
+    def __init__(self) -> None:
+        self.sim_s = 0.0
+        self.wh_shaft = 0.0
+        self.wh_elec = 0.0
+        self.wh_idle = 0.0
+        self.wh_pack = 0.0
+        self.elec_gaps = 0
+        self.shaft_gaps = 0
+        self.last_pack_w = 0.0
+        self.last_step_wh = 0.0
+
+    def step(
+        self,
+        sim_dt_s: float,
+        *,
+        shaft_w: float | None,
+        elec_w: float | None,
+        idle_w: float | None,
+    ) -> float:
+        """Add one simulation step. Return the pack watt-hours just added."""
+        try:
+            dt = float(sim_dt_s)
+        except (TypeError, ValueError):
+            dt = 0.0
+        if dt <= 0.0 or dt > PACK_DRAW_MAX_DT_S:
+            self.last_pack_w = 0.0
+            self.last_step_wh = 0.0
+            return 0.0
+        idle = 0.0 if idle_w is None else float(idle_w)
+        if shaft_w is None:
+            self.shaft_gaps += 1
+        else:
+            self.wh_shaft += float(shaft_w) * dt / 3600.0
+        if elec_w is None:
+            self.elec_gaps += 1
+            drive = 0.0
+        else:
+            drive = float(elec_w)
+            self.wh_elec += drive * dt / 3600.0
+        self.sim_s += dt
+        self.wh_idle += idle * dt / 3600.0
+        step_wh = (drive + idle) * dt / 3600.0
+        self.wh_pack += step_wh
+        self.last_pack_w = drive + idle
+        self.last_step_wh = step_wh
+        return step_wh
+
+    def snapshot(self) -> dict:
+        return {
+            "energy_sim_s": self.sim_s,
+            "energy_wh_shaft": self.wh_shaft,
+            "energy_wh_elec": self.wh_elec,
+            "energy_wh_idle": self.wh_idle,
+            "energy_wh_pack": self.wh_pack,
+            "energy_elec_gaps": self.elec_gaps,
+        }
 
 
 def shift_energy_wh(

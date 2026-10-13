@@ -836,6 +836,7 @@ def test_light_motor_electrical_point_cites_published_specs():
     from src.twin_energy import (
         brushed_drive_point,
         electrical_from_shaft_w,
+        SimPackMeter,
         electrical_pack_draw_w,
         pack_drain_dt_s,
         published_motor_circuit,
@@ -957,10 +958,231 @@ def test_light_motor_electrical_point_cites_published_specs():
     assert pack_drain_dt_s(None, sim_dt_s=0.032) == pytest.approx(0.032)
     assert pack_drain_dt_s(2.0, sim_dt_s=0.032) == pytest.approx(2.0)
     assert pack_drain_dt_s(20.0, sim_dt_s=0.032) == 0.0
+    # Live drain is the simulation step, not that wall gap. One step of
+    # 20 W drive and 9.96 W idle matches the percent on a 240 Wh pack.
+    meter = SimPackMeter()
+    step_wh = meter.step(0.008, shaft_w=4.0, elec_w=20.0, idle_w=9.96)
+    assert step_wh == pytest.approx((20.0 + 9.96) * 0.008 / 3600.0, rel=1e-12)
+    assert meter.snapshot()["energy_wh_pack"] == pytest.approx(step_wh, rel=1e-12)
+    assert meter.step(20.0, shaft_w=4.0, elec_w=20.0, idle_w=9.96) == 0.0
+    missed = SimPackMeter()
+    missed.step(0.008, shaft_w=None, elec_w=None, idle_w=9.96)
+    assert missed.elec_gaps == 1
+    assert missed.wh_elec == 0.0
+    assert missed.wh_idle == pytest.approx(9.96 * 0.008 / 3600.0, rel=1e-12)
 
     controller = Path(
         "webots/controllers/butlerbot_controller/butlerbot_controller.py"
     ).read_text(encoding="utf-8")
-    assert "electrical_pack_draw_w" in controller
-    assert "pack_drain_dt_s" in controller
+    assert "SimPackMeter" in controller
+    assert "pack_drain_dt_s" not in controller
     assert "measured_drive_split" in controller
+    assert "pack_meter.snapshot()" in controller
+
+
+def _with_counter(sample: dict, **fields) -> dict:
+    out = dict(sample)
+    out.update(fields)
+    return out
+
+
+def test_restamp_keeps_the_controller_energy_counters():
+    from src.twin.adapters.webots import WebotsAdapter
+
+    old = _use_bom("light")
+    try:
+        payload = {
+            "robot": {
+                "name": "ButlerBot",
+                "main_battery_pct": 99.0,
+                "battery_capacity_wh": 240,
+            },
+            "joints": [
+                {"name": "left_wheel", "velocity": 1.0, "torque": 0.0, "torque_feedback_nm": 0.2},
+                {"name": "right_wheel", "velocity": 1.0, "torque": 0.0, "torque_feedback_nm": 0.2},
+            ],
+            "locomotion": {
+                "gait": "drive",
+                "speed_m_s": 0.2,
+                "controller_run_id": "run-a",
+                "energy_sim_s": 1.5,
+                "energy_wh_pack": 0.02,
+                "energy_wh_elec": 0.01,
+                "energy_wh_idle": 0.01,
+                "energy_wh_shaft": 0.004,
+                "steer_split": "STEER_SPLIT n=3",
+            },
+            "channel_draws": {"Compute": 9.96, "Legs": 3.0},
+        }
+        tel = WebotsAdapter().normalize(payload)
+        assert tel.locomotion["controller_run_id"] == "run-a"
+        assert tel.locomotion["energy_wh_pack"] == pytest.approx(0.02)
+        assert tel.locomotion["energy_sim_s"] == pytest.approx(1.5)
+        assert str(tel.locomotion["steer_split"]).startswith("STEER_SPLIT")
+    finally:
+        _restore_bom(old)
+
+
+def test_controller_counter_keeps_energy_the_15s_rule_used_to_drop():
+    """A 20 s post gap used to drop the watt-hours. The counter does not.
+
+    Run #11: wh_measured 6.381 vs wh_measured_soc 7.224. Posts were a
+    few seconds apart, and a hole over 15 s moved the percent without
+    entering the log. The controller integral is what both totals use.
+    """
+    idle_w = 7.20 + 2.66
+    elec_w = 20.0
+    shaft_w = 5.0
+    sim_s = 10.0
+    pack = (elec_w + idle_w) * sim_s / 3600.0
+    log = MissionEnergyLog()
+    arm = _with_counter(
+        _sample(
+            0.0, 0.0, battery=100.0,
+            report_measured=True, measured_drive_w=shaft_w,
+            report_elec=True, measured_drive_elec_w=elec_w,
+        ),
+        controller_run_id="run-a",
+        energy_sim_s=0.0,
+        energy_wh_shaft=0.0,
+        energy_wh_elec=0.0,
+        energy_wh_idle=0.0,
+        energy_wh_pack=0.0,
+        energy_elec_gaps=0,
+    )
+    assert log.observe(arm) == []
+    done = log.observe(
+        _with_counter(
+            _sample(
+                20.0, 4.0, speed=0.4, battery=100.0 - pack / 240.0 * 100.0,
+                event="complete",
+                report_measured=True, measured_drive_w=shaft_w,
+                report_elec=True, measured_drive_elec_w=elec_w,
+            ),
+            controller_run_id="run-a",
+            energy_sim_s=sim_s,
+            energy_wh_shaft=shaft_w * sim_s / 3600.0,
+            energy_wh_elec=elec_w * sim_s / 3600.0,
+            energy_wh_idle=idle_w * sim_s / 3600.0,
+            energy_wh_pack=pack,
+            energy_elec_gaps=0,
+            steer_split="STEER_SPLIT n=4 var_cmd_split=0.0400",
+        )
+    )
+    summary = _fields(next(line for line in done if line.startswith("MISSION_SUMMARY")))
+    gaps = _fields(next(line for line in done if line.startswith("TELEMETRY_GAPS")))
+    assert float(summary["duration_s"]) == pytest.approx(sim_s, abs=0.05)
+    assert float(summary["wh_measured"]) == pytest.approx(pack, abs=0.001)
+    assert float(summary["wh_measured_soc"]) == pytest.approx(pack, abs=0.001)
+    assert float(summary["wh_measured_drive_elec"]) == pytest.approx(
+        elec_w * sim_s / 3600.0, abs=0.001
+    )
+    assert gaps["cumulative"] == "1"
+    assert float(gaps["skipped_s"]) == pytest.approx(20.0, abs=0.01)
+    assert float(gaps["skipped_wh"]) == pytest.approx(pack, abs=0.001)
+    assert int(gaps["n"]) == 1
+    assert float(gaps["max_s"]) == pytest.approx(20.0, abs=0.01)
+    assert gaps["sim_s"] == "10.000"
+    assert any(line.startswith("STEER_SPLIT ") for line in done)
+
+
+def test_legacy_integrator_records_a_skipped_gap_and_does_not_bill_it():
+    idle_w = 7.20 + 2.66
+    elec_w = 20.0
+    log = MissionEnergyLog()
+    log.observe(
+        _sample(
+            0.0, 0.0,
+            report_measured=True, measured_drive_w=5.0,
+            report_elec=True, measured_drive_elec_w=elec_w,
+        )
+    )
+    log.observe(
+        _sample(
+            10.0, 3.0, speed=0.3,
+            report_measured=True, measured_drive_w=5.0,
+            report_elec=True, measured_drive_elec_w=elec_w,
+        )
+    )
+    done = log.observe(
+        _sample(
+            40.0, 3.1, speed=0.0, event="complete",
+            report_measured=True, measured_drive_w=5.0,
+            report_elec=True, measured_drive_elec_w=elec_w,
+        )
+    )
+    summary = _fields(next(line for line in done if line.startswith("MISSION_SUMMARY")))
+    gaps = _fields(next(line for line in done if line.startswith("TELEMETRY_GAPS")))
+    billed = (elec_w + idle_w) * 10.0 / 3600.0
+    skipped = (elec_w + idle_w) * 30.0 / 3600.0
+    assert float(summary["duration_s"]) == pytest.approx(10.0, abs=0.05)
+    assert float(summary["wh_measured"]) == pytest.approx(billed, abs=0.001)
+    assert float(summary["wh_measured"]) < billed + skipped * 0.5
+    assert gaps["cumulative"] == "0"
+    assert gaps["sim_s"] == "na"
+    assert float(gaps["skipped_s"]) == pytest.approx(30.0, abs=0.01)
+    assert float(gaps["skipped_wh"]) == pytest.approx(skipped, abs=0.001)
+    assert int(gaps["n"]) == 2
+    assert float(gaps["mean_s"]) == pytest.approx(20.0, abs=0.01)
+    assert float(gaps["max_s"]) == pytest.approx(30.0, abs=0.01)
+
+
+def test_new_controller_run_summarizes_the_previous_mission_and_resets():
+    log = MissionEnergyLog()
+    common = dict(
+        report_measured=True, measured_drive_w=5.0,
+        report_elec=True, measured_drive_elec_w=20.0,
+    )
+    log.observe(_with_counter(_sample(0.0, 0.0, **common), controller_run_id="webots-1"))
+    log.observe(_with_counter(_sample(10.0, 8.0, speed=0.8, **common), controller_run_id="webots-1"))
+    restarted = log.observe(
+        _with_counter(_sample(0.0, 0.0, speed=0.0, **common), controller_run_id="webots-2")
+    )
+    summary = _fields(next(line for line in restarted if line.startswith("MISSION_SUMMARY")))
+    assert float(summary["dist_m"]) == pytest.approx(8.0, abs=0.05)
+    assert float(summary["duration_s"]) == pytest.approx(10.0, abs=0.05)
+    # The new process only armed. Its first metres are a new segment 0.
+    moved = log.observe(
+        _with_counter(
+            _sample(10.0, TEN_FT_M, speed=TEN_FT_M / 10.0, **common),
+            controller_run_id="webots-2",
+        )
+    )
+    seg = _fields(next(line for line in moved if line.startswith("SEGMENT_ENERGY")))
+    assert seg["seg_idx"] == "0"
+    assert float(seg["dist_m"]) == pytest.approx(TEN_FT_M, abs=1e-3)
+
+
+def test_a_trivial_restart_does_not_consume_the_summary():
+    log = MissionEnergyLog()
+    log.observe(_with_counter(_sample(0.0, 0.0, speed=0.0), controller_run_id="webots-1"))
+    restarted = log.observe(
+        _with_counter(_sample(0.2, 0.01, speed=0.0), controller_run_id="webots-2")
+    )
+    assert not any(line.startswith("MISSION_SUMMARY") for line in restarted)
+    log.observe(_with_counter(_sample(5.0, 4.0, speed=0.8), controller_run_id="webots-2"))
+    done = log.observe(
+        _with_counter(
+            _sample(8.0, 6.0, speed=0.6, event="complete"),
+            controller_run_id="webots-2",
+        )
+    )
+    assert any(line.startswith("MISSION_SUMMARY") for line in done)
+
+
+def test_same_run_id_does_not_reset_the_segment_index():
+    log = MissionEnergyLog()
+    common = dict(
+        report_measured=True, measured_drive_w=5.0,
+        report_elec=True, measured_drive_elec_w=20.0,
+    )
+    log.observe(_with_counter(_sample(0.0, 0.0, **common), controller_run_id="webots-1"))
+    first = log.observe(
+        _with_counter(_sample(8.0, 4.0, speed=0.5, **common), controller_run_id="webots-1")
+    )
+    assert any(line.startswith("SEGMENT_ENERGY") for line in first)
+    second = log.observe(
+        _with_counter(_sample(16.0, 8.0, speed=0.5, **common), controller_run_id="webots-1")
+    )
+    seg = _fields(next(line for line in second if line.startswith("SEGMENT_ENERGY")))
+    assert seg["seg_idx"] == "1"

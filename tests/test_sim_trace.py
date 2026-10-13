@@ -1,11 +1,14 @@
 """Speed-trace and HUD-paint flags. No Webots."""
 
+import pytest
+
 from src.mission_park import warehouse_perimeter_m
 from src.sim_trace import (
     SpeedTrace,
     overlay_status_lines,
     resolve_hud_overlays,
     resolve_speed_trace,
+    resolve_speed_trace_console,
 )
 
 
@@ -105,3 +108,61 @@ def test_sim_rtf_logs_the_mean_wheel_split():
     assert "mean_cmd_split=1.000" in rtf
     assert "mean_hub_split=0.400" in rtf
     assert rtf.endswith("n=3")
+
+
+def test_speed_trace_console_defaults_off():
+    assert resolve_speed_trace_console() is False
+    assert resolve_speed_trace_console(config_value=None, env_value="") is False
+    assert resolve_speed_trace_console(config_value=True) is True
+    assert resolve_speed_trace_console(config_value=True, env_value="0") is False
+    assert resolve_speed_trace_console(env_value="1") is True
+
+
+def test_speed_trace_file_skips_parked_rows_and_stops_at_mission_end(tmp_path):
+    path = tmp_path / "speed_trace_test.csv"
+    trace = SpeedTrace(True, step_s=0.1, rtf_period_s=10.0, path=str(path))
+    for i in range(30):
+        assert trace.lines(
+            t_sim=i * 0.1,
+            t_wall=i * 0.1,
+            v_body=0.0,
+            v_odo=0.0,
+            w_l_cmd=0.0,
+            w_r_cmd=0.0,
+            w_l=0.0,
+            w_r=0.0,
+        ) == []
+    parked = path.read_text(encoding="utf-8").strip().splitlines()
+    assert len(parked) == 1
+    assert parked[0].startswith("kind,")
+
+    # Signed command split ±0.2, hub split ±0.1, two moving steps.
+    trace.lines(
+        t_sim=3.0, t_wall=3.0, v_body=0.20, v_odo=0.20,
+        w_l_cmd=2.6, w_r_cmd=2.4, w_l=2.55, w_r=2.45,
+    )
+    trace.lines(
+        t_sim=3.1, t_wall=3.2, v_body=0.20, v_odo=0.20,
+        w_l_cmd=2.4, w_r_cmd=2.6, w_l=2.45, w_r=2.55,
+    )
+    body = path.read_text(encoding="utf-8")
+    assert "trace," in body
+    line = trace.finish()
+    assert line.startswith("STEER_SPLIT ")
+    fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+    assert int(fields["n"]) == 2
+    # Population variance of +0.2 and -0.2 is 0.04. Mean is 0.
+    assert float(fields["mean_cmd_split"]) == pytest.approx(0.0, abs=1e-9)
+    assert float(fields["var_cmd_split"]) == pytest.approx(0.04, abs=1e-9)
+    assert float(fields["var_hub_split"]) == pytest.approx(0.01, abs=1e-9)
+    assert float(fields["mean_abs_cmd_split"]) == pytest.approx(0.2, abs=1e-9)
+    # Second step only: 0.1 s sim / 0.2 s wall.
+    assert fields["mean_rtf"] == "0.500"
+    closed = path.read_text(encoding="utf-8")
+    assert "steer," in closed
+    trace.lines(
+        t_sim=4.0, t_wall=5.0, v_body=0.30, v_odo=0.30,
+        w_l_cmd=3.0, w_r_cmd=2.0, w_l=2.8, w_r=2.2,
+    )
+    assert path.read_text(encoding="utf-8") == closed
+    assert trace.finish() == line

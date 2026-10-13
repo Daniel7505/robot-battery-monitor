@@ -21,6 +21,7 @@ def _run(tmp_path, mode, world=None, extra=None):
     env.pop("RBM_OBSTACLES", None)
     env.pop("RBM_HUD", None)
     env.pop("RBM_SPEED_TRACE", None)
+    env.pop("RBM_SPEED_TRACE_CONSOLE", None)
     env.pop("RBM_MISSION_LAPS", None)
     env.pop("RBM_MISSION_MAX_M", None)
     env.update(extra or {})
@@ -112,10 +113,28 @@ def test_hud_paint_and_speed_trace_follow_the_env_flags(tmp_path):
     assert "HUD hud_nadir_r ← nadir_right" in text, text
     assert "HUD paint is on" in text
     assert "SPEED_TRACE on" in text
-    assert any(line.startswith("SPEED_TRACE t_sim=") for line in text.splitlines())
-    assert "wL_cmd=" in text and "v_body=" in text
+    # Console printing is off. The controller writes the CSV itself.
+    assert not any(line.startswith("SPEED_TRACE t_sim=") for line in text.splitlines())
+    traces = list(tmp_path.glob("speed_trace_*.csv"))
+    assert len(traces) == 1, text
+    rows = traces[0].read_text(encoding="utf-8").splitlines()
+    assert rows[0].startswith("kind,")
+    assert any(row.startswith("trace,") for row in rows), rows[:8]
+    assert any(row.startswith("steer,") for row in rows)
+    assert any(line.startswith("STEER_SPLIT ") for line in text.splitlines())
     # 200 steps of 8 ms is 1.6 s of sim. The 10 s SIM_RTF sample stays quiet.
     assert not any(line.startswith("SIM_RTF ") for line in text.splitlines())
+
+
+def test_speed_trace_console_flag_prints_rows(tmp_path):
+    text = _run(
+        tmp_path,
+        None,
+        extra={"RBM_SPEED_TRACE": "1", "RBM_SPEED_TRACE_CONSOLE": "1"},
+    )
+    assert "console on" in text
+    assert any(line.startswith("SPEED_TRACE t_sim=") for line in text.splitlines())
+    assert "wL_cmd=" in text and "v_body=" in text
 
 
 def test_obstacles_world_tag_turns_sensing_on(tmp_path):

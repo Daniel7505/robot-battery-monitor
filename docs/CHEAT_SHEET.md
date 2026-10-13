@@ -410,6 +410,12 @@ See `docs/RUN_HISTORY.md`.
   the controller leaves those cameras off unless obstacles are on. Close
   it with the overlay X or Robot → Camera Devices. The controller cannot
   hide it.
+* **Speed trace is a CSV, not the Webots console.** `webots.exe --stdout`
+  redirected with `Start-Process -RedirectStandardOutput` stays a 0-byte
+  file. The controller writes `logs/speed_trace_<timestamp>.csv` (or
+  `RBM_LOG_DIR`) while the wheels are moving, and stops at mission end.
+  Console printing is off unless `RBM_SPEED_TRACE_CONSOLE=1`. The lap
+  line to grep in the dashboard log is `STEER_SPLIT`.
 * **`getWorldPath` fallback: set `RBM_TRACK`.** The finish referee finds the
   track from the world's `# TRACK_FILE` tag via `robot.getWorldPath()`. If the
   console says `FINISH REFEREE finish x>=16.5 m (default S)` on a non-S world,

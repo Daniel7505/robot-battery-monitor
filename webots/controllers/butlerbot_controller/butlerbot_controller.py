@@ -679,9 +679,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     dashboard = opts["dashboard_url"]
     startup_state = fetch_twin_state(dashboard)
     battery_pct = battery_from_twin_state(startup_state, default=100.0)
-    # Wall clock for the pack drain. The energy log bills timestamp gaps,
-    # not simulation timesteps. See pack_drain_dt_s.
-    battery_wall_mono: float | None = None
+    # One id per controller process. A Webots restart without a dashboard
+    # restart changes this, and the energy log summarizes the old mission.
+    controller_run_id = f"{_RUN_ID}-{os.getpid()}"
+    pack_meter = None
+    try:
+        from src.twin_energy import SimPackMeter
+
+        pack_meter = SimPackMeter()
+    except Exception as exc:
+        print(f"Pack energy meter failed ({type(exc).__name__}: {exc})")
     thermal_c = 22.0
     tick = 0
     publish_fail_streak = 0
@@ -841,24 +848,40 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             )
         else:
             print("MISSION LIMIT off — run until the track finish")
-        from src.sim_trace import resolve_speed_trace
+        from src.sim_trace import resolve_speed_trace, resolve_speed_trace_console
+        from twin_publisher import project_env
 
+        _trace_on = resolve_speed_trace(
+            config_value=_rbm_config.get("robot", "speed_trace", None),
+            env_value=os.environ.get("RBM_SPEED_TRACE"),
+            mission_limit_m=mission_limit_m,
+            lap_m=_perim_m,
+        )
+        _trace_console = resolve_speed_trace_console(
+            config_value=_rbm_config.get("robot", "speed_trace_console", None),
+            env_value=os.environ.get("RBM_SPEED_TRACE_CONSOLE"),
+        )
+        _trace_dir = project_env("RBM_LOG_DIR") or os.path.join(_PROJECT_ROOT, "logs")
         speed_trace = SpeedTrace(
-            resolve_speed_trace(
-                config_value=_rbm_config.get("robot", "speed_trace", None),
-                env_value=os.environ.get("RBM_SPEED_TRACE"),
-                mission_limit_m=mission_limit_m,
-                lap_m=_perim_m,
-            )
+            _trace_on,
+            console=_trace_console,
+            log_dir=_trace_dir if _trace_on else None,
         )
     except Exception as exc:
         mission_distance_reached = lambda traveled_m, limit_m: False  # noqa: E731
         plausible_travel_m = lambda step_m, dt_s: 0.0  # noqa: E731
         print(f"MISSION LIMIT off ({type(exc).__name__}: {exc})")
     if speed_trace.enabled:
+        _where = speed_trace.path or speed_trace.open_error or "no file"
+        _console = (
+            "console on"
+            if speed_trace.console
+            else "console off (set RBM_SPEED_TRACE_CONSOLE=1 to print)"
+        )
         print(
-            "SPEED_TRACE on — Webots console every 0.1 s sim, "
-            "SIM_RTF every 10 s. Not the dashboard log."
+            f"SPEED_TRACE on — file {_where}. {_console}. "
+            "Rows only while the wheels are moving. Stops at mission end. "
+            "Not the dashboard log."
         )
     else:
         print(
@@ -1496,10 +1519,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 speed_m_s=power_speed,
             )
             total_draw = sum(j.get("power_w", 0) for j in joints)
-            now_mono = time.monotonic()
-            wall_gap = None if battery_wall_mono is None else now_mono - battery_wall_mono
-            battery_wall_mono = now_mono
             drain_dt = dt
+            pack_step_wh = None
             wheel_motion = max(
                 abs(j.get("velocity", 0.0))
                 for j in joints
@@ -1538,17 +1559,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
             cap_wh = 0.0
-            if _uses_bom_pack():
+            if _uses_bom_pack() and pack_meter is not None:
                 # Pack draw is measured electrical drive plus the non-drive
                 # channels. Legs in the preview are the rolling prediction;
                 # substituting that for hinge torque made wh_measured_soc
                 # disagree with the electrical total (16646d5: pack 2.256 Wh,
-                # shaft+idle 3.724 Wh). Missing feedback does not fall back
-                # to the rolling line. The drain uses wall time so it matches
-                # the energy log's timestamp gaps.
+                # shaft+idle 3.724 Wh). Missing feedback adds no drive watts.
+                # The integral is the simulation step, posted as energy_wh_*.
+                # Wall time between POSTs is not the drain clock: a few
+                # seconds blocked in HTTP used to bill that many seconds of
+                # sim watts, and a hole over 15 s was dropped by the log
+                # (run #11, wh_measured 6.381 vs wh_measured_soc 7.224).
                 try:
                     from src.twin.webots_power import measured_drive_split
-                    from src.twin_energy import electrical_pack_draw_w, pack_drain_dt_s
 
                     preview = build_payload(
                         joints,
@@ -1562,20 +1585,32 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     )
                     split = measured_drive_split(joints, power_speed)
                     elec_w = None if split is None else split.get("elec_w")
-                    pack_w = electrical_pack_draw_w(channels, elec_w)
-                    if pack_w is None:
-                        pack_w = sum(
-                            float(watts)
-                            for name, watts in channels.items()
-                            if name != "Legs" and watts is not None
-                        )
-                    total_draw = float(pack_w)
+                    shaft_w = None if split is None else split.get("shaft_w")
+                    idle_w = sum(
+                        float(watts)
+                        for name, watts in channels.items()
+                        if name != "Legs" and watts is not None
+                    )
+                    pack_step_wh = pack_meter.step(
+                        dt, shaft_w=shaft_w, elec_w=elec_w, idle_w=idle_w
+                    )
+                    total_draw = float(pack_meter.last_pack_w)
                     cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
-                    drain_dt = pack_drain_dt_s(wall_gap, sim_dt_s=dt)
+                    drain_dt = dt
                 except Exception:
                     cap_wh = 0.0
                     drain_dt = dt
-            if _teleop is not None:
+                    pack_step_wh = None
+            if pack_step_wh is not None:
+                if cap_wh <= 0:
+                    cap_wh = float(
+                        getattr(_teleop, "BATTERY_CAPACITY_WH", 240.0) or 240.0
+                    ) if _teleop is not None else 240.0
+                if cap_wh > 0:
+                    battery_pct = max(
+                        5.0, battery_pct - pack_step_wh / cap_wh * 100.0
+                    )
+            elif _teleop is not None:
                 if cap_wh <= 0:
                     cap_wh = float(
                         getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
@@ -1694,7 +1729,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 w_l=float(left_wv),
                 w_r=float(right_wv),
             ):
-                print(_trace_line)
+                if speed_trace.console:
+                    print(_trace_line)
 
             if hud is not None:
                 _draw_hud(
@@ -1794,6 +1830,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if abs_just_finished and nadir_lobe_done:
                         mission_complete = True
                         mission_event = "complete"
+            if mission_complete and not speed_trace.finished:
+                _steer_line = speed_trace.finish()
+                if _steer_line:
+                    print(_steer_line)
             publish_ticks = 1 if abs_brake.active else publish_every
             if tick % publish_ticks == 0:
                 lock_l = _WHEEL_LOCK_POS.get("left_wheel")
@@ -1930,6 +1970,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             new_frame=False,
                             yaw=prev_yaw,
                         )
+                loco = payload.get("locomotion")
+                if not isinstance(loco, dict):
+                    loco = {}
+                    payload["locomotion"] = loco
+                loco["controller_run_id"] = controller_run_id
+                sensors_out = payload.get("sensors")
+                if isinstance(sensors_out, dict):
+                    sensors_out["controller_run_id"] = controller_run_id
+                if pack_meter is not None and _uses_bom_pack():
+                    loco.update(pack_meter.snapshot())
+                if speed_trace.steer_text:
+                    loco["steer_split"] = speed_trace.steer_text
+                    if isinstance(sensors_out, dict):
+                        sensors_out["steer_split"] = speed_trace.steer_text
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0
@@ -1942,6 +1996,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             traceback.print_exc()
             continue
 
+    if not speed_trace.finished:
+        _steer_line = speed_trace.finish()
+        if _steer_line:
+            print(_steer_line)
     print("ButlerBot controller stopped (simulation ended)")
 
 

@@ -28,6 +28,7 @@ from src.twin.webots_power import (
     motor_powers_from_joints,
     restamp_active_bom,
 )
+from src.twin_energy import LOCO_PASSTHROUGH_KEYS
 
 _WEBOTS_CHANNEL_MAP = dict(WEBOTS_MOTOR_CHANNELS)
 _WEBOTS_CHANNEL_MAP.update({
@@ -121,6 +122,13 @@ class WebotsAdapter(TwinAdapter):
         for key in ("measured_drive_w", "measured_drive_elec_w"):
             if key in loc or key in payload:
                 loco[key] = loc[key] if key in loc else payload.get(key)
+        # Controller energy counters and the run id. restamp rebuilds
+        # locomotion; these are copied back there and again here.
+        for key in LOCO_PASSTHROUGH_KEYS:
+            if key in loc:
+                loco[key] = loc[key]
+            elif key in payload:
+                loco[key] = payload[key]
         return TwinTelemetry.from_payload(
             {
                 "source": "webots",

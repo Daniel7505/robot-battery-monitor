@@ -1010,6 +1010,14 @@ def restamp_active_bom(payload: dict) -> dict:
     loco = dict(loco)
     loco["measured_drive_w"] = measured
     loco["measured_drive_elec_w"] = measured_elec
+    # The rebuild replaces locomotion. Keep the controller's sim-time
+    # energy counters, run id, and steer summary, or a dashboard restart
+    # cannot tell one Webots process from the next.
+    from src.twin_energy import LOCO_PASSTHROUGH_KEYS
+
+    for key in LOCO_PASSTHROUGH_KEYS:
+        if key in loc:
+            loco[key] = loc[key]
     rebuilt["locomotion"] = loco
     rebuilt["measured_drive_w"] = measured
     rebuilt["measured_drive_elec_w"] = measured_elec

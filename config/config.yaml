@@ -140,10 +140,16 @@ robot:
   # A black overlay with a magenta border is a stereo camera Webots shows
   # even though it is not enabled. Close it under Robot → Camera Devices.
   hud_overlays: false
-  # Webots-console SPEED_TRACE every 0.1 s of sim time. Blank: on only
-  # when the mission cap is one warehouse lap. RBM_SPEED_TRACE=1 forces
-  # it on, 0 forces it off. The S track stays quiet.
+  # SPEED_TRACE CSV every 0.1 s of sim time, only while the wheels
+  # are moving, and it stops at mission end. Blank: on only when the
+  # mission cap is one warehouse lap. RBM_SPEED_TRACE=1 forces it on,
+  # 0 forces it off. The S track stays quiet. The file is
+  # logs/speed_trace_<timestamp>.csv (or RBM_LOG_DIR). Webots stdout
+  # redirected to a file stays empty, so the controller writes this itself.
   speed_trace:
+  # Also print those rows on the Webots console. Off: the CSV is the log.
+  # RBM_SPEED_TRACE_CONSOLE=1 turns printing on.
+  speed_trace_console: false
 
 hardware_profile: butlerbot_wheeled
 

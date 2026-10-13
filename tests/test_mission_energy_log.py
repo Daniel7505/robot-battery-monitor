@@ -33,7 +33,9 @@ def test_unmeasured_wheel_torque_is_not_invented_for_a_bom_build():
     assert reported_wheel_torque_nm(5.5, None, bom=True) == 0.0
     assert reported_wheel_torque_nm(5.5, 1e-6, bom=True) == 0.0
     assert reported_wheel_torque_nm(5.5, None, bom=False) == pytest.approx(5.5 * 0.45)
-    assert reported_wheel_torque_nm(5.5, 1.0, bom=True) == 1.0
+    # Hinge torque feedback is motor effort, not a load cell. A BoM build
+    # does not pass it into the rolling line.
+    assert reported_wheel_torque_nm(5.5, 1.0, bom=True) == 0.0
     assert reported_wheel_torque_nm(5.5, -1.0, bom=False) == 1.0
 
 
@@ -221,10 +223,11 @@ def test_mission_summary_fires_once_when_the_track_parks():
         assert float(fields["soc_end"]) == pytest.approx(99.0)
         assert float(fields["wh_model_idle"]) == pytest.approx(9.96 * 20.0 / 3600.0, abs=0.002)
         assert float(fields["wh_model"]) > float(fields["wh_model_drive"]) > 0
-        assert float(fields["wh_model_turn"]) > 0
+        assert float(fields["wh_model_turn"]) == 0.0
+        assert float(fields["wh_model_visc"]) > 0.0
         assert float(fields["wh_model_drive"]) == pytest.approx(
             float(fields["wh_model_roll"])
-            + float(fields["wh_model_turn"])
+            + float(fields["wh_model_visc"])
             + float(fields["wh_model_accel"]),
             abs=0.003,
         )
@@ -379,13 +382,20 @@ def test_mission_complete_does_not_wait_forever_on_gps_noise():
     assert mission_should_complete(
         **common, hubs_quiet=True, finish_age_s=1.0
     ) is True
-    # The old 12 s no-drive timeout must not complete the mission.
-    # A slow start (hubs quiet or not, track not finished) must not either.
+    # Hub twitch after the finish must not block the summary. The hold
+    # is only after track_done, and only once the drive command is zero.
     assert mission_should_complete(
-        **common, hubs_quiet=False, finish_age_s=12.0
+        **common, hubs_quiet=False, finish_age_s=1.0
     ) is False
     assert mission_should_complete(
-        **common, hubs_quiet=False, finish_age_s=90.0
+        **common, hubs_quiet=False, finish_age_s=3.0
+    ) is True
+    assert mission_should_complete(
+        **common, hubs_quiet=False, finish_age_s=12.0
+    ) is True
+    assert mission_should_complete(
+        track_done=True, already_complete=False, abs_done=False,
+        hubs_quiet=False, no_drive_command=False, finish_age_s=90.0,
     ) is False
     assert mission_should_complete(
         track_done=False, already_complete=False, abs_done=False,
@@ -398,6 +408,44 @@ def test_mission_complete_does_not_wait_forever_on_gps_noise():
     assert mission_should_complete(
         track_done=False, already_complete=False, abs_done=True,
         hubs_quiet=True, no_drive_command=True, finish_age_s=20,
+    ) is False
+
+
+def test_distance_cap_is_off_unless_asked_and_never_finishes_the_s_early():
+    from src.mission_park import (
+        mission_distance_reached,
+        mission_should_complete,
+        resolve_mission_limit_m,
+        warehouse_perimeter_m,
+    )
+
+    assert mission_distance_reached(500.0, None) is False
+    assert mission_distance_reached(500.0, 0) is False
+    assert mission_distance_reached(500.0, "") is False
+    assert mission_distance_reached(10.0, 50) is False
+    assert mission_distance_reached(50.0, 50) is True
+    assert resolve_mission_limit_m() is None
+    assert resolve_mission_limit_m(config_m="", env_m=None, env_laps=None) is None
+    perim = warehouse_perimeter_m()
+    assert perim == pytest.approx(201.0, abs=0.1)
+    assert resolve_mission_limit_m(env_laps="2", lap_m=perim) == pytest.approx(402.0, abs=0.2)
+    # An explicit metre cap wins over laps. Env metres win over YAML.
+    assert resolve_mission_limit_m(config_m=100, env_laps="2", lap_m=perim) == 100
+    assert resolve_mission_limit_m(
+        config_m=100, env_m="40", env_laps="2", lap_m=perim
+    ) == 40
+    # Env 0 turns the cap off. It does not fall through to laps.
+    assert resolve_mission_limit_m(
+        config_m=100, env_m="0", env_laps="2", lap_m=perim
+    ) is None
+    # No cap, and the track is not finished: a long pause still does not complete.
+    assert mission_should_complete(
+        track_done=False,
+        already_complete=False,
+        abs_done=False,
+        hubs_quiet=True,
+        no_drive_command=True,
+        finish_age_s=90.0,
     ) is False
 
 
@@ -473,6 +521,7 @@ def test_segment_logs_roll_turn_and_accel_from_the_model():
         assert float(seg["wh_turn"]) == pytest.approx(0.0, abs=1e-6)
         assert float(seg["wh_accel"]) == pytest.approx(0.0, abs=1e-6)
         assert float(seg["wh_roll"]) == pytest.approx(0.0066, abs=0.0003)
+        assert float(seg["wh_visc"]) > float(seg["wh_roll"])
         assert float(seg["wh_drive"]) == pytest.approx(3.43 * dt / 3600.0, abs=1e-4)
 
         curve = MissionEnergyLog()
@@ -489,8 +538,69 @@ def test_segment_logs_roll_turn_and_accel_from_the_model():
         )
         fields = _fields(next(line for line in closed if line.startswith("SEGMENT_ENERGY")))
         assert float(fields["heading_change_deg"]) == pytest.approx(61.6, abs=0.2)
-        assert float(fields["wh_turn"]) == pytest.approx(0.1134, abs=0.005)
+        assert float(fields["wh_turn"]) == 0.0
         assert float(fields["wh_accel"]) > 0
         assert float(fields["wh_roll"]) == pytest.approx(0.0066, abs=0.0004)
+        assert float(fields["wh_visc"]) > float(fields["wh_roll"])
+    finally:
+        _restore_bom(old)
+
+
+def test_a_killed_process_does_not_log_an_empty_summary():
+    """0.6 s and no travel is the Webots process dying, not a mission."""
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, speed=0.0))
+    killed = log.observe(_sample(0.6, 0.02, speed=0.0, event="complete"))
+    assert not any(line.startswith("MISSION_SUMMARY") for line in killed)
+    # The empty complete does not consume the one summary. Steps stay
+    # under the 15 s stall guard so the distance is actually billed.
+    log.observe(_sample(10.0, 8.0, speed=0.4))
+    done = log.observe(_sample(12.0, 10.0, speed=0.4, event="complete"))
+    assert any(line.startswith("MISSION_SUMMARY") for line in done)
+    again = log.observe(_sample(13.0, 10.0, speed=0.0, event="complete"))
+    assert not any(line.startswith("MISSION_SUMMARY") for line in again)
+
+
+def test_hinge_torque_does_not_inflate_bom_locomotion():
+    """Sim getTorqueFeedback must not become the drive bill.
+
+    dampingConstant 0.15 on the 0.08 m wheel, plus a few tenths of a
+    newton-metre of contact, is the order of torque that made live
+    locomotion ~16× rolling. The published Legs watts stay on rolling.
+    """
+    import math
+
+    from src.hardware_profile import get_active_profile
+    from src.twin.webots_power import build_webots_telemetry
+    from src.twin_energy import bom_drive_terms, sim_hinge_torque_nm
+
+    old = _use_bom("light")
+    try:
+        prof = get_active_profile()
+        v = 0.12
+        hub = v / 0.08
+        # Published damping only. The +0.25 N·m is contact, not a bill.
+        assert sim_hinge_torque_nm(v) == pytest.approx(0.15 * hub, abs=1e-9)
+        tau = 0.15 * hub + 0.25
+        spec = prof["motors"]["left_wheel"]
+        omega = v / 0.04
+        omega0 = float(spec["no_load_rpm"]) * 2.0 * math.pi / 60.0
+        tau_s = float(spec["stall_torque_nm"])
+        duty = omega / omega0 + tau / tau_s
+        current = float(spec["no_load_current_a"]) + (
+            float(spec["stall_current_a"]) - float(spec["no_load_current_a"])
+        ) * (tau / tau_s)
+        old_line_w = 2.0 * duty * float(spec["voltage_v"]) * current / 0.92
+        roll = bom_drive_terms(prof, v)
+        assert old_line_w > 10.0 * roll["drive_w"]
+
+        joints = [
+            {"name": "left_wheel", "velocity": hub, "torque": tau},
+            {"name": "right_wheel", "velocity": hub, "torque": tau},
+        ]
+        billed = build_webots_telemetry(
+            joints=joints, gait="drive", phase="teleop", speed_m_s=v, profile=prof
+        )
+        assert billed["channel_draws"]["Legs"] == pytest.approx(roll["drive_w"], abs=0.15)
     finally:
         _restore_bom(old)

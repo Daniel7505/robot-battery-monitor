@@ -5,16 +5,12 @@ import pytest
 from src.design_agent import Mission, propose
 from src.hardware_profile import clear_profile_cache
 from src.twin_energy import (
-    FITTED_CURVE_HEADING_DEG,
-    FITTED_CURVE_ROLL_WH,
-    FITTED_CURVE_WH,
     TEN_FT_M,
     accel_electrical_wh,
     bom_drive_terms,
     bom_run_energy_wh,
     brushed_drive_point,
     estimate_mission_energy,
-    fitted_turn_wh,
     format_mission_energy_line,
     geometry_scrub_wh,
     paper_energy,
@@ -165,48 +161,123 @@ def test_mission_energy_over_a_duration_includes_idle():
         _restore_bom(old)
 
 
-def test_straight_run_stays_rolling_and_a_curve_adds_the_fitted_yaw():
-    """61.6° of yaw on 10 ft is the live light-S fit (~0.12 Wh). No yaw stays ~0.0066."""
-    import math
-
+def test_drive_wh_per_metre_depends_on_speed_and_not_on_yaw():
+    """Rolling electrical Wh per 10 ft is the motor line. Yaw does not add a term."""
     from src.hardware_profile import get_active_profile, load_hardware_profile
 
     old = _use_bom("light")
     try:
         prof = get_active_profile()
+        cruise = bom_drive_terms(prof, 0.44)
+        crawl = bom_drive_terms(prof, 0.12)
+        assert cruise["drive_wh_per_10ft"] == pytest.approx(0.0066, abs=0.00015)
+        # Same 10 ft takes longer at 0.12 m/s, so the rolling-torque watts
+        # add a little more energy. Still the same order, not ~0.11 Wh.
+        assert crawl["drive_wh_per_10ft"] > cruise["drive_wh_per_10ft"]
+        assert crawl["drive_wh_per_10ft"] < 0.02
+
         dt = TEN_FT_M / 0.44
         straight = bom_run_energy_wh(TEN_FT_M, dt, 0.0)
-        terms = bom_drive_terms(prof, 0.44)
-        assert terms["drive_wh_per_10ft"] == pytest.approx(0.0066, abs=0.00015)
         assert straight["wh_model_turn"] == 0.0
         assert straight["wh_model_accel"] == 0.0
-        assert straight["wh_model_drive"] == pytest.approx(straight["wh_model_roll"], abs=1e-6)
-        # Logged to 0.001 Wh, so 0.0066 becomes 0.007.
-        assert straight["wh_model_drive"] == pytest.approx(round(terms["drive_wh_per_10ft"], 3), abs=1e-6)
-        assert straight["turn_source"] == "fitted-from-twin"
+        # Logged to 0.001 Wh, so 0.0066 becomes 0.007. Viscous hinge
+        # damping is extra on top of that rolling bill.
+        assert straight["wh_model_roll"] == pytest.approx(round(cruise["drive_wh_per_10ft"], 3), abs=1e-6)
+        assert straight["wh_model_visc"] > straight["wh_model_roll"]
+        assert straight["wh_model_drive"] == pytest.approx(
+            straight["wh_model_roll"] + straight["wh_model_visc"], abs=0.002
+        )
+        assert straight["turn_source"] == "none"
 
         curved = bom_run_energy_wh(TEN_FT_M, dt, 0.0, heading_change_deg=61.6)
-        per_rad = (FITTED_CURVE_WH - FITTED_CURVE_ROLL_WH) / math.radians(FITTED_CURVE_HEADING_DEG)
-        scale = terms["drive_wh_per_10ft"] / FITTED_CURVE_ROLL_WH
-        expect_turn = per_rad * math.radians(61.6) * scale
-        assert fitted_turn_wh(prof, 61.6, 0.44, 0.0) == pytest.approx(expect_turn, rel=1e-6)
-        assert curved["wh_model_turn"] == pytest.approx(expect_turn, abs=0.001)
-        assert curved["wh_model_roll"] == pytest.approx(straight["wh_model_roll"], abs=0.001)
-        # The fit's target: rolling term + yaw term ≈ the logged 0.12 Wh.
-        assert curved["wh_model_drive"] == pytest.approx(0.12, abs=0.002)
-        assert fitted_turn_wh(prof, 0.0, 0.44) == 0.0
+        assert curved["wh_model_turn"] == 0.0
+        assert curved["wh_model_drive"] == straight["wh_model_drive"]
+        assert curved["wh_model_roll"] == straight["wh_model_roll"]
+        assert curved["wh_model_visc"] == straight["wh_model_visc"]
 
         track = float(load_hardware_profile("butlerbot_wheeled")["geometry"]["track_width_m"])
         assert track == pytest.approx(0.34)
         scrub = geometry_scrub_wh(
             6.142, 61.6, crr=0.015, track_width_m=track, eta_driver=0.92
         )
+        # Geometry scrub is real and tiny. It is not added on top of rolling.
         assert 0 < scrub < 0.001
-        assert expect_turn > 100.0 * scrub
+        assert curved["wh_model_drive"] > 50.0 * scrub
 
         sped_up = accel_electrical_wh(prof, 0.0, 0.44, 1.0, 0.0)
         assert 0 < sped_up < 0.01
         assert accel_electrical_wh(prof, 0.44, 0.0, 1.0, 0.0) == 0.0
+    finally:
+        _restore_bom(old)
+
+
+def test_warehouse_run_checks_drive_shape_without_a_fitted_bill():
+    """Full warehouse run, stopped by hand because that world loops.
+
+    121 segments, 369 m, 2145 s. Mean locomotion 0.120 Wh per 10 ft
+    (sd 0.023). Correlation with heading −0.11, with speed +0.82.
+    Bins, Wh per segment: <0.15 m/s 0.096; 0.15–0.25 0.103;
+    0.25–0.35 0.126; >0.35 0.153. Totals: drive 14.5 Wh, idle 5.9 Wh.
+    A reported line ``0.248*v + 0.056`` describes that log. It is not
+    an input to the model.
+
+    Check speeds sit inside those bins. Rolling-only falls as speed
+    rises, so it is the wrong shape. Published hinge damping rises
+    with speed and stays under every bin. The gap is sim tire contact
+    and is left unfitted. Idle matches the 9.96 W BoM figure.
+    """
+    from src.twin.webots_power import SIM_WHEEL_RADIUS_M as drawn_radius
+    from src.twin_energy import (
+        SIM_HINGE_DAMPING_NM_S_RAD,
+        SIM_WHEEL_RADIUS_M,
+        sim_drive_terms,
+    )
+
+    old = _use_bom("light")
+    try:
+        from src.hardware_profile import get_active_profile
+
+        prof = get_active_profile()
+        assert drawn_radius == SIM_WHEEL_RADIUS_M == 0.08
+        assert SIM_HINGE_DAMPING_NM_S_RAD == 0.15
+
+        # Representative speeds inside each reported bin, not a regression.
+        bins = (
+            (0.10, 0.096),
+            (0.20, 0.103),
+            (0.30, 0.126),
+            (0.40, 0.153),
+        )
+        roll_wh = []
+        sim_wh = []
+        for speed, observed in bins:
+            roll = bom_drive_terms(prof, speed)["drive_wh_per_10ft"]
+            sim = sim_drive_terms(prof, speed)["drive_wh_per_10ft"]
+            roll_wh.append(roll)
+            sim_wh.append(sim)
+            assert sim > roll
+            assert sim < observed
+            assert observed - sim > 0.02
+        assert roll_wh[0] > roll_wh[-1]
+        assert sim_wh == sorted(sim_wh)
+        assert sim_wh[-1] > sim_wh[0] * 2
+
+        mean_v = 369.0 / 2145.0
+        n_10ft = 369.0 / TEN_FT_M
+        roll_total = bom_drive_terms(prof, mean_v)["drive_wh_per_10ft"] * n_10ft
+        sim_total = sim_drive_terms(prof, mean_v)["drive_wh_per_10ft"] * n_10ft
+        assert roll_total < 2.0
+        assert sim_total > roll_total * 3.0
+        assert sim_total < 14.5
+
+        idle = 9.96 * 2145.0 / 3600.0
+        assert idle == pytest.approx(5.9, abs=0.1)
+        plain = bom_run_energy_wh(369.0, 2145.0, 0.0, heading_change_deg=0.0)
+        turned = bom_run_energy_wh(369.0, 2145.0, 0.0, heading_change_deg=400.0)
+        assert plain["wh_model_turn"] == 0.0
+        assert plain["wh_model_drive"] == turned["wh_model_drive"]
+        assert plain["wh_model_idle"] == pytest.approx(idle, abs=0.01)
+        assert plain["wh_model_visc"] > plain["wh_model_roll"]
     finally:
         _restore_bom(old)
 

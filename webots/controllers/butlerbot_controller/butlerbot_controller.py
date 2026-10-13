@@ -789,6 +789,40 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     nadir_lobe_done = False
     mission_complete = False
     finish_age_s = 0.0
+    mission_travel_m = 0.0
+    mission_prev_xy: tuple[float, float] | None = None
+    mission_capped = False
+    mission_limit_m = None
+    try:
+        from src.config import config as _rbm_config
+        from src.mission_park import (
+            mission_distance_reached,
+            resolve_mission_limit_m,
+            warehouse_perimeter_m,
+        )
+        from src.teleop_agent import plausible_travel_m
+
+        _perim_m = warehouse_perimeter_m()
+        mission_limit_m = resolve_mission_limit_m(
+            config_m=_rbm_config.get("robot", "mission_max_m", None),
+            env_m=os.environ.get("RBM_MISSION_MAX_M"),
+            env_laps=os.environ.get("RBM_MISSION_LAPS"),
+            lap_m=_perim_m,
+        )
+        if mission_limit_m:
+            _perim_txt = f"{_perim_m:.0f} m" if _perim_m else "unknown"
+            print(
+                f"MISSION LIMIT on — stop at {mission_limit_m:.1f} m "
+                f"(warehouse perimeter {_perim_txt}). "
+                "Leave mission_max_m blank and unset RBM_MISSION_MAX_M "
+                "to run until the track finish."
+            )
+        else:
+            print("MISSION LIMIT off — run until the track finish")
+    except Exception as exc:
+        mission_distance_reached = lambda traveled_m, limit_m: False  # noqa: E731
+        plausible_travel_m = lambda step_m, dt_s: 0.0  # noqa: E731
+        print(f"MISSION LIMIT off ({type(exc).__name__}: {exc})")
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -858,6 +892,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
             gps_xy = _gps_xy(gps)
+            if not mission_capped and gps_xy is not None:
+                if mission_prev_xy is not None:
+                    _step_m = math.hypot(
+                        float(gps_xy[0]) - mission_prev_xy[0],
+                        float(gps_xy[1]) - mission_prev_xy[1],
+                    )
+                    mission_travel_m += plausible_travel_m(_step_m, dt)
+                mission_prev_xy = (float(gps_xy[0]), float(gps_xy[1]))
             if rowfit_rt is not None:
                 rowfit_rt.odometry(left_wv_early, right_wv_early, dt, WHEEL_RADIUS_M)
                 # Pull-behind trolley hitch (every tick)
@@ -967,7 +1009,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     got_new_stop = stop_epoch > last_stop_epoch
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
-                    if not nadir_lobe_done:
+                    # A distance cap stays stopped. A real finish can still
+                    # hand lane-keep back to the dashboard.
+                    if mission_capped:
+                        lane_keep_on = False
+                    elif not nadir_lobe_done:
                         lane_keep_on = True
                     else:
                         lane_keep_on = bool(api_cmd.get("lane_keep"))
@@ -1101,20 +1147,42 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         dt=dt,
                         **guard_kw,
                     )
-                if gps_xy is not None and finish_ref.crossed(float(gps_xy[0]), float(gps_xy[1])):
+                _crossed = (
+                    gps_xy is not None
+                    and finish_ref.crossed(float(gps_xy[0]), float(gps_xy[1]))
+                )
+                # Stay on the brake after the cap. A later poll can turn
+                # lane-keep back on for one step; the cap must still win.
+                _at_cap = mission_capped or mission_distance_reached(
+                    mission_travel_m, mission_limit_m
+                )
+                if _crossed or _at_cap:
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
-                        _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
-                        _exit = finish_ref.exit_name(float(gps_xy[0]), float(gps_xy[1])) if hasattr(
-                            finish_ref, "exit_name") else None
-                        if _exit:
-                            _what += f" via exit {_exit}"
-                        print(
-                            f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
-                            "GPS finish, not a red camera. Nadir was on the wheel."
-                        )
-                        if getattr(rowfit_rt, "inventory", None) is not None:
+                        if _at_cap and not _crossed:
+                            mission_capped = True
+                            _gx = 0.0 if gps_xy is None else float(gps_xy[0])
+                            _gy = 0.0 if gps_xy is None else float(gps_xy[1])
+                            print(
+                                f"MISSION LIMIT {mission_travel_m:.1f} m "
+                                f"(cap {float(mission_limit_m):.1f} m) at "
+                                f"x={_gx:.2f} y={_gy:.2f} — "
+                                "distance cap, braking like a finish"
+                            )
+                        else:
+                            _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
+                            _exit = finish_ref.exit_name(float(gps_xy[0]), float(gps_xy[1])) if hasattr(
+                                finish_ref, "exit_name") else None
+                            if _exit:
+                                _what += f" via exit {_exit}"
+                            print(
+                                f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
+                                "GPS finish, not a red camera. Nadir was on the wheel."
+                            )
+                        if getattr(rowfit_rt, "inventory", None) is not None and _crossed:
                             rowfit_rt.inventory.mark_shipped()
+                    elif _at_cap:
+                        mission_capped = True
                     lane_keep_on = False
                     lk = {
                         "left": 0.0,
@@ -1624,8 +1692,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         and abs(left_v) < 0.05
                         and abs(right_v) < 0.05
                     )
-                    # nadir_lobe_done is set only on FULL S DONE / route end.
+                    # nadir_lobe_done is set on FULL S DONE / route end, or when
+                    # an optional distance cap (off by default) is reached.
                     # A no-drive pause before that must not complete the mission.
+                    # After it, hub twitch and an ABS hold that never closes
+                    # still complete once the drive command has been zero.
                     if mission_should_complete(
                         track_done=nadir_lobe_done,
                         already_complete=False,

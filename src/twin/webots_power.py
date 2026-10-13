@@ -258,16 +258,18 @@ def reported_wheel_torque_nm(
 ) -> float:
     """Torque sample the power model should see.
 
-    A real torque-feedback reading is kept. With no reading, a BoM build
-    passes 0 so the linear model uses rolling resistance (Crr · m · g · r / 2).
-    The old ``|ω| × 0.45`` stand-in is not a measured torque and, on the
-    light motor, it is past stall — that is what pushed the panel well
-    above the published idle.
+    A BoM build always returns 0. Webots ``getTorqueFeedback`` on these
+    hinges is the motor effort against ``dampingConstant`` and the tire
+    contact, not a load cell, and the linear model would treat it as
+    shaft torque. With no reading, 0 lets that model use rolling
+    resistance (Crr · m · g · r / 2). The YAML profile still keeps a real
+    feedback reading, and with no reading it keeps the old ``|ω| × 0.45``
+    stand-in.
     """
-    if feedback_nm is not None and abs(float(feedback_nm)) > 1e-4:
-        return abs(float(feedback_nm))
     if bom:
         return 0.0
+    if feedback_nm is not None and abs(float(feedback_nm)) > 1e-4:
+        return abs(float(feedback_nm))
     return abs(float(velocity)) * 0.45
 
 
@@ -281,6 +283,12 @@ def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
     return crr * mass * 9.81 * float(radius_m) / 2.0
 
 
+# Drawn wheel in the Webots worlds (butlerbot.wbt cylinder). Odometry in the
+# controller uses this same radius. The BoM wheel is 80 mm diameter, 0.04 m.
+# Do not resize the mesh and do not change lane_keep.WHEEL_RADIUS_M.
+SIM_WHEEL_RADIUS_M = 0.08
+
+
 def _linear_wheel_electrical_w(
     spec: dict,
     profile: dict,
@@ -289,21 +297,48 @@ def _linear_wheel_electrical_w(
     torque: float,
     speed_m_s: float | None,
 ) -> float:
-    """One motor's terminal power: duty * V * I.
+    """One motor's terminal power: duty * V * I, from the BoM motor line.
 
     Driver efficiency is applied later, once, in ``aggregate_channel_draws``,
-    so this is not divided by eta here. A missing torque sample uses the
-    rolling-resistance torque from the BoM formula. It does not invent a
-    current the datasheet didn't publish.
+    so this is not divided by eta here. Load torque is rolling resistance
+    (Crr · m · g · r / 2 on the BoM radius). ``torque`` is ignored on purpose.
+
+    Why the logged drive was ~16× this line
+    ---------------------------------------
+    Live locomotion was this same duty·V·I line with ω = body speed /
+    0.04 m, and the torque was Webots ``getTorqueFeedback``: hinge motor
+    effort, not the ~0.018 N·m rolling torque. Heading did not matter.
+    A full warehouse run (121 segments, 369 m, 2145 s, stopped by hand
+    because that world loops) measured mean 0.120 Wh per 10 ft
+    (sd 0.023), correlation with heading −0.11 and with speed +0.82,
+    14.5 Wh drive and 5.9 Wh idle. Idle matches 9.96 W. Rolling-only
+    does not: it is ~0.8 Wh over that distance and it falls slightly as
+    speed rises.
+
+    The worlds set ``dampingConstant 0.15`` on a 0.08 m wheel, so
+    viscous torque is ``0.15 · v / 0.08``. Put through this motor line
+    it rises with speed and is about 6 Wh at that run's average speed,
+    still short of 14.5 Wh. The remainder is tire contact (friction and
+    force-dependent slip). That is not one published torque, and a
+    straight-line fit of the log is not a bill. The mission energy
+    model adds only the published damping, as ``wh_visc``. This
+    function stays on rolling resistance so Legs at 0.44 m/s stay
+    ~3.43 W. The 0.08 m mesh versus the 0.04 m BoM wheel doubles ω if
+    a hub rate is used as the electrical rate, but it is not the 16×.
+    The fitted yaw term treated the gap as scrub. It is removed.
+
+    With no body speed, hub rad/s is the sim hinge. Electrical ω is that
+    rate times 0.08 / 0.04, so a spinning sim wheel matches body speed
+    on the real wheel.
     """
+    del torque  # sim feedback is not the BoM load; see the docstring
     radius = wheel_radius_m(profile)
+    radius = max(radius, 1e-4)
     if speed_m_s is not None and float(speed_m_s) > 0.02:
-        omega = float(speed_m_s) / max(radius, 1e-4)
+        omega = float(speed_m_s) / radius
     else:
-        omega = abs(float(velocity))
-    tau = abs(float(torque))
-    if tau < 1e-4:
-        tau = _rolling_torque_nm(profile, radius)
+        omega = abs(float(velocity)) * SIM_WHEEL_RADIUS_M / radius
+    tau = _rolling_torque_nm(profile, radius)
     omega0 = float(spec["no_load_rpm"]) * 2.0 * math.pi / 60.0
     tau_stall = float(spec["stall_torque_nm"])
     if omega0 <= 0 or tau_stall <= 0:
@@ -734,10 +769,9 @@ def restamp_active_bom(payload: dict) -> dict:
     The dashboard and the controller do not share a working directory.
     Webots used to miss ``config/config.yaml``, post the YAML profile
     (arms and torso watts, ``sensors=na``, ``build=default``), while the
-    dashboard log said ``BOM build=light``. When a build is selected and
-    this sample is not already that build, recompute from the joint
-    velocities with wheel torque cleared so the linear model uses rolling
-    resistance instead of the ``|ω| × 0.45`` stand-in.
+    dashboard log said ``BOM build=light``. With a build selected, joint
+    samples are recomputed on the BoM line even if the controller already
+    stamped that build: hinge torque feedback is not the motor load.
     """
     from src.hardware_profile import active_bom_build
 
@@ -748,14 +782,10 @@ def restamp_active_bom(payload: dict) -> dict:
         return payload
     loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
     hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
-    stamped = loc.get("bom_build") or hw.get("bom_build")
-    subs = payload.get("subsystem_draws")
-    if (
-        stamped == build
-        and isinstance(subs, dict)
-        and subs.get("sensors") is not None
-    ):
-        return payload
+    # Always recompute when joints are present. A controller that already
+    # stamped this build may still have billed Webots hinge torque as the
+    # motor load. The linear line ignores that torque; rebuilding is what
+    # makes the logged watts match wh_roll.
     joints = [j for j in (payload.get("joints") or []) if isinstance(j, dict)]
     if not joints:
         out = dict(payload)

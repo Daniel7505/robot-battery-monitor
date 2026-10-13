@@ -37,24 +37,47 @@ load:
 With a BoM selected, channel draws, the pack drain, and these log lines
 all use the published idle plus the motor model, and the controller
 drains that same total against the BoM pack. ``wh_model`` is idle over
-the whole run plus drive. Drive is three terms, also logged on each
-``SEGMENT_ENERGY`` line:
+the whole run plus drive. Drive on each ``SEGMENT_ENERGY`` line is:
 
-* ``wh_roll`` — rolling-resistance electrical energy from the BoM formula
-* ``wh_turn`` — skid-steer yaw, ``fitted-from-twin`` (light S, 0.12 Wh
-  per 10 ft at 61.6° of heading, minus the 0.0066 Wh rolling term).
-  A straight segment is zero. The geometry-only scrub
-  ``Crr·m·g·track·|Δθ|`` is about 0.0001 Wh for that same yaw and is not
-  what we bill; the BoM has no sliding μ.
+* ``wh_roll`` — brushed-DC electrical energy at rolling resistance.
+  Watt-hours per metre depend on speed: no-load current is paid per
+  revolution, rolling torque is paid per second. On the light build
+  that is about 0.0066 Wh per 10 ft near 0.44 m/s, a little more when
+  the same 10 ft takes longer. The design shift table uses only this.
+* ``wh_visc`` — extra electrical energy from the published Webots hinge
+  (``dampingConstant 0.15`` on the 0.08 m wheel) through that same
+  motor line. It rises with speed. It is not a coefficient fitted to
+  a log.
+* ``wh_turn`` — always 0. A fitted yaw term used to bill ~0.11 Wh per
+  10 ft. Live locomotion tracks distance and speed, not heading.
 * ``wh_accel`` — extra motor-line watts while speeding up (``m·a`` on
   top of rolling torque). Slowing down is zero (no regen). Wheel spin
   inertia is not in the BoM.
 
-``wh_drive`` on the segment stays the measured locomotion integral.
-The three terms are the model, so they are not forced to add up to
-``wh_drive``. ``err_pct`` is still model versus integrated channel
-watts (``wh_measured``). ``wh_measured_soc`` is
+``wh_drive`` is the measured locomotion integral. Dashboard Legs stay
+on the rolling line (about 3.43 W at 0.44 m/s), so a new run's
+``wh_drive`` sits near ``wh_roll``. Webots ``getTorqueFeedback`` is
+hinge effort, not a load cell, and is not billed.
+
+A full warehouse run (no finish; stopped by hand) is the check on this
+split: 121 segments, 369 m, 2145 s. Mean locomotion 0.120 Wh per 10 ft
+(sd 0.023). Correlation with heading −0.11, with average speed +0.82.
+Speed bins, Wh per segment: under 0.15 m/s → 0.096; 0.15–0.25 → 0.103;
+0.25–0.35 → 0.126; over 0.35 → 0.153. Totals: drive 14.5 Wh, idle
+5.9 Wh. Idle matches 9.96 W × 2145 s. Rolling-only does not: it is
+about 0.8 Wh and it falls slightly as speed rises. Published damping
+rises with speed and is about 6 Wh at the run's average speed, short
+of 14.5 Wh. The remainder is sim tire contact. That torque is not one
+published number, and a straight-line fit of the log is not pasted in
+as a bill.
+
+``err_pct`` is model versus integrated channel watts
+(``wh_measured``). ``wh_measured_soc`` is
 ``capacity × (start% − end%) / 100``.
+
+A ``mission_event=complete`` with essentially no distance and no
+duration is not a mission (a Webots process killed on startup). It
+does not log a summary, and it does not consume the one summary.
 """
 
 from __future__ import annotations
@@ -75,6 +98,10 @@ ACCEL_EVENT_M_S2 = 0.4
 TURN_DEG = 30.0
 # Same stall guard as the efficiency tracker: do not bill a paused Webots.
 MAX_DT_S = 15.0
+# A killed Webots process can post complete after a fraction of a second
+# and a few centimetres. That is not a mission summary.
+MIN_SUMMARY_DIST_M = 0.5
+MIN_SUMMARY_DURATION_S = 2.0
 
 
 def _as_float(value) -> float | None:
@@ -326,7 +353,8 @@ class MissionEnergyLog:
             f"avg_speed={avg:.3f} heading_change_deg={self._seg_heading_deg:.1f} "
             f"accel_events={self._seg_accel} payload_kg={self._payload_kg:g} "
             f"wh_drive={self._seg_wh_drive:.4f} "
-            f"wh_roll={terms['wh_roll']:.4f} wh_turn={terms['wh_turn']:.4f} "
+            f"wh_roll={terms['wh_roll']:.4f} wh_visc={terms['wh_visc']:.4f} "
+            f"wh_turn={terms['wh_turn']:.4f} "
             f"wh_accel={terms['wh_accel']:.4f} "
             f"wh_idle={self._seg_wh_idle:.4f} "
             f"wh_total={total:.4f}"
@@ -360,6 +388,11 @@ class MissionEnergyLog:
             return []
         if str(sample.get("mission_event") or "") != "complete":
             return []
+        if (
+            self._mission_dist < MIN_SUMMARY_DIST_M
+            and self._mission_dt < MIN_SUMMARY_DURATION_S
+        ):
+            return []
         self._summarized = True
         self._note_soc(sample)
         return [self._summary_line(), self._mission_energy_line()]
@@ -377,6 +410,7 @@ class MissionEnergyLog:
         idle = None if model is None else model["wh_model_idle"]
         drive = None if model is None else model["wh_model_drive"]
         roll = None if model is None else model.get("wh_model_roll")
+        visc = None if model is None else model.get("wh_model_visc")
         turn = None if model is None else model.get("wh_model_turn")
         accel_wh = None if model is None else model.get("wh_model_accel")
         soc_wh = None
@@ -396,7 +430,8 @@ class MissionEnergyLog:
             f"soc_start={_fmt(self._soc_start, 2)} soc_end={_fmt(self._soc_end, 2)} "
             f"wh_model={_fmt(wh_model, 3)} wh_model_idle={_fmt(idle, 3)} "
             f"wh_model_drive={_fmt(drive, 3)} "
-            f"wh_model_roll={_fmt(roll, 3)} wh_model_turn={_fmt(turn, 3)} "
+            f"wh_model_roll={_fmt(roll, 3)} wh_model_visc={_fmt(visc, 3)} "
+            f"wh_model_turn={_fmt(turn, 3)} "
             f"wh_model_accel={_fmt(accel_wh, 3)} "
             f"wh_measured={measured:.3f} "
             f"wh_measured_soc={_fmt(None if soc_wh is None else round(soc_wh, 3), 3)} "
@@ -513,7 +548,12 @@ def _drive_breakdown(
     wh_accel: float,
     payload_kg: float,
 ) -> dict:
-    zeros = {"wh_roll": 0.0, "wh_turn": 0.0, "wh_accel": max(0.0, float(wh_accel))}
+    zeros = {
+        "wh_roll": 0.0,
+        "wh_visc": 0.0,
+        "wh_turn": 0.0,
+        "wh_accel": max(0.0, float(wh_accel)),
+    }
     try:
         from src.hardware_profile import active_bom_build
         from src.twin_energy import segment_model_terms

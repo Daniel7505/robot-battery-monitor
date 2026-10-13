@@ -10,6 +10,7 @@ Example SKUs are seeded only when the ``parts`` table is empty.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS motors (
     peak_power_w REAL,
     no_load_rpm REAL,
     stall_current_a REAL,
-    efficiency REAL
+    efficiency REAL,
+    no_load_current_a REAL
 );
 
 CREATE TABLE IF NOT EXISTS batteries (
@@ -101,7 +103,15 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first catalog schema."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(motors)")}
+    if "no_load_current_a" not in cols:
+        conn.execute("ALTER TABLE motors ADD COLUMN no_load_current_a REAL")
 
 
 def _parts_empty(conn: sqlite3.Connection) -> bool:
@@ -151,13 +161,15 @@ def add_motor(
     no_load_rpm: float | None = None,
     stall_current_a: float | None = None,
     efficiency: float | None = None,
+    no_load_current_a: float | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO motors (
             part_id, voltage_v, gear_ratio, continuous_torque_nm, peak_torque_nm,
-            continuous_power_w, peak_power_w, no_load_rpm, stall_current_a, efficiency
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            continuous_power_w, peak_power_w, no_load_rpm, stall_current_a, efficiency,
+            no_load_current_a
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             part_id,
@@ -170,6 +182,7 @@ def add_motor(
             no_load_rpm,
             stall_current_a,
             efficiency,
+            no_load_current_a,
         ),
     )
     conn.commit()
@@ -281,7 +294,7 @@ def list_motors(
     sql = """
         SELECT p.*, m.voltage_v, m.gear_ratio, m.continuous_torque_nm,
                m.peak_torque_nm, m.continuous_power_w, m.peak_power_w,
-               m.no_load_rpm, m.stall_current_a, m.efficiency
+               m.no_load_rpm, m.stall_current_a, m.efficiency, m.no_load_current_a
         FROM parts p
         JOIN motors m ON m.part_id = p.id
         WHERE p.category = 'motor'
@@ -364,9 +377,9 @@ def seed_examples(conn: sqlite3.Connection) -> int:
         name="48V 10Ah NMC Li-ion pack (480 Wh class)",
         category="battery",
         vendor="generic-catalog",
-        mass_g=2700,
+        mass_g=2800,
         cost_usd=289.00,
-        notes="Current twin pack class from butlerbot_wheeled.yaml. 2C cont / 3C peak.",
+        notes="Aegis ABL-048010P vendor page: 10 A continuous, 20 A for 2 s, 2.8 kg.",
         source_url="https://www.aegisbattery.com/products/aegis-48v-10ah-lithium-ion-battery-pack-nmc-48v-lithium-battery",
     )
     add_battery(
@@ -375,8 +388,8 @@ def seed_examples(conn: sqlite3.Connection) -> int:
         capacity_wh=480,
         capacity_ah=10,
         voltage_v=48,
-        max_continuous_a=20,
-        peak_a=30,
+        max_continuous_a=10,
+        peak_a=20,
         chemistry="NMC Li-ion",
     )
 
@@ -487,11 +500,108 @@ def seed_examples(conn: sqlite3.Connection) -> int:
         vendor="generic-catalog",
         mass_g=85,
         cost_usd=6.50,
-        notes="Matches twin r=0.08 m. Catalog class mass from wheeled profile.",
+        notes="80 mm diameter, radius 0.04 m. Catalog class mass from wheeled profile.",
         source_url="https://abra-electronics.com/robotics/robot-wheels/tire-80-black-8035mm-rubber-wheel.html",
     )
 
     return int(conn.execute("SELECT COUNT(*) AS n FROM parts").fetchone()["n"])
+
+
+def seed_from_bom_json(conn: sqlite3.Connection, path: Path | str | None = None) -> int:
+    """Upsert every ``parts[]`` row from bom.json into the catalog.
+
+    sku is the vendor part number (or the BoM id when the page has none).
+    ``price_date``, ``source_url`` and the ``unknown`` list are kept on the
+    row so a blank spec is still visible. Motors gain ``no_load_current_a``
+    because the energy model needs it. Safe to call twice.
+    """
+    from src.bom_profile import (
+        BOM_JSON_PATH,
+        bom_notes,
+        catalog_sku,
+        map_category,
+    )
+
+    p = Path(path) if path is not None else BOM_JSON_PATH
+    data = json.loads(p.read_text(encoding="utf-8"))
+    n = 0
+    for part in data.get("parts") or []:
+        sku = catalog_sku(part)
+        category = map_category(part)
+        notes = bom_notes(part)
+        row = conn.execute("SELECT id FROM parts WHERE sku = ?", (sku,)).fetchone()
+        if row is None:
+            pid = add_part(
+                conn,
+                sku=sku,
+                name=part.get("name") or sku,
+                category=category,
+                vendor=part.get("vendor"),
+                mass_g=part.get("mass_g"),
+                cost_usd=part.get("price_usd"),
+                notes=notes,
+                source_url=part.get("source_url"),
+            )
+        else:
+            pid = int(row["id"])
+            conn.execute(
+                """
+                UPDATE parts
+                   SET name = ?, category = ?, vendor = ?, mass_g = ?, cost_usd = ?,
+                       notes = ?, source_url = ?
+                 WHERE id = ?
+                """,
+                (
+                    part.get("name") or sku,
+                    category,
+                    part.get("vendor"),
+                    part.get("mass_g"),
+                    part.get("price_usd"),
+                    notes,
+                    part.get("source_url"),
+                    pid,
+                ),
+            )
+            conn.commit()
+        if category == "motor":
+            conn.execute("DELETE FROM motors WHERE part_id = ?", (pid,))
+            add_motor(
+                conn,
+                pid,
+                voltage_v=_as_float(part.get("voltage_v")),
+                gear_ratio=_as_float(part.get("gear_ratio")),
+                continuous_torque_nm=_as_float(part.get("rec_continuous_torque_nm")),
+                peak_torque_nm=_as_float(part.get("stall_torque_nm")),
+                no_load_rpm=_as_float(part.get("no_load_rpm")),
+                stall_current_a=_as_float(part.get("stall_current_a")),
+                efficiency=_as_float(part.get("max_efficiency")),
+                no_load_current_a=_as_float(part.get("no_load_current_a")),
+            )
+        elif category == "battery":
+            conn.execute("DELETE FROM batteries WHERE part_id = ?", (pid,))
+            add_battery(
+                conn,
+                pid,
+                capacity_wh=_as_float(part.get("capacity_wh")),
+                capacity_ah=_as_float(part.get("capacity_ah")),
+                voltage_v=_as_float(part.get("voltage_v")),
+                max_continuous_a=_as_float(part.get("max_continuous_discharge_a")),
+                peak_a=_as_float(part.get("peak_discharge_a")),
+                chemistry=part.get("chemistry"),
+            )
+        elif category == "camera" and part.get("hfov_deg") is not None:
+            conn.execute("DELETE FROM cameras WHERE part_id = ?", (pid,))
+            add_camera(conn, pid, fov_deg=_as_float(part.get("hfov_deg")))
+        n += 1
+    return n
+
+
+def _as_float(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _fmt(row: dict, keys: tuple[str, ...]) -> str:

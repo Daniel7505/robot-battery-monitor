@@ -121,6 +121,7 @@ class SimulationDriver:
             f"{self._robot_name} simulation started — {len(self._script)} phases, "
             f"loop={self._loop}, battery={self._battery_wh}Wh"
         )
+        self._log_bom_and_mission()
 
     def stop(self) -> None:
         if self._running:
@@ -180,12 +181,45 @@ class SimulationDriver:
                     f"{self._robot_name} simulation loop #{self._loops_completed} — "
                     "restarting Idle → Transit → Patrol → High Load"
                 )
+                self._log_mission_energy()
             else:
                 self.stop()
                 logger.info(f"{self._robot_name} simulation script complete")
                 return False
 
         return self._apply_current_segment(mission)
+
+    def _scripted_distance_m(self) -> float:
+        """Distance for the MISSION_ENERGY line.
+
+        ``robot.mission_distance_m`` wins when Dan sets it. Otherwise the
+        moving phases of this script times the profile cruise speed — that
+        is the script length, not a guessed motor watt.
+        """
+        raw = config.get("robot", "mission_distance_m")
+        if raw is not None and raw != "":
+            return float(raw)
+        from src.hardware_profile import profile_cruise_speed_m_s
+
+        cruise = profile_cruise_speed_m_s()
+        moving_s = sum(
+            int(seg["duration_s"])
+            for seg in self._script
+            if seg["task"] in {"moving", "balanced", "high_load"}
+        )
+        return round(moving_s * cruise, 2)
+
+    def _log_bom_and_mission(self) -> None:
+        from src.hardware_profile import format_bom_log_line, log_profile_flags
+
+        logger.info(format_bom_log_line())
+        log_profile_flags()
+        self._log_mission_energy()
+
+    def _log_mission_energy(self) -> None:
+        from src.twin_energy import format_mission_energy_line
+
+        logger.info(format_mission_energy_line(self._scripted_distance_m()))
 
     def status(self, mission: MissionTaskManager | None = None) -> dict:
         """Dashboard-facing simulation panel payload for the internal script."""

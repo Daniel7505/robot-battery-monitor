@@ -96,18 +96,26 @@ class WebotsAdapter(TwinAdapter):
         if not task and gait:
             task = gait_to_task(gait)
 
+        loco = {
+            "gait": gait,
+            "speed_m_s": speed_f,
+            "phase": phase,
+            "mode": loc.get("mode") or "wheeled",
+        }
+        hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
+        for key in ("bom_build", "bom_schema_version", "payload_kg", "wheel_radius_m"):
+            if loc.get(key) is not None:
+                loco[key] = loc[key]
+            elif hw.get(key) is not None:
+                loco[key] = hw[key]
         return TwinTelemetry.from_payload(
             {
                 "source": "webots",
                 "robot": payload.get("robot", {"name": "ButlerBot"}),
                 "mission": {"task": task},
                 "channel_draws": draws,
-                "locomotion": {
-                    "gait": gait,
-                    "speed_m_s": speed_f,
-                    "phase": phase,
-                    "mode": loc.get("mode") or "wheeled",
-                },
+                "locomotion": loco,
+                "hardware": hw,
                 "pose": payload.get("pose", {}),
                 "timestamp": payload.get("timestamp"),
                 # Preserve controller sensors/control_diag (hub rates, ABS, locks)

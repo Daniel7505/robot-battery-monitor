@@ -317,6 +317,11 @@ def test_obstacles_world_is_generator_output_with_three_props(built):
     assert text.split("\nRobot {", 1)[1] == clean.split("\nRobot {", 1)[1]  # same robot, same spawn
 
 
+def test_unset_bom_build_leaves_the_robot_text_alone():
+    sample = "    mass 3.2\n        radius 0.08\n"
+    assert wb.apply_bom_build_to_robot(sample) is sample
+
+
 def test_obstacle_props_sit_where_the_brief_says(built):
     from src.stereo_depth import CorridorParams
 

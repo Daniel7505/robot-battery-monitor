@@ -125,8 +125,20 @@ robot:
   name: "ButlerBot"
   main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
   hardware_profile: butlerbot_wheeled
+  # Kilograms on the trolley, and the trolley's own mass. Both stay 0 until
+  # a trolley SKU is sourced (the hitch part in bom.json has no mass).
+  payload_kg: 0
+  trolley_tare_kg: 0
 
 hardware_profile: butlerbot_wheeled
+
+# Real-hardware build from config/bom/bom.json.
+# Leave this blank to keep butlerbot_wheeled.yaml (current behaviour).
+# Set one of: light, heavy, budget.
+#   light  — 24 V Pololu #4693, 240 Wh LiFePO4
+#   heavy  — 12 V planetary motors, 200 mm wheels, 480 Wh
+#   budget — 12 V Pololu #4753, Pi 5, 240 Wh
+bom_build:
 
 # System-level allocatable power ceiling (includes cooling channel)
 power:

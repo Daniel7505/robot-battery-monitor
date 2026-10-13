@@ -20,9 +20,9 @@ description: >
   (no demo accel) for agent hardware optimization.
 
 # --- Battery pack — REAL SPECS (project core) ---------------------------------
-# Class: 48 V 10 Ah Li-ion / NMC ebike-style pack (480 Wh). Representative of
-# common catalog packs (e.g. 13S NMC 10 Ah, continuous ~2C / peak ~3C).
-# Refs: industry 48V10Ah listings — 480 Wh, cont 15–20 A, peak 20–30 A, ~2.7 kg.
+# Class: 48 V 10 Ah Li-ion / NMC (480 Wh), Aegis ABL-048010P.
+# Vendor page (read 2026-10-13): 10 A continuous, 20 A peak for 2 s, 2.8 kg.
+# Older text in this file said 20 A / 30 A / 2.7 kg. That did not match the page.
 battery:
   label: "48V 10Ah NMC Li-ion pack (480 Wh)"
   part_class: "48V 10Ah ebike / mobile-robot pack"
@@ -37,25 +37,30 @@ battery:
   capacity_ah: 10
   capacity_wh: 480                   # primary: SOC / drain / forecasts
   usable_fraction: 0.90              # soft planning limit (BMS / DoD)
-  # --- C-rate (the important battery truth for this project) ------------------
-  continuous_c_rate: 2.0             # 2C continuous
-  peak_c_rate: 3.0                   # 3C short peak
+  # --- C-rate (vendor page, not a 2C/3C guess) --------------------------------
+  continuous_c_rate: 1.0             # 10 A / 10 Ah
+  peak_c_rate: 2.0                   # 20 A / 10 Ah, held 2 s
   charge_c_rate: 0.5                 # 0.5C charge typical
-  continuous_discharge_a: 20         # 2C × 10 Ah
-  peak_discharge_a: 30               # 3C × 10 Ah (brief)
-  continuous_power_w: 960            # 48 V × 20 A
-  peak_power_w: 1440                 # 48 V × 30 A
+  continuous_discharge_a: 10         # vendor continuous
+  peak_discharge_a: 20               # vendor peak
+  peak_duration_s: 2                 # vendor: 20 A for 2 s
+  continuous_power_w: 480            # 48 V × 10 A
+  peak_power_w: 960                  # 48 V × 20 A
   cycle_life_80pct: 1000
-  mass_kg: 2.7
+  mass_kg: 2.8
   internal_resistance_mohm: 80
   bms:
-    continuous_a: 20
-    peak_a: 30
-    label: "integrated 20–30 A class BMS"
+    continuous_a: 10
+    peak_a: 20
+    peak_duration_s: 2
+    label: "vendor 10 A continuous / 20 A for 2 s"
   note: >
     Drive motors are 12 V; pack feeds a DC-DC for the motor bus. Energy is
     still tracked in Wh at the pack. Twin should flag if total draw exceeds
     continuous_power_w for long periods (C-rate stress).
+    FLAG, not changed: this pack charges to 54.6 V. Pololu D36V50 regulators
+    are rated to 50 V input. Do not pair them until the regulator is rated
+    for the charge voltage.
 
 # --- Motor driver — REAL PART -------------------------------------------------
 # SparkFun Dual TB6612FNG (ROB-14451 / ROB-13845 class)
@@ -84,8 +89,21 @@ motor_driver:
   continuous_bus_w: 28.8
   peak_bus_w: 76.8               # 2 × 3.2 A × 12 V (brief)
   note: >
-    Undersized for sustained stall of 37D (5.5 A). Twin cruise stays under
-    1.2 A/ch; ABS peaks use peak budget. Upgrade path: Pololu G2 18v15.
+    FLAG, not changed: 1.2 A continuous per channel is below the 37D stall
+    of 5.5 A. Left as the current twin driver on purpose. The BoM builds
+    use a larger bridge (G2 24v14, G2 24v21, or VNH5019). Do not read 1.2 A
+    as enough current for a stall.
+
+# Issues recorded on purpose. The loader logs these; it does not edit the parts.
+known_issues:
+  - id: tb6612_undersized
+    note: >
+      SparkFun TB6612FNG is 1.2 A continuous per channel. The Pololu 37D
+      stalls at 5.5 A. Not replaced in this profile.
+  - id: aegis_charge_above_d36v50
+    note: >
+      Aegis 48 V NMC charges to 54.6 V. Pololu D36V50 regulators accept
+      50 V max. Not rewired in this profile.
 
 # --- DC-DC 48 V → 12 V (closes pack vs motor-bus story) ------------------------
 # Catalog class: industrial non-isolated / isolated brick 48→12, ~100–150 W.
@@ -118,8 +136,11 @@ dc_dc_48_12:
 #   stall (extrapolated): 21 kg·cm ≈ 2.06 N·m, 5.5 A
 #   max efficiency: ~180 RPM, 22 kg·mm, 4.0 W mech, 0.66 A, η≈51%
 #
-# Track map (r=0.08 m): cruise v=0.44 m/s → ω=5.5 rad/s ≈ 52.5 RPM
-#   ≈ 26% of free-run speed — working band, not free-spin.
+# Real wheel is 80 mm across, so the radius is 0.04 m (this file used to say
+# 0.08, which is the diameter in metres). Webots worlds still draw a 0.08 m
+# cylinder; that mesh was not resized here. Cruise v=0.44 m/s on the real
+# wheel is ω=11 rad/s. The power curve uses body speed, so it still lands
+# on cruise_w at 0.44 m/s.
 #
 # Electrical model (velocity-only when torque feedback missing):
 #   partial: idle → cruise_w along |ω|/ω_cruise ^ 1.25
@@ -153,7 +174,7 @@ _drive_motor_pololu_37d_50_1: &pololu_37d_50_1
   # Twin power curve (per motor, Legs channel sums L+R)
   idle_w: 0.5                    # at rest (controller bias, no free-run)
   cruise_w: 8.0                  # electrical at track cruise ~0.44 m/s
-  cruise_speed_m_s: 0.44         # matches measure_track_run ω=5.5, r=0.08
+  cruise_speed_m_s: 0.44         # repo lane cruise; real-wheel ω = v/0.04 m
   curve_top_w: 12.0              # soft cont. ≤ TB6612 1.2 A × 12 V = 14.4 W/ch
   cont_w: 14.4                   # driver continuous electrical per channel
   peak_w: 22                     # brief peak ≤ driver 3.2 A × ~0.6 duty (not full stall)
@@ -311,7 +332,7 @@ modes:
 # 80 mm OD rubber robot tire + plastic hub ≈ 80–120 g.
 # Body: compact aluminum plate chassis class ~3.2 kg (sans pack/motors).
 geometry:
-  wheel_radius_m: 0.08
+  wheel_radius_m: 0.04          # 80 mm diameter / 2. Was 0.08 (diameter written as radius).
   wheel_diameter_mm: 80
   wheel_width_m: 0.035
   track_width_m: 0.34

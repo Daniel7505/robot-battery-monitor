@@ -27,8 +27,10 @@ actually present, so a labeled "drive" phase with stationary wheels stays calm.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
+from src.config import config
 from src.hardware_profile import (
     battery_capacity_wh,
     battery_c_rate_limits,
@@ -161,6 +163,16 @@ def estimate_motor_power_w(
     if is_wheel and vel <= 0.05 and (speed_m_s is None or float(speed_m_s) <= 0.04):
         return clamp_motor_power_w(name, idle_w, prof) if name else round(idle_w, 2)
 
+    # BoM builds use the published no-load / stall line (duty·V·I).
+    # The YAML profile keeps cruise_w, so it stays on the curve below.
+    if is_wheel and _use_bom_linear(prof, spec):
+        raw = _linear_wheel_electrical_w(
+            spec, prof, velocity=vel, torque=float(torque), speed_m_s=speed_m_s
+        )
+        if name:
+            return clamp_motor_power_w(name, raw, prof)
+        return round(raw, 2)
+
     # Profile cruise curve for wheels: smooth |ω| (or body speed) → watts
     cruise_w = spec.get("cruise_w")
     if is_wheel and cruise_w is not None and vel > 0.02:
@@ -212,6 +224,74 @@ def estimate_motor_power_w(
     if name:
         return clamp_motor_power_w(name, raw, prof)
     return round(raw, 2)
+
+
+def _use_bom_linear(profile: dict, spec: dict) -> bool:
+    """True when this wheel should use the BoM brushed-DC line, not cruise_w^1.25."""
+    if profile.get("power_model") == "bom_linear":
+        needed = (
+            "no_load_current_a",
+            "stall_current_a",
+            "stall_torque_nm",
+            "no_load_rpm",
+            "voltage_v",
+        )
+        return all(spec.get(key) is not None for key in needed)
+    # A profile that published stall numbers and has no cruise curve.
+    if spec.get("cruise_w") is not None:
+        return False
+    needed = (
+        "no_load_current_a",
+        "stall_current_a",
+        "stall_torque_nm",
+        "no_load_rpm",
+        "voltage_v",
+    )
+    return all(spec.get(key) is not None for key in needed)
+
+
+def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
+    """tau = Crr * m * g * r / 2. Mass is the known BoM mass plus payload."""
+    from src.bom_profile import rolling_mass_kg
+
+    assumptions = profile.get("assumptions") or {}
+    crr = float(assumptions.get("crr") or 0.015)
+    mass = rolling_mass_kg(profile)
+    return crr * mass * 9.81 * float(radius_m) / 2.0
+
+
+def _linear_wheel_electrical_w(
+    spec: dict,
+    profile: dict,
+    *,
+    velocity: float,
+    torque: float,
+    speed_m_s: float | None,
+) -> float:
+    """One motor's terminal power: duty * V * I.
+
+    Driver efficiency is applied later, once, in ``aggregate_channel_draws``,
+    so this is not divided by eta here. A missing torque sample uses the
+    rolling-resistance torque from the BoM formula. It does not invent a
+    current the datasheet didn't publish.
+    """
+    radius = wheel_radius_m(profile)
+    if speed_m_s is not None and float(speed_m_s) > 0.02:
+        omega = float(speed_m_s) / max(radius, 1e-4)
+    else:
+        omega = abs(float(velocity))
+    tau = abs(float(torque))
+    if tau < 1e-4:
+        tau = _rolling_torque_nm(profile, radius)
+    omega0 = float(spec["no_load_rpm"]) * 2.0 * math.pi / 60.0
+    tau_stall = float(spec["stall_torque_nm"])
+    if omega0 <= 0 or tau_stall <= 0:
+        return float(spec.get("idle_w") or 0.0)
+    duty = max(0.0, omega / omega0 + tau / tau_stall)
+    i0 = float(spec["no_load_current_a"])
+    i_stall = float(spec["stall_current_a"])
+    current = i0 + (i_stall - i0) * (tau / tau_stall)
+    return duty * float(spec["voltage_v"]) * current
 
 
 def motor_powers_from_joints(
@@ -287,6 +367,12 @@ def _compute_draw_w(
     vision: bool = False,
 ) -> float:
     """SBC + sensors (+ optional vision/agent modes) from profile compute blocks."""
+    if profile.get("bom_build") or profile.get("power_model") == "bom_linear":
+        from src.bom_profile import electronics_draw_w
+
+        moving = not (gait in ("stand", "idle", "standby") and speed_m_s < 0.06)
+        # Per-part watts only. The flat sensors.idle_w number is not added.
+        return electronics_draw_w(profile, moving=moving)
     compute = profile.get("compute") or {}
     sensors = profile.get("sensors") or {}
     imu = profile.get("imu") or {}
@@ -350,9 +436,11 @@ def aggregate_channel_draws(
         if ch:
             channels[ch] = round(channels.get(ch, 0.0) + float(watts), 2)
 
-    stab_ch, stab_w = _stabilizer_draw_w(prof, speed_m_s=speed_m_s)
-    if stab_w > 0:
-        channels[stab_ch] = round(channels.get(stab_ch, 0.0) + stab_w, 2)
+    bom = bool(prof.get("bom_build") or prof.get("power_model") == "bom_linear")
+    if not bom:
+        stab_ch, stab_w = _stabilizer_draw_w(prof, speed_m_s=speed_m_s)
+        if stab_w > 0:
+            channels[stab_ch] = round(channels.get(stab_ch, 0.0) + stab_w, 2)
 
     if compute_w is None:
         compute_w = _compute_draw_w(gait, prof, speed_m_s=speed_m_s)
@@ -360,7 +448,7 @@ def aggregate_channel_draws(
 
     # Mild stress from gait/phase (profile cruise already sets base drive level).
     # Keep stress light so Legs land mid-band instead of hard-pegging channel max.
-    mult = stress_multiplier(gait=gait, phase=phase)
+    mult = 1.0 if bom else stress_multiplier(gait=gait, phase=phase)
     if mult > 1.0 and (speed_m_s > 0.05 or motion_scale(speed_m_s=speed_m_s, joints=joints) > 0.2):
         motion = motion_scale(speed_m_s=speed_m_s, joints=joints)
         if motion > 0.0:
@@ -401,7 +489,28 @@ def aggregate_channel_draws(
         if max_w is not None:
             channels[ch_id] = round(min(total, float(max_w)), 2)
 
+    if bom:
+        # No arm, torso, or cooling hardware is sourced on a wheeled BoM build.
+        channels["Arms"] = 0.0
+        channels["Torso"] = 0.0
+        channels["Cooling"] = 0.0
+
     return channels
+
+
+def _locomotion_block(prof: dict, *, gait: str, phase: str, speed_m_s: float) -> dict:
+    block = {
+        "gait": gait,
+        "speed_m_s": round(speed_m_s, 3),
+        "phase": phase,
+        "mode": "wheeled",
+        "wheel_radius_m": wheel_radius_m(prof),
+    }
+    if prof.get("bom_build"):
+        block["bom_build"] = prof.get("bom_build")
+        block["bom_schema_version"] = prof.get("bom_schema_version")
+        block["payload_kg"] = float(config.get("robot", "payload_kg") or 0.0)
+    return block
 
 
 def gait_to_task(gait: str) -> str:
@@ -446,6 +555,16 @@ def build_webots_telemetry(
     )
     task = gait_to_task(gait)
     norm_phase = normalize_phase_name(phase) if phase else phase
+    locomotion = _locomotion_block(
+        prof, gait=gait, phase=norm_phase or phase, speed_m_s=speed_m_s
+    )
+    hardware = {}
+    if locomotion.get("bom_build"):
+        hardware = {
+            "bom_build": locomotion.get("bom_build"),
+            "bom_schema_version": locomotion.get("bom_schema_version"),
+            "payload_kg": locomotion.get("payload_kg"),
+        }
 
     return {
         "schema_version": "1.1",
@@ -464,13 +583,8 @@ def build_webots_telemetry(
         "motor_power_w": motor_power_w,
         "channel_draws": channel_draws,
         "joints": joints,
-        "locomotion": {
-            "gait": gait,
-            "speed_m_s": round(speed_m_s, 3),
-            "phase": norm_phase or phase,
-            "mode": "wheeled",
-            "wheel_radius_m": wheel_radius_m(prof),
-        },
+        "locomotion": locomotion,
+        "hardware": hardware,
         # Real-part BOM trace (motors, driver, pack, wheels)
         "hardware_parts": {
             "left_wheel": motor_part_meta("left_wheel", prof),

@@ -62,6 +62,8 @@ class PowerFeed:
     throttle: float | None = None
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     locomotion: dict[str, Any] = field(default_factory=dict)
+    # Additive. Empty for schema 1.0 clients that never sent a BoM build.
+    hardware: dict[str, Any] = field(default_factory=dict)
 
     def usable(self) -> bool:
         """True if this feed can drive at least one live reading field."""
@@ -77,7 +79,7 @@ class PowerFeed:
             "throttle": self.throttle,
             "timestamp": self.timestamp.isoformat(),
             "locomotion": dict(self.locomotion),
-        }
+        } | ({"hardware": dict(self.hardware)} if self.hardware else {})
 
 
 def power_feed_from_telemetry(tel) -> PowerFeed | None:
@@ -100,6 +102,14 @@ def power_feed_from_telemetry(tel) -> PowerFeed | None:
             battery = max(0.0, min(100.0, float(battery)))
         except (TypeError, ValueError):
             battery = None
+    locomotion = dict(getattr(tel, "locomotion", None) or {})
+    hardware = {}
+    raw = getattr(tel, "raw", None) or {}
+    if isinstance(raw, dict) and isinstance(raw.get("hardware"), dict):
+        hardware.update(raw["hardware"])
+    for key in ("bom_build", "bom_schema_version", "payload_kg"):
+        if locomotion.get(key) is not None:
+            hardware.setdefault(key, locomotion[key])
     feed = PowerFeed(
         source=str(getattr(tel, "source", "external") or "external"),
         battery_pct=battery,
@@ -107,6 +117,7 @@ def power_feed_from_telemetry(tel) -> PowerFeed | None:
         task=getattr(tel, "task", None),
         throttle=getattr(tel, "throttle", None),
         timestamp=getattr(tel, "timestamp", None) or datetime.now(timezone.utc),
-        locomotion=dict(getattr(tel, "locomotion", None) or {}),
+        locomotion=locomotion,
+        hardware=hardware,
     )
     return feed if feed.usable() else None

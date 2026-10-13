@@ -44,7 +44,8 @@
     "notes": {
       "crr": "ASSUMPTION: rolling-resistance coefficient for rubber/urethane on sealed concrete. Not a vendor spec. Measure it in a coast-down test or calibrate against Webots Wh/m.",
       "driver_eff": "ASSUMPTION: copied from the repo YAML TB6612 value. G2/VNH5019 efficiency is not published.",
-      "motor_model": "Linear brushed-DC model from published no-load speed/current and stall torque/current (gearbox losses are inside these gearmotor figures). Flat floor, constant speed, no acceleration, no turning losses.",
+      "motor_model": "Linear brushed-DC model from published no-load speed/current and stall torque/current (gearbox losses are inside these gearmotor figures). The design table is flat floor and constant speed. The live mission log adds published hinge damping, an m·a bound, and the turn term in turning_scrub. Datasheet peak efficiency is not an operating-point η.",
+      "turning_scrub": "ASSUMPTION gaps, not a fit. Billed only on the mission log. Slip speed of each hub is (track/2)·|yaw rate| with track_width_m 0.34 from butlerbot_wheeled.yaml (world anchors ±0.17 m). Force is min(μ·N, v_slip/k). μ=8 and k=0.01 are drive_wheel vs default in butlerbot_warehouse.wbt (ODE: v = k·F). μ is a cap; the world comment says μ=80 made yaw impossible. frictionRotation is 0 0, so bore torque is not billed. Torque is F times the drawn wheel radius 0.08 m, then the Pololu 4693 duty/current line. Driver η 0.92 is applied once. ASSUMPTION: both drive wheels carry the weight because caster bottoms are ~4 mm above the tire. Straight-line contact torque above dampingConstant 0.15 is not given a coefficient. Fully mobilizing μ=8 as a skid is not billed.",
       "payload": "Payload rolls on the trolley with the same Crr. Trolley tare mass is unknown and excluded."
     }
   },

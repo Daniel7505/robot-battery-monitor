@@ -34,6 +34,17 @@ DEFAULT_DRIVER_EFF = 0.92
 # not a fit to a logged run.
 SIM_WHEEL_RADIUS_M = 0.08
 SIM_HINGE_DAMPING_NM_S_RAD = 0.15
+# butlerbot_warehouse.wbt WorldInfo contactProperties, drive_wheel vs
+# default. The same block is in the other butlerbot*.wbt files.
+# coulombFriction 8 is the no-slip cap: the world comment says μ=80 made
+# yaw impossible. forceDependentSlip 0.01 is ODE's k in ``v = k · F``
+# (Webots R2025a ContactProperties, quoting the ODE manual).
+# frictionRotation is 0 0, so the world applies no bore torque and this
+# model does not invent one. The tire cylinder height is 0.05 m; it is
+# not a second slip length.
+WORLD_DRIVE_COULOMB_FRICTION = 8.0
+WORLD_DRIVE_FDS_M_S_PER_N = 0.01
+TURN_SOURCE = "world_fds_track_scrub"
 
 # Grounded in V1_WHEELED_ENERGY_BASELINE + 15 m hold-cruise logs.
 TWIN_CRUISE = {
@@ -96,6 +107,37 @@ def _energy_row(profile: dict, speed_m_s: float | None) -> dict | None:
     return min(rows, key=lambda row: abs(float(row["speed_m_s"]) - float(speed_m_s)))
 
 
+def _pack_watts_from_shaft(
+    tau_nm: float,
+    omega_rad_s: float,
+    *,
+    voltage_v: float,
+    no_load_rpm: float,
+    no_load_current_a: float,
+    stall_current_a: float,
+    stall_torque_nm: float,
+    eta_driver: float,
+) -> tuple[float, float, float]:
+    """Duty, current, and pack watts of one motor. One curve for every bill.
+
+    This is ``electrical_from_shaft_w``. A missing line (bad stall or
+    driver efficiency) is 0 W, matching the old early return.
+    """
+    point = electrical_from_shaft_w(
+        tau_nm,
+        omega_rad_s,
+        voltage_v=voltage_v,
+        no_load_rpm=no_load_rpm,
+        no_load_current_a=no_load_current_a,
+        stall_current_a=stall_current_a,
+        stall_torque_nm=stall_torque_nm,
+        eta_driver=eta_driver,
+    )
+    if point["elec_w"] is None:
+        return 0.0, float(no_load_current_a), 0.0
+    return float(point["duty"]), float(point["current_a"]), float(point["elec_w"])
+
+
 def brushed_drive_point(
     *,
     mass_kg: float,
@@ -123,8 +165,13 @@ def brushed_drive_point(
     together), used for the acceleration term. ``extra_torque_nm`` is an
     added shaft torque on each motor. Both default to zero, which is the
     rolling-only point (light build ~3.43 W and ~0.0066 Wh per 10 ft at
-    0.44 m/s). Torque is clamped to stall so a hard accel does not invent
+    0.44 m/s).     Torque is clamped to stall so a hard accel does not invent
     a current past the datasheet.
+
+    Pack watts are ``electrical_from_shaft_w`` on each motor: the same
+    speed-and-torque line as the measured hinge conversion. Driver
+    efficiency is that function's ``eta_driver``, applied once. The
+    datasheet peak efficiency is not used.
     """
     radius = max(float(wheel_radius_m), 1e-6)
     speed = float(speed_m_s)
@@ -145,11 +192,17 @@ def brushed_drive_point(
             "extra_wh_per_10ft_per_kg_payload": 0.0,
         }
     tau_elec = min(tau, tau_stall)
-    duty = omega / omega0 + tau_elec / tau_stall
-    current = float(no_load_current_a) + (
-        float(stall_current_a) - float(no_load_current_a)
-    ) * (tau_elec / tau_stall)
-    drive_w = float(motors) * duty * float(voltage_v) * current / float(eta_driver)
+    duty, current, drive_one = _pack_watts_from_shaft(
+        tau_elec,
+        omega,
+        voltage_v=float(voltage_v),
+        no_load_rpm=float(no_load_rpm),
+        no_load_current_a=float(no_load_current_a),
+        stall_current_a=float(stall_current_a),
+        stall_torque_nm=tau_stall,
+        eta_driver=float(eta_driver),
+    )
+    drive_w = float(motors) * drive_one
     seconds = TEN_FT_M / speed
     drive_wh = drive_w * seconds / 3600.0
 
@@ -161,11 +214,17 @@ def brushed_drive_point(
             + added,
             tau_stall,
         )
-        duty_m = omega / omega0 + tau_m / tau_stall
-        current_m = float(no_load_current_a) + (
-            float(stall_current_a) - float(no_load_current_a)
-        ) * (tau_m / tau_stall)
-        return float(motors) * duty_m * float(voltage_v) * current_m / float(eta_driver)
+        _duty_m, _current_m, watts = _pack_watts_from_shaft(
+            tau_m,
+            omega,
+            voltage_v=float(voltage_v),
+            no_load_rpm=float(no_load_rpm),
+            no_load_current_a=float(no_load_current_a),
+            stall_current_a=float(stall_current_a),
+            stall_torque_nm=tau_stall,
+            eta_driver=float(eta_driver),
+        )
+        return float(motors) * watts
 
     extra = (_drive_at(float(mass_kg) + 1.0) - drive_w) * seconds / 3600.0
     return {
@@ -273,6 +332,8 @@ def published_motor_circuit(
             "There is no regen. Torque past stall is clamped to stall so "
             "current is not invented past the datasheet. Contact torque is "
             "already inside the measured hinge torque and is not added again.",
+            "The mission turn term uses this same duty/current line. "
+            "It does not divide scrub work by a fixed efficiency.",
         ),
     }
 
@@ -507,9 +568,9 @@ def geometry_scrub_wh(
     that work divided by driver efficiency.
 
     This is not billed. A 61.6° yaw on the light chassis is about 0.0001 Wh.
-    Live segments did not correlate locomotion watt-hours with heading
-    (warehouse correlation −0.06 across 52 segments). The old fitted yaw
-    term was that gap misread as scrub.
+    The billed turn term is ``turning_scrub_wh``: track geometry and the
+    world's force-dependent slip, through the motor curve. Not this arc,
+    and not a coefficient fitted to a log.
     """
     theta = math.radians(abs(float(heading_change_deg)))
     track = chassis_track_width_m() if track_width_m is None else float(track_width_m)
@@ -517,6 +578,156 @@ def geometry_scrub_wh(
         return 0.0
     work_j = float(crr) * float(mass_kg) * GRAVITY_M_S2 * track * theta
     return (work_j / float(eta_driver)) / 3600.0
+
+
+def _profile_motor_args(profile: dict) -> dict:
+    spec = (profile.get("motors") or {}).get("left_wheel") or {}
+    assumptions = profile.get("assumptions") or {}
+    geom = profile.get("geometry") or {}
+    return {
+        "voltage_v": float(spec.get("voltage_v") or 0.0),
+        "no_load_rpm": float(spec.get("no_load_rpm") or 0.0),
+        "no_load_current_a": float(spec.get("no_load_current_a") or 0.0),
+        "stall_current_a": float(spec.get("stall_current_a") or 0.0),
+        "stall_torque_nm": float(spec.get("stall_torque_nm") or 0.0),
+        "eta_driver": float(assumptions.get("driver_eff") or DEFAULT_DRIVER_EFF),
+        "crr": float(assumptions.get("crr") or DEFAULT_CRR),
+        "wheel_radius_m": float(geom.get("wheel_radius_m") or 0.04),
+        "mass_kg": float(geom.get("mass_kg_known") or 0.0),
+    }
+
+
+def _hub_electrical_w(args: dict, mass_kg: float, speed_m_s: float, tau_scrub_nm: float) -> tuple[float, bool]:
+    """One hub's pack watts at body speed, plus an optional scrub torque.
+
+    Electrical speed is body speed / BoM radius, the same convention as
+    ``brushed_drive_point``. A hub at 0 m/s bills 0 W, same as that line.
+    Scrub torque is clamped by ``electrical_from_shaft_w`` at stall.
+    """
+    speed = float(speed_m_s)
+    if speed <= 1e-9:
+        return 0.0, False
+    radius = max(float(args["wheel_radius_m"]), 1e-6)
+    tau = (
+        float(args["crr"]) * float(mass_kg) * GRAVITY_M_S2 * radius / 2.0
+        + SIM_HINGE_DAMPING_NM_S_RAD * speed / SIM_WHEEL_RADIUS_M
+        + max(0.0, float(tau_scrub_nm))
+    )
+    point = electrical_from_shaft_w(
+        tau,
+        speed / radius,
+        voltage_v=args["voltage_v"],
+        no_load_rpm=args["no_load_rpm"],
+        no_load_current_a=args["no_load_current_a"],
+        stall_current_a=args["stall_current_a"],
+        stall_torque_nm=args["stall_torque_nm"],
+        eta_driver=args["eta_driver"],
+    )
+    if point["elec_w"] is None:
+        return 0.0, False
+    return float(point["elec_w"]), bool(point["clamped"])
+
+
+def turning_scrub_point(
+    profile: dict,
+    speed_m_s: float,
+    yaw_rate_rad_s: float,
+    payload_kg: float = 0.0,
+) -> dict:
+    """Extra pack watts of a yaw, from track geometry and the world contact.
+
+    Each drive hub is ``track/2`` from the chassis centre (0.34 m in
+    ``butlerbot_wheeled.yaml``, anchors ±0.17 m in the world). At yaw
+    rate ω the hub's ground-speed offset from the centre is
+    ``(track/2)·|ω|``. The world's ODE force-dependent slip turns a
+    tangential slip speed into a force, ``v = k · F`` with
+    ``k = 0.01``, capped by ``μ · N`` with ``μ = 8``.
+
+    ``N`` is half the known BoM mass plus this run's payload.
+    ASSUMPTION: the two drive wheels carry the robot. Caster bottoms
+    sit about 4 mm above the tire (world comment), so they are not in
+    the normal load. ``μ = 8`` is only the cap. At a warehouse corner
+    the force is ``v/k``, well below ``μ·N``. Fully mobilizing μ = 8
+    as a skid would clamp the motor at stall and is not billed.
+    ``frictionRotation`` is 0, so there is no bore torque.
+
+    The force is an axle torque ``F · R`` on the drawn 0.08 m wheel.
+    Both hubs get it. Each hub is also evaluated at its own speed
+    ``v ± (track/2)·|ω|`` so the viscous hinge torque follows the
+    faster outer wheel. Pack watts are ``electrical_from_shaft_w``.
+    Driver efficiency 0.92 is inside that call, once. The straight
+    bill (both hubs at ``v``, scrub torque 0) is subtracted, so rolling
+    and damping are not billed twice.
+
+    A differential drive that matches each hub to that offset is
+    rolling, and the residual slip is only the tire width plus tracking
+    error. Using the full offset is the contact law's force when that
+    offset is slip. It is an upper bound when the controller cancels
+    it. The number is not adjusted to a log.
+    """
+    args = _profile_motor_args(profile)
+    mass = args["mass_kg"] + max(0.0, float(payload_kg))
+    speed = max(0.0, float(speed_m_s))
+    yaw = abs(float(yaw_rate_rad_s))
+    empty = {
+        "delta_w": 0.0,
+        "straight_w": 0.0,
+        "turned_w": 0.0,
+        "scrub_force_n": 0.0,
+        "scrub_torque_nm": 0.0,
+        "clamped": False,
+        "turn_source": "none",
+    }
+    if mass <= 0 or speed <= 0 or yaw <= 0:
+        if mass > 0 and speed > 0:
+            straight = 2.0 * _hub_electrical_w(args, mass, speed, 0.0)[0]
+            empty["straight_w"] = straight
+            empty["turned_w"] = straight
+        return empty
+    track = chassis_track_width_m()
+    if track <= 0 or WORLD_DRIVE_FDS_M_S_PER_N <= 0:
+        return empty
+    v_slip = (track / 2.0) * yaw
+    normal = mass * GRAVITY_M_S2 / 2.0
+    force = min(
+        WORLD_DRIVE_COULOMB_FRICTION * normal,
+        v_slip / WORLD_DRIVE_FDS_M_S_PER_N,
+    )
+    tau_scrub = force * SIM_WHEEL_RADIUS_M
+    half = v_slip
+    inner_v = max(0.0, speed - half)
+    outer_v = speed + half
+    straight = 2.0 * _hub_electrical_w(args, mass, speed, 0.0)[0]
+    inner_w, inner_clamp = _hub_electrical_w(args, mass, inner_v, tau_scrub)
+    outer_w, outer_clamp = _hub_electrical_w(args, mass, outer_v, tau_scrub)
+    turned = inner_w + outer_w
+    return {
+        "delta_w": max(0.0, turned - straight),
+        "straight_w": straight,
+        "turned_w": turned,
+        "scrub_force_n": force,
+        "scrub_torque_nm": tau_scrub,
+        "clamped": inner_clamp or outer_clamp,
+        "turn_source": TURN_SOURCE,
+    }
+
+
+def turning_scrub_wh(
+    profile: dict,
+    speed_m_s: float,
+    heading_change_deg: float,
+    dt_s: float,
+    payload_kg: float = 0.0,
+) -> float:
+    """Electrical watt-hours of one yaw step. Zero when the step does not yaw."""
+    dt = float(dt_s)
+    if dt <= 0:
+        return 0.0
+    yaw = math.radians(abs(float(heading_change_deg)))
+    if yaw <= 0:
+        return 0.0
+    point = turning_scrub_point(profile, speed_m_s, yaw / dt, payload_kg)
+    return float(point["delta_w"]) * dt / 3600.0
 
 
 def accel_electrical_wh(
@@ -574,10 +785,10 @@ def segment_model_terms(
     ``wh_roll`` is the rolling-only motor line. ``wh_visc`` is the extra
     electrical energy from the published hinge damping on that same line
     (the cross term included, so roll + visc is the combined point).
-    ``heading_change_deg`` is accepted so callers can keep passing it.
-    It is not billed. Warehouse locomotion did not track heading.
+    ``wh_turn`` is ``turning_scrub_wh`` for this piece's heading, at the
+    piece's average speed. Zero heading bills zero. Rolling per 10 ft
+    does not change.
     """
-    del heading_change_deg
     from src.hardware_profile import get_active_profile
 
     prof = profile if profile is not None else get_active_profile()
@@ -585,16 +796,22 @@ def segment_model_terms(
     speed = float(avg_speed_m_s)
     roll = 0.0
     visc = 0.0
+    turn = 0.0
+    source = "none"
     if dist > 0 and speed > 0:
         roll = (dist / TEN_FT_M) * _per_10ft(bom_drive_terms(prof, speed), payload_kg)
         sim = (dist / TEN_FT_M) * _per_10ft(sim_drive_terms(prof, speed), payload_kg)
         visc = max(0.0, sim - roll)
+        dt = dist / speed
+        turn = turning_scrub_wh(prof, speed, heading_change_deg, dt, payload_kg)
+        if turn > 0:
+            source = TURN_SOURCE
     return {
         "wh_roll": roll,
         "wh_visc": visc,
-        "wh_turn": 0.0,
+        "wh_turn": turn,
         "wh_accel": max(0.0, float(wh_accel)),
-        "turn_source": "none",
+        "turn_source": source,
     }
 
 
@@ -617,8 +834,8 @@ def estimate_mission_energy(
 
     With ``bom_build`` set and no override, Wh/m comes from that build's
     per-10-ft table (including the payload term). This shift table stays
-    rolling-only. A logged run adds published hinge damping and the
-    acceleration bound in ``bom_run_energy_wh``, not here.
+    rolling-only. A logged run adds published hinge damping, the turn
+    term, and the acceleration bound in ``bom_run_energy_wh``, not here.
     """
     length = max(0.0, float(length_m))
     ov = load_override(override_path) if use_override else None
@@ -678,15 +895,19 @@ def bom_run_energy_wh(
     profile: dict | None = None,
     heading_change_deg: float = 0.0,
     wh_accel: float = 0.0,
+    wh_turn: float | None = None,
 ) -> dict | None:
-    """Idle for the whole run, plus rolling, published hinge damping, and accel.
+    """Idle for the whole run, plus rolling, hinge damping, turn, and accel.
 
     ``idle_w_known × hours`` is the compute/sensor idle from the BoM (9.96 W
     on the light build). Drive is the brushed-DC line at the run's average
     speed. ``wh_model_roll`` is rolling resistance only. ``wh_model_visc``
     is the extra from ``dampingConstant 0.15`` on the 0.08 m sim wheel.
-    Yaw is not a term. ``heading_change_deg`` is ignored. Acceleration is
-    the caller's summed motor-line bound (zero when omitted). Unknown idle
+    ``wh_model_turn`` is the track/FDS scrub term. Passed ``wh_turn`` wins:
+    the live log integrates each sample, because one average yaw rate over
+    a whole lap under-bills a short corner. Otherwise the term uses
+    ``heading_change_deg`` at the average speed. Acceleration is the
+    caller's summed motor-line bound (zero when omitted). Unknown idle
     watts return None.
 
     The design-agent shift table stays rolling-only. A fitted
@@ -714,19 +935,26 @@ def bom_run_energy_wh(
             sim_drive_terms(prof, speed), payload_kg
         )
         visc_wh = max(0.0, sim_wh - roll_wh)
-    del heading_change_deg
+    if wh_turn is None:
+        turn_wh = 0.0
+        if distance > 0 and speed > 0 and duration > 0:
+            turn_wh = turning_scrub_wh(
+                prof, speed, heading_change_deg, duration, payload_kg
+            )
+    else:
+        turn_wh = max(0.0, float(wh_turn))
     accel_wh = max(0.0, float(wh_accel))
-    drive_wh = roll_wh + visc_wh + accel_wh
+    drive_wh = roll_wh + visc_wh + turn_wh + accel_wh
     return {
         "wh_model": round(idle_wh + drive_wh, 3),
         "wh_model_idle": round(idle_wh, 3),
         "wh_model_drive": round(drive_wh, 3),
         "wh_model_roll": round(roll_wh, 3),
         "wh_model_visc": round(visc_wh, 3),
-        "wh_model_turn": 0.0,
+        "wh_model_turn": round(turn_wh, 3),
         "wh_model_accel": round(accel_wh, 3),
         "idle_w": idle_w,
-        "turn_source": "none",
+        "turn_source": TURN_SOURCE if turn_wh > 0 else "none",
     }
 
 
@@ -737,6 +965,7 @@ def format_mission_energy_line(
     duration_s: float | None = None,
     heading_change_deg: float = 0.0,
     wh_accel: float = 0.0,
+    wh_turn: float | None = None,
 ) -> str:
     """``MISSION_ENERGY build=...`` line. Model and measured stay separate.
 
@@ -762,6 +991,7 @@ def format_mission_energy_line(
             float(payload_kg),
             heading_change_deg=heading_change_deg,
             wh_accel=wh_accel,
+            wh_turn=wh_turn,
         )
     if run is not None:
         wh_model = run["wh_model"]

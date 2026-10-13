@@ -268,11 +268,12 @@ def test_mission_summary_fires_once_when_the_track_parks():
         assert float(fields["soc_end"]) == pytest.approx(99.0)
         assert float(fields["wh_model_idle"]) == pytest.approx(9.96 * 20.0 / 3600.0, abs=0.002)
         assert float(fields["wh_model"]) > float(fields["wh_model_drive"]) > 0
-        assert float(fields["wh_model_turn"]) == 0.0
+        assert float(fields["wh_model_turn"]) > 0.0
         assert float(fields["wh_model_visc"]) > 0.0
         assert float(fields["wh_model_drive"]) == pytest.approx(
             float(fields["wh_model_roll"])
             + float(fields["wh_model_visc"])
+            + float(fields["wh_model_turn"])
             + float(fields["wh_model_accel"]),
             abs=0.003,
         )
@@ -608,10 +609,17 @@ def test_segment_logs_roll_turn_and_accel_from_the_model():
         )
         fields = _fields(next(line for line in closed if line.startswith("SEGMENT_ENERGY")))
         assert float(fields["heading_change_deg"]) == pytest.approx(61.6, abs=0.2)
-        assert float(fields["wh_model_turn"]) == 0.0
+        assert float(fields["wh_model_turn"]) > 0.0
         assert float(fields["wh_model_accel"]) > 0
         assert float(fields["wh_model_roll"]) == pytest.approx(0.0066, abs=0.0004)
         assert float(fields["wh_model_visc"]) > float(fields["wh_model_roll"])
+        assert float(fields["wh_model_drive"]) == pytest.approx(
+            float(fields["wh_model_roll"])
+            + float(fields["wh_model_visc"])
+            + float(fields["wh_model_turn"])
+            + float(fields["wh_model_accel"]),
+            abs=1e-4,
+        )
         assert fields["wh_measured_drive_shaft"] == "na"
         assert fields["wh_measured_drive_elec"] == "na"
         assert fields["eta_avg"] == "na"

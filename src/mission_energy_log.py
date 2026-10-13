@@ -75,12 +75,24 @@ the electrical ones.
   published Webots hinge (``dampingConstant 0.15`` on the 0.08 m
   wheel) through that same motor line. It rises with speed. It is
   not a coefficient fitted to a log.
-* ``wh_model_turn`` — always 0. Heading is counted for ``turns``
-  and is not an energy term.
+* ``wh_model_turn`` — extra electrical watt-hours while yawing.
+  Each hub sits half the axle track off the chassis centre. Its
+  ground-speed offset is ``(track/2)·|ω|``. The world contact
+  (``butlerbot_warehouse.wbt``, drive_wheel vs default) uses ODE
+  force-dependent slip ``v = k·F`` with ``k = 0.01``, capped by
+  ``μ = 8``. That force times the 0.08 m wheel is shaft torque on
+  the same Pololu 4693 line as ``wh_measured_drive_elec``. Driver
+  efficiency 0.92 is inside that line, once. ``μ = 8`` is the cap,
+  not a skid coefficient: the world comment says μ=80 made yaw
+  impossible, and ``frictionRotation`` is 0 so bore torque is not
+  billed. ASSUMPTION: both drive wheels carry the weight, because
+  the caster bottoms are about 4 mm above the tire. Straight
+  segments stay at the rolling-plus-damping line. The 11–39%
+  straight residual is not given a fitted coefficient.
 * ``wh_model_accel`` — predicted extra motor-line watts while
   speeding up (``m·a`` on top of rolling torque). Slowing down is
   zero (no regen).
-* ``wh_model_drive`` — ``wh_model_roll + wh_model_visc + wh_model_accel``.
+* ``wh_model_drive`` — ``wh_model_roll + wh_model_visc + wh_model_turn + wh_model_accel``.
 * ``err_pct`` — ``(wh_measured_drive_elec − wh_model_drive) / wh_model_drive × 100``.
   ``na`` when the electrical measurement is missing or the model
   drive is 0. Shaft watts are not subtracted from the electrical
@@ -230,6 +242,7 @@ class MissionEnergyLog:
         self._mission_elec_known = True
         self._mission_wh_idle = 0.0
         self._mission_wh_accel = 0.0
+        self._mission_wh_turn = 0.0
         self._clear_segment()
         self._clear_power()
 
@@ -243,6 +256,7 @@ class MissionEnergyLog:
         self._seg_elec_known = True
         self._seg_wh_idle = 0.0
         self._seg_wh_accel = 0.0
+        self._seg_wh_turn = 0.0
         self._seg_heading_deg = 0.0
         self._seg_accel = 0
 
@@ -295,6 +309,9 @@ class MissionEnergyLog:
             accel = 1
         if trusted and self._last_speed is not None and speed > self._last_speed:
             wh_accel_step = _accel_step_wh(self._last_speed, speed, dt, self._payload_kg)
+        wh_turn_step = 0.0
+        if trusted:
+            wh_turn_step = _turn_step_wh(speed, heading_deg, dt, self._payload_kg)
         self._last_speed = speed
 
         self._mission_dt += dt
@@ -309,6 +326,7 @@ class MissionEnergyLog:
             self._mission_elec_known = False
         self._mission_wh_idle += wh_idle
         self._mission_wh_accel += wh_accel_step
+        self._mission_wh_turn += wh_turn_step
         self._note_soc(sample)
         if trusted:
             self._note_turn(heading_deg)
@@ -337,6 +355,7 @@ class MissionEnergyLog:
                 self._seg_elec_known = False
             self._seg_wh_idle += wh_idle
             self._seg_wh_accel += wh_accel_step
+            self._seg_wh_turn += wh_turn_step
             self._seg_heading_deg += abs(heading_deg)
             if accel:
                 self._seg_accel += accel
@@ -350,6 +369,7 @@ class MissionEnergyLog:
             closed_elec = self._seg_wh_elec
             closed_idle = self._seg_wh_idle
             closed_accel = self._seg_wh_accel
+            closed_turn = self._seg_wh_turn
             closed_head = self._seg_heading_deg
             self._seg_dist = closed_dist * frac
             self._seg_dt = closed_dt * frac
@@ -359,6 +379,7 @@ class MissionEnergyLog:
             closed_elec_known = self._seg_elec_known
             self._seg_wh_idle = closed_idle * frac
             self._seg_wh_accel = closed_accel * frac
+            self._seg_wh_turn = closed_turn * frac
             self._seg_heading_deg = closed_head * frac
             lines.append(
                 self._segment_line(
@@ -378,6 +399,7 @@ class MissionEnergyLog:
             self._seg_elec_known = closed_elec_known
             self._seg_wh_idle = closed_idle * keep
             self._seg_wh_accel = closed_accel * keep
+            self._seg_wh_turn = closed_turn * keep
             self._seg_heading_deg = closed_head * keep
             self._seg_accel = 0
 
@@ -478,9 +500,13 @@ class MissionEnergyLog:
             self._seg_wh_accel,
             self._payload_kg,
         )
-        model_drive = (
-            float(terms["wh_roll"]) + float(terms["wh_visc"]) + float(terms["wh_accel"])
-        )
+        # Per-sample integral. Averaging the segment's yaw under-bills a
+        # corner that occupies only part of the 10 ft.
+        roll = round(float(terms["wh_roll"]), 4)
+        visc = round(float(terms["wh_visc"]), 4)
+        turn = round(self._seg_wh_turn, 4)
+        accel = round(float(terms["wh_accel"]), 4)
+        model_drive = round(roll + visc + turn + accel, 4)
         err = _err_pct(elec, model_drive)
         eta = _eta(shaft if shaft_known else None, elec)
         total = None if elec is None else elec + self._seg_wh_idle
@@ -493,10 +519,10 @@ class MissionEnergyLog:
             f"wh_measured_drive_elec={_na(elec, 4)} "
             f"eta_avg={eta} "
             f"wh_model_drive={model_drive:.4f} "
-            f"wh_model_roll={terms['wh_roll']:.4f} "
-            f"wh_model_visc={terms['wh_visc']:.4f} "
-            f"wh_model_turn={terms['wh_turn']:.4f} "
-            f"wh_model_accel={terms['wh_accel']:.4f} "
+            f"wh_model_roll={roll:.4f} "
+            f"wh_model_visc={visc:.4f} "
+            f"wh_model_turn={turn:.4f} "
+            f"wh_model_accel={accel:.4f} "
             f"err_pct={err} "
             f"wh_idle={self._seg_wh_idle:.4f} "
             f"wh_total={_na(total, 4)}"
@@ -555,13 +581,20 @@ class MissionEnergyLog:
             self._heading_accum_deg,
             self._mission_wh_accel,
         )
-        wh_model = None if model is None else model["wh_model"]
         idle = None if model is None else model["wh_model_idle"]
-        drive = None if model is None else model["wh_model_drive"]
         roll = None if model is None else model.get("wh_model_roll")
         visc = None if model is None else model.get("wh_model_visc")
-        turn = None if model is None else model.get("wh_model_turn")
         accel_wh = None if model is None else model.get("wh_model_accel")
+        # Sample integral, not yaw averaged over the whole lap.
+        turn = round(self._mission_wh_turn, 3)
+        drive = None
+        wh_model = None
+        if model is not None:
+            drive = round(
+                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0),
+                3,
+            )
+            wh_model = round(float(idle or 0.0) + drive, 3)
         soc_wh = None
         if (
             self._soc_start is not None
@@ -602,6 +635,7 @@ class MissionEnergyLog:
             duration_s=self._mission_dt,
             heading_change_deg=self._heading_accum_deg,
             wh_accel=self._mission_wh_accel,
+            wh_turn=self._mission_wh_turn,
         )
 
 
@@ -702,6 +736,20 @@ def resolve_log_build(stamped) -> str:
     if text.lower() in {"", "default", "none", "null", "yaml", "~"}:
         return active or "default"
     return text
+
+
+def _turn_step_wh(speed: float, heading_deg: float, dt: float, payload_kg: float) -> float:
+    try:
+        from src.hardware_profile import active_bom_build, get_active_profile
+        from src.twin_energy import turning_scrub_wh
+
+        if not active_bom_build():
+            return 0.0
+        return turning_scrub_wh(
+            get_active_profile(), speed, heading_deg, dt, payload_kg
+        )
+    except Exception:
+        return 0.0
 
 
 def _accel_step_wh(v0: float, v1: float, dt: float, payload_kg: float) -> float:

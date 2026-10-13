@@ -161,8 +161,8 @@ def test_mission_energy_over_a_duration_includes_idle():
         _restore_bom(old)
 
 
-def test_drive_wh_per_metre_depends_on_speed_and_not_on_yaw():
-    """Rolling electrical Wh per 10 ft is the motor line. Yaw does not add a term."""
+def test_drive_wh_per_metre_depends_on_speed_and_yaw_is_separate():
+    """Rolling Wh per 10 ft is the motor line. Yaw is a separate turn term."""
     from src.hardware_profile import get_active_profile, load_hardware_profile
 
     old = _use_bom("light")
@@ -190,8 +190,12 @@ def test_drive_wh_per_metre_depends_on_speed_and_not_on_yaw():
         assert straight["turn_source"] == "none"
 
         curved = bom_run_energy_wh(TEN_FT_M, dt, 0.0, heading_change_deg=61.6)
-        assert curved["wh_model_turn"] == 0.0
-        assert curved["wh_model_drive"] == straight["wh_model_drive"]
+        assert curved["wh_model_turn"] > 0.0
+        assert curved["turn_source"] == "world_fds_track_scrub"
+        assert curved["wh_model_drive"] == pytest.approx(
+            curved["wh_model_roll"] + curved["wh_model_visc"] + curved["wh_model_turn"],
+            abs=0.002,
+        )
         assert curved["wh_model_roll"] == straight["wh_model_roll"]
         assert curved["wh_model_visc"] == straight["wh_model_visc"]
 
@@ -200,9 +204,9 @@ def test_drive_wh_per_metre_depends_on_speed_and_not_on_yaw():
         scrub = geometry_scrub_wh(
             6.142, 61.6, crr=0.015, track_width_m=track, eta_driver=0.92
         )
-        # Geometry scrub is real and tiny. It is not added on top of rolling.
+        # The Crr arc is real and tiny. It is not the billed turn term.
         assert 0 < scrub < 0.001
-        assert curved["wh_model_drive"] > 50.0 * scrub
+        assert curved["wh_model_turn"] > 50.0 * scrub
 
         sped_up = accel_electrical_wh(prof, 0.0, 0.44, 1.0, 0.0)
         assert 0 < sped_up < 0.01
@@ -273,11 +277,108 @@ def test_warehouse_run_checks_drive_shape_without_a_fitted_bill():
         idle = 9.96 * 2145.0 / 3600.0
         assert idle == pytest.approx(5.9, abs=0.1)
         plain = bom_run_energy_wh(369.0, 2145.0, 0.0, heading_change_deg=0.0)
-        turned = bom_run_energy_wh(369.0, 2145.0, 0.0, heading_change_deg=400.0)
+        # 400° spread over 2145 s is a tiny average yaw. A short corner is not.
+        spread = bom_run_energy_wh(369.0, 2145.0, 0.0, heading_change_deg=400.0)
+        corner_dt = TEN_FT_M / 0.22
+        corner = bom_run_energy_wh(TEN_FT_M, corner_dt, 0.0, heading_change_deg=90.0)
+        straight_corner = bom_run_energy_wh(TEN_FT_M, corner_dt, 0.0, heading_change_deg=0.0)
         assert plain["wh_model_turn"] == 0.0
-        assert plain["wh_model_drive"] == turned["wh_model_drive"]
+        assert spread["wh_model_roll"] == plain["wh_model_roll"]
+        assert spread["wh_model_visc"] == plain["wh_model_visc"]
+        assert corner["wh_model_turn"] > straight_corner["wh_model_turn"]
+        assert corner["wh_model_roll"] == straight_corner["wh_model_roll"]
         assert plain["wh_model_idle"] == pytest.approx(idle, abs=0.01)
         assert plain["wh_model_visc"] > plain["wh_model_roll"]
+    finally:
+        _restore_bom(old)
+
+
+def test_turning_scrub_uses_world_contact_and_the_4693_curve():
+    """107.6° corner: force from track, μ cap, and FDS k, then the motor line.
+
+    The hand formula below is the bill. It is not a regression to run #8.
+    """
+    import math
+
+    from src.hardware_profile import get_active_profile
+    from src.twin_energy import (
+        SIM_HINGE_DAMPING_NM_S_RAD,
+        SIM_WHEEL_RADIUS_M,
+        WORLD_DRIVE_COULOMB_FRICTION,
+        WORLD_DRIVE_FDS_M_S_PER_N,
+        electrical_from_shaft_w,
+        sim_drive_terms,
+        turning_scrub_point,
+        turning_scrub_wh,
+    )
+
+    old = _use_bom("light")
+    try:
+        prof = get_active_profile()
+        spec = prof["motors"]["left_wheel"]
+        assert WORLD_DRIVE_COULOMB_FRICTION == 8.0
+        assert WORLD_DRIVE_FDS_M_S_PER_N == 0.01
+        assert SIM_WHEEL_RADIUS_M == 0.08
+        mass = 6.142
+        g = 9.81
+        track = 0.34
+        r_bom = 0.04
+        crr = 0.015
+        v = 0.22
+        heading = 107.6
+        dist = TEN_FT_M
+        dt = dist / v
+        yaw = math.radians(heading) / dt
+        v_slip = (track / 2.0) * yaw
+        normal = mass * g / 2.0
+        force = min(WORLD_DRIVE_COULOMB_FRICTION * normal, v_slip / WORLD_DRIVE_FDS_M_S_PER_N)
+        # Below the cap. Mobilizing μ=8 would be a different, larger force.
+        assert force < WORLD_DRIVE_COULOMB_FRICTION * normal * 0.5
+        tau_scrub = force * SIM_WHEEL_RADIUS_M
+        assert tau_scrub < float(spec["stall_torque_nm"])
+
+        def one(speed: float, scrub: float) -> float:
+            tau = crr * mass * g * r_bom / 2.0 + SIM_HINGE_DAMPING_NM_S_RAD * speed / SIM_WHEEL_RADIUS_M + scrub
+            omega = speed / r_bom
+            omega0 = 200.0 * 2.0 * math.pi / 60.0
+            duty = omega / omega0 + tau / 2.256
+            current = 0.1 + (3.0 - 0.1) * (tau / 2.256)
+            assert current < 3.0
+            return duty * 24.0 * current / 0.92
+
+        straight = 2.0 * one(v, 0.0)
+        turned = one(v - v_slip, tau_scrub) + one(v + v_slip, tau_scrub)
+        assert sim_drive_terms(prof, v)["drive_w"] == pytest.approx(straight, rel=1e-9)
+        point = electrical_from_shaft_w(
+            crr * mass * g * r_bom / 2.0 + SIM_HINGE_DAMPING_NM_S_RAD * v / SIM_WHEEL_RADIUS_M,
+            v / r_bom,
+            voltage_v=24.0,
+            no_load_rpm=200.0,
+            no_load_current_a=0.1,
+            stall_current_a=3.0,
+            stall_torque_nm=2.256,
+            eta_driver=0.92,
+        )
+        assert 2.0 * point["elec_w"] == pytest.approx(straight, rel=1e-9)
+        assert point["eta"] != pytest.approx(0.5, abs=0.02)
+        assert point["eta"] != pytest.approx(0.92, abs=0.02)
+
+        scrub = turning_scrub_point(prof, v, yaw)
+        assert scrub["scrub_force_n"] == pytest.approx(force, rel=1e-9)
+        assert scrub["scrub_torque_nm"] == pytest.approx(tau_scrub, rel=1e-9)
+        assert scrub["straight_w"] == pytest.approx(straight, rel=1e-9)
+        assert scrub["turned_w"] == pytest.approx(turned, rel=1e-9)
+        assert scrub["delta_w"] == pytest.approx(turned - straight, rel=1e-9)
+        assert scrub["clamped"] is False
+        assert scrub["turn_source"] == "world_fds_track_scrub"
+        assert turning_scrub_wh(prof, v, heading, dt) == pytest.approx(
+            (turned - straight) * dt / 3600.0, rel=1e-9
+        )
+        assert turning_scrub_wh(prof, v, 0.0, dt) == 0.0
+        # Design bill is untouched: no scrub torque, BoM radius, rolling only.
+        cruise = bom_drive_terms(prof, 0.44)
+        assert cruise["drive_w"] == pytest.approx(3.43, abs=0.05)
+        assert cruise["drive_wh_per_10ft"] == pytest.approx(0.0066, abs=0.00015)
     finally:
         _restore_bom(old)
 

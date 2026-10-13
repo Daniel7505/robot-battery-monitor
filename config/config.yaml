@@ -135,6 +135,15 @@ robot:
   # wins). RBM_MISSION_LAPS=2 stops after two warehouse perimeters
   # (~201 m each) when this is blank. 0 means off.
   mission_max_m:
+  # Shoulder HUD paint (hud_nadir / hud_nadir_r). false: do not paint.
+  # Lane keeping still reads the nadir cameras. RBM_HUD=1 turns paint on.
+  # A black overlay with a magenta border is a stereo camera Webots shows
+  # even though it is not enabled. Close it under Robot → Camera Devices.
+  hud_overlays: false
+  # Webots-console SPEED_TRACE every 0.1 s of sim time. Blank: on only
+  # when the mission cap is one warehouse lap. RBM_SPEED_TRACE=1 forces
+  # it on, 0 forces it off. The S track stays quiet.
+  speed_trace:
 
 hardware_profile: butlerbot_wheeled
 

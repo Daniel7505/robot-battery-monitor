@@ -383,6 +383,77 @@ def test_turning_scrub_uses_world_contact_and_the_4693_curve():
         _restore_bom(old)
 
 
+def test_straight_bill_stays_rolling_plus_hinge_damping():
+    """Run #9 straights were about 10-25% low at 0.20 m/s and 30-40% at 0.29 m/s.
+
+    The miss grows with speed. A constant extra torque makes the percent
+    fall as speed rises. Extra viscous damping stays nearly flat. A
+    0.2 rad/s wheel split is under 1% and also falls with speed. None of
+    those is billed. The straight line stays Crr plus dampingConstant 0.15.
+    """
+    from src.hardware_profile import get_active_profile
+    from src.twin_energy import (
+        GRAVITY_M_S2,
+        SIM_HINGE_DAMPING_NM_S_RAD,
+        SIM_WHEEL_RADIUS_M,
+        _hub_electrical_w,
+        _profile_motor_args,
+        electrical_from_shaft_w,
+        sim_drive_terms,
+        sim_hinge_torque_nm,
+    )
+
+    old = _use_bom("light")
+    try:
+        prof = get_active_profile()
+        args = _profile_motor_args(prof)
+
+        def at(v, extra_tau):
+            tau = (
+                args["crr"] * args["mass_kg"] * GRAVITY_M_S2 * args["wheel_radius_m"] / 2.0
+                + SIM_HINGE_DAMPING_NM_S_RAD * v / SIM_WHEEL_RADIUS_M
+                + extra_tau
+            )
+            point = electrical_from_shaft_w(
+                tau,
+                v / args["wheel_radius_m"],
+                voltage_v=args["voltage_v"],
+                no_load_rpm=args["no_load_rpm"],
+                no_load_current_a=args["no_load_current_a"],
+                stall_current_a=args["stall_current_a"],
+                stall_torque_nm=args["stall_torque_nm"],
+                eta_driver=args["eta_driver"],
+            )
+            return 2.0 * point["elec_w"]
+
+        for v in (0.20, 0.29):
+            assert sim_drive_terms(prof, v)["drive_w"] == pytest.approx(at(v, 0.0))
+            assert sim_hinge_torque_nm(v) == pytest.approx(0.15 * v / 0.08)
+
+        const_20 = (at(0.20, 0.05) - at(0.20, 0.0)) / at(0.20, 0.0)
+        const_29 = (at(0.29, 0.05) - at(0.29, 0.0)) / at(0.29, 0.0)
+        assert const_20 > const_29
+
+        visc_20 = (at(0.20, 0.04 * 0.20 / 0.08) - at(0.20, 0.0)) / at(0.20, 0.0)
+        visc_29 = (at(0.29, 0.04 * 0.29 / 0.08) - at(0.29, 0.0)) / at(0.29, 0.0)
+        assert abs(visc_20 - visc_29) < 0.03
+
+        def split_premium(v, half_split_rad_s):
+            base = 2.0 * _hub_electrical_w(args, args["mass_kg"], v, 0.0)[0]
+            dv = half_split_rad_s * SIM_WHEEL_RADIUS_M
+            left = _hub_electrical_w(args, args["mass_kg"], v + dv, 0.0)[0]
+            right = _hub_electrical_w(args, args["mass_kg"], max(0.01, v - dv), 0.0)[0]
+            return (left + right - base) / base
+
+        assert split_premium(0.20, 0.2) < 0.01
+        assert split_premium(0.20, 0.2) > split_premium(0.29, 0.2)
+        cruise = bom_drive_terms(prof, 0.44)
+        assert cruise["drive_w"] == pytest.approx(3.43, abs=0.05)
+        assert cruise["drive_wh_per_10ft"] == pytest.approx(0.0066, abs=0.00015)
+    finally:
+        _restore_bom(old)
+
+
 def test_propose_exposes_paper_and_twin(tmp_path: Path):
     from src.parts_db import connect
 

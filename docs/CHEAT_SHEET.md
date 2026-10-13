@@ -404,6 +404,12 @@ See `docs/RUN_HISTORY.md`.
   is opened. If a world's HUDs are missing, stacked or hidden, re-enable
   them in Webots (right-click the overlay / Overlays menu) and save the
   world, or delete that world's `.wbproj` and launch it again.
+  Shoulder paint (`hud_nadir`, `hud_nadir_r`) is off unless `RBM_HUD=1`.
+  Lane keeping does not use those Displays. A black window with a magenta
+  border is `stereo_left` or `stereo_right`: Webots opens it even though
+  the controller leaves those cameras off unless obstacles are on. Close
+  it with the overlay X or Robot → Camera Devices. The controller cannot
+  hide it.
 * **`getWorldPath` fallback: set `RBM_TRACK`.** The finish referee finds the
   track from the world's `# TRACK_FILE` tag via `robot.getWorldPath()`. If the
   console says `FINISH REFEREE finish x>=16.5 m (default S)` on a non-S world,

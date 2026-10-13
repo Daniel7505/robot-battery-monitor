@@ -18,7 +18,9 @@ Copy that file back over this one to undo.
 
 Siblings (do not re-merge):
 
-* ``controller_hud.py`` — Display gauges + shoulder overlays
+* ``controller_hud.py`` — Display gauges + shoulder overlays.
+  Paint is off unless ``RBM_HUD=1`` (``robot.hud_overlays``). Lane
+  keeping still reads the nadir cameras.
 * ``controller_keys.py`` — legacy debug key input (not a user feature;
   the agent steers through the twin API)
 * ``controller_wheels.py`` — ABS / residual-spin / soft-grip
@@ -757,7 +759,21 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     _apply_follow_camera(robot)
     steer_filter = None if steer_filter_cls is None else steer_filter_cls()
     nadir_guard = None if nadir_guard_cls is None else nadir_guard_cls()
-    eye_huds = _label_eye_huds(robot, cams)
+    hud_paint = False
+    try:
+        from src.config import config as _hud_cfg
+        from src.sim_trace import overlay_status_lines, resolve_hud_overlays
+
+        hud_paint = resolve_hud_overlays(
+            config_value=_hud_cfg.get("robot", "hud_overlays", None),
+            env_value=os.environ.get("RBM_HUD"),
+        )
+        for _line in overlay_status_lines(hud_paint):
+            print(_line)
+    except Exception as exc:
+        print(f"HUD paint failed ({type(exc).__name__}: {exc})")
+    # Paint is the optional 256×256 paste. Cameras stay enabled either way.
+    eye_huds = _label_eye_huds(robot, cams) if hud_paint else []
     if rowfit_rt is not None:
         for msg in rowfit_rt.bind_cameras(robot, cams) + rowfit_rt.check_cameras(cams):
             print(f"WARNING rowfit camera model: {msg}")
@@ -796,6 +812,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     mission_prev_xy: tuple[float, float] | None = None
     mission_capped = False
     mission_limit_m = None
+    from src.sim_trace import SpeedTrace
+
+    speed_trace = SpeedTrace(False)
     try:
         from src.config import config as _rbm_config
         from src.mission_park import (
@@ -822,10 +841,30 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             )
         else:
             print("MISSION LIMIT off — run until the track finish")
+        from src.sim_trace import resolve_speed_trace
+
+        speed_trace = SpeedTrace(
+            resolve_speed_trace(
+                config_value=_rbm_config.get("robot", "speed_trace", None),
+                env_value=os.environ.get("RBM_SPEED_TRACE"),
+                mission_limit_m=mission_limit_m,
+                lap_m=_perim_m,
+            )
+        )
     except Exception as exc:
         mission_distance_reached = lambda traveled_m, limit_m: False  # noqa: E731
         plausible_travel_m = lambda step_m, dt_s: 0.0  # noqa: E731
         print(f"MISSION LIMIT off ({type(exc).__name__}: {exc})")
+    if speed_trace.enabled:
+        print(
+            "SPEED_TRACE on — Webots console every 0.1 s sim, "
+            "SIM_RTF every 10 s. Not the dashboard log."
+        )
+    else:
+        print(
+            "SPEED_TRACE off — set RBM_SPEED_TRACE=1, or run one warehouse "
+            "lap (RBM_MISSION_LAPS=1)."
+        )
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -1281,7 +1320,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"phase={lk.get('phase')}"
                         )
 
-            if harvest_now:
+            if hud_paint and harvest_now:
                 _paint_eye_huds(eye_huds, lane_eyes)
 
             if stop_pressed:
@@ -1644,6 +1683,18 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 drive_log_elapsed = 0.0
                 if hasattr(speed_estimator, "_log_anchor"):
                     speed_estimator._log_anchor = None  # type: ignore[attr-defined]
+
+            for _trace_line in speed_trace.lines(
+                t_sim=float(robot.getTime()),
+                t_wall=time.monotonic(),
+                v_body=float(speed_m_s),
+                v_odo=0.5 * (abs(left_wv) + abs(right_wv)) * WHEEL_RADIUS_M,
+                w_l_cmd=float(left_v),
+                w_r_cmd=float(right_v),
+                w_l=float(left_wv),
+                w_r=float(right_wv),
+            ):
+                print(_trace_line)
 
             if hud is not None:
                 _draw_hud(

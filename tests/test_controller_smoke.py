@@ -19,6 +19,10 @@ def _run(tmp_path, mode, world=None, extra=None):
     env.pop("RBM_LANE_MODE", None)
     env.pop("RBM_TRACK", None)
     env.pop("RBM_OBSTACLES", None)
+    env.pop("RBM_HUD", None)
+    env.pop("RBM_SPEED_TRACE", None)
+    env.pop("RBM_MISSION_LAPS", None)
+    env.pop("RBM_MISSION_MAX_M", None)
     env.update(extra or {})
     if world is not None:
         env["FAKE_WEBOTS_WORLD"] = str(ROOT / "webots" / "worlds" / world)
@@ -43,6 +47,9 @@ def test_controller_loop_runs(tmp_path, mode):
     assert "ButlerBot controller stopped" in text, text
     assert "Controller step error" not in text, text
     assert "fatal error" not in text, text
+    assert "HUD paint is off" in text, text
+    assert "SPEED_TRACE off" in text, text
+    assert "HUD hud_nadir" not in text
     if mode in ("rowfit", None):  # unset = rowfit (default)
         assert "LANE MODE rowfit" in text
         assert "ROWFIT STEER ON" in text
@@ -95,6 +102,20 @@ def test_controller_obstacles_on_sees_box_and_slows(tmp_path):
     slow = [r for r in rows if r["obstacle_state"] == "SLOW_FOR_OBSTACLE"]
     assert slow and slow[-1]["obstacle_band"] == "low", log[:3]
     assert abs(float(slow[-1]["obstacle_m"]) - 1.0) < 0.08
+
+
+def test_hud_paint_and_speed_trace_follow_the_env_flags(tmp_path):
+    text = _run(tmp_path, None, extra={"RBM_HUD": "1", "RBM_SPEED_TRACE": "1"})
+    assert "ButlerBot controller stopped" in text, text
+    assert "Controller step error" not in text, text
+    assert "HUD hud_nadir ← nadir_left" in text, text
+    assert "HUD hud_nadir_r ← nadir_right" in text, text
+    assert "HUD paint is on" in text
+    assert "SPEED_TRACE on" in text
+    assert any(line.startswith("SPEED_TRACE t_sim=") for line in text.splitlines())
+    assert "wL_cmd=" in text and "v_body=" in text
+    # 200 steps of 8 ms is 1.6 s of sim. The 10 s SIM_RTF sample stays quiet.
+    assert not any(line.startswith("SIM_RTF ") for line in text.splitlines())
 
 
 def test_obstacles_world_tag_turns_sensing_on(tmp_path):

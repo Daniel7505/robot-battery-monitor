@@ -78,6 +78,8 @@ Write-Host "World:     $WorldFile"
 Write-Host "Track:     $(if ($env:RBM_TRACK) { $env:RBM_TRACK } else { '(none: S default)' })"
 Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else { '(unset: straight if possible, else left)' })  RBM_MAX_BLIND_M=$(if ($env:RBM_MAX_BLIND_M) { $env:RBM_MAX_BLIND_M } else { '(4.0)' })"
 Write-Host "Obstacles: RBM_OBSTACLES=$(if ($env:RBM_OBSTACLES) { $env:RBM_OBSTACLES } else { '(unset: on only in worlds tagged # OBSTACLES on)' })  RBM_STEREO_BACKEND=$(if ($env:RBM_STEREO_BACKEND) { $env:RBM_STEREO_BACKEND } else { '(auto)' })  radar with obstacles when on"
+Write-Host "HUD paint: RBM_HUD=$(if ($env:RBM_HUD) { $env:RBM_HUD } else { '(unset: off — lane keeping still uses the nadir cameras)' })  A black magenta overlay is an unused stereo camera. Close it under Robot → Camera Devices."
+Write-Host "Speed trace: RBM_SPEED_TRACE=$(if ($env:RBM_SPEED_TRACE) { $env:RBM_SPEED_TRACE } else { '(unset: on for a 1-lap run, off otherwise)' })  Lines go to the Webots console, not the dashboard log."
 Write-Host "Pick:      RBM_PICK_SKU=$(if ($env:RBM_PICK_SKU) { $env:RBM_PICK_SKU } else { '(unset: trolley follow only; set demo for one-SKU pretend pick)' })"
 Write-Host ""
 

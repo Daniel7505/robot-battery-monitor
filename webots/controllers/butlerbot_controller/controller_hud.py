@@ -1,5 +1,9 @@
 """Webots Display HUD + shoulder nadir overlays. No physics.
 
+``hud_nadir`` and ``hud_nadir_r`` are the only Display nodes. This module
+paints them when the controller asks. The raw nadir Camera overlays and
+the unused black stereo Camera overlays are drawn by Webots, not here.
+
 Choir overlay (yellow_look_band / picture-wins ticks / L P vs R P) is
 archived at archives/controller_hud_choir_2026-09-02.py. Restore that
 file to undo.

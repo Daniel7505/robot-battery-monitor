@@ -250,6 +250,27 @@ def _use_bom_linear(profile: dict, spec: dict) -> bool:
     return all(spec.get(key) is not None for key in needed)
 
 
+def reported_wheel_torque_nm(
+    velocity: float,
+    feedback_nm: float | None,
+    *,
+    bom: bool,
+) -> float:
+    """Torque sample the power model should see.
+
+    A real torque-feedback reading is kept. With no reading, a BoM build
+    passes 0 so the linear model uses rolling resistance (Crr · m · g · r / 2).
+    The old ``|ω| × 0.45`` stand-in is not a measured torque and, on the
+    light motor, it is past stall — that is what pushed the panel well
+    above the published idle.
+    """
+    if feedback_nm is not None and abs(float(feedback_nm)) > 1e-4:
+        return abs(float(feedback_nm))
+    if bom:
+        return 0.0
+    return abs(float(velocity)) * 0.45
+
+
 def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
     """tau = Crr * m * g * r / 2. Mass is the known BoM mass plus payload."""
     from src.bom_profile import rolling_mass_kg
@@ -370,9 +391,8 @@ def _compute_draw_w(
     if profile.get("bom_build") or profile.get("power_model") == "bom_linear":
         from src.bom_profile import electronics_draw_w
 
-        moving = not (gait in ("stand", "idle", "standby") and speed_m_s < 0.06)
-        # Per-part watts only. The flat sensors.idle_w number is not added.
-        return electronics_draw_w(profile, moving=moving)
+        # Published idle (9.96 W on light), not the Jetson/OAK active mode.
+        return electronics_draw_w(profile, moving=False)
     compute = profile.get("compute") or {}
     sensors = profile.get("sensors") or {}
     imu = profile.get("imu") or {}
@@ -513,6 +533,35 @@ def _locomotion_block(prof: dict, *, gait: str, phase: str, speed_m_s: float) ->
     return block
 
 
+def _subsystem_draws(profile: dict, channel_draws: dict[str, float]) -> dict:
+    """Split channel watts into the log names. The numbers are the channel draws.
+
+    On a BoM build, compute and sensors are the published idle watts that
+    already make up the Compute channel. Anything left over after rounding
+    stays on compute so the six names still add up to the system draw.
+    Without a BoM, sensors are not metered separately and the value is None.
+    """
+    bom = bool(profile.get("bom_build") or profile.get("power_model") == "bom_linear")
+    out: dict = {
+        "locomotion": round(float(channel_draws.get("Legs") or 0.0), 2),
+        "arms": round(float(channel_draws.get("Arms") or 0.0), 2),
+        "torso": round(float(channel_draws.get("Torso") or 0.0), 2),
+        "cooling": round(float(channel_draws.get("Cooling") or 0.0), 2),
+    }
+    compute_ch = round(float(channel_draws.get("Compute") or 0.0), 2)
+    if not bom:
+        out["compute"] = compute_ch
+        out["sensors"] = None
+        return out
+    from src.bom_profile import subsystem_part_watts
+
+    parts = subsystem_part_watts(profile)
+    gap = round(compute_ch - float(parts["compute"]) - float(parts["sensors"]), 2)
+    out["compute"] = round(float(parts["compute"]) + gap, 2)
+    out["sensors"] = float(parts["sensors"])
+    return out
+
+
 def gait_to_task(gait: str) -> str:
     """Map locomotion gait string onto a PMS mission task id."""
     return _GAIT_TO_TASK.get(str(gait).lower(), "balanced")
@@ -555,6 +604,7 @@ def build_webots_telemetry(
     )
     task = gait_to_task(gait)
     norm_phase = normalize_phase_name(phase) if phase else phase
+    subsystem_draws = _subsystem_draws(prof, channel_draws)
     locomotion = _locomotion_block(
         prof, gait=gait, phase=norm_phase or phase, speed_m_s=speed_m_s
     )
@@ -582,6 +632,7 @@ def build_webots_telemetry(
         "mission": {"task": task, "phase": norm_phase or phase},
         "motor_power_w": motor_power_w,
         "channel_draws": channel_draws,
+        "subsystem_draws": subsystem_draws,
         "joints": joints,
         "locomotion": locomotion,
         "hardware": hardware,

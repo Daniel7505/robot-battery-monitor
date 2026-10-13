@@ -787,6 +787,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         except Exception as exc:
             print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
+    mission_summary_sent = False
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -799,6 +800,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            mission_event = None
             if tick == 5 and not lane_keep_on and rowfit_rt is not None:
                 lane_keep_on = True
                 print(
@@ -1236,6 +1238,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     last_teleop_right = 0.0
                     cached_api_left = 0.0
                     cached_api_right = 0.0
+                    # End of a finished track: FULL S DONE already fired, and
+                    # ABS has now parked. One telemetry flag, one summary.
+                    if nadir_lobe_done and not mission_summary_sent:
+                        mission_event = "complete"
+                        mission_summary_sent = True
                     _hard_zero_wheels(
                         motors,
                         sensors,
@@ -1416,10 +1423,28 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 gait = "drive"
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
+            cap_wh = 0.0
+            if _uses_bom_pack():
+                # Same watts the dashboard shows (channels, including compute),
+                # against the BoM pack. Joint-only watts on a 480 Wh pack made
+                # SoC Wh disagree with system draw.
+                try:
+                    preview = build_payload(
+                        joints,
+                        gait=gait,
+                        phase=phase_name,
+                        speed_m_s=speed_m_s,
+                        battery_pct=battery_pct,
+                    )
+                    total_draw = float((preview.get("power") or {}).get("total_draw_w") or 0.0)
+                    cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
+                except Exception:
+                    cap_wh = 0.0
             if _teleop is not None:
-                cap_wh = float(
-                    getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
-                )
+                if cap_wh <= 0:
+                    cap_wh = float(
+                        getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
+                    )
                 battery_pct = max(
                     5.0,
                     battery_pct
@@ -1432,10 +1457,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     ),
                 )
             else:
+                if cap_wh <= 0:
+                    cap_wh = 480.0
                 battery_pct = max(
                     5.0,
                     battery_pct
-                    - (total_draw * dt) / (480.0 * 3600.0) * 100.0,
+                    - (total_draw * dt) / (cap_wh * 3600.0) * 100.0,
                 )
             thermal_c = _update_thermal(thermal_c, total_draw, dt, motion_factor=motion_factor)
 
@@ -1696,6 +1723,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
+                        "mission_event": mission_event,
                         "control_diag": control_diag,
                         "wheels": wheel_sensors,
                     },
@@ -1745,6 +1773,16 @@ def main() -> None:
         print(f"ButlerBot controller fatal error: {exc}")
         traceback.print_exc()
         sys.exit(0)
+
+
+def _uses_bom_pack() -> bool:
+    """True when config selects a BoM build and the pack/draw should follow it."""
+    try:
+        from src.hardware_profile import active_bom_build
+
+        return bool(active_bom_build())
+    except Exception:
+        return False
 
 
 def _estimate_joint_power(
@@ -1818,7 +1856,9 @@ def _read_joints(
             and abs(velocity) < 0.15
             and speed_m_s < 0.05
         )
-        if wheel_parked:
+        if wheel_parked and not _uses_bom_pack():
+            # Legacy sim: a flat 2 W so a parked hub is not free. A BoM build
+            # falls through and uses the published encoder idle instead.
             joints.append({
                 "name": motor_name,
                 "position": round(position, 4),
@@ -1828,15 +1868,22 @@ def _read_joints(
             })
             continue
 
-        torque_est = abs(velocity) * 0.45
-        torque = torque_est
+        feedback = None
         if hasattr(motor, "getTorqueFeedback"):
             try:
                 tf = abs(float(motor.getTorqueFeedback()))
                 if tf > 1e-4:
-                    torque = tf
+                    feedback = tf
             except Exception:
-                pass
+                feedback = None
+        try:
+            from src.twin.webots_power import reported_wheel_torque_nm
+
+            torque = reported_wheel_torque_nm(
+                velocity, feedback, bom=_uses_bom_pack()
+            )
+        except Exception:
+            torque = feedback if feedback is not None else abs(velocity) * 0.45
         joint_speed = speed_m_s if (abs(velocity) < 0.2 and cmd_v > 0.05) else 0.0
         power_w = _estimate_joint_power(
             motor_name, velocity, torque, speed_m_s=joint_speed

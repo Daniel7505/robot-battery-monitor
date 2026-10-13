@@ -114,6 +114,7 @@ class WebotsAdapter(TwinAdapter):
                 "robot": payload.get("robot", {"name": "ButlerBot"}),
                 "mission": {"task": task},
                 "channel_draws": draws,
+                "subsystem_draws": payload.get("subsystem_draws") or {},
                 "locomotion": loco,
                 "hardware": hw,
                 "pose": payload.get("pose", {}),

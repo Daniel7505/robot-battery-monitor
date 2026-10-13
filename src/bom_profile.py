@@ -369,32 +369,76 @@ def build_profile_from_bom(build_id: str, bom: dict | None = None) -> dict:
     }
 
 
-def electronics_draw_w(profile: dict, *, moving: bool) -> float:
-    """Sum published idle/active watts for Compute-channel parts.
+# Cameras and navigation sensors. Split out of the Compute channel for logs.
+# A dc-dc regulator stays with compute: it feeds the computer, and its only
+# published number is quiescent current.
+_SENSOR_CATEGORIES = frozenset({
+    "stereo_camera",
+    "camera",
+    "radar",
+    "ultrasound",
+    "gnss",
+    "imu",
+    "sensor",
+})
+
+
+def _published_part_w(part: dict, bus_v: float) -> float | None:
+    """Watts this part contributes, or None when the vendor did not publish them.
+
+    ``active_w`` (Jetson 25 W, OAK 4.5 W) is a different power mode from the
+    idle figure the energy table uses. The twin keeps the published idle so
+    a moving robot does not jump from 9.96 W to ~30 W of compute.
+    """
+    qty = int(part.get("qty") or 1)
+    if part.get("category") == "dc_dc" and part.get("idle_w") is None:
+        quiescent = _num(part.get("quiescent_current_a_max"))
+        if quiescent is None or bus_v <= 0:
+            return None
+        return float(quiescent) * bus_v * qty
+    if part.get("idle_w") is None:
+        return None
+    return float(part["idle_w"]) * qty
+
+
+def electronics_draw_w(profile: dict, *, moving: bool = False) -> float:
+    """Sum published idle watts for Compute-channel parts.
 
     A part with no idle_w contributes nothing. Regulator quiescent current
     is a published maximum (``quiescent_current_a_max`` × bus voltage), which
     is how bom.json's idle total was added up. It is not a guessed operating point.
+
+    ``moving`` is accepted so older callers keep working. It does not switch
+    the Jetson or the camera to ``active_w``.
     """
+    del moving  # cruise model is the published idle, not the 25 W mode
     bus_v = _num(profile.get("bus_voltage_v")) or 0.0
     total = 0.0
     for part in profile.get("bom_parts") or []:
         if part.get("twin_channel") != "Compute":
             continue
-        qty = int(part.get("qty") or 1)
-        if part.get("category") == "dc_dc" and part.get("idle_w") is None:
-            quiescent = _num(part.get("quiescent_current_a_max"))
-            if quiescent is not None and bus_v > 0:
-                total += quiescent * bus_v * qty
-            continue
-        if moving and part.get("active_w") is not None:
-            watts = float(part["active_w"])
-        elif part.get("idle_w") is not None:
-            watts = float(part["idle_w"])
-        else:
-            watts = 0.0
-        total += watts * qty
+        watts = _published_part_w(part, bus_v)
+        if watts is not None:
+            total += watts
     return round(total, 2)
+
+
+def subsystem_part_watts(profile: dict) -> dict[str, float]:
+    """Published compute vs sensor watts. Parts with no idle number are omitted."""
+    bus_v = _num(profile.get("bus_voltage_v")) or 0.0
+    compute = 0.0
+    sensors = 0.0
+    for part in profile.get("bom_parts") or []:
+        if part.get("twin_channel") != "Compute":
+            continue
+        watts = _published_part_w(part, bus_v)
+        if watts is None:
+            continue
+        if part.get("category") in _SENSOR_CATEGORIES:
+            sensors += watts
+        else:
+            compute += watts
+    return {"compute": round(compute, 2), "sensors": round(sensors, 2)}
 
 
 def compute_camera_unknown_ids(build: dict, parts: dict) -> list[str]:

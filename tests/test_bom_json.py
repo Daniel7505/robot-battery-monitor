@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from src.bom_profile import BOM_JSON_PATH, load_bom, parts_by_id
+from src.bom_profile import (
+    BOM_JSON_PATH,
+    electronics_draw_w,
+    load_bom,
+    parts_by_id,
+    subsystem_part_watts,
+)
 from src.hardware_profile import (
     battery_capacity_wh,
     build_profile_from_bom,
@@ -120,7 +126,21 @@ def test_bom_profile_drive_power_and_zero_upper_body():
     assert drive["hardware"]["bom_build"] == "light"
     assert drive["locomotion"]["wheel_radius_m"] == 0.04
     # Compute is the Jetson idle plus the other published sensor watts, not a flat guess.
+    # Moving does not switch the Jetson to its 25 W mode.
     assert idle["channel_draws"]["Compute"] == pytest.approx(9.86, abs=0.05)
+    assert drive["channel_draws"]["Compute"] == pytest.approx(9.86, abs=0.05)
+    assert electronics_draw_w(prof, moving=True) == pytest.approx(9.86, abs=0.05)
+    parts = subsystem_part_watts(prof)
+    assert parts["compute"] + parts["sensors"] == pytest.approx(9.86, abs=0.05)
+    for payload in (idle, drive):
+        channels = payload["channel_draws"]
+        subs = payload["subsystem_draws"]
+        assert subs["sensors"] is not None
+        assert sum(subs.values()) == pytest.approx(sum(channels.values()), abs=0.05)
+    # Stopped light robot sits on the published idle (~9.96 W). Cruise adds the
+    # 3.43 W drive figure, not a second copy of the encoder idle.
+    assert sum(idle["channel_draws"].values()) == pytest.approx(9.96, abs=0.2)
+    assert sum(drive["channel_draws"].values()) == pytest.approx(13.39, abs=0.3)
 
 
 def test_bom_log_line_names_the_light_build(monkeypatch):

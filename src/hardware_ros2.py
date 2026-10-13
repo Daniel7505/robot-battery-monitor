@@ -807,9 +807,21 @@ class ROS2BatterySource(RealHardwareSource):
         )
 
         # One-time boot energy (inverters/bring-up) so SOC does not start at 100% forever.
-        self._main_battery, startup = self._requirements.apply_startup(
-            self._main_battery, capacity_wh
-        )
+        # A BoM pack does not use this 6 Wh guess: the controller drains the
+        # published channel watts, and a fake startup would make SoC disagree
+        # with that integral before the robot has moved.
+        try:
+            from src.hardware_profile import active_bom_build
+
+            bom_pack = bool(active_bom_build())
+        except Exception:
+            bom_pack = False
+        if bom_pack:
+            startup = {"applied": False, "cost_wh": 0, "reason": "bom_build"}
+        else:
+            self._main_battery, startup = self._requirements.apply_startup(
+                self._main_battery, capacity_wh
+            )
         self.requirements_status = {"startup": startup}
 
         self.last_readings = self._build_readings()

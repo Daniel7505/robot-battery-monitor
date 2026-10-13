@@ -6,6 +6,7 @@ from src.design_agent import Mission, propose
 from src.hardware_profile import clear_profile_cache
 from src.twin_energy import (
     TEN_FT_M,
+    bom_run_energy_wh,
     brushed_drive_point,
     estimate_mission_energy,
     format_mission_energy_line,
@@ -135,6 +136,24 @@ def test_measured_override_beats_the_bom_table(tmp_path: Path):
         assert "wh_measured=1.00" in line
         assert "wh_model=" in line
         assert "wh_model=1.0" not in line
+    finally:
+        _restore_bom(old)
+
+
+def test_mission_energy_over_a_duration_includes_idle():
+    # 9.96 W for 450 s is 1.245 Wh of idle, even if the robot did not move.
+    old = _use_bom("light")
+    try:
+        parked = bom_run_energy_wh(0.0, 450.0, 0.0)
+        assert parked["wh_model_idle"] == pytest.approx(1.245, abs=0.001)
+        assert parked["wh_model_drive"] == 0.0
+        assert parked["wh_model"] == pytest.approx(1.245, abs=0.001)
+        line = format_mission_energy_line(0.0, payload_kg=0, wh_measured=0.5, duration_s=450)
+        assert "wh_model=1.245" in line
+        assert "wh_measured=0.50" in line
+        moving = bom_run_energy_wh(TEN_FT_M, 450.0, 0.0)
+        assert moving["wh_model"] > moving["wh_model_drive"] > 0
+        assert moving["wh_model_idle"] == pytest.approx(1.245, abs=0.001)
     finally:
         _restore_bom(old)
 

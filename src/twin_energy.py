@@ -267,10 +267,51 @@ def estimate_mission_energy(
     }
 
 
+def bom_run_energy_wh(
+    dist_m: float,
+    duration_s: float,
+    payload_kg: float = 0.0,
+    profile: dict | None = None,
+) -> dict | None:
+    """Idle for the whole run, plus drive for the distance actually travelled.
+
+    ``idle_w_known × hours`` is the compute/sensor idle from the BoM (9.96 W
+    on the light build). Drive is the motor formula at the run's average
+    speed. Unknown idle watts return None — they are not filled in.
+    Turns and acceleration are not in this number; ``err_pct`` is that gap.
+    """
+    from src.hardware_profile import get_active_profile
+
+    prof = profile if profile is not None else get_active_profile()
+    totals = prof.get("bom_totals") or {}
+    if totals.get("idle_w_known") is None:
+        return None
+    idle_w = float(totals["idle_w_known"])
+    duration = max(0.0, float(duration_s))
+    distance = max(0.0, float(dist_m))
+    idle_wh = idle_w * duration / 3600.0
+    speed = distance / duration if duration > 0.05 and distance > 0 else 0.44
+    if distance <= 0 or speed <= 0:
+        drive_wh = 0.0
+    else:
+        terms = bom_drive_terms(prof, speed)
+        per_10ft = float(terms["drive_wh_per_10ft"]) + float(payload_kg) * float(
+            terms["extra_wh_per_10ft_per_kg_payload"]
+        )
+        drive_wh = (distance / TEN_FT_M) * per_10ft
+    return {
+        "wh_model": round(idle_wh + drive_wh, 3),
+        "wh_model_idle": round(idle_wh, 3),
+        "wh_model_drive": round(drive_wh, 3),
+        "idle_w": idle_w,
+    }
+
+
 def format_mission_energy_line(
     dist_m: float,
     payload_kg: float | None = None,
     wh_measured: float | None = None,
+    duration_s: float | None = None,
 ) -> str:
     """``MISSION_ENERGY build=...`` line. Model and measured stay separate.
 
@@ -278,19 +319,29 @@ def format_mission_energy_line(
     sit next to it as ``wh_measured`` / ``err_pct``. When that file is
     present and the caller did not pass ``wh_measured``, it is the measured
     value.
+
+    With ``duration_s`` and a BoM build, the model is idle over the whole
+    run plus drive for ``dist_m``, not drive-only and not idle only while
+    the wheels are turning.
     """
     from src.config import config
     from src.hardware_profile import active_bom_build
 
     if payload_kg is None:
         payload_kg = float(config.get("robot", "payload_kg") or 0.0)
-    model = estimate_mission_energy(
-        dist_m,
-        track="straight",
-        payload_kg=float(payload_kg),
-        use_override=False,
-    )
-    wh_model = model["energy_wh"]
+    run = None
+    if duration_s is not None and active_bom_build():
+        run = bom_run_energy_wh(dist_m, duration_s, float(payload_kg))
+    if run is not None:
+        wh_model = run["wh_model"]
+    else:
+        model = estimate_mission_energy(
+            dist_m,
+            track="straight",
+            payload_kg=float(payload_kg),
+            use_override=False,
+        )
+        wh_model = model["energy_wh"]
     if wh_measured is None:
         ov = load_override()
         if ov is not None and ov.get("wh_per_m") is not None:

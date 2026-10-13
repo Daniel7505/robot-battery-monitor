@@ -39,15 +39,35 @@ all use the published idle plus the motor model, and the controller
 drains that same total against the BoM pack. ``wh_model`` is idle over
 the whole run plus drive. Drive on each ``SEGMENT_ENERGY`` line is:
 
-Measured and modeled drive are different columns.
+Measured and modeled drive are different columns. Both measured
+columns are electrical or mechanical on purpose. ``err_pct`` compares
+the electrical ones.
 
-* ``wh_measured_drive`` — mechanical watt-hours from the twin:
+* ``wh_measured_drive_shaft`` — mechanical watt-hours from the twin:
   sum of |torque feedback| × |hinge rad/s| on the drive wheels.
   The hinge rate is the position sensor. When that rate is missing
   and the body is moving, it is body speed / 0.08 m (the drawn
   wheel). The BoM radius 0.04 m is not used. If ``getTorqueFeedback``
   did not report, this field is ``na``. Rolling resistance is not
   written in its place, and neither is ``|ω| × 0.45``.
+* ``wh_measured_drive_elec`` — those same hinge points converted to
+  pack-side electrical watt-hours. Each motor uses the published
+  brushed line (duty = |ω|/ω0 + τ/τstall, I = I0 + (Istall−I0)·τ/τstall,
+  P = duty·V·I / η_driver). On the light build the motor is Pololu
+  4693: 24 V, 200 rpm and 0.1 A no-load, 3.0 A and 2.256 N·m stall
+  (https://www.pololu.com/product/4693/specs). Kt = 2.256/3.0 =
+  0.752 N·m/A and R = 24/3 = 8 Ω are derived; bom.json does not
+  publish them, and they are not a circuit that also hits 200 rpm
+  (that circuit predicts about 295 rpm). The conversion therefore
+  uses the interpolation above, not Kt and R as a winding model.
+  Datasheet peak efficiency 0.5 is not the operating-point η.
+  Gear ratio 50 is already in the output-shaft figures and is not
+  applied again. Driver η is the 0.92 assumption, applied once.
+  Hinge rad/s is not rewritten as body speed / 0.04 m. Missing
+  feedback is ``na``, not the rolling prediction.
+* ``eta_avg`` — ``wh_measured_drive_shaft / wh_measured_drive_elec``
+  over the piece (energy-weighted). ``na`` when electrical energy
+  is missing or zero.
 * ``wh_model_roll`` — predicted brushed-DC electrical energy at
   rolling resistance. On the light build that is about 0.0066 Wh
   per 10 ft near 0.44 m/s. The design shift table uses only this.
@@ -61,14 +81,48 @@ Measured and modeled drive are different columns.
   speeding up (``m·a`` on top of rolling torque). Slowing down is
   zero (no regen).
 * ``wh_model_drive`` — ``wh_model_roll + wh_model_visc + wh_model_accel``.
-* ``err_pct`` — ``(wh_measured_drive − wh_model_drive) / wh_model_drive × 100``.
-  ``na`` when the measurement is missing or the model drive is 0.
-  Measured is shaft power. The model is an electrical prediction.
-  They are not the same reading copied twice.
+* ``err_pct`` — ``(wh_measured_drive_elec − wh_model_drive) / wh_model_drive × 100``.
+  ``na`` when the electrical measurement is missing or the model
+  drive is 0. Shaft watts are not subtracted from the electrical
+  model. A live light warehouse lap (commit 16646d5) printed
+  err_pct=−69.1 because it compared 1.206 Wh of shaft to 3.909 Wh
+  of electrical model.
 
 Dashboard Legs stay the rolling electrical prediction (about 3.43 W
 at 0.44 m/s) so the power allocator keeps the BoM bill. That channel
-is not ``wh_measured_drive``.
+is not ``wh_measured_drive_elec``.
+
+Why ``wh_measured`` and ``wh_measured_soc`` disagreed on that lap
+----------------------------------------------------------------
+The summary was duration 919.1 s, 200.91 m, SoC 99.60% → 98.66%,
+``wh_measured_drive`` 1.206 (shaft), ``wh_measured`` 3.724,
+``wh_measured_soc`` 2.256, model drive 3.909 (roll 0.441 + visc
+3.461 + accel 0.007), idle 2.543.
+
+``wh_measured`` was shaft plus the non-drive channels:
+1.206 + 2.518 = 3.724. The 2.518 Wh is about 9.96 W × 919.1 s, the
+published electronics idle. Shaft watts are mechanical. Adding them
+to electrical idle mixes two units.
+
+``wh_measured_soc`` is only the pack percent times the 240 Wh pack:
+240 × (99.60 − 98.66) / 100 = 2.256 exactly. The controller did not
+integrate shaft watts. On a BoM build it integrated ``total_draw_w``
+from ``build_payload``: published electronics plus the rolling-only
+motor line (feedback torque forced to 0, so viscous hinge torque was
+not in the drain), multiplied by the simulation timestep
+(``timestep/1000``), against the BoM pack. Idle plus rolling on the
+log's wall clock is 2.543 + 0.441 = 2.984 Wh, which would be a 1.24
+point drop, not the 0.94 points observed. The log's clock is the gap
+between telemetry timestamps. Those two integrals are not the same
+load and not the same clock.
+
+``wh_measured`` is now electrical drive plus the same non-drive
+channels. The controller drains that same pack draw, on wall-clock
+gaps, and drops a gap longer than 15 s the way this log does. The
+next run's ``wh_measured_soc`` matches ``wh_measured`` when torque
+feedback is present for the whole mission. A sample with no feedback
+leaves the measured fields ``na`` and does not bill the rolling line
+in their place.
 
 A full warehouse run (no finish; stopped by hand) checked the
 prediction: 121 segments, 369 m, 2145 s. The old locomotion integral
@@ -82,8 +136,10 @@ falls slightly as speed rises. Published damping rises with speed
 and is about 6 Wh at the run's average speed, short of 14.5 Wh.
 The remainder is sim tire contact. That torque is not one published
 number, and a straight-line fit of the log is not pasted in as a
-bill. That 0.120 Wh figure is not copied into ``wh_measured_drive``.
-The measured column is the hinge's own |τ|·|ω|.
+bill. That 0.120 Wh figure is not copied into
+``wh_measured_drive_shaft`` or ``wh_measured_drive_elec``.
+The shaft column is the hinge's own |τ|·|ω|. The electrical column
+converts that hinge point; it does not reuse the old 0.120 fit.
 
 ``wh_measured_soc`` is ``capacity × (start% − end%) / 100``.
 
@@ -168,8 +224,10 @@ class MissionEnergyLog:
         self._build = "default"
         self._mission_dt = 0.0
         self._mission_dist = 0.0
-        self._mission_wh_drive = 0.0
-        self._mission_drive_known = True
+        self._mission_wh_shaft = 0.0
+        self._mission_shaft_known = True
+        self._mission_wh_elec = 0.0
+        self._mission_elec_known = True
         self._mission_wh_idle = 0.0
         self._mission_wh_accel = 0.0
         self._clear_segment()
@@ -179,8 +237,10 @@ class MissionEnergyLog:
         self._seg_idx = 0
         self._seg_dist = 0.0
         self._seg_dt = 0.0
-        self._seg_wh_drive = 0.0
-        self._seg_drive_known = True
+        self._seg_wh_shaft = 0.0
+        self._seg_shaft_known = True
+        self._seg_wh_elec = 0.0
+        self._seg_elec_known = True
         self._seg_wh_idle = 0.0
         self._seg_wh_accel = 0.0
         self._seg_heading_deg = 0.0
@@ -214,14 +274,20 @@ class MissionEnergyLog:
 
         step_m, speed, heading_deg, trusted = self._step_motion(sample, dt)
         subs = _subsystems(sample)
-        drive_w, drive_known = _measured_drive_w(sample)
-        if "measured_drive_w" in sample:
-            # Breakdown locomotion is the twin shaft power, or na.
-            subs["locomotion"] = drive_w
-            if not drive_known:
+        shaft_w, shaft_known = _metered_w(sample, "measured_drive_w")
+        elec_w, elec_known = _metered_w(sample, "measured_drive_elec_w")
+        if "measured_drive_elec_w" in sample:
+            # Breakdown locomotion is pack-side electrical drive, or na.
+            subs["locomotion"] = elec_w
+            if not elec_known:
+                self._power_loco_gap = True
+        elif "measured_drive_w" in sample:
+            subs["locomotion"] = shaft_w
+            if not shaft_known:
                 self._power_loco_gap = True
         idle_w = _idle_w(sample, subs)
-        wh_drive = 0.0 if drive_w is None else drive_w * dt / 3600.0
+        wh_shaft = 0.0 if shaft_w is None else shaft_w * dt / 3600.0
+        wh_elec = 0.0 if elec_w is None else elec_w * dt / 3600.0
         wh_idle = idle_w * dt / 3600.0
         accel = 0
         wh_accel_step = 0.0
@@ -233,10 +299,14 @@ class MissionEnergyLog:
 
         self._mission_dt += dt
         self._mission_dist += step_m
-        if drive_known:
-            self._mission_wh_drive += wh_drive
+        if shaft_known:
+            self._mission_wh_shaft += wh_shaft
         else:
-            self._mission_drive_known = False
+            self._mission_shaft_known = False
+        if elec_known:
+            self._mission_wh_elec += wh_elec
+        else:
+            self._mission_elec_known = False
         self._mission_wh_idle += wh_idle
         self._mission_wh_accel += wh_accel_step
         self._note_soc(sample)
@@ -257,10 +327,14 @@ class MissionEnergyLog:
         if trusted:
             self._seg_dist += step_m
             self._seg_dt += dt
-            if drive_known:
-                self._seg_wh_drive += wh_drive
+            if shaft_known:
+                self._seg_wh_shaft += wh_shaft
             else:
-                self._seg_drive_known = False
+                self._seg_shaft_known = False
+            if elec_known:
+                self._seg_wh_elec += wh_elec
+            else:
+                self._seg_elec_known = False
             self._seg_wh_idle += wh_idle
             self._seg_wh_accel += wh_accel_step
             self._seg_heading_deg += abs(heading_deg)
@@ -272,26 +346,36 @@ class MissionEnergyLog:
             frac = min(1.0, TEN_FT_M / self._seg_dist)
             closed_dist = self._seg_dist
             closed_dt = self._seg_dt
-            closed_drive = self._seg_wh_drive
+            closed_shaft = self._seg_wh_shaft
+            closed_elec = self._seg_wh_elec
             closed_idle = self._seg_wh_idle
             closed_accel = self._seg_wh_accel
             closed_head = self._seg_heading_deg
             self._seg_dist = closed_dist * frac
             self._seg_dt = closed_dt * frac
-            self._seg_wh_drive = closed_drive * frac
-            closed_known = self._seg_drive_known
+            self._seg_wh_shaft = closed_shaft * frac
+            self._seg_wh_elec = closed_elec * frac
+            closed_shaft_known = self._seg_shaft_known
+            closed_elec_known = self._seg_elec_known
             self._seg_wh_idle = closed_idle * frac
             self._seg_wh_accel = closed_accel * frac
             self._seg_heading_deg = closed_head * frac
-            lines.append(self._segment_line(known=closed_known))
+            lines.append(
+                self._segment_line(
+                    shaft_known=closed_shaft_known,
+                    elec_known=closed_elec_known,
+                )
+            )
             self._seg_idx += 1
             keep = 1.0 - frac
             self._seg_dist = closed_dist * keep
             self._seg_dt = closed_dt * keep
-            self._seg_wh_drive = closed_drive * keep
+            self._seg_wh_shaft = closed_shaft * keep
+            self._seg_wh_elec = closed_elec * keep
             # A sample with no torque feedback poisons the piece it
             # straddles, including the leftover that opens the next one.
-            self._seg_drive_known = closed_known
+            self._seg_shaft_known = closed_shaft_known
+            self._seg_elec_known = closed_elec_known
             self._seg_wh_idle = closed_idle * keep
             self._seg_wh_accel = closed_accel * keep
             self._seg_heading_deg = closed_head * keep
@@ -375,11 +459,18 @@ class MissionEnergyLog:
             self._last_heading = heading
         return step_m, speed, heading_deg, trusted
 
-    def _segment_line(self, known: bool | None = None) -> str:
+    def _segment_line(
+        self,
+        shaft_known: bool | None = None,
+        elec_known: bool | None = None,
+    ) -> str:
         avg = (self._seg_dist / self._seg_dt) if self._seg_dt > 0 else 0.0
-        if known is None:
-            known = self._seg_drive_known
-        measured = self._seg_wh_drive if known else None
+        if shaft_known is None:
+            shaft_known = self._seg_shaft_known
+        if elec_known is None:
+            elec_known = self._seg_elec_known
+        shaft = self._seg_wh_shaft if shaft_known else None
+        elec = self._seg_wh_elec if elec_known else None
         terms = _drive_breakdown(
             self._seg_dist,
             avg,
@@ -390,17 +481,17 @@ class MissionEnergyLog:
         model_drive = (
             float(terms["wh_roll"]) + float(terms["wh_visc"]) + float(terms["wh_accel"])
         )
-        if measured is None or model_drive <= 1e-12:
-            err = "na"
-        else:
-            err = f"{(measured - model_drive) / model_drive * 100.0:.1f}"
-        total = None if measured is None else measured + self._seg_wh_idle
+        err = _err_pct(elec, model_drive)
+        eta = _eta(shaft if shaft_known else None, elec)
+        total = None if elec is None else elec + self._seg_wh_idle
         return (
             f"SEGMENT_ENERGY build={self._build} seg_idx={self._seg_idx} "
             f"dist_m={self._seg_dist:.3f} dt_s={self._seg_dt:.2f} "
             f"avg_speed={avg:.3f} heading_change_deg={self._seg_heading_deg:.1f} "
             f"accel_events={self._seg_accel} payload_kg={self._payload_kg:g} "
-            f"wh_measured_drive={_na(measured, 4)} "
+            f"wh_measured_drive_shaft={_na(shaft, 4)} "
+            f"wh_measured_drive_elec={_na(elec, 4)} "
+            f"eta_avg={eta} "
             f"wh_model_drive={model_drive:.4f} "
             f"wh_model_roll={terms['wh_roll']:.4f} "
             f"wh_model_visc={terms['wh_visc']:.4f} "
@@ -452,8 +543,11 @@ class MissionEnergyLog:
         return [self._summary_line(), self._mission_energy_line()]
 
     def _summary_line(self) -> str:
-        measured_drive = self._mission_wh_drive if self._mission_drive_known else None
-        measured = None if measured_drive is None else measured_drive + self._mission_wh_idle
+        shaft = self._mission_wh_shaft if self._mission_shaft_known else None
+        elec = self._mission_wh_elec if self._mission_elec_known else None
+        # Electrical total: measured drive at the pack plus non-drive channels.
+        # Shaft watts are logged beside it and are not added into this sum.
+        measured = None if elec is None else elec + self._mission_wh_idle
         model = _model(
             self._mission_dist,
             self._mission_dt,
@@ -475,9 +569,8 @@ class MissionEnergyLog:
             and self._capacity_wh
         ):
             soc_wh = max(0.0, self._soc_start - self._soc_end) * self._capacity_wh / 100.0
-        err = "na"
-        if measured_drive is not None and drive:
-            err = f"{(measured_drive - drive) / drive * 100.0:.1f}"
+        err = _err_pct(elec, drive)
+        eta = _eta(shaft, elec)
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "
@@ -488,7 +581,9 @@ class MissionEnergyLog:
             f"wh_model_roll={_fmt(roll, 3)} wh_model_visc={_fmt(visc, 3)} "
             f"wh_model_turn={_fmt(turn, 3)} "
             f"wh_model_accel={_fmt(accel_wh, 3)} "
-            f"wh_measured_drive={_na(None if measured_drive is None else round(measured_drive, 3), 3)} "
+            f"wh_measured_drive_shaft={_na(None if shaft is None else round(shaft, 3), 3)} "
+            f"wh_measured_drive_elec={_na(None if elec is None else round(elec, 3), 3)} "
+            f"eta_avg={eta} "
             f"wh_measured={_na(None if measured is None else round(measured, 3), 3)} "
             f"wh_measured_soc={_fmt(None if soc_wh is None else round(soc_wh, 3), 3)} "
             f"err_pct={err}"
@@ -497,8 +592,8 @@ class MissionEnergyLog:
     def _mission_energy_line(self) -> str:
         from src.twin_energy import format_mission_energy_line
 
-        measured = None if not self._mission_drive_known else (
-            self._mission_wh_drive + self._mission_wh_idle
+        measured = None if not self._mission_elec_known else (
+            self._mission_wh_elec + self._mission_wh_idle
         )
         return format_mission_energy_line(
             round(self._mission_dist, 2),
@@ -549,16 +644,31 @@ def _subsystems(sample: dict) -> dict[str, float | None]:
     }
 
 
-def _measured_drive_w(sample: dict) -> tuple[float | None, bool]:
-    """Twin shaft power, and whether this sample actually reported it.
+def _metered_w(sample: dict, key: str) -> tuple[float | None, bool]:
+    """A measured watt field, and whether this sample actually reported it.
 
-    The key has to be present. Missing feedback is ``None`` and is not
-    a cue to use channel Legs. Samples from before this field existed
-    also have no measurement.
+    The key has to be present. A present ``None`` is a gap (torque
+    feedback missing) and is not a cue to use channel Legs. Samples
+    from before the field existed also have no measurement.
     """
-    if "measured_drive_w" not in sample:
+    if key not in sample:
         return None, False
-    return _as_float(sample.get("measured_drive_w")), _as_float(sample.get("measured_drive_w")) is not None
+    value = _as_float(sample.get(key))
+    return value, value is not None
+
+
+def _err_pct(elec_wh: float | None, model_drive_wh: float | None) -> str:
+    """Electrical measured versus electrical model. Shaft is not the error."""
+    if elec_wh is None or model_drive_wh is None or abs(float(model_drive_wh)) <= 1e-12:
+        return "na"
+    return f"{(float(elec_wh) - float(model_drive_wh)) / float(model_drive_wh) * 100.0:.1f}"
+
+
+def _eta(shaft_wh: float | None, elec_wh: float | None) -> str:
+    """Energy-weighted efficiency. Zero electrical energy is na, not 0."""
+    if shaft_wh is None or elec_wh is None or abs(float(elec_wh)) <= 1e-12:
+        return "na"
+    return f"{float(shaft_wh) / float(elec_wh):.3f}"
 
 
 def _idle_w(sample: dict, subs: dict[str, float | None]) -> float:

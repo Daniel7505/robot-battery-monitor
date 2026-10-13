@@ -178,6 +178,222 @@ def brushed_drive_point(
     }
 
 
+# Pololu #4693, the light-build drive motor. bom.json copies these from
+# https://www.pololu.com/product/4693/specs and the 37D gearmotor datasheet
+# https://www.pololu.com/file/0J1736/pololu-37d-metal-gearmotors-rev-1-2.pdf
+# Kt and R are not fields on that page. They are derived below.
+LIGHT_MOTOR_PART_ID = "mot_pololu_4693"
+# Same stall guard as the mission energy log: a paused Webots gap is not a drain.
+PACK_DRAW_MAX_DT_S = 15.0
+
+
+def published_motor_circuit(
+    spec: dict,
+    *,
+    eta_driver: float = DEFAULT_DRIVER_EFF,
+) -> dict:
+    """Constants of one BoM gearmotor, and the gaps in that circuit.
+
+    Published, from the part (light build is Pololu 4693):
+
+    * ``voltage_v``, ``no_load_rpm``, ``no_load_current_a``
+    * ``stall_current_a``, ``stall_torque_nm``
+    * ``max_efficiency`` — datasheet peak, not an operating-point η
+    * ``gear_ratio`` — already inside the output-shaft no-load and stall
+      figures. It is not applied a second time.
+
+    Derived, because bom.json does not publish Kt or R as their own fields:
+
+    * ``Kt = stall_torque_nm / stall_current_a`` (N·m/A)
+    * ``Kt_line = stall_torque_nm / (stall_current_a − no_load_current_a)``
+      which is the slope of the published current line
+      ``I = I0 + (Istall − I0) · τ/τstall``
+    * ``R = voltage_v / stall_current_a`` (ohm), the stall approximation
+
+    Gap: those derived Kt and R are not one circuit with the published
+    no-load speed. ``(V − I0·R) / Kt`` is about 295 rpm on the 4693.
+    The datasheet no-load speed is 200 rpm. The operating-point conversion
+    therefore uses the published interpolation (the same duty and current
+    line as ``brushed_drive_point``), which hits both published endpoints,
+    and does not use the inconsistent Kt/R circuit to invent a current.
+
+    ``eta_driver`` is ``assumptions.driver_eff`` (0.92). bom.json marks
+    that as an assumption: G2/VNH5019 efficiency is not published.
+    """
+    voltage = float(spec.get("voltage_v") or 0.0)
+    i0 = float(spec.get("no_load_current_a") or 0.0)
+    i_stall = float(spec.get("stall_current_a") or 0.0)
+    tau_stall = float(spec.get("stall_torque_nm") or 0.0)
+    rpm = float(spec.get("no_load_rpm") or 0.0)
+    omega0 = rpm * 2.0 * math.pi / 60.0
+    kt = (tau_stall / i_stall) if i_stall > 0 else None
+    kt_line = (tau_stall / (i_stall - i0)) if (i_stall - i0) > 0 else None
+    resistance = (voltage / i_stall) if i_stall > 0 else None
+    omega_from_kt_r = None
+    if kt and resistance is not None and kt > 0:
+        omega_from_kt_r = (voltage - i0 * resistance) / kt
+    peak = spec.get("max_efficiency")
+    if peak is None:
+        # The profile loader stores the datasheet peak on ``efficiency``.
+        peak = spec.get("efficiency")
+    return {
+        "part_id": spec.get("part_number") or LIGHT_MOTOR_PART_ID,
+        "voltage_v": voltage,
+        "no_load_rpm": rpm,
+        "omega0_rad_s": omega0,
+        "no_load_current_a": i0,
+        "stall_current_a": i_stall,
+        "stall_torque_nm": tau_stall,
+        "kt_nm_per_a": kt,
+        "kt_line_nm_per_a": kt_line,
+        "r_ohm": resistance,
+        "omega_from_kt_r_rad_s": omega_from_kt_r,
+        "eta_driver": float(eta_driver),
+        "max_efficiency_datasheet": None if peak is None else float(peak),
+        "gear_ratio": spec.get("gear_ratio"),
+        "gaps": (
+            "Kt and R are derived from stall torque, stall current, and "
+            "nominal voltage. bom.json does not publish them as fields.",
+            "Kt = τstall/Istall and R = V/Istall predict a no-load speed "
+            "higher than no_load_rpm, because no-load current drop and the "
+            "published no-load speed are not the same circuit. The "
+            "operating point uses the published duty/current line instead.",
+            "max_efficiency is the datasheet peak. It is not the efficiency "
+            "at the measured torque and speed.",
+            "gear_ratio is already inside the output-shaft no-load and stall "
+            "numbers. It is not applied again. The Webots hinge is treated "
+            "as that output shaft.",
+            "The sim wheel radius is 0.08 m and the BoM wheel is 0.04 m. "
+            "Measured electrical speed is the hinge rad/s. The model line "
+            "uses body speed / 0.04 m, which is twice the hinge rate at the "
+            "same body speed. Measured watts are not doubled to hide that.",
+            "driver efficiency is the 0.92 assumption in bom.json, applied "
+            "once, the same way brushed_drive_point applies it. G2/VNH5019 "
+            "efficiency is not published.",
+            "There is no regen. Torque past stall is clamped to stall so "
+            "current is not invented past the datasheet. Contact torque is "
+            "already inside the measured hinge torque and is not added again.",
+        ),
+    }
+
+
+def electrical_from_shaft_w(
+    tau_nm: float,
+    omega_rad_s: float,
+    *,
+    voltage_v: float,
+    no_load_rpm: float,
+    no_load_current_a: float,
+    stall_current_a: float,
+    stall_torque_nm: float,
+    eta_driver: float = DEFAULT_DRIVER_EFF,
+) -> dict:
+    """Pack-side watts of one motor at a measured shaft point.
+
+    ``tau_nm`` and ``omega_rad_s`` are the hinge reading. Rolling
+    resistance is not added on top: the hinge torque already includes
+    whatever load the sim applied. ``omega`` is not converted through the
+    0.04 m BoM radius.
+
+    The electrical line is the published interpolation, same as
+    ``brushed_drive_point``:
+
+    duty = |ω| / ω0 + τ_elec / τstall
+    I = I0 + (Istall − I0) · τ_elec / τstall
+    P = duty · V · I / eta_driver
+
+    ``eta_driver`` is applied once. Point efficiency is shaft watts
+    (|τ|·|ω|) divided by that pack-side P. The datasheet peak efficiency
+    is not substituted. Torque above stall is clamped; the returned
+    ``clamped`` flag marks that gap. A stopped, unloaded motor is 0 W.
+    """
+    tau = abs(float(tau_nm))
+    omega = abs(float(omega_rad_s))
+    omega0 = float(no_load_rpm) * 2.0 * math.pi / 60.0
+    tau_stall = float(stall_torque_nm)
+    driver = float(eta_driver)
+    shaft_w = tau * omega
+    if omega0 <= 0 or tau_stall <= 0 or driver <= 0:
+        return {
+            "shaft_w": shaft_w,
+            "elec_w": None,
+            "eta": None,
+            "duty": None,
+            "current_a": None,
+            "clamped": False,
+        }
+    clamped = tau > tau_stall
+    tau_elec = min(tau, tau_stall)
+    if omega <= 0.0 and tau_elec <= 0.0:
+        return {
+            "shaft_w": 0.0,
+            "elec_w": 0.0,
+            "eta": None,
+            "duty": 0.0,
+            "current_a": float(no_load_current_a),
+            "clamped": False,
+        }
+    duty = omega / omega0 + tau_elec / tau_stall
+    current = float(no_load_current_a) + (
+        float(stall_current_a) - float(no_load_current_a)
+    ) * (tau_elec / tau_stall)
+    elec_w = duty * float(voltage_v) * current / driver
+    eta = (shaft_w / elec_w) if elec_w > 1e-12 else None
+    return {
+        "shaft_w": shaft_w,
+        "elec_w": elec_w,
+        "eta": eta,
+        "duty": duty,
+        "current_a": current,
+        "clamped": clamped,
+    }
+
+
+def electrical_pack_draw_w(
+    channel_draws: dict | None,
+    measured_drive_elec_w: float | None,
+) -> float | None:
+    """Pack watts that SoC and ``wh_measured`` both integrate.
+
+    Non-locomotion channels stay (published electronics on a BoM build).
+    The Legs channel is the rolling prediction, so it is replaced by the
+    measured electrical drive. ``None`` when that measurement is missing:
+    the rolling line is not written in its place.
+    """
+    if measured_drive_elec_w is None:
+        return None
+    idle = 0.0
+    for name, watts in (channel_draws or {}).items():
+        if name == "Legs" or watts is None:
+            continue
+        idle += float(watts)
+    return idle + float(measured_drive_elec_w)
+
+
+def pack_drain_dt_s(
+    wall_gap_s: float | None,
+    *,
+    sim_dt_s: float,
+    max_dt_s: float = PACK_DRAW_MAX_DT_S,
+) -> float:
+    """Seconds to bill so SoC matches the energy log's clock.
+
+    The log integrates the gap between telemetry timestamps and drops a
+    gap longer than 15 s. The controller used to multiply watts by the
+    simulation timestep instead, so a warehouse step slower than realtime
+    moved the percent less than the logged watt-hours. The first step has
+    no wall gap yet and uses the simulation step. A non-positive gap or a
+    gap past ``max_dt_s`` bills nothing.
+    """
+    if wall_gap_s is None:
+        dt = float(sim_dt_s)
+    else:
+        dt = float(wall_gap_s)
+    if dt <= 0.0 or dt > float(max_dt_s):
+        return 0.0
+    return dt
+
+
 def shift_energy_wh(
     *,
     idle_w: float,

@@ -677,6 +677,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     dashboard = opts["dashboard_url"]
     startup_state = fetch_twin_state(dashboard)
     battery_pct = battery_from_twin_state(startup_state, default=100.0)
+    # Wall clock for the pack drain. The energy log bills timestamp gaps,
+    # not simulation timesteps. See pack_drain_dt_s.
+    battery_wall_mono: float | None = None
     thermal_c = 22.0
     tick = 0
     publish_fail_streak = 0
@@ -1454,6 +1457,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 speed_m_s=power_speed,
             )
             total_draw = sum(j.get("power_w", 0) for j in joints)
+            now_mono = time.monotonic()
+            wall_gap = None if battery_wall_mono is None else now_mono - battery_wall_mono
+            battery_wall_mono = now_mono
+            drain_dt = dt
             wheel_motion = max(
                 abs(j.get("velocity", 0.0))
                 for j in joints
@@ -1493,10 +1500,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             motion_factor = 1.0 if (moving or turning) else 0.0
             cap_wh = 0.0
             if _uses_bom_pack():
-                # Same watts the dashboard shows (channels, including compute),
-                # against the BoM pack. Joint-only watts on a 480 Wh pack made
-                # SoC Wh disagree with system draw.
+                # Pack draw is measured electrical drive plus the non-drive
+                # channels. Legs in the preview are the rolling prediction;
+                # substituting that for hinge torque made wh_measured_soc
+                # disagree with the electrical total (16646d5: pack 2.256 Wh,
+                # shaft+idle 3.724 Wh). Missing feedback does not fall back
+                # to the rolling line. The drain uses wall time so it matches
+                # the energy log's timestamp gaps.
                 try:
+                    from src.twin.webots_power import measured_drive_split
+                    from src.twin_energy import electrical_pack_draw_w, pack_drain_dt_s
+
                     preview = build_payload(
                         joints,
                         gait=gait,
@@ -1504,10 +1518,24 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         speed_m_s=speed_m_s,
                         battery_pct=battery_pct,
                     )
-                    total_draw = float((preview.get("power") or {}).get("total_draw_w") or 0.0)
+                    channels = preview.get("channel_draws") or (
+                        (preview.get("power") or {}).get("channel_draws") or {}
+                    )
+                    split = measured_drive_split(joints, power_speed)
+                    elec_w = None if split is None else split.get("elec_w")
+                    pack_w = electrical_pack_draw_w(channels, elec_w)
+                    if pack_w is None:
+                        pack_w = sum(
+                            float(watts)
+                            for name, watts in channels.items()
+                            if name != "Legs" and watts is not None
+                        )
+                    total_draw = float(pack_w)
                     cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
+                    drain_dt = pack_drain_dt_s(wall_gap, sim_dt_s=dt)
                 except Exception:
                     cap_wh = 0.0
+                    drain_dt = dt
             if _teleop is not None:
                 if cap_wh <= 0:
                     cap_wh = float(
@@ -1518,7 +1546,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     battery_pct
                     - _teleop.battery_drain_pct(
                         total_draw,
-                        dt,
+                        drain_dt,
                         capacity_wh=cap_wh,
                         scale=1.0,
                         drain_scale=1.0,
@@ -1530,7 +1558,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 battery_pct = max(
                     5.0,
                     battery_pct
-                    - (total_draw * dt) / (cap_wh * 3600.0) * 100.0,
+                    - (total_draw * drain_dt) / (cap_wh * 3600.0) * 100.0,
                 )
             thermal_c = _update_thermal(thermal_c, total_draw, dt, motion_factor=motion_factor)
 

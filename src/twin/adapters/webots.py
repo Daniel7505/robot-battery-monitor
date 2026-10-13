@@ -118,10 +118,9 @@ class WebotsAdapter(TwinAdapter):
                 loco[key] = hw[key]
         # None is a real value: torque feedback was missing, so measured
         # drive is na. Do not drop the key and let Legs stand in for it.
-        if "measured_drive_w" in loc or "measured_drive_w" in payload:
-            loco["measured_drive_w"] = (
-                loc["measured_drive_w"] if "measured_drive_w" in loc else payload.get("measured_drive_w")
-            )
+        for key in ("measured_drive_w", "measured_drive_elec_w"):
+            if key in loc or key in payload:
+                loco[key] = loc[key] if key in loc else payload.get(key)
         return TwinTelemetry.from_payload(
             {
                 "source": "webots",

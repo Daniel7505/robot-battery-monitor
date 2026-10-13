@@ -325,6 +325,99 @@ def measured_drive_w(
     return total
 
 
+def measured_drive_split(
+    joints: list[dict] | None,
+    speed_m_s: float | None = None,
+    profile: dict | None = None,
+) -> dict | None:
+    """Shaft watts and pack-side electrical watts for the drive hinges.
+
+    Shaft is |τ|·|ω| on the 0.08 m wheel, same as ``measured_drive_w``.
+    Electrical watts run each hinge's (τ, ω) through the BoM motor's
+    published duty/current line (see ``electrical_from_shaft_w``). The
+    hinge rad/s is not doubled to the 0.04 m BoM wheel.
+
+    Returns None when any drive wheel has no torque feedback. When the
+    profile has no published no-load/stall numbers, ``elec_w`` is None
+    and the shaft total is still returned. Rolling resistance is not
+    substituted for either number.
+    """
+    wheels = [
+        joint
+        for joint in (joints or [])
+        if isinstance(joint, dict) and "wheel" in str(joint.get("name") or "").lower()
+    ]
+    if not wheels:
+        return None
+    points: list[tuple[float, float]] = []
+    for joint in wheels:
+        if "torque_feedback_nm" not in joint:
+            return None
+        tau = wheel_torque_feedback_nm(joint.get("torque_feedback_nm"))
+        if tau is None:
+            return None
+        omega = _hinge_rad_s(joint, speed_m_s)
+        if omega is None:
+            return None
+        points.append((tau, omega))
+    shaft_w = sum(abs(tau) * abs(omega) for tau, omega in points)
+    spec, eta_driver = _drive_motor_spec(profile)
+    if spec is None:
+        return {"shaft_w": shaft_w, "elec_w": None, "eta": None}
+    from src.twin_energy import electrical_from_shaft_w
+
+    elec_w = 0.0
+    for tau, omega in points:
+        point = electrical_from_shaft_w(
+            tau,
+            omega,
+            voltage_v=float(spec["voltage_v"]),
+            no_load_rpm=float(spec["no_load_rpm"]),
+            no_load_current_a=float(spec["no_load_current_a"]),
+            stall_current_a=float(spec["stall_current_a"]),
+            stall_torque_nm=float(spec["stall_torque_nm"]),
+            eta_driver=eta_driver,
+        )
+        if point["elec_w"] is None:
+            return {"shaft_w": shaft_w, "elec_w": None, "eta": None}
+        elec_w += float(point["elec_w"])
+    eta = (shaft_w / elec_w) if elec_w > 1e-12 else None
+    return {"shaft_w": shaft_w, "elec_w": elec_w, "eta": eta}
+
+
+def _drive_motor_spec(profile: dict | None) -> tuple[dict | None, float]:
+    """Light/heavy/budget wheel spec, or None when the line is not published."""
+    from src.twin_energy import DEFAULT_DRIVER_EFF
+
+    prof = profile
+    if prof is None:
+        try:
+            prof = get_active_profile()
+        except Exception:
+            return None, DEFAULT_DRIVER_EFF
+    spec = {}
+    motors = (prof or {}).get("motors") or {}
+    if isinstance(motors, dict):
+        spec = dict(motors.get("left_wheel") or motors.get("right_wheel") or {})
+    needed = (
+        "voltage_v",
+        "no_load_rpm",
+        "no_load_current_a",
+        "stall_current_a",
+        "stall_torque_nm",
+    )
+    if not spec or any(spec.get(key) is None for key in needed):
+        return None, DEFAULT_DRIVER_EFF
+    driver = (prof or {}).get("motor_driver") or {}
+    assumptions = (prof or {}).get("assumptions") or {}
+    eta = driver.get("efficiency")
+    if eta is None:
+        eta = assumptions.get("driver_eff")
+    if eta is None:
+        eta = DEFAULT_DRIVER_EFF
+    return spec, float(eta)
+
+
 def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
     """Hinge rate in rad/s. Body speed converts through the 0.08 m wheel."""
     omega = None
@@ -849,9 +942,10 @@ def restamp_active_bom(payload: dict) -> dict:
     (arms and torso watts, ``sensors=na``, ``build=default``), while the
     dashboard log said ``BOM build=light``.     With a build selected, joint samples are recomputed on the BoM line
     even if the controller already stamped that build. That rebuild is
-    the predicted Legs bill. ``measured_drive_w`` is separate: |τ|·|ω|
-    from ``torque_feedback_nm`` on the 0.08 m hinge. Missing feedback
-    is None, and the rolling line is not written in its place.
+    the predicted Legs bill. ``measured_drive_w`` is shaft |τ|·|ω| on
+    the 0.08 m hinge. ``measured_drive_elec_w`` is that same (τ, ω)
+    through the published motor line. Missing feedback is None on both,
+    and the rolling line is not written in their place.
     """
     from src.hardware_profile import active_bom_build
 
@@ -896,7 +990,9 @@ def restamp_active_bom(payload: dict) -> dict:
         speed_f = float(speed)
     except (TypeError, ValueError):
         speed_f = 0.0
-    measured = measured_drive_w(joints, speed_f)
+    split = measured_drive_split(joints, speed_f, get_active_profile())
+    measured = None if split is None else split["shaft_w"]
+    measured_elec = None if split is None else split["elec_w"]
     rebuilt = build_webots_telemetry(
         joints=clean,
         gait=str(payload.get("gait") or loc.get("gait") or "stand"),
@@ -913,8 +1009,10 @@ def restamp_active_bom(payload: dict) -> dict:
     loco = rebuilt.get("locomotion") if isinstance(rebuilt.get("locomotion"), dict) else {}
     loco = dict(loco)
     loco["measured_drive_w"] = measured
+    loco["measured_drive_elec_w"] = measured_elec
     rebuilt["locomotion"] = loco
     rebuilt["measured_drive_w"] = measured
+    rebuilt["measured_drive_elec_w"] = measured_elec
     # Keep the feedback on the joints the model rebuild stored, so a later
     # reader can see the raw hinge torque next to the zero model load.
     feedback_by_name = {

@@ -227,8 +227,9 @@ class DigitalTwinBridge:
                 "speed_m_s": loc.get("speed_m_s"),
                 "mission_event": sensors.get("mission_event"),
             }
-            if "measured_drive_w" in loc:
-                sample["measured_drive_w"] = loc.get("measured_drive_w")
+            for key in ("measured_drive_w", "measured_drive_elec_w"):
+                if key in loc:
+                    sample[key] = loc.get(key)
             for line in self._energy_log.observe(sample):
                 logger.info(line)
         except Exception as exc:

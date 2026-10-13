@@ -3,6 +3,14 @@ import pytest
 from src.config import Config
 
 
+def test_config_yaml_is_found_when_the_process_is_not_in_the_repo(tmp_path, monkeypatch):
+    # Webots starts the controller in its own folder, not the repo root.
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    assert cfg.get("robot", "name") not in (None, "Robot")
+    assert isinstance(cfg.get("power_channels"), list)
+
+
 def test_config_loads_yaml():
     """Config should load from config.yaml without crashing"""
     cfg = Config()

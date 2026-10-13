@@ -20,11 +20,13 @@ from __future__ import annotations
 
 from src.twin.adapters.base import TwinAdapter
 from src.twin.models import TwinTelemetry
+from src.teleop_agent import CONTROL_SPEED_CAP_M_S
 from src.twin.webots_power import (
     WEBOTS_MOTOR_CHANNELS,
     aggregate_channel_draws,
     gait_to_task,
     motor_powers_from_joints,
+    restamp_active_bom,
 )
 
 _WEBOTS_CHANNEL_MAP = dict(WEBOTS_MOTOR_CHANNELS)
@@ -46,6 +48,7 @@ class WebotsAdapter(TwinAdapter):
     name = "webots"
 
     def normalize(self, payload: dict) -> TwinTelemetry:
+        payload = restamp_active_bom(payload)
         loc = payload.get("locomotion") or {}
         gait = payload.get("gait") or loc.get("gait", "stand")
         phase = payload.get("phase") or loc.get("phase") or ""
@@ -55,6 +58,11 @@ class WebotsAdapter(TwinAdapter):
         try:
             speed_f = float(speed) if speed is not None else 0.0
         except (TypeError, ValueError):
+            speed_f = 0.0
+        # GPS spikes above the control cap are not body speed.
+        if speed_f > CONTROL_SPEED_CAP_M_S:
+            speed_f = CONTROL_SPEED_CAP_M_S
+        elif speed_f < 0.0:
             speed_f = 0.0
 
         # Prefer pre-built channel_draws from the controller (build_webots_telemetry).

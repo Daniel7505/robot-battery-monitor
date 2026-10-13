@@ -787,7 +787,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         except Exception as exc:
             print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
-    mission_summary_sent = False
+    mission_complete = False
+    finish_age_s = 0.0
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -800,7 +801,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
-            mission_event = None
+            mission_event = "complete" if mission_complete else None
+            if nadir_lobe_done and not mission_complete:
+                finish_age_s += dt
+            abs_just_finished = False
             if tick == 5 and not lane_keep_on and rowfit_rt is not None:
                 lane_keep_on = True
                 print(
@@ -1238,11 +1242,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     last_teleop_right = 0.0
                     cached_api_left = 0.0
                     cached_api_right = 0.0
-                    # End of a finished track: FULL S DONE already fired, and
-                    # ABS has now parked. One telemetry flag, one summary.
-                    if nadir_lobe_done and not mission_summary_sent:
-                        mission_event = "complete"
-                        mission_summary_sent = True
+                    abs_just_finished = True
                     _hard_zero_wheels(
                         motors,
                         sensors,
@@ -1610,6 +1610,38 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             }
             wheels_both_locked = all(wheel_locked.values())
 
+            if not mission_complete:
+                try:
+                    from src.mission_park import mission_should_complete
+
+                    hubs_quiet = (
+                        abs(left_wv) < STOP_WHEEL_RAD_S
+                        and abs(right_wv) < STOP_WHEEL_RAD_S
+                    )
+                    no_cmd = (
+                        not user_driving
+                        and not api_driving
+                        and abs(left_v) < 0.05
+                        and abs(right_v) < 0.05
+                    )
+                    if mission_should_complete(
+                        track_done=nadir_lobe_done,
+                        already_complete=False,
+                        abs_done=abs_just_finished,
+                        hubs_quiet=hubs_quiet,
+                        no_drive_command=no_cmd,
+                        finish_age_s=finish_age_s,
+                    ):
+                        mission_complete = True
+                        mission_event = "complete"
+                        print(
+                            "MISSION complete — parked after track finish; "
+                            "dashboard will log MISSION_SUMMARY"
+                        )
+                except Exception:
+                    if abs_just_finished and nadir_lobe_done:
+                        mission_complete = True
+                        mission_event = "complete"
             publish_ticks = 1 if abs_brake.active else publish_every
             if tick % publish_ticks == 0:
                 lock_l = _WHEEL_LOCK_POS.get("left_wheel")

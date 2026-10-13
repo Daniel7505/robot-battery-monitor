@@ -99,20 +99,34 @@ def test_segment_closes_every_ten_feet_from_measured_draws():
     assert not any(line.startswith("SEGMENT_ENERGY") for line in more)
 
 
-def test_one_long_step_splits_into_whole_segments_and_counts_accel_once():
+def test_pose_jump_is_not_split_into_segments():
+    # 6 m in 1 s is ~6 m/s. The live log turned that into several SEGMENT
+    # lines with the same timestamp and avg_speed=1.842.
     log = MissionEnergyLog()
     log.observe(_sample(0.0, 0.0, speed=0.0))
-    # 1 m/s gained in 1 s is an accel event, and the step covers two segments.
-    lines = log.observe(_sample(1.0, 2.0 * TEN_FT_M, speed=1.0))
+    lines = log.observe(_sample(1.0, 2.0 * TEN_FT_M, speed=1.84))
+    assert not any(line.startswith("SEGMENT_ENERGY") for line in lines)
+    # The jump is not travel, so the next honest step still starts at seg 0.
+    dt = TEN_FT_M / 0.44
+    later = log.observe(_sample(1.0 + dt, 2.0 * TEN_FT_M + TEN_FT_M, speed=0.44))
+    segments = [line for line in later if line.startswith("SEGMENT_ENERGY")]
+    assert len(segments) == 1
+    assert _fields(segments[0])["seg_idx"] == "0"
+    assert float(_fields(segments[0])["avg_speed"]) == pytest.approx(0.44, abs=0.02)
+
+
+def test_one_sample_closes_at_most_one_segment():
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, speed=0.44))
+    dt = (2.0 * TEN_FT_M) / 0.44
+    lines = log.observe(_sample(dt, 2.0 * TEN_FT_M, speed=0.44))
     segments = [line for line in lines if line.startswith("SEGMENT_ENERGY")]
-    assert len(segments) == 2
-    first, second = (_fields(line) for line in segments)
-    assert first["seg_idx"] == "0"
-    assert second["seg_idx"] == "1"
-    assert first["accel_events"] == "1"
-    assert second["accel_events"] == "0"
-    assert float(first["dist_m"]) == pytest.approx(TEN_FT_M, abs=1e-6)
-    assert float(second["dist_m"]) == pytest.approx(TEN_FT_M, abs=1e-6)
+    assert len(segments) == 1
+    assert _fields(segments[0])["seg_idx"] == "0"
+    more = log.observe(_sample(dt + 0.5, 2.0 * TEN_FT_M + 0.05, speed=0.44))
+    more_segs = [line for line in more if line.startswith("SEGMENT_ENERGY")]
+    assert len(more_segs) == 1
+    assert _fields(more_segs[0])["seg_idx"] == "1"
 
 
 def test_power_breakdown_every_ten_seconds_sums_to_system_draw():
@@ -222,6 +236,71 @@ def test_mission_summary_fires_once_when_the_track_parks():
         _restore_bom(old)
 
 
+def test_log_build_follows_the_config_when_the_sample_says_default():
+    old = _use_bom("light")
+    try:
+        log = MissionEnergyLog()
+        first = _sample(0.0, 0.0)
+        first["build"] = "default"
+        log.observe(first)
+        lines: list[str] = []
+        for i in range(1, 11):
+            sample = _sample(float(i), 0.0)
+            sample["build"] = "default"
+            lines.extend(log.observe(sample))
+        breakdown = next(line for line in lines if line.startswith("POWER_BREAKDOWN"))
+        assert "build=light" in breakdown
+    finally:
+        _restore_bom(old)
+
+
+def test_unstamped_parked_sample_uses_the_light_build_watts():
+    from src.twin.adapters.webots import WebotsAdapter
+
+    old = _use_bom("light")
+    try:
+        tel = WebotsAdapter().normalize({
+            "source": "webots",
+            "robot": {"name": "ButlerBot", "main_battery_pct": 100},
+            "channel_draws": {
+                "Compute": 9.0,
+                "Legs": 2.73,
+                "Arms": 2.8,
+                "Torso": 2.3,
+                "Cooling": 0.0,
+            },
+            "joints": [
+                {"name": "left_wheel", "velocity": 0.0, "torque": 2.0},
+                {"name": "right_wheel", "velocity": 0.0, "torque": 2.0},
+                {"name": "left_arm", "velocity": 1.0, "torque": 1.0},
+                {"name": "torso_joint", "velocity": 1.0, "torque": 1.0},
+            ],
+            "locomotion": {"gait": "stand", "speed_m_s": 0.0, "phase": "standby"},
+            "mission": {"task": "idle"},
+        })
+        assert tel.locomotion.get("bom_build") == "light"
+        assert tel.channel_draws["Arms"] == 0.0
+        assert tel.channel_draws["Torso"] == 0.0
+        assert tel.channel_draws["Compute"] == pytest.approx(9.86, abs=0.05)
+        assert tel.raw["subsystem_draws"]["sensors"] is not None
+        assert sum(tel.channel_draws.values()) == pytest.approx(9.96, abs=0.25)
+    finally:
+        _restore_bom(old)
+
+
+def test_reported_speed_above_the_control_cap_is_clipped():
+    from src.twin.adapters.webots import WebotsAdapter
+
+    tel = WebotsAdapter().normalize({
+        "source": "webots",
+        "robot": {"name": "ButlerBot", "main_battery_pct": 90},
+        "channel_draws": {"Compute": 9.0, "Legs": 3.0, "Arms": 0.0, "Torso": 0.0, "Cooling": 0.0},
+        "locomotion": {"gait": "drive", "speed_m_s": 1.84, "phase": "teleop"},
+        "mission": {"task": "moving"},
+    })
+    assert tel.locomotion["speed_m_s"] == pytest.approx(0.85)
+
+
 def test_summary_is_not_emitted_without_the_park_complete_event():
     log = MissionEnergyLog()
     log.observe(_sample(0.0, 0.0))
@@ -280,3 +359,57 @@ def test_bridge_logs_a_breakdown_from_a_webots_payload(caplog):
         sum(float(fields[name]) for name in ("compute", "sensors", "cooling", "locomotion", "arms", "torso")),
         abs=0.02,
     )
+
+
+def test_mission_complete_does_not_wait_forever_on_gps_noise():
+    from src.mission_park import mission_should_complete
+
+    common = dict(track_done=True, already_complete=False, abs_done=False, no_drive_command=True)
+    assert mission_should_complete(
+        **common, hubs_quiet=False, finish_age_s=0.2
+    ) is False
+    assert mission_should_complete(
+        **common, hubs_quiet=True, finish_age_s=1.0
+    ) is True
+    assert mission_should_complete(
+        **common, hubs_quiet=False, finish_age_s=12.0
+    ) is True
+    assert mission_should_complete(
+        track_done=True, already_complete=False, abs_done=True,
+        hubs_quiet=False, no_drive_command=False, finish_age_s=0.1,
+    ) is True
+    assert mission_should_complete(
+        track_done=False, already_complete=False, abs_done=True,
+        hubs_quiet=True, no_drive_command=True, finish_age_s=20,
+    ) is False
+
+
+def test_live_twin_ignores_ros2_mission_override():
+    from datetime import datetime, timezone
+
+    from src.hardware import reset_hardware_source
+    from src.hardware_ros2 import ROS2BatterySource
+    from src.twin.bridge import reset_twin_bridge
+
+    reset_twin_bridge()
+    reset_hardware_source()
+    source = ROS2BatterySource()
+    source._ros2.inject_command(mission="high_load")
+    source._apply_ros2_commands()
+    assert source._mission.task_id == "high_load"
+
+    now = datetime.now(timezone.utc).isoformat()
+    assert source._twin.ingest_telemetry({
+        "source": "webots",
+        "adapter": "webots",
+        "timestamp": now,
+        "robot": {"name": "ButlerBot", "main_battery_pct": 100, "battery_capacity_wh": 240},
+        "mission": {"task": "moving"},
+        "channel_draws": {"Compute": 9.86, "Legs": 3.43, "Arms": 0, "Torso": 0, "Cooling": 0},
+        "locomotion": {"gait": "drive", "speed_m_s": 0.44, "phase": "teleop"},
+        "pose": {"x_m": 1.0, "y_m": 0.0, "heading_rad": 0.0},
+    }, adapter="webots")["ok"] is True
+    assert source._twin._is_external_active()
+    source._ros2.inject_command(mission="idle")
+    source._apply_ros2_commands()
+    assert source._mission.task_id == "high_load"

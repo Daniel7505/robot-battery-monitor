@@ -262,6 +262,7 @@ def status_for_external_twin(
     *,
     source: str = "webots",
     live_draw_w: float | None = None,
+    parked: bool = False,
 ) -> dict:
     """
     Dashboard simulation panel when Webots (not the internal script) drives the loop.
@@ -289,7 +290,8 @@ def status_for_external_twin(
         "driver": source,
         "robot_name": config.get("robot", "name", "ButlerBot"),
         "enabled": True,
-        "running": True,
+        "running": not parked,
+        "parked": bool(parked),
         "external_twin": True,
         "twin_source": source,
         "loop": True,
@@ -305,7 +307,11 @@ def status_for_external_twin(
             round(sum(float(v) for v in draws.values()), 1) if draws else None
         ),
         "current_task": mission.task_id if mission else None,
-        "note": "Internal script paused — Webots twin drives the mission loop",
+        "note": (
+            "Parked — mission clock stopped"
+            if parked
+            else "Internal script paused — Webots twin drives the mission loop"
+        ),
         "script": [
             {
                 "task": s.get("task", ""),

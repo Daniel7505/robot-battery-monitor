@@ -230,6 +230,24 @@ BATTERY_CAPACITY_WH = 480.0
 BATTERY_DRAIN_SCALE = 1.0
 
 
+def plausible_travel_m(step_m: float, dt_s: float) -> float:
+    """Metres of this step that count as travel.
+
+    A GPS chord faster than the control cap is a pose jump. It is not
+    distance, and it must not be split into several energy segments.
+    """
+    try:
+        step = float(step_m)
+        dt = float(dt_s)
+    except (TypeError, ValueError):
+        return 0.0
+    if step <= 0.0 or dt <= 0.0:
+        return 0.0
+    if step / dt > CONTROL_SPEED_CAP_M_S:
+        return 0.0
+    return step
+
+
 def sanitize_motion(speed_m_s: float, forward_m_s: float) -> tuple[float, float]:
     """Ignore GPS spikes from tipping — robot max cruise is ~0.5 m/s.
 

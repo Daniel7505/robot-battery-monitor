@@ -802,7 +802,8 @@ HTML_TEMPLATE = '''
                         ? 'energy from ∫ channel draws'
                         : (eff.energy_source === 'soc_delta' ? 'energy from battery SoC Δ' : 'energy pending');
                     const distN = eff.distance_m != null ? 'GPS path' : 'no pose yet';
-                    effNote.innerText = 'Mission running · ' + src + ' · distance: ' + distN
+                    const missionWord = eff.parked ? 'Mission parked' : 'Mission running';
+                    effNote.innerText = missionWord + ' · ' + src + ' · distance: ' + distN
                         + ' · samples ' + (eff.samples != null ? eff.samples : '—');
                 }
             }

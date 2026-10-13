@@ -717,7 +717,7 @@ def build_webots_telemetry(
         "pose": pose or {},
         "sensors": sensors or {},
         "power": {
-            "total_draw_w": round(sum(channel_draws.values()), 1),
+            "total_draw_w": round(sum(channel_draws.values()), 2),
             "pack_c_rate": round(
                 battery_draw_c_rate(sum(channel_draws.values()), prof), 3
             ),
@@ -726,3 +726,78 @@ def build_webots_telemetry(
             "hardware_profile": prof.get("profile_id"),
         },
     }
+
+
+def restamp_active_bom(payload: dict) -> dict:
+    """Make a live Webots sample use the config BoM build.
+
+    The dashboard and the controller do not share a working directory.
+    Webots used to miss ``config/config.yaml``, post the YAML profile
+    (arms and torso watts, ``sensors=na``, ``build=default``), while the
+    dashboard log said ``BOM build=light``. When a build is selected and
+    this sample is not already that build, recompute from the joint
+    velocities with wheel torque cleared so the linear model uses rolling
+    resistance instead of the ``|ω| × 0.45`` stand-in.
+    """
+    from src.hardware_profile import active_bom_build
+
+    if not isinstance(payload, dict):
+        return payload
+    build = active_bom_build()
+    if not build:
+        return payload
+    loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
+    hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
+    stamped = loc.get("bom_build") or hw.get("bom_build")
+    subs = payload.get("subsystem_draws")
+    if (
+        stamped == build
+        and isinstance(subs, dict)
+        and subs.get("sensors") is not None
+    ):
+        return payload
+    joints = [j for j in (payload.get("joints") or []) if isinstance(j, dict)]
+    if not joints:
+        out = dict(payload)
+        loc_out = dict(loc)
+        loc_out["bom_build"] = build
+        hw_out = dict(hw)
+        hw_out["bom_build"] = build
+        out["locomotion"] = loc_out
+        out["hardware"] = hw_out
+        return out
+    clean = []
+    for joint in joints:
+        copied = dict(joint)
+        if "wheel" in str(copied.get("name") or ""):
+            copied["torque"] = 0.0
+        clean.append(copied)
+    robot = payload.get("robot") if isinstance(payload.get("robot"), dict) else {}
+    battery = robot.get("main_battery_pct")
+    if battery is None:
+        battery = robot.get("battery_pct")
+    try:
+        battery_f = float(battery) if battery is not None else 90.0
+    except (TypeError, ValueError):
+        battery_f = 90.0
+    speed = loc.get("speed_m_s")
+    if speed is None:
+        speed = payload.get("speed_m_s") or 0.0
+    try:
+        speed_f = float(speed)
+    except (TypeError, ValueError):
+        speed_f = 0.0
+    rebuilt = build_webots_telemetry(
+        joints=clean,
+        gait=str(payload.get("gait") or loc.get("gait") or "stand"),
+        phase=str(payload.get("phase") or loc.get("phase") or ""),
+        speed_m_s=speed_f,
+        battery_pct=battery_f,
+        pose=payload.get("pose") if isinstance(payload.get("pose"), dict) else {},
+        sensors=payload.get("sensors") if isinstance(payload.get("sensors"), dict) else {},
+        robot_name=str(robot.get("name") or "ButlerBot"),
+        profile=get_active_profile(),
+    )
+    if payload.get("timestamp"):
+        rebuilt["timestamp"] = payload["timestamp"]
+    return rebuilt

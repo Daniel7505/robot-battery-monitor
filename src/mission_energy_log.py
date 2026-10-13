@@ -49,6 +49,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from src.teleop_agent import plausible_travel_m
 from src.twin_energy import TEN_FT_M
 
 POWER_PERIOD_S = 10.0
@@ -145,7 +146,7 @@ class MissionEnergyLog:
             lines.extend(self._maybe_summary(sample))
             return lines
 
-        step_m, speed, heading_deg = self._step_motion(sample, dt)
+        step_m, speed, heading_deg, trusted = self._step_motion(sample, dt)
         subs = _subsystems(sample)
         drive_w, idle_w = _drive_idle_w(sample, subs)
         wh_drive = drive_w * dt / 3600.0
@@ -160,7 +161,8 @@ class MissionEnergyLog:
         self._mission_wh_drive += wh_drive
         self._mission_wh_idle += wh_idle
         self._note_soc(sample)
-        self._note_turn(sample)
+        if trusted:
+            self._note_turn(sample)
 
         self._power_dt += dt
         for key, watts in subs.items():
@@ -173,43 +175,37 @@ class MissionEnergyLog:
             lines.append(self._power_line())
             self._clear_power()
 
-        remain_m = step_m
-        remain_dt = dt
-        remain_drive = wh_drive
-        remain_idle = wh_idle
-        remain_head = abs(heading_deg)
-        first_piece = True
-        while self._seg_dist + remain_m >= TEN_FT_M - 1e-9 and remain_m > 1e-9:
-            need = TEN_FT_M - self._seg_dist
-            frac = min(1.0, need / remain_m)
-            self._seg_dist += remain_m * frac
-            self._seg_dt += remain_dt * frac
-            self._seg_wh_drive += remain_drive * frac
-            self._seg_wh_idle += remain_idle * frac
-            self._seg_heading_deg += remain_head * frac
-            if first_piece and accel:
+        if trusted:
+            self._seg_dist += step_m
+            self._seg_dt += dt
+            self._seg_wh_drive += wh_drive
+            self._seg_wh_idle += wh_idle
+            self._seg_heading_deg += abs(heading_deg)
+            if accel:
                 self._seg_accel += accel
-                first_piece = False
+        # One line per sample, and only when this sample actually moved.
+        # A pose jump used to close several segments in the same millisecond.
+        if trusted and step_m > 0 and self._seg_dist >= TEN_FT_M - 1e-9 and self._seg_dist > 0:
+            frac = min(1.0, TEN_FT_M / self._seg_dist)
+            closed_dist = self._seg_dist
+            closed_dt = self._seg_dt
+            closed_drive = self._seg_wh_drive
+            closed_idle = self._seg_wh_idle
+            closed_head = self._seg_heading_deg
+            self._seg_dist = closed_dist * frac
+            self._seg_dt = closed_dt * frac
+            self._seg_wh_drive = closed_drive * frac
+            self._seg_wh_idle = closed_idle * frac
+            self._seg_heading_deg = closed_head * frac
             lines.append(self._segment_line())
             self._seg_idx += 1
-            self._seg_dist = 0.0
-            self._seg_dt = 0.0
-            self._seg_wh_drive = 0.0
-            self._seg_wh_idle = 0.0
-            self._seg_heading_deg = 0.0
+            keep = 1.0 - frac
+            self._seg_dist = closed_dist * keep
+            self._seg_dt = closed_dt * keep
+            self._seg_wh_drive = closed_drive * keep
+            self._seg_wh_idle = closed_idle * keep
+            self._seg_heading_deg = closed_head * keep
             self._seg_accel = 0
-            remain_m -= remain_m * frac
-            remain_dt -= remain_dt * frac
-            remain_drive -= remain_drive * frac
-            remain_idle -= remain_idle * frac
-            remain_head -= remain_head * frac
-        self._seg_dist += remain_m
-        self._seg_dt += remain_dt
-        self._seg_wh_drive += remain_drive
-        self._seg_wh_idle += remain_idle
-        self._seg_heading_deg += remain_head
-        if first_piece and accel:
-            self._seg_accel += accel
 
         lines.extend(self._maybe_summary(sample))
         return lines
@@ -217,7 +213,7 @@ class MissionEnergyLog:
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
         self._last_ts = ts
-        self._build = str(sample.get("build") or "default")
+        self._build = resolve_log_build(sample.get("build"))
         payload = _as_float(sample.get("payload_kg"))
         self._payload_kg = 0.0 if payload is None else payload
         cap = _as_float(sample.get("capacity_wh"))
@@ -245,8 +241,7 @@ class MissionEnergyLog:
         cap = _as_float(sample.get("capacity_wh"))
         if cap is not None and cap > 0:
             self._capacity_wh = cap
-        if sample.get("build"):
-            self._build = str(sample["build"])
+        self._build = resolve_log_build(sample.get("build") or self._build)
         payload = _as_float(sample.get("payload_kg"))
         if payload is not None:
             self._payload_kg = payload
@@ -270,7 +265,7 @@ class MissionEnergyLog:
             self._turns += 1
             self._turn_anchor = heading
 
-    def _step_motion(self, sample: dict, dt: float) -> tuple[float, float, float]:
+    def _step_motion(self, sample: dict, dt: float) -> tuple[float, float, float, bool]:
         xy = _xy(sample.get("pose") or {})
         step_m = 0.0
         if xy is not None and self._last_xy is not None:
@@ -283,9 +278,19 @@ class MissionEnergyLog:
         heading_deg = 0.0
         if heading is not None and self._last_heading is not None:
             heading_deg = math.degrees(_wrap_rad(heading - self._last_heading))
+        trusted = True
+        credited = plausible_travel_m(step_m, dt)
+        if credited + 1e-9 < step_m:
+            # Pose teleport. Re-anchor so the next sample is not measured
+            # from the old point, and do not bill the jump as a turn.
+            heading_deg = 0.0
+            step_m = 0.0
+            trusted = False
+        else:
+            step_m = credited
         if heading is not None:
             self._last_heading = heading
-        return step_m, speed, heading_deg
+        return step_m, speed, heading_deg, trusted
 
     def _segment_line(self) -> str:
         avg = (self._seg_dist / self._seg_dt) if self._seg_dt > 0 else 0.0
@@ -425,6 +430,26 @@ def _drive_idle_w(sample: dict, subs: dict[str, float | None]) -> tuple[float, f
         draws = sample.get("channel_draws") or {}
         idle = sum(float(v) for name, v in draws.items() if name != "Legs")
     return loco, idle
+
+
+def resolve_log_build(stamped) -> str:
+    """Build name for a log line.
+
+    A controller that never saw ``bom_build`` stamps nothing, and the log
+    used to say ``default`` next to a dashboard ``BOM build=light`` line.
+    The config selection wins over a blank or default stamp.
+    """
+    active = None
+    try:
+        from src.hardware_profile import active_bom_build
+
+        active = active_bom_build()
+    except Exception:
+        active = None
+    text = str(stamped).strip() if stamped else ""
+    if text.lower() in {"", "default", "none", "null", "yaml", "~"}:
+        return active or "default"
+    return text
 
 
 def _model(dist_m: float, duration_s: float, payload_kg: float) -> dict | None:

@@ -8,3 +8,8 @@ def test_external_twin_status_reflects_webots_phase():
     assert st["segment_label"] == "Drive / Transit"
     assert st["segment_index"] == 2
     assert "Webots" in st["note"]
+    assert st["running"] is True
+    parked = status_for_external_twin(None, "standby", "stand", parked=True)
+    assert parked["running"] is False
+    assert parked["parked"] is True
+    assert "clock stopped" in parked["note"]

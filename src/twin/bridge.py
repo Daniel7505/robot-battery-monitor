@@ -177,7 +177,12 @@ class DigitalTwinBridge:
         self._active_source = telemetry.source
         # Skip internal/sim noise; only arm efficiency on real external feeds.
         if telemetry.source != "internal":
-            self._efficiency.update_from_telemetry(telemetry)
+            sensors = {}
+            raw = telemetry.raw if isinstance(getattr(telemetry, "raw", None), dict) else {}
+            if isinstance(raw.get("sensors"), dict):
+                sensors = raw["sensors"]
+            parked = str(sensors.get("mission_event") or "") == "complete"
+            self._efficiency.update_from_telemetry(telemetry, parked=parked)
             self._log_mission_energy(telemetry)
         logger.info(
             f"DigitalTwinBridge ingest [{telemetry.source}/{adapter_impl.name}] "
@@ -202,6 +207,14 @@ class DigitalTwinBridge:
             raw = telemetry.raw if isinstance(getattr(telemetry, "raw", None), dict) else {}
             sensors = raw.get("sensors") if isinstance(raw.get("sensors"), dict) else {}
             loc = telemetry.locomotion or {}
+            stamped = loc.get("bom_build")
+            if not stamped:
+                try:
+                    from src.hardware_profile import active_bom_build
+
+                    stamped = active_bom_build()
+                except Exception:
+                    stamped = None
             sample = {
                 "timestamp": telemetry.timestamp,
                 "pose": telemetry.pose or {},
@@ -210,7 +223,7 @@ class DigitalTwinBridge:
                 "battery_pct": telemetry.battery_pct,
                 "capacity_wh": telemetry.battery_capacity_wh or self._battery_wh,
                 "payload_kg": loc.get("payload_kg"),
-                "build": loc.get("bom_build") or None,
+                "build": stamped,
                 "speed_m_s": loc.get("speed_m_s"),
                 "mission_event": sensors.get("mission_event"),
             }

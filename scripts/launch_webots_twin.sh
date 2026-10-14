@@ -26,6 +26,26 @@ if [ -z "$WORLD" ]; then
   exit 1
 fi
 
+# Selected bom_build: open a sibling world whose body mass and contact
+# wheel match the BoM. The drawn mesh stays 0.08 m. Unset bom_build
+# leaves WORLD unchanged. The sibling is gitignored.
+PY=""
+if command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+elif command -v python >/dev/null 2>&1; then
+  PY="python"
+fi
+if [ -n "$PY" ]; then
+  if PATCHED="$("$PY" "$PROJECT_ROOT/scripts/prepare_bom_world.py" "$WORLD")"; then
+    if [ -n "$PATCHED" ] && [ "$PATCHED" != "$WORLD" ]; then
+      echo "BoM body: $PATCHED"
+      WORLD="$PATCHED"
+    fi
+  else
+    echo "WARNING: BoM body patch skipped; opening the shipped world" >&2
+  fi
+fi
+
 # Track for the finish referee from the world's "# TRACK_FILE" tag; a different
 # RBM_TRACK left in the shell is a leftover from an earlier run: override it.
 TAG="$(sed -n 's/^# TRACK_FILE \(.*\)$/\1/p' "$WORLD" | head -n 1 | tr -d '\r')"

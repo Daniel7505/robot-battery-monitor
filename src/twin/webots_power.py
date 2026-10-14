@@ -297,9 +297,9 @@ def measured_drive_w(
 
     τ is ``torque_feedback_nm`` only. The ``torque`` field is the load
     the electrical model used, and a BoM build stores 0 there, so it is
-    not a measurement. ω is the wheel position-sensor rate (rad/s of the
-    0.08 m world wheel). When that rate is missing and the body is
-    moving, ω = speed / 0.08. The BoM radius 0.04 m is not used.
+    not a measurement. ω is the wheel position-sensor rate. When that
+    rate is missing and the body is moving, ω = speed / R. R is the
+    drawn 0.08 m wheel until a BoM body loads, then the contact radius.
 
     Returns None when any drive wheel has no torque feedback. The energy
     log writes ``na`` in that case.
@@ -419,7 +419,7 @@ def _drive_motor_spec(profile: dict | None) -> tuple[dict | None, float]:
 
 
 def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
-    """Hinge rate in rad/s. Body speed converts through the 0.08 m wheel."""
+    """Hinge rate in rad/s. A quiet encoder uses the command wheel radius."""
     omega = None
     if joint.get("velocity") is not None and joint.get("velocity") != "":
         try:
@@ -436,10 +436,25 @@ def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
             speed = None
         if speed is not None and not math.isfinite(speed):
             speed = None
-    # Encoder quiet while the body is moving: use the drawn wheel, not 0.04 m.
+    # Encoder quiet while the body is moving. Unset bom_build uses the drawn
+    # 0.08 m wheel. After a BoM body is loaded, the command radius is the
+    # contact radius (src.webots_body.install_command_radius).
     if speed is not None and speed > 0.02 and (omega is None or omega < 1e-3):
-        return speed / SIM_WHEEL_RADIUS_M
+        return speed / _command_wheel_radius_m()
     return omega
+
+
+def _command_wheel_radius_m() -> float:
+    """Hinge radius for a body-speed fallback. 0.08 m until a BoM build loads."""
+    try:
+        from src.lane_keep import WHEEL_RADIUS_M as command_r
+
+        radius = float(command_r)
+        if radius > 0:
+            return radius
+    except Exception:
+        pass
+    return SIM_WHEEL_RADIUS_M
 
 
 def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
@@ -452,9 +467,10 @@ def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
     return crr * mass * 9.81 * float(radius_m) / 2.0
 
 
-# Drawn wheel in the Webots worlds (butlerbot.wbt cylinder). Odometry in the
-# controller uses this same radius. The BoM wheel is 80 mm diameter, 0.04 m.
-# Do not resize the mesh and do not change lane_keep.WHEEL_RADIUS_M.
+# Drawn wheel mesh in the shipped butlerbot*.wbt cylinders (Shape radius).
+# The contact cylinder matches it until a BoM build is loaded. Do not resize
+# the Shape. src.webots_body sets the contact cylinder and lane_keep's
+# command radius from the BoM; this constant stays the drawn mesh.
 SIM_WHEEL_RADIUS_M = 0.08
 
 

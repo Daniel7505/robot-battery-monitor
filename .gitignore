@@ -40,6 +40,8 @@ archives/
 webots/controllers/**/logs/
 webots/worlds/*.jpg
 webots/worlds/.*.wbproj
+# BoM body siblings (mass + contact radius). Shipped worlds stay the 0.08 m mesh.
+webots/worlds/*.bom-*.wbt
 __pycache__/
 
 # OS

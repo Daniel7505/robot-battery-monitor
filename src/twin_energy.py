@@ -29,9 +29,12 @@ TEN_FT_M = 3.048
 GRAVITY_M_S2 = 9.81
 DEFAULT_CRR = 0.015
 DEFAULT_DRIVER_EFF = 0.92
-# Drive-wheel hinge in every butlerbot*.wbt. The mesh stays 0.08 m and
-# lane_keep.WHEEL_RADIUS_M stays 0.08. These are world-file constants,
-# not a fit to a logged run.
+# Drawn wheel mesh, and the contact radius, in every shipped butlerbot*.wbt.
+# This is not a fit to a logged run. A selected bom_build does not resize
+# that mesh. It writes a sibling world whose contact cylinder uses the BoM
+# radius (src/webots_body.py) and points the controller's m/s conversion at
+# that radius. This constant stays the unpatched hinge, including the
+# viscous bill below. That bill is not refit when the contact radius changes.
 SIM_WHEEL_RADIUS_M = 0.08
 SIM_HINGE_DAMPING_NM_S_RAD = 0.15
 # butlerbot_warehouse.wbt WorldInfo contactProperties, drive_wheel vs

@@ -38,6 +38,21 @@ if (-not $WorldFile) {
     Get-ChildItem $WorldsDir -Filter *.wbt | ForEach-Object { Write-Host "  $($_.BaseName)" }
     exit 1
 }
+# Selected bom_build: open a sibling world whose body mass and contact
+# wheel match the BoM. The drawn mesh stays 0.08 m. Unset bom_build
+# leaves $WorldFile unchanged. The sibling is gitignored.
+$Prepare = Join-Path $ProjectRoot "scripts\prepare_bom_world.py"
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    try {
+        $patched = (& python $Prepare $WorldFile).Trim()
+        if ($patched -and $patched -ne $WorldFile) {
+            Write-Host "BoM body: $patched"
+            $WorldFile = $patched
+        }
+    } catch {
+        Write-Host "WARNING: BoM body patch skipped; opening the shipped world" -ForegroundColor Yellow
+    }
+}
 # Webots keeps HUD overlay placement per world in worlds\.<world>.wbproj; start a
 # new world with the S world's layout so the shoulder HUDs land in the same spots.
 $WorldBase = [System.IO.Path]::GetFileNameWithoutExtension($WorldFile)

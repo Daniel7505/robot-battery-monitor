@@ -147,6 +147,7 @@ from controller_wheels import (
     STOP_YAW_RATE_RAD_S,
     WHEEL_RADIUS_M,
     AbsBrakeController,
+    bind_drive_radius,
     SpeedEstimator,
     _apply_soft_grip,
     _clamp,
@@ -660,8 +661,73 @@ def _harvest_nadir(cams: dict, nadir_fn, gps_xy, yaw: float) -> dict:
     return eyes
 
 
+def _sync_bom_body(robot: Robot) -> bool:
+    """Load BoM mass and contact-wheel radius. True means stop for a reload.
+
+    The shipped world keeps the 0.08 m mesh. A selected ``bom_build`` writes
+    a sibling world (see ``src.webots_body``) and reloads it so the contact
+    cylinder is the BoM radius. The command radius then matches that
+    cylinder (``v = ω · r``). No build selected: this does nothing.
+    """
+    try:
+        from src.webots_body import (
+            DRAWN_WHEEL_RADIUS_M,
+            bom_body_physics,
+            install_command_radius,
+            plan_bom_world,
+        )
+    except Exception as exc:
+        print(f"BOM BODY skipped ({type(exc).__name__}: {exc})")
+        return False
+    physics = bom_body_physics()
+    if physics is None:
+        return False
+    try:
+        loaded = str(robot.getWorldPath() or "")
+    except Exception:
+        loaded = ""
+    if not loaded:
+        print("BOM BODY skipped: controller has no world path")
+        return False
+    try:
+        plan = plan_bom_world(loaded)
+    except Exception as exc:
+        print(f"BOM BODY patch failed ({type(exc).__name__}: {exc})")
+        return False
+    target = plan.path
+    if plan.reload:
+        print(
+            f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
+            f"physics_wheel_radius_m={physics.wheel_radius_m:g} "
+            f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
+            f"-> {os.path.basename(target)} (reloading so contact uses the BoM wheel)"
+        )
+        if not hasattr(robot, "worldLoad"):
+            print(f"BOM BODY open this world and restart: {target}")
+            return False
+        try:
+            robot.worldLoad(os.path.abspath(target))
+        except Exception as exc:
+            print(f"BOM BODY reload failed ({type(exc).__name__}: {exc}); drawn wheel stays")
+            return False
+        return True
+    install_command_radius(physics.wheel_radius_m)
+    bind_drive_radius(physics.wheel_radius_m)
+    global WHEEL_RADIUS_M
+    WHEEL_RADIUS_M = physics.wheel_radius_m
+    print(
+        f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
+        f"physics_wheel_radius_m={physics.wheel_radius_m:g} "
+        f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
+        f"(Shape mesh stays {DRAWN_WHEEL_RADIUS_M:g} m; contact cylinder and v=ω·r use the BoM)"
+    )
+    return False
+
+
 def _run_loop(robot: Robot, opts: dict) -> None:
     """Priority: ABS → dashboard API → keyboard → nadir keep → residual park."""
+    if _sync_bom_body(robot):
+        return
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))

@@ -83,3 +83,21 @@ Copy this block, newest entry at the bottom of the current stage (or start a new
 - **What I learned:** One or two lessons I'd reuse.
 - **Links:** PR #…, tag `save-…`, docs/…
 ```
+
+## 2026-10-13: Real parts and an energy model that matches (PR #19)
+
+**What we built.** A bill of materials (`config/bom/bom.json`) with real, datasheet-backed parts in three builds (light, heavy, budget). Specs that aren't published are flagged as unknown rather than guessed.
+
+**Challenge: the meters disagreed.** The predicted and measured energy didn't line up, and we chased the gap one cause at a time:
+- The model was comparing motor-shaft energy against battery-side (electrical) energy. Converting both to the same units on the Pololu motor curve fixed the mismatch.
+- Turns were off by about 110% because turning wasn't modeled at all. We added a turn scrub term.
+- Dan suspected the gap came from timing between telemetry updates. He was right: the dashboard was integrating sparse posts and dropping about 101 seconds of data. The controller now keeps cumulative energy totals on simulation time.
+- The model still ran 28% high because damping was billed at a 0.04 m wheel radius instead of 0.08 m. After that fix, a full warehouse lap matched within **0.1%** (5.569 Wh modeled vs 5.556 Wh measured).
+
+**Debugging calls.** The stutter Dan saw was rendering only (real-time factor swinging 0.6–1.5x while actual speed barely changed). Turning off the HUD did not cut energy use. It only shortened wall-clock time, and Grok Bot corrected its own earlier claim about that.
+
+**Honest result.** The first lap on the heavy build was 5% off. But measured shaft energy was identical to the light build, which showed the 3D robot in Webots never actually got heavier. Only the battery and motor math changed. Next step: make the simulated robot load the BoM's mass and wheel size.
+
+**Dan's design notes for later.**
+- The bot nearly stops for 90° turns and takes them fine, but struggles to re-enter the lane afterward.
+- Build choices need common-sense rules written as formulas, such as wheel and motor load ratings checked against total mass, so "a LEGO wheel can't support a forklift."

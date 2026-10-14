@@ -19,6 +19,7 @@ Owner: [Daniel7505](https://github.com/Daniel7505) Â· Co-built with Grok Build Â
    - [C. Full Windows setup: dashboard + Webots robot](#c-full-windows-setup-dashboard--webots-robot)
    - [D. Linux or macOS (untested)](#d-linux-or-macos-untested)
    - [E. Developer / contributor workflow](#e-developer--contributor-workflow)
+   - [F. Overnight optimizer (Windows)](#f-overnight-optimizer-windows)
 6. [Reading the dashboard](#6-reading-the-dashboard)
 7. [Settings you might change](#7-settings-you-might-change)
 8. [Common problems](#8-common-problems)
@@ -407,6 +408,52 @@ Same as C, with these differences:
 
 ---
 
+### F. Overnight optimizer (Windows)
+
+A script you can start before bed. It runs warehouse laps one after another, changes **one** allowlisted setting at a time, and leaves `optimizer/runs/morning.md` for the morning. Webots has to be on this PC. The cloud and Linux cannot launch it.
+
+What it is allowed to change, in `config/config.yaml`:
+
+| Key | What it does |
+| --- | --- |
+| `bom_build` | `light`, `heavy`, or `budget` (the launcher applies that mass) |
+| `controller.cruise_m_s` | Rowfit curve / lane cruise |
+| `controller.straight_m_s` | Straightaway cap |
+| `controller.pivot_w_max_rad_s` | In-place turn rate |
+| `controller.k_steer` | How hard the steer command is |
+
+It does **not** edit the energy model or `config/bom/bom.json` to chase a better score. A change that looks good is checked on another BoM build (or a second lap, when the change was the build itself). Ideas for code changes are written in the report and are not committed. When the loop stops, those five keys are put back to what they were at the start.
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\start.ps1
+powershell -ExecutionPolicy Bypass -File scripts\overnight_optimize.ps1
+```
+
+`overnight_optimize.ps1` starts the dashboard if it is down, then runs laps with `RBM_MISSION_LAPS=1` through `scripts\launch_webots_twin.ps1` (warehouse world). Defaults are 10 iterations, 8 hours, 40 minutes per lap. Shorter night:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\overnight_optimize.ps1 -MaxIterations 4 -MaxHours 6
+```
+
+In the morning open `optimizer/runs/morning.md`. The same tries are in `results.jsonl` and `results.csv`. Learnings are appended to `optimizer/KNOWLEDGE.md`. If you want a confirmed setting kept, copy it into `config.yaml` yourself.
+
+A no-Webots smoke test (synthetic numbers, not a measurement):
+
+```
+python -m optimizer --dry-run --max-iterations 2
+```
+
+An optional later picker can shell out to a command you supply. Nothing in the repo holds an API key.
+
+```
+set OPTIMIZER_LLM_CMD=python my_picker.py
+powershell -ExecutionPolicy Bypass -File scripts\overnight_optimize.ps1 -Picker llm
+```
+
+The command reads a JSON request on stdin and prints one JSON proposal (`param`, `value`, `hypothesis`, `expected_effect`). A proposal outside the allowlist is ignored and the rule picker is used instead.
+
+---
+
 ## 6. Reading the dashboard
 
 | Panel | Meaning |
@@ -474,6 +521,7 @@ Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware
 | `webots/` | Simulator worlds and the robot controller ([`webots/README.md`](webots/README.md)) |
 | `tracks/` | Test track definitions (JSON) |
 | `scripts/` | Start/stop scripts, Webots launchers, offline simulator, measurement tools, world builders |
+| `optimizer/` | Overnight lap loop, knowledge notes, morning report (`runs/` is local, not committed) |
 | `config/` | `config.yaml` settings and hardware profiles |
 | `data/parts.db` | The parts catalog (SQLite) |
 | `tests/` | Automated tests (`tests/fake_webots/` stands in for Webots) |

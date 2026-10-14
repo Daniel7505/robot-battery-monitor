@@ -157,13 +157,19 @@ def lookahead_bounds_from_coverage(coverages) -> tuple[float, float]:
     return ld_min, ld_max
 
 
-def curve_speed(kappa_abs: float, conf: float = 1.0) -> float:
-    """Target speed for the sharpest curvature ahead (and fit confidence)."""
+def curve_speed(kappa_abs: float, conf: float = 1.0, v_cruise: float | None = None) -> float:
+    """Target speed for the sharpest curvature ahead (and fit confidence).
+
+    ``v_cruise`` defaults to the module constant. The overnight optimizer
+    passes the allowlisted ``controller.cruise_m_s`` through the controller
+    instance; callers that omit it keep the 0.44 m/s baseline.
+    """
+    cruise = V_CRUISE_M_S if v_cruise is None else float(v_cruise)
     k = abs(float(kappa_abs))
-    v = V_CRUISE_M_S if k < 1e-6 else min(V_CRUISE_M_S, math.sqrt(A_LAT_M_S2 / k))
+    v = cruise if k < 1e-6 else min(cruise, math.sqrt(A_LAT_M_S2 / k))
     c = max(0.0, min(1.0, (float(conf) - MIN_CONF) / 0.45))
     v = V_MIN_M_S + (v - V_MIN_M_S) * c
-    return max(V_MIN_M_S, min(V_CRUISE_M_S, v))
+    return max(V_MIN_M_S, min(cruise, v))
 
 
 def steer_for_curvature(kappa: float, v_m_s: float, k_steer: float = DEFAULT_K_STEER) -> float:
@@ -189,10 +195,19 @@ class RowfitController:
         k_steer: float = DEFAULT_K_STEER,
         ld_min: float = LD_MIN_M,
         ld_max: float = LD_MAX_M,
+        v_cruise: float | None = None,
+        v_straight: float | None = None,
+        pivot_w_max: float | None = None,
     ) -> None:
         self.k_steer = float(k_steer)
         self.ld_min = float(ld_min)
         self.ld_max = float(ld_max)
+        # None keeps the module constants, so existing callers and tests
+        # are unchanged. config.yaml's controller section supplies these
+        # when the Webots runtime constructs the controller.
+        self.v_cruise = V_CRUISE_M_S if v_cruise is None else float(v_cruise)
+        self.v_straight = V_STRAIGHT_M_S if v_straight is None else float(v_straight)
+        self.pivot_w_max = PIVOT_W_MAX if pivot_w_max is None else float(pivot_w_max)
         self.filter = SteerFilter()
         self.gov = SpeedGovernor()
         self.kappa_cmd = 0.0
@@ -254,7 +269,15 @@ class RowfitController:
 
     def reset(self) -> None:
         tracker, route, mb, la = self.tracker, self.policy.route, self.max_blind_m, self.look_around
-        self.__init__(k_steer=self.k_steer, ld_min=self.ld_min, ld_max=self.ld_max)
+        vc, vs, pw = self.v_cruise, self.v_straight, self.pivot_w_max
+        self.__init__(
+            k_steer=self.k_steer,
+            ld_min=self.ld_min,
+            ld_max=self.ld_max,
+            v_cruise=vc,
+            v_straight=vs,
+            pivot_w_max=pw,
+        )
         self.tracker = tracker
         self.set_route(route, max_blind_m=mb, look_around=la)
 
@@ -318,14 +341,14 @@ class RowfitController:
             abs(getattr(est, "near_curvature_1pm", 0.0)),
             abs(k_pp),
         )
-        self.target_speed = curve_speed(k_gov, est.confidence)
+        self.target_speed = curve_speed(k_gov, est.confidence, v_cruise=self.v_cruise)
         if self._straightaway_ok(est, k_gov):
             self.straight_frames += 1
         else:
             self.straight_frames = 0
         self.straight_boost = self.straight_frames >= STRAIGHT_FRAMES
         if self.straight_boost:
-            self.target_speed = max(self.target_speed, V_STRAIGHT_M_S)
+            self.target_speed = max(self.target_speed, self.v_straight)
 
     def _straight_reset(self) -> None:
         self.straight_frames = 0
@@ -575,7 +598,7 @@ class RowfitController:
             return self._cmd(0.0, 0.0, reason="pivot timeout", phase="rowfit_stop", brake=True,
                              new_frame=new_frame)
         want = PIVOT_K_YAW * err
-        want = max(-PIVOT_W_MAX, min(PIVOT_W_MAX, want))
+        want = max(-self.pivot_w_max, min(self.pivot_w_max, want))
         if abs(err) > PIVOT_TOL_RAD and abs(want) < PIVOT_W_MIN:
             want = math.copysign(PIVOT_W_MIN, err)
         # never ask for more than we can stop from before the target

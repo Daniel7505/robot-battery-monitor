@@ -37,6 +37,8 @@ logs/*.db
 logs/*.log
 logs/speed_trace_*.csv
 logs/mission_summary_*.json
+# Overnight optimizer transcripts (KNOWLEDGE.md learnings are kept on purpose)
+optimizer/runs/
 archives/
 webots/controllers/**/logs/
 webots/worlds/*.jpg

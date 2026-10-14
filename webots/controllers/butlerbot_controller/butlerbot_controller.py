@@ -779,6 +779,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             )
             _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
+            print(rowfit_rt.limits_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
         except Exception as exc:

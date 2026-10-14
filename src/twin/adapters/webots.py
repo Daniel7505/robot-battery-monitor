@@ -20,12 +20,15 @@ from __future__ import annotations
 
 from src.twin.adapters.base import TwinAdapter
 from src.twin.models import TwinTelemetry
+from src.teleop_agent import CONTROL_SPEED_CAP_M_S
 from src.twin.webots_power import (
     WEBOTS_MOTOR_CHANNELS,
     aggregate_channel_draws,
     gait_to_task,
     motor_powers_from_joints,
+    restamp_active_bom,
 )
+from src.twin_energy import LOCO_PASSTHROUGH_KEYS
 
 _WEBOTS_CHANNEL_MAP = dict(WEBOTS_MOTOR_CHANNELS)
 _WEBOTS_CHANNEL_MAP.update({
@@ -46,6 +49,7 @@ class WebotsAdapter(TwinAdapter):
     name = "webots"
 
     def normalize(self, payload: dict) -> TwinTelemetry:
+        payload = restamp_active_bom(payload)
         loc = payload.get("locomotion") or {}
         gait = payload.get("gait") or loc.get("gait", "stand")
         phase = payload.get("phase") or loc.get("phase") or ""
@@ -55,6 +59,11 @@ class WebotsAdapter(TwinAdapter):
         try:
             speed_f = float(speed) if speed is not None else 0.0
         except (TypeError, ValueError):
+            speed_f = 0.0
+        # GPS spikes above the control cap are not body speed.
+        if speed_f > CONTROL_SPEED_CAP_M_S:
+            speed_f = CONTROL_SPEED_CAP_M_S
+        elif speed_f < 0.0:
             speed_f = 0.0
 
         # Prefer pre-built channel_draws from the controller (build_webots_telemetry).
@@ -96,18 +105,39 @@ class WebotsAdapter(TwinAdapter):
         if not task and gait:
             task = gait_to_task(gait)
 
+        loco = {
+            "gait": gait,
+            "speed_m_s": speed_f,
+            "phase": phase,
+            "mode": loc.get("mode") or "wheeled",
+        }
+        hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
+        for key in ("bom_build", "bom_schema_version", "payload_kg", "wheel_radius_m"):
+            if loc.get(key) is not None:
+                loco[key] = loc[key]
+            elif hw.get(key) is not None:
+                loco[key] = hw[key]
+        # None is a real value: torque feedback was missing, so measured
+        # drive is na. Do not drop the key and let Legs stand in for it.
+        for key in ("measured_drive_w", "measured_drive_elec_w"):
+            if key in loc or key in payload:
+                loco[key] = loc[key] if key in loc else payload.get(key)
+        # Controller energy counters and the run id. restamp rebuilds
+        # locomotion; these are copied back there and again here.
+        for key in LOCO_PASSTHROUGH_KEYS:
+            if key in loc:
+                loco[key] = loc[key]
+            elif key in payload:
+                loco[key] = payload[key]
         return TwinTelemetry.from_payload(
             {
                 "source": "webots",
                 "robot": payload.get("robot", {"name": "ButlerBot"}),
                 "mission": {"task": task},
                 "channel_draws": draws,
-                "locomotion": {
-                    "gait": gait,
-                    "speed_m_s": speed_f,
-                    "phase": phase,
-                    "mode": loc.get("mode") or "wheeled",
-                },
+                "subsystem_draws": payload.get("subsystem_draws") or {},
+                "locomotion": loco,
+                "hardware": hw,
                 "pose": payload.get("pose", {}),
                 "timestamp": payload.get("timestamp"),
                 # Preserve controller sensors/control_diag (hub rates, ABS, locks)

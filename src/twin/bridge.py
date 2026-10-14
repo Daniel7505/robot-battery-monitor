@@ -73,7 +73,9 @@ from src.twin.adapters import get_adapter, registered_adapters
 from src.twin.butlerbot import butlerbot_flow_description
 from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
 from src.mission_efficiency import MissionEfficiencyTracker
+from src.mission_energy_log import MissionEnergyLog
 from src.twin.power_feed import PowerFeed, power_feed_from_telemetry
+from src.twin_energy import LOCO_PASSTHROUGH_KEYS
 
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
 
@@ -125,6 +127,7 @@ class DigitalTwinBridge:
         self._webots_stop_seq = 0
         # Live mission efficiency (time / Wh / distance) for the dashboard.
         self._efficiency = MissionEfficiencyTracker(capacity_wh=float(self._battery_wh or 480))
+        self._energy_log = MissionEnergyLog()
 
     @property
     def enabled(self) -> bool:
@@ -175,7 +178,13 @@ class DigitalTwinBridge:
         self._active_source = telemetry.source
         # Skip internal/sim noise; only arm efficiency on real external feeds.
         if telemetry.source != "internal":
-            self._efficiency.update_from_telemetry(telemetry)
+            sensors = {}
+            raw = telemetry.raw if isinstance(getattr(telemetry, "raw", None), dict) else {}
+            if isinstance(raw.get("sensors"), dict):
+                sensors = raw["sensors"]
+            parked = str(sensors.get("mission_event") or "") == "complete"
+            self._efficiency.update_from_telemetry(telemetry, parked=parked)
+            self._log_mission_energy(telemetry)
         logger.info(
             f"DigitalTwinBridge ingest [{telemetry.source}/{adapter_impl.name}] "
             f"task={telemetry.task} draws={len(telemetry.channel_draws)}"
@@ -189,6 +198,52 @@ class DigitalTwinBridge:
             "timestamp": telemetry.timestamp.isoformat(),
             "efficiency": self._efficiency.snapshot(),
         }
+
+    def _log_mission_energy(self, telemetry) -> None:
+        """SEGMENT_ENERGY / POWER_BREAKDOWN / MISSION_SUMMARY from this sample.
+
+        Logging must not fail the telemetry POST. A bad sample is a warning.
+        """
+        try:
+            raw = telemetry.raw if isinstance(getattr(telemetry, "raw", None), dict) else {}
+            sensors = raw.get("sensors") if isinstance(raw.get("sensors"), dict) else {}
+            loc = telemetry.locomotion or {}
+            stamped = loc.get("bom_build")
+            if not stamped:
+                try:
+                    from src.hardware_profile import active_bom_build
+
+                    stamped = active_bom_build()
+                except Exception:
+                    stamped = None
+            sample = {
+                "timestamp": telemetry.timestamp,
+                "pose": telemetry.pose or {},
+                "channel_draws": telemetry.channel_draws or {},
+                "subsystem_draws": raw.get("subsystem_draws") or {},
+                "battery_pct": telemetry.battery_pct,
+                "capacity_wh": telemetry.battery_capacity_wh or self._battery_wh,
+                "payload_kg": loc.get("payload_kg"),
+                "build": stamped,
+                "speed_m_s": loc.get("speed_m_s"),
+                "mission_event": sensors.get("mission_event"),
+            }
+            for key in ("measured_drive_w", "measured_drive_elec_w"):
+                if key in loc:
+                    sample[key] = loc.get(key)
+            run_id = loc.get("controller_run_id") or sensors.get("controller_run_id")
+            if run_id:
+                sample["controller_run_id"] = run_id
+            steer = loc.get("steer_split") or sensors.get("steer_split")
+            if steer:
+                sample["steer_split"] = steer
+            for key in LOCO_PASSTHROUGH_KEYS:
+                if key in loc:
+                    sample[key] = loc.get(key)
+            for line in self._energy_log.observe(sample):
+                logger.info(line)
+        except Exception as exc:
+            logger.warning(f"mission energy log failed: {exc}")
 
     def get_power_feed(self) -> PowerFeed | None:
         """Return the live external power contract, or None if twin feed is inactive.
@@ -487,6 +542,7 @@ class DigitalTwinBridge:
                 self._webots_teleop["reset_thermal"] = True
                 # Fresh pack → fresh mission efficiency baseline.
                 self._efficiency.reset(capacity_wh=float(self._battery_wh or 480))
+                self._energy_log.reset()
                 applied.append(f"battery_reset={pct:.0f}%")
 
         drive = command.get("drive")
@@ -555,6 +611,7 @@ class DigitalTwinBridge:
         """Clear mission efficiency totals (also called on battery_reset)."""
         cap = capacity_wh if capacity_wh is not None else float(self._battery_wh or 480)
         self._efficiency.reset(capacity_wh=cap)
+        self._energy_log.reset()
         return self._efficiency.snapshot()
 
     def status(self) -> dict:

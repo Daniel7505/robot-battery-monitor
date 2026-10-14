@@ -71,7 +71,14 @@ def test_active_profile_wheel_has_cruise_and_efficiency():
     assert spec["cruise_speed_m_s"] == raw["cruise_speed_m_s"]
     assert spec["rated_power_w"] == raw["rated_power_w"]
     assert battery_capacity_wh(prof) == 480
-    assert wheel_radius_m(prof) == 0.08
+    # 80 mm wheel: radius is 0.04 m. 0.08 was the diameter written into this field.
+    assert wheel_radius_m(prof) == 0.04
+    assert prof["battery"]["continuous_discharge_a"] == 10
+    assert prof["battery"]["peak_discharge_a"] == 20
+    assert prof["battery"]["mass_kg"] == 2.8
+    # Flagged, not silently replaced.
+    assert prof["motor_driver"]["continuous_current_a_per_ch"] == 1.2
+    assert prof["battery"]["max_charge_voltage_v"] == 54.6
 
 
 def test_motor_scale_derived_from_cruise():
@@ -99,7 +106,8 @@ def test_idle_draw_low_and_drive_rises():
         {"name": "left_arm", "velocity": 0.0, "torque": 0.0},
         {"name": "right_arm", "velocity": 0.0, "torque": 0.0},
     ]
-    # ~0.4 m/s → ω ≈ v/r = 0.4/0.08 = 5 rad/s
+    # Body speed drives the cruise curve. 0.4 m/s at r=0.04 m is 10 rad/s;
+    # these joint rates are only the fallback when speed_m_s is missing.
     moving_joints = [
         {"name": "left_wheel", "velocity": 5.0, "torque": 0.0},
         {"name": "right_wheel", "velocity": 5.0, "torque": 0.0},

@@ -69,6 +69,51 @@ def test_integrated_draw_when_soc_flat():
     assert snap["avg_speed_m_s"] is None
 
 
+def test_pose_jump_does_not_inflate_distance_or_rewind_the_clock():
+    t = MissionEfficiencyTracker(capacity_wh=240.0)
+    t.update(timestamp=_ts(0), battery_pct=100.0, channel_draws={"Legs": 3.0}, pose={"x_m": 0, "y_m": 0})
+    jumped = t.update(
+        timestamp=_ts(1),
+        battery_pct=100.0,
+        channel_draws={"Legs": 3.0},
+        pose={"x_m": 9.0, "y_m": 0},
+    )
+    assert jumped["distance_m"] == pytest.approx(0.0)
+    assert jumped["elapsed_s"] == pytest.approx(1.0)
+    # A replayed timestamp must not walk the clock backwards.
+    replay = t.update(
+        timestamp=_ts(0),
+        battery_pct=99.0,
+        channel_draws={"Legs": 3.0},
+        pose={"x_m": 0.0, "y_m": 0},
+    )
+    assert replay["elapsed_s"] == pytest.approx(1.0)
+
+
+def test_park_freezes_the_mission_clock():
+    t = MissionEfficiencyTracker(capacity_wh=240.0)
+    t.update(timestamp=_ts(0), battery_pct=100.0, channel_draws={"Compute": 10}, pose={"x_m": 0, "y_m": 0})
+    parked = t.update(
+        timestamp=_ts(30),
+        battery_pct=99.0,
+        channel_draws={"Compute": 10},
+        pose={"x_m": 10.0, "y_m": 0},
+        parked=True,
+    )
+    assert parked["parked"] is True
+    assert parked["elapsed_s"] == pytest.approx(30.0)
+    later = t.update(
+        timestamp=_ts(600),
+        battery_pct=98.0,
+        channel_draws={"Compute": 10},
+        pose={"x_m": 40.0, "y_m": 0},
+        parked=True,
+    )
+    assert later["elapsed_s"] == pytest.approx(30.0)
+    assert later["distance_m"] == pytest.approx(10.0)
+    assert later["elapsed_label"] == "0:30"
+
+
 def test_reset_clears_totals():
     t = MissionEfficiencyTracker(capacity_wh=480.0)
     t.update(timestamp=_ts(0), battery_pct=90.0, channel_draws={"Legs": 10}, pose={"x_m": 0, "y_m": 0})

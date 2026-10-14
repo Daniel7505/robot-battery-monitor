@@ -18,7 +18,9 @@ Copy that file back over this one to undo.
 
 Siblings (do not re-merge):
 
-* ``controller_hud.py`` — Display gauges + shoulder overlays
+* ``controller_hud.py`` — Display gauges + shoulder overlays.
+  Paint is off unless ``RBM_HUD=1`` (``robot.hud_overlays``). Lane
+  keeping still reads the nadir cameras.
 * ``controller_keys.py`` — legacy debug key input (not a user feature;
   the agent steers through the twin API)
 * ``controller_wheels.py`` — ABS / residual-spin / soft-grip
@@ -677,6 +679,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     dashboard = opts["dashboard_url"]
     startup_state = fetch_twin_state(dashboard)
     battery_pct = battery_from_twin_state(startup_state, default=100.0)
+    # One id per controller process. A Webots restart without a dashboard
+    # restart changes this, and the energy log summarizes the old mission.
+    controller_run_id = f"{_RUN_ID}-{os.getpid()}"
+    pack_meter = None
+    try:
+        from src.twin_energy import SimPackMeter
+
+        pack_meter = SimPackMeter()
+    except Exception as exc:
+        print(f"Pack energy meter failed ({type(exc).__name__}: {exc})")
     thermal_c = 22.0
     tick = 0
     publish_fail_streak = 0
@@ -754,7 +766,21 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     _apply_follow_camera(robot)
     steer_filter = None if steer_filter_cls is None else steer_filter_cls()
     nadir_guard = None if nadir_guard_cls is None else nadir_guard_cls()
-    eye_huds = _label_eye_huds(robot, cams)
+    hud_paint = False
+    try:
+        from src.config import config as _hud_cfg
+        from src.sim_trace import overlay_status_lines, resolve_hud_overlays
+
+        hud_paint = resolve_hud_overlays(
+            config_value=_hud_cfg.get("robot", "hud_overlays", None),
+            env_value=os.environ.get("RBM_HUD"),
+        )
+        for _line in overlay_status_lines(hud_paint):
+            print(_line)
+    except Exception as exc:
+        print(f"HUD paint failed ({type(exc).__name__}: {exc})")
+    # Paint is the optional 256×256 paste. Cameras stay enabled either way.
+    eye_huds = _label_eye_huds(robot, cams) if hud_paint else []
     if rowfit_rt is not None:
         for msg in rowfit_rt.bind_cameras(robot, cams) + rowfit_rt.check_cameras(cams):
             print(f"WARNING rowfit camera model: {msg}")
@@ -787,6 +813,81 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         except Exception as exc:
             print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
+    mission_complete = False
+    finish_age_s = 0.0
+    mission_travel_m = 0.0
+    mission_prev_xy: tuple[float, float] | None = None
+    mission_capped = False
+    mission_limit_m = None
+    from src.sim_trace import SpeedTrace
+
+    speed_trace = SpeedTrace(False)
+    try:
+        from src.config import config as _rbm_config
+        from src.mission_park import (
+            mission_distance_reached,
+            resolve_mission_limit_m,
+            warehouse_perimeter_m,
+        )
+        from src.teleop_agent import plausible_travel_m
+
+        _perim_m = warehouse_perimeter_m()
+        mission_limit_m = resolve_mission_limit_m(
+            config_m=_rbm_config.get("robot", "mission_max_m", None),
+            env_m=os.environ.get("RBM_MISSION_MAX_M"),
+            env_laps=os.environ.get("RBM_MISSION_LAPS"),
+            lap_m=_perim_m,
+        )
+        if mission_limit_m:
+            _perim_txt = f"{_perim_m:.0f} m" if _perim_m else "unknown"
+            print(
+                f"MISSION LIMIT on — stop at {mission_limit_m:.1f} m "
+                f"(warehouse perimeter {_perim_txt}). "
+                "Leave mission_max_m blank and unset RBM_MISSION_MAX_M "
+                "to run until the track finish."
+            )
+        else:
+            print("MISSION LIMIT off — run until the track finish")
+        from src.sim_trace import resolve_speed_trace, resolve_speed_trace_console
+        from twin_publisher import project_env
+
+        _trace_on = resolve_speed_trace(
+            config_value=_rbm_config.get("robot", "speed_trace", None),
+            env_value=os.environ.get("RBM_SPEED_TRACE"),
+            mission_limit_m=mission_limit_m,
+            lap_m=_perim_m,
+        )
+        _trace_console = resolve_speed_trace_console(
+            config_value=_rbm_config.get("robot", "speed_trace_console", None),
+            env_value=os.environ.get("RBM_SPEED_TRACE_CONSOLE"),
+        )
+        _trace_dir = project_env("RBM_LOG_DIR") or os.path.join(_PROJECT_ROOT, "logs")
+        speed_trace = SpeedTrace(
+            _trace_on,
+            console=_trace_console,
+            log_dir=_trace_dir if _trace_on else None,
+        )
+    except Exception as exc:
+        mission_distance_reached = lambda traveled_m, limit_m: False  # noqa: E731
+        plausible_travel_m = lambda step_m, dt_s: 0.0  # noqa: E731
+        print(f"MISSION LIMIT off ({type(exc).__name__}: {exc})")
+    if speed_trace.enabled:
+        _where = speed_trace.path or speed_trace.open_error or "no file"
+        _console = (
+            "console on"
+            if speed_trace.console
+            else "console off (set RBM_SPEED_TRACE_CONSOLE=1 to print)"
+        )
+        print(
+            f"SPEED_TRACE on — file {_where}. {_console}. "
+            "Rows only while the wheels are moving. Stops at mission end. "
+            "Not the dashboard log."
+        )
+    else:
+        print(
+            "SPEED_TRACE off — set RBM_SPEED_TRACE=1, or run one warehouse "
+            "lap (RBM_MISSION_LAPS=1)."
+        )
     nadir_logged = False
     print(f"ButlerBot controller started — twin → {dashboard}/api/twin/telemetry")
     print(f"Battery synced from dashboard: {battery_pct:.1f}%")
@@ -799,6 +900,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            mission_event = "complete" if mission_complete else None
+            if nadir_lobe_done and not mission_complete:
+                finish_age_s += dt
+            abs_just_finished = False
             if tick == 5 and not lane_keep_on and rowfit_rt is not None:
                 lane_keep_on = True
                 print(
@@ -852,6 +957,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
             gps_xy = _gps_xy(gps)
+            if not mission_capped and gps_xy is not None:
+                if mission_prev_xy is not None:
+                    _step_m = math.hypot(
+                        float(gps_xy[0]) - mission_prev_xy[0],
+                        float(gps_xy[1]) - mission_prev_xy[1],
+                    )
+                    mission_travel_m += plausible_travel_m(_step_m, dt)
+                mission_prev_xy = (float(gps_xy[0]), float(gps_xy[1]))
             if rowfit_rt is not None:
                 rowfit_rt.odometry(left_wv_early, right_wv_early, dt, WHEEL_RADIUS_M)
                 # Pull-behind trolley hitch (every tick)
@@ -961,7 +1074,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     got_new_stop = stop_epoch > last_stop_epoch
                     api_source = str(api_cmd.get("source") or "")
                     api_active = bool(api_cmd.get("active"))
-                    if not nadir_lobe_done:
+                    # A distance cap stays stopped. A real finish can still
+                    # hand lane-keep back to the dashboard.
+                    if mission_capped:
+                        lane_keep_on = False
+                    elif not nadir_lobe_done:
                         lane_keep_on = True
                     else:
                         lane_keep_on = bool(api_cmd.get("lane_keep"))
@@ -1095,20 +1212,42 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         dt=dt,
                         **guard_kw,
                     )
-                if gps_xy is not None and finish_ref.crossed(float(gps_xy[0]), float(gps_xy[1])):
+                _crossed = (
+                    gps_xy is not None
+                    and finish_ref.crossed(float(gps_xy[0]), float(gps_xy[1]))
+                )
+                # Stay on the brake after the cap. A later poll can turn
+                # lane-keep back on for one step; the cap must still win.
+                _at_cap = mission_capped or mission_distance_reached(
+                    mission_travel_m, mission_limit_m
+                )
+                if _crossed or _at_cap:
                     if not nadir_lobe_done:
                         nadir_lobe_done = True
-                        _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
-                        _exit = finish_ref.exit_name(float(gps_xy[0]), float(gps_xy[1])) if hasattr(
-                            finish_ref, "exit_name") else None
-                        if _exit:
-                            _what += f" via exit {_exit}"
-                        print(
-                            f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
-                            "GPS finish, not a red camera. Nadir was on the wheel."
-                        )
-                        if getattr(rowfit_rt, "inventory", None) is not None:
+                        if _at_cap and not _crossed:
+                            mission_capped = True
+                            _gx = 0.0 if gps_xy is None else float(gps_xy[0])
+                            _gy = 0.0 if gps_xy is None else float(gps_xy[1])
+                            print(
+                                f"MISSION LIMIT {mission_travel_m:.1f} m "
+                                f"(cap {float(mission_limit_m):.1f} m) at "
+                                f"x={_gx:.2f} y={_gy:.2f} — "
+                                "distance cap, braking like a finish"
+                            )
+                        else:
+                            _what = "FULL S DONE" if finish_ref.name == "s" else f"TRACK {finish_ref.name} DONE"
+                            _exit = finish_ref.exit_name(float(gps_xy[0]), float(gps_xy[1])) if hasattr(
+                                finish_ref, "exit_name") else None
+                            if _exit:
+                                _what += f" via exit {_exit}"
+                            print(
+                                f"{_what} at x={gps_xy[0]:.2f} y={gps_xy[1]:.2f} m — "
+                                "GPS finish, not a red camera. Nadir was on the wheel."
+                            )
+                        if getattr(rowfit_rt, "inventory", None) is not None and _crossed:
                             rowfit_rt.inventory.mark_shipped()
+                    elif _at_cap:
+                        mission_capped = True
                     lane_keep_on = False
                     lk = {
                         "left": 0.0,
@@ -1204,7 +1343,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"phase={lk.get('phase')}"
                         )
 
-            if harvest_now:
+            if hud_paint and harvest_now:
                 _paint_eye_huds(eye_huds, lane_eyes)
 
             if stop_pressed:
@@ -1236,6 +1375,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     last_teleop_right = 0.0
                     cached_api_left = 0.0
                     cached_api_right = 0.0
+                    abs_just_finished = True
                     _hard_zero_wheels(
                         motors,
                         sensors,
@@ -1379,6 +1519,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 speed_m_s=power_speed,
             )
             total_draw = sum(j.get("power_w", 0) for j in joints)
+            drain_dt = dt
+            pack_step_wh = None
             wheel_motion = max(
                 abs(j.get("velocity", 0.0))
                 for j in joints
@@ -1416,26 +1558,81 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 gait = "drive"
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
-            if _teleop is not None:
-                cap_wh = float(
-                    getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
-                )
+            cap_wh = 0.0
+            if _uses_bom_pack() and pack_meter is not None:
+                # Pack draw is measured electrical drive plus the non-drive
+                # channels. Legs in the preview are the rolling prediction;
+                # substituting that for hinge torque made wh_measured_soc
+                # disagree with the electrical total (16646d5: pack 2.256 Wh,
+                # shaft+idle 3.724 Wh). Missing feedback adds no drive watts.
+                # The integral is the simulation step, posted as energy_wh_*.
+                # Wall time between POSTs is not the drain clock: a few
+                # seconds blocked in HTTP used to bill that many seconds of
+                # sim watts, and a hole over 15 s was dropped by the log
+                # (run #11, wh_measured 6.381 vs wh_measured_soc 7.224).
+                try:
+                    from src.twin.webots_power import measured_drive_split
+
+                    preview = build_payload(
+                        joints,
+                        gait=gait,
+                        phase=phase_name,
+                        speed_m_s=speed_m_s,
+                        battery_pct=battery_pct,
+                    )
+                    channels = preview.get("channel_draws") or (
+                        (preview.get("power") or {}).get("channel_draws") or {}
+                    )
+                    split = measured_drive_split(joints, power_speed)
+                    elec_w = None if split is None else split.get("elec_w")
+                    shaft_w = None if split is None else split.get("shaft_w")
+                    idle_w = sum(
+                        float(watts)
+                        for name, watts in channels.items()
+                        if name != "Legs" and watts is not None
+                    )
+                    pack_step_wh = pack_meter.step(
+                        dt, shaft_w=shaft_w, elec_w=elec_w, idle_w=idle_w
+                    )
+                    total_draw = float(pack_meter.last_pack_w)
+                    cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
+                    drain_dt = dt
+                except Exception:
+                    cap_wh = 0.0
+                    drain_dt = dt
+                    pack_step_wh = None
+            if pack_step_wh is not None:
+                if cap_wh <= 0:
+                    cap_wh = float(
+                        getattr(_teleop, "BATTERY_CAPACITY_WH", 240.0) or 240.0
+                    ) if _teleop is not None else 240.0
+                if cap_wh > 0:
+                    battery_pct = max(
+                        5.0, battery_pct - pack_step_wh / cap_wh * 100.0
+                    )
+            elif _teleop is not None:
+                if cap_wh <= 0:
+                    cap_wh = float(
+                        getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
+                    )
                 battery_pct = max(
                     5.0,
                     battery_pct
                     - _teleop.battery_drain_pct(
                         total_draw,
-                        dt,
+                        drain_dt,
                         capacity_wh=cap_wh,
                         scale=1.0,
                         drain_scale=1.0,
                     ),
                 )
             else:
+                if cap_wh <= 0:
+                    cap_wh = 480.0
                 battery_pct = max(
                     5.0,
                     battery_pct
-                    - (total_draw * dt) / (480.0 * 3600.0) * 100.0,
+                    - (total_draw * drain_dt) / (cap_wh * 3600.0) * 100.0,
                 )
             thermal_c = _update_thermal(thermal_c, total_draw, dt, motion_factor=motion_factor)
 
@@ -1522,6 +1719,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 if hasattr(speed_estimator, "_log_anchor"):
                     speed_estimator._log_anchor = None  # type: ignore[attr-defined]
 
+            for _trace_line in speed_trace.lines(
+                t_sim=float(robot.getTime()),
+                t_wall=time.monotonic(),
+                v_body=float(speed_m_s),
+                v_odo=0.5 * (abs(left_wv) + abs(right_wv)) * WHEEL_RADIUS_M,
+                w_l_cmd=float(left_v),
+                w_r_cmd=float(right_v),
+                w_l=float(left_wv),
+                w_r=float(right_wv),
+            ):
+                if speed_trace.console:
+                    print(_trace_line)
+
             if hud is not None:
                 _draw_hud(
                     hud,
@@ -1583,6 +1793,47 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             }
             wheels_both_locked = all(wheel_locked.values())
 
+            if not mission_complete:
+                try:
+                    from src.mission_park import mission_should_complete
+
+                    hubs_quiet = (
+                        abs(left_wv) < STOP_WHEEL_RAD_S
+                        and abs(right_wv) < STOP_WHEEL_RAD_S
+                    )
+                    no_cmd = (
+                        not user_driving
+                        and not api_driving
+                        and abs(left_v) < 0.05
+                        and abs(right_v) < 0.05
+                    )
+                    # nadir_lobe_done is set on FULL S DONE / route end, or when
+                    # an optional distance cap (off by default) is reached.
+                    # A no-drive pause before that must not complete the mission.
+                    # After it, hub twitch and an ABS hold that never closes
+                    # still complete once the drive command has been zero.
+                    if mission_should_complete(
+                        track_done=nadir_lobe_done,
+                        already_complete=False,
+                        abs_done=abs_just_finished,
+                        hubs_quiet=hubs_quiet,
+                        no_drive_command=no_cmd,
+                        finish_age_s=finish_age_s,
+                    ):
+                        mission_complete = True
+                        mission_event = "complete"
+                        print(
+                            "MISSION complete — parked after track finish; "
+                            "dashboard will log MISSION_SUMMARY"
+                        )
+                except Exception:
+                    if abs_just_finished and nadir_lobe_done:
+                        mission_complete = True
+                        mission_event = "complete"
+            if mission_complete and not speed_trace.finished:
+                _steer_line = speed_trace.finish()
+                if _steer_line:
+                    print(_steer_line)
             publish_ticks = 1 if abs_brake.active else publish_every
             if tick % publish_ticks == 0:
                 lock_l = _WHEEL_LOCK_POS.get("left_wheel")
@@ -1696,6 +1947,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
+                        "mission_event": mission_event,
                         "control_diag": control_diag,
                         "wheels": wheel_sensors,
                     },
@@ -1718,6 +1970,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             new_frame=False,
                             yaw=prev_yaw,
                         )
+                loco = payload.get("locomotion")
+                if not isinstance(loco, dict):
+                    loco = {}
+                    payload["locomotion"] = loco
+                loco["controller_run_id"] = controller_run_id
+                sensors_out = payload.get("sensors")
+                if isinstance(sensors_out, dict):
+                    sensors_out["controller_run_id"] = controller_run_id
+                if pack_meter is not None and _uses_bom_pack():
+                    loco.update(pack_meter.snapshot())
+                if speed_trace.steer_text:
+                    loco["steer_split"] = speed_trace.steer_text
+                    if isinstance(sensors_out, dict):
+                        sensors_out["steer_split"] = speed_trace.steer_text
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0
@@ -1730,6 +1996,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             traceback.print_exc()
             continue
 
+    if not speed_trace.finished:
+        _steer_line = speed_trace.finish()
+        if _steer_line:
+            print(_steer_line)
     print("ButlerBot controller stopped (simulation ended)")
 
 
@@ -1745,6 +2015,16 @@ def main() -> None:
         print(f"ButlerBot controller fatal error: {exc}")
         traceback.print_exc()
         sys.exit(0)
+
+
+def _uses_bom_pack() -> bool:
+    """True when config selects a BoM build and the pack/draw should follow it."""
+    try:
+        from src.hardware_profile import active_bom_build
+
+        return bool(active_bom_build())
+    except Exception:
+        return False
 
 
 def _estimate_joint_power(
@@ -1818,7 +2098,9 @@ def _read_joints(
             and abs(velocity) < 0.15
             and speed_m_s < 0.05
         )
-        if wheel_parked:
+        if wheel_parked and not _uses_bom_pack():
+            # Legacy sim: a flat 2 W so a parked hub is not free. A BoM build
+            # falls through and uses the published encoder idle instead.
             joints.append({
                 "name": motor_name,
                 "position": round(position, 4),
@@ -1828,26 +2110,44 @@ def _read_joints(
             })
             continue
 
-        torque_est = abs(velocity) * 0.45
-        torque = torque_est
+        feedback = None
         if hasattr(motor, "getTorqueFeedback"):
             try:
-                tf = abs(float(motor.getTorqueFeedback()))
-                if tf > 1e-4:
-                    torque = tf
+                tf = float(motor.getTorqueFeedback())
+                if math.isfinite(tf):
+                    feedback = tf
             except Exception:
-                pass
+                feedback = None
+        try:
+            from src.twin.webots_power import reported_wheel_torque_nm
+
+            # Model load. A BoM build passes 0 so Legs stay on rolling
+            # resistance. The raw hinge reading is torque_feedback_nm,
+            # which the energy log integrates as |τ|·|ω|.
+            torque = reported_wheel_torque_nm(
+                velocity, feedback, bom=_uses_bom_pack()
+            )
+        except Exception:
+            torque = 0.0 if _uses_bom_pack() else (
+                abs(feedback) if feedback is not None else abs(velocity) * 0.45
+            )
         joint_speed = speed_m_s if (abs(velocity) < 0.2 and cmd_v > 0.05) else 0.0
         power_w = _estimate_joint_power(
             motor_name, velocity, torque, speed_m_s=joint_speed
         )
-        joints.append({
+        joint = {
             "name": motor_name,
             "position": round(position, 4),
             "velocity": round(velocity, 4),
             "torque": round(torque, 4),
             "power_w": power_w,
-        })
+        }
+        if "wheel" in motor_name:
+            # None when getTorqueFeedback did not report. 0.0 is a reading.
+            joint["torque_feedback_nm"] = (
+                None if feedback is None else round(feedback, 4)
+            )
+        joints.append(joint)
     return joints
 
 

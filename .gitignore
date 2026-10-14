@@ -35,6 +35,7 @@ env/
 # Logs and data (we keep the folders but not the contents in git)
 logs/*.db
 logs/*.log
+logs/speed_trace_*.csv
 archives/
 webots/controllers/**/logs/
 webots/worlds/*.jpg

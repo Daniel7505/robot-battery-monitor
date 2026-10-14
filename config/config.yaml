@@ -125,8 +125,41 @@ robot:
   name: "ButlerBot"
   main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
   hardware_profile: butlerbot_wheeled
+  # Kilograms on the trolley, and the trolley's own mass. Both stay 0 until
+  # a trolley SKU is sourced (the hitch part in bom.json has no mass).
+  payload_kg: 0
+  trolley_tare_kg: 0
+  # Optional stop for a world that loops (the warehouse has no finish).
+  # Leave blank to run until the track finish — the S track is unchanged.
+  # Set a number of metres, or set the env var RBM_MISSION_MAX_M (that
+  # wins). RBM_MISSION_LAPS=2 stops after two warehouse perimeters
+  # (~201 m each) when this is blank. 0 means off.
+  mission_max_m:
+  # Shoulder HUD paint (hud_nadir / hud_nadir_r). false: do not paint.
+  # Lane keeping still reads the nadir cameras. RBM_HUD=1 turns paint on.
+  # A black overlay with a magenta border is a stereo camera Webots shows
+  # even though it is not enabled. Close it under Robot → Camera Devices.
+  hud_overlays: false
+  # SPEED_TRACE CSV every 0.1 s of sim time, only while the wheels
+  # are moving, and it stops at mission end. Blank: on only when the
+  # mission cap is one warehouse lap. RBM_SPEED_TRACE=1 forces it on,
+  # 0 forces it off. The S track stays quiet. The file is
+  # logs/speed_trace_<timestamp>.csv (or RBM_LOG_DIR). Webots stdout
+  # redirected to a file stays empty, so the controller writes this itself.
+  speed_trace:
+  # Also print those rows on the Webots console. Off: the CSV is the log.
+  # RBM_SPEED_TRACE_CONSOLE=1 turns printing on.
+  speed_trace_console: false
 
 hardware_profile: butlerbot_wheeled
+
+# Real-hardware build from config/bom/bom.json.
+# Leave this blank to keep butlerbot_wheeled.yaml (current behaviour).
+# Set one of: light, heavy, budget.
+#   light  — 24 V Pololu #4693, 240 Wh LiFePO4
+#   heavy  — 12 V planetary motors, 200 mm wheels, 480 Wh
+#   budget — 12 V Pololu #4753, Pi 5, 240 Wh
+bom_build:
 
 # System-level allocatable power ceiling (includes cooling channel)
 power:

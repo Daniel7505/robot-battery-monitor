@@ -38,6 +38,16 @@ import time
 from datetime import datetime
 
 from src.config import config
+
+
+def twin_feed_is_live() -> bool:
+    """True while a fresh external twin (Webots) owns the dashboard."""
+    try:
+        from src.twin.bridge import get_twin_bridge
+
+        return bool(get_twin_bridge()._is_external_active())
+    except Exception:
+        return False
 from src.logger import logger
 from src.mission_tasks import TASK_PROFILES
 
@@ -291,6 +301,10 @@ class ROS2Bridge:
         time.sleep(interval * 0.5)
         while self._running and self._use_mock:
             try:
+                if twin_feed_is_live():
+                    # Webots owns the mission. Do not invent idle/moving commands.
+                    time.sleep(interval)
+                    continue
                 sim_cfg = config.get("simulation") or {}
                 # Avoid fighting SimulationDriver when the internal script is on.
                 if random.random() < 0.45 and not sim_cfg.get("enabled", False):

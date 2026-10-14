@@ -33,6 +33,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _find_config_yaml() -> str | None:
+    """Path to ``config/config.yaml``.
+
+    Docker starts in the repo root, so the working directory is enough.
+    Webots starts the controller in its own folder, and a relative
+    ``config/config.yaml`` is then missing — the process used to fall
+    through to defaults and ignore ``bom_build``. The file next to this
+    package is the same YAML the dashboard loaded.
+    """
+    here = os.path.abspath(os.path.dirname(__file__))
+    repo = os.path.dirname(here)
+    candidates = [
+        os.path.join(os.getcwd(), "config", "config.yaml"),
+        os.path.join(repo, "config", "config.yaml"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 class Config:
     """YAML + env configuration with flexible section/key access."""
 
@@ -43,11 +64,11 @@ class Config:
     def load(self):
         """Load YAML (or defaults), then apply env overrides."""
         try:
-            config_path = 'config/config.yaml'
-            if os.path.exists(config_path):
+            config_path = _find_config_yaml()
+            if config_path:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     self._config = yaml.safe_load(f) or {}
-                logger.info("✅ Loaded config.yaml")
+                logger.info(f"✅ Loaded config.yaml ({config_path})")
             else:
                 logger.warning("config.yaml not found — using defaults")
                 self._config = self._get_defaults()

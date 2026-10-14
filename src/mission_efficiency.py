@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from src.teleop_agent import plausible_travel_m
+
 
 def _as_float(value: Any) -> float | None:
     if value is None:
@@ -80,6 +82,8 @@ class MissionEfficiencyTracker:
     _last_xy: tuple[float, float] | None = field(default=None, init=False)
     _samples: int = field(default=0, init=False)
     _has_pose: bool = field(default=False, init=False)
+    _parked: bool = field(default=False, init=False)
+    _elapsed_frozen: float | None = field(default=None, init=False)
 
     def reset(self, *, capacity_wh: float | None = None) -> None:
         """Clear totals; next ``update`` becomes the new mission start."""
@@ -95,6 +99,8 @@ class MissionEfficiencyTracker:
         self._last_xy = None
         self._samples = 0
         self._has_pose = False
+        self._parked = False
+        self._elapsed_frozen = None
 
     def update(
         self,
@@ -104,6 +110,7 @@ class MissionEfficiencyTracker:
         channel_draws: dict | None = None,
         pose: dict | None = None,
         capacity_wh: float | None = None,
+        parked: bool = False,
     ) -> dict:
         """Ingest one telemetry sample; return the current snapshot dict."""
         if capacity_wh is not None and capacity_wh > 0:
@@ -115,6 +122,11 @@ class MissionEfficiencyTracker:
 
         batt = _as_float(battery_pct)
         xy = _pose_xy(pose)
+
+        if self._parked:
+            if batt is not None:
+                self._battery_pct = batt
+            return self.snapshot()
 
         if not self._armed:
             self._armed = True
@@ -129,8 +141,9 @@ class MissionEfficiencyTracker:
 
         dt = (ts - self._last_ts).total_seconds() if self._last_ts else 0.0
         if dt < 0:
-            # Clock skew / replay — re-anchor time, skip integrals this tick.
+            # A late or replayed sample must not walk the wall clock backwards.
             dt = 0.0
+            ts = self._last_ts or ts
         self._last_ts = ts
         self._samples += 1
 
@@ -153,17 +166,21 @@ class MissionEfficiencyTracker:
         # Distance always follows pose chords (GPS truth even after a stall).
         if xy is not None:
             self._has_pose = True
-            if self._last_xy is not None and dt >= 0.0:
+            if self._last_xy is not None and dt > 0.0:
                 dx = xy[0] - self._last_xy[0]
                 dy = xy[1] - self._last_xy[1]
-                step = math.hypot(dx, dy)
+                step = plausible_travel_m(math.hypot(dx, dy), dt)
                 if step >= self.min_step_m:
                     self._distance_m += step
             self._last_xy = xy
 
+        if parked and not self._parked:
+            self._parked = True
+            self._elapsed_frozen = self.elapsed_s
+
         return self.snapshot()
 
-    def update_from_telemetry(self, tel: Any) -> dict:
+    def update_from_telemetry(self, tel: Any, *, parked: bool = False) -> dict:
         """Convenience: pull fields from a ``TwinTelemetry`` (or duck-type)."""
         if tel is None:
             return self.snapshot()
@@ -174,10 +191,13 @@ class MissionEfficiencyTracker:
             channel_draws=getattr(tel, "channel_draws", None) or {},
             pose=getattr(tel, "pose", None) or {},
             capacity_wh=capacity,
+            parked=parked,
         )
 
     @property
     def elapsed_s(self) -> float | None:
+        if self._elapsed_frozen is not None:
+            return self._elapsed_frozen
         if not self._armed or self._started_at is None or self._last_ts is None:
             return None
         return max(0.0, (self._last_ts - self._started_at).total_seconds())
@@ -240,6 +260,7 @@ class MissionEfficiencyTracker:
             "distance_m": distance,
             "avg_speed_m_s": avg_speed,
             "samples": self._samples,
+            "parked": self._parked,
             "started_at": self._started_at.isoformat() if self._started_at else None,
         }
 

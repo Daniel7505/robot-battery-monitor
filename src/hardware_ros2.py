@@ -113,6 +113,13 @@ class ROS2BatterySource(RealHardwareSource):
     def _apply_ros2_commands(self) -> None:
         """Consume one-shot ROS2 mission/throttle commands for this tick."""
         twin_active = self._twin._is_external_active()
+        # A live Webots twin owns task, throttle, and the mission clock.
+        # The ROS2 mock otherwise injects "idle" and resets the task timer.
+        if twin_active:
+            self._ros2.consume_commanded_task()
+            self._ros2.consume_throttle_override()
+            self._ros2_throttle_pulse = None
+            return
         # When the internal script owns the mission, discard external task cmds
         # so mock ROS2 feed does not fight the SimulationDriver timeline.
         if self._simulator.enabled and self._simulator.running and not twin_active:
@@ -568,12 +575,14 @@ class ROS2BatterySource(RealHardwareSource):
                 if twin_draws
                 else None
             )
+            parked = str(sensors.get("mission_event") or "") == "complete"
             self.simulation_status = status_for_external_twin(
                 self._mission,
                 twin_ctx.get("phase"),
                 twin_ctx.get("gait"),
                 source=twin_ctx.get("source", "webots"),
                 live_draw_w=live_draw,
+                parked=parked,
             )
         else:
             self.simulation_status = self._simulator.status(self._mission)
@@ -807,9 +816,21 @@ class ROS2BatterySource(RealHardwareSource):
         )
 
         # One-time boot energy (inverters/bring-up) so SOC does not start at 100% forever.
-        self._main_battery, startup = self._requirements.apply_startup(
-            self._main_battery, capacity_wh
-        )
+        # A BoM pack does not use this 6 Wh guess: the controller drains the
+        # published channel watts, and a fake startup would make SoC disagree
+        # with that integral before the robot has moved.
+        try:
+            from src.hardware_profile import active_bom_build
+
+            bom_pack = bool(active_bom_build())
+        except Exception:
+            bom_pack = False
+        if bom_pack:
+            startup = {"applied": False, "cost_wh": 0, "reason": "bom_build"}
+        else:
+            self._main_battery, startup = self._requirements.apply_startup(
+                self._main_battery, capacity_wh
+            )
         self.requirements_status = {"startup": startup}
 
         self.last_readings = self._build_readings()

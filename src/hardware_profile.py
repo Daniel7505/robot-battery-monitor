@@ -16,6 +16,10 @@ Selection
 ``hardware_profile`` top-level config, or ``robot.hardware_profile``, default
 ``butlerbot_wheeled``.
 
+``bom_build: light|heavy|budget`` loads that build from ``config/bom/bom.json``
+via ``build_profile_from_bom()``. Leave it unset and the YAML profile is used,
+which is the previous behaviour.
+
 Invariants
 ----------
 - Missing/invalid YAML → ``_FALLBACK_PROFILE`` (never raises to callers).
@@ -42,7 +46,7 @@ _FALLBACK_PROFILE = {
     "sensors": {"idle_w": 0.0, "active_w": 0.0},
     "stabilizers": {"idle_w": 0.0, "active_w": 0.0, "channel": "Torso"},
     "modes": {},
-    "geometry": {"wheel_radius_m": 0.08},
+    "geometry": {"wheel_radius_m": 0.04},
     "motors": {},
     "channels": {},
     "phase_draw_w": {},
@@ -68,8 +72,25 @@ def load_hardware_profile(profile_id: str) -> dict:
         return dict(_FALLBACK_PROFILE)
 
 
+def active_bom_build() -> str | None:
+    """``bom_build`` config value, or None when the YAML profile should be used.
+
+    Blank, ``default``, and ``yaml`` all mean "keep the current profile".
+    """
+    raw = config.get("bom_build")
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if text in {"", "none", "null", "default", "yaml", "~"}:
+        return None
+    return text
+
+
 def get_active_profile_id() -> str:
     """Resolved profile id from config (wheeled ButlerBot by default)."""
+    build = active_bom_build()
+    if build:
+        return f"butlerbot_bom_{build}"
     return (
         config.get("hardware_profile")
         or config.get("robot", "hardware_profile")
@@ -78,12 +99,86 @@ def get_active_profile_id() -> str:
 
 
 def get_active_profile() -> dict:
-    return load_hardware_profile(get_active_profile_id())
+    """YAML profile, or the selected BoM build when ``bom_build`` is set."""
+    build = active_bom_build()
+    if not build:
+        return load_hardware_profile(get_active_profile_id())
+    try:
+        return build_profile_from_bom(build)
+    except Exception as exc:
+        logger.error(f"bom_build {build!r} failed ({exc}); using the YAML profile")
+        return load_hardware_profile(
+            config.get("hardware_profile")
+            or config.get("robot", "hardware_profile")
+            or "butlerbot_wheeled"
+        )
 
 
 def clear_profile_cache() -> None:
-    """Drop cached YAML (tests / hot-reload)."""
+    """Drop cached YAML and BoM profiles (tests / hot-reload)."""
     load_hardware_profile.cache_clear()
+    from src.bom_profile import clear_bom_cache
+
+    clear_bom_cache()
+    build_profile_from_bom.cache_clear()
+
+
+@lru_cache(maxsize=4)
+def build_profile_from_bom(build_id: str) -> dict:
+    """One ``builds`` entry from bom.json, in the wheeled-profile dict shape."""
+    from src.bom_profile import build_profile_from_bom as _build
+
+    return _build(build_id)
+
+
+def profile_cruise_speed_m_s(profile: dict | None = None) -> float:
+    """Cruise speed the profile was drawn at. Falls back to 0.44 m/s."""
+    prof = profile or get_active_profile()
+    spec = motor_spec(prof, "left_wheel")
+    if spec.get("cruise_speed_m_s") is not None:
+        return float(spec["cruise_speed_m_s"])
+    return 0.44
+
+
+def format_bom_log_line() -> str:
+    """One ``BOM build=...`` line for Docker / ``logs/robot_monitor_*.log``."""
+    build = active_bom_build()
+    if build:
+        prof = build_profile_from_bom(build)
+        totals = prof.get("bom_totals") or {}
+        unknown = ",".join(totals.get("idle_missing_parts") or [])
+        return (
+            f"BOM build={build} schema={prof.get('bom_schema_version')} "
+            f"mass_kg={totals.get('mass_kg_known')} "
+            f"pack_wh={totals.get('battery_wh')} "
+            f"pack_cont_a={totals.get('battery_max_continuous_a')} "
+            f"idle_w={totals.get('idle_w_known')} "
+            f"unknown_parts={unknown}"
+        )
+    prof = load_hardware_profile(
+        config.get("hardware_profile")
+        or config.get("robot", "hardware_profile")
+        or "butlerbot_wheeled"
+    )
+    batt = prof.get("battery") or {}
+    geom = prof.get("geometry") or {}
+    return (
+        f"BOM build=default schema={prof.get('version')} "
+        f"profile={prof.get('profile_id')} "
+        f"mass_kg={batt.get('mass_kg')} "
+        f"pack_wh={batt.get('capacity_wh')} "
+        f"pack_cont_a={batt.get('continuous_discharge_a')} "
+        f"wheel_radius_m={geom.get('wheel_radius_m')} "
+        f"unknown_parts="
+    )
+
+
+def log_profile_flags() -> None:
+    """Warn about issues we are flagging on purpose and not silently 'fixing'."""
+    prof = get_active_profile()
+    for issue in prof.get("known_issues") or []:
+        note = " ".join(str(issue.get("note") or "").split())
+        logger.warning(f"PROFILE_FLAG id={issue.get('id')} {note}")
 
 
 def motor_spec(profile: dict, motor_name: str) -> dict:
@@ -190,7 +285,8 @@ def wheel_mass_kg(profile: dict | None = None) -> float:
 def wheel_radius_m(profile: dict | None = None) -> float:
     prof = profile or get_active_profile()
     geom = prof.get("geometry") or {}
-    return float(geom.get("wheel_radius_m", 0.08) or 0.08)
+    # 80 mm wheel → radius 0.04 m. 0.08 was the diameter written into the radius field.
+    return float(geom.get("wheel_radius_m", 0.04) or 0.04)
 
 
 def clamp_motor_power_w(motor_name: str, watts: float, profile: dict | None = None) -> float:

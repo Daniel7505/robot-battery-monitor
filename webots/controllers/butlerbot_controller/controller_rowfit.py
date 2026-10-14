@@ -200,13 +200,20 @@ class RowfitRuntime:
     """Owns the tracker/controller; fed images on harvest ticks, wheels every tick."""
 
     def __init__(self) -> None:
+        from src.controller_limits import load_controller_limits
         from src.lane_vision import NADIR_CAMS, LaneTracker
         from src.rowfit_control import RowfitController
 
         self.cams_model = dict(NADIR_CAMS)
         self.pose_source: dict[str, str] = {n: "constants" for n in self.cams_model}
         self.tracker = LaneTracker(self.cams_model)
-        self.ctl = RowfitController()
+        self.limits = load_controller_limits()
+        self.ctl = RowfitController(
+            k_steer=self.limits.k_steer,
+            v_cruise=self.limits.cruise_m_s,
+            v_straight=self.limits.straight_m_s,
+            pivot_w_max=self.limits.pivot_w_max_rad_s,
+        )
         self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
         self.last_cmd: dict = {}
         self.est = None  # last estimate (for logs / HUD)
@@ -242,6 +249,18 @@ class RowfitRuntime:
         self.ctl.set_route(route, max_blind_m=mb, look_around=la)
         self.route_text = raw
         self.route_warnings = warn
+
+    def limits_line(self) -> str:
+        lim = self.limits
+        warn = ""
+        if lim.warnings:
+            warn = " warnings: " + "; ".join(lim.warnings)
+        return (
+            "CONTROLLER LIMITS "
+            f"cruise={lim.cruise_m_s:.2f} m/s straight={lim.straight_m_s:.2f} m/s "
+            f"pivot_w_max={lim.pivot_w_max_rad_s:.2f} rad/s k_steer={lim.k_steer:.2f}"
+            f"{warn}"
+        )
 
     def route_line(self) -> str:
         c = self.ctl

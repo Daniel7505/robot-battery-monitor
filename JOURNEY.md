@@ -84,6 +84,15 @@ Copy this block, newest entry at the bottom of the current stage (or start a new
 - **Links:** PR #…, tag `save-…`, docs/…
 ```
 
+### 2026-10-14: Overnight optimizer
+
+- **Challenge:** Leave the Windows PC running warehouse laps and tune controller speeds and BoM build selection for energy-model accuracy, without anyone babysitting it.
+- **Tools:** Cursor Grok agent. Webots was not run here; the loop's diagnose / score / log path is tested with a fake lap runner.
+- **What we tried:** One allowlisted config change per lap, keep or roll back on a score, then a held-out lap so a one-build fluke does not stick. The energy-model source is not a knob.
+- **What worked:** The non-Webots logic is covered by `tests/test_optimizer.py`. A real night still has to be started on the PC that has Webots and Docker.
+- **What I learned:** Mass barely moves gentle-turn scrub, so the loop steps turn rate and speed, not the physics file.
+- **Links:** `optimizer/KNOWLEDGE.md`, `scripts/overnight_optimize.ps1`
+
 ## 2026-10-13: Real parts and an energy model that matches (PR #19)
 
 **What we built.** A bill of materials (`config/bom/bom.json`) with real, datasheet-backed parts in three builds (light, heavy, budget). Specs that aren't published are flagged as unknown rather than guessed.

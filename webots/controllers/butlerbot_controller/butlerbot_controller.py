@@ -798,6 +798,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 f"log → {lane_vision_log.path}"
             )
             print(rowfit_rt.route_line())
+            print(rowfit_rt.limits_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
         except Exception as exc:

@@ -161,6 +161,16 @@ hardware_profile: butlerbot_wheeled
 #   budget — 12 V Pololu #4753, Pi 5, 240 Wh
 bom_build:
 
+# Rowfit speeds the overnight optimizer is allowed to change.
+# Missing or blank keys use the constants in src/rowfit_control.py
+# (0.44 m/s cruise, 0.50 m/s straight, 0.9 rad/s pivot, k_steer 2.0).
+# The energy model does not read this section. See optimizer/KNOWLEDGE.md.
+controller:
+  cruise_m_s: 0.44
+  straight_m_s: 0.50
+  pivot_w_max_rad_s: 0.9
+  k_steer: 2.0
+
 # System-level allocatable power ceiling (includes cooling channel)
 power:
   system_budget_w: 62   # Total allocatable watts (includes active cooling)

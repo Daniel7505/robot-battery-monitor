@@ -23,8 +23,9 @@ Pipeline (one call per new camera frame, see :class:`LaneTracker`):
 4. One lane model is fitted to both lines at once: a centre line that is a
    circle arc (straight when curvature = 0) through (0, a0) with direction
    psi and curvature kappa; left/right paint sit at +/- width/2 from it.
-   Robust Gauss-Newton (Huber + gate). Lane width is measured online and
-   reused when only one line is visible.
+   Robust Gauss-Newton (Huber + gate). When both lines are in the near
+   window the width is the live fit. The constant 1.30 m, and the smoothed
+   width from earlier frames, are used only when a line is missing.
 5. The known 6 cm stripe width is only a CHECK: each run's floor length
    times |cos| to the fitted line normal should be ~6 cm.
 """
@@ -41,7 +42,10 @@ STRIPE_W_M = 0.06
 PAINT_TOP_Z_M = 0.013
 YELLOW_THRESH = 0.22  # same as nadir_wheel_to_tape
 YELLOW_MODE = "rg"  # yellow_mask: "rg" = min(R,G)-B (rejects red/green bars), "lane_keep" = gap score
-FALLBACK_LANE_W_M = 1.30  # only until both lines have been seen once
+FALLBACK_LANE_W_M = 1.30  # one-line frames, and the first frames before both lines have been seen
+# The near fit looks about this far ahead of the axle. Width logged against
+# the paint is the track width there, not the width under the axle.
+WIDTH_FIT_AHEAD_M = 0.30
 MAX_RANGE_M = 3.5
 MIN_SIDE_PTS = 4
 # Fit windows (floor x ahead of the axle). The cameras no longer see behind
@@ -1009,7 +1013,8 @@ class LaneEstimate:
     n_left: int = 0
     n_right: int = 0
     lane_width_m: float = 0.0
-    width_measured: bool = False
+    width_measured: bool = False  # a both-line width has been seen this run
+    width_live: bool = False  # this frame's width is the near-window fit, not the fallback
     rms_m: float = 0.0
     width_ok_frac: float = 0.0  # share of points whose floor width ~ 6 cm
     a0: float = 0.0
@@ -1487,6 +1492,7 @@ class LaneTracker:
     def fit_points(self, pts: list[LinePoint]) -> LaneEstimate:
         lane_w = self.lane_w if self.lane_w is not None else FALLBACK_LANE_W_M
         width = lane_w
+        fitted_width = False  # both near lines produced a width this frame
         if self.prior_near is not None and self.prior_far is not None:
             near_m, far_m = self.prior_near, self.prior_far
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.25)
@@ -1507,6 +1513,7 @@ class LaneTracker:
             near_m = far_m = (res[0][0], res[0][1], res[0][2])
             if both and 0.4 < res[0][3] < 3.0:
                 width = res[0][3]
+                fitted_width = True
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.15)
         got = False
         for it in range(3):
@@ -1529,6 +1536,7 @@ class LaneTracker:
             near_m, far_m = near[0], far[0]
             if near_both and 0.4 < near[1] < 3.0:
                 width = near[1]
+                fitted_width = True
             got = True
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.15 if it < 2 else 0.10)
         if not got:
@@ -1588,6 +1596,7 @@ class LaneTracker:
             n_right=n_right,
             lane_width_m=width if both else lane_w,
             width_measured=measured,
+            width_live=bool(fitted_width and both),
             rms_m=rms,
             width_ok_frac=width_ok,
             a0=a0,

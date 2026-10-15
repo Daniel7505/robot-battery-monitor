@@ -86,6 +86,10 @@ def test_memorized_s_leaves_the_camera_lane():
     old = load_track("s")
     assert camera.spec.waypoints[-1][0] == pytest.approx(18.5, abs=1e-6)
     assert old.spec.waypoints[-1][0] == pytest.approx(16.5, abs=1e-6)
+    assert all(abs(w - 1.3) < 1e-9 for w in old.spec.widths)
+    assert max(camera.spec.widths) - min(camera.spec.widths) == pytest.approx(0.30, abs=0.01)
+    assert min(camera.spec.widths) == pytest.approx(1.15, abs=0.01)
+    assert max(camera.spec.widths) == pytest.approx(1.45, abs=0.01)
     worst = 0.0
     worst_xy = (0.0, 0.0)
     for x, y in old.spec.waypoints:
@@ -147,6 +151,117 @@ def test_wheels_follow_the_camera_curve_with_the_old_map_loaded():
         assert abs(cmd["kappa_cmd"] - k_map) > 0.5
     # The probe is off the scored road, so that file cannot own a pivot distance either.
     assert distance_to_next_corner(load_track("s"), PROBE_X_M, y, hd) is None
+
+
+def test_live_width_tracks_the_paint_and_one_line_falls_back():
+    """Both lines in view: the fit follows the sine, not the 1.30 m constant.
+
+    A frame that then loses one line keeps the last measured width. 1.30 m
+    is only the stand-in before both lines have been seen.
+    """
+    from src.lane_vision import (
+        NADIR_CAMS,
+        WIDTH_FIT_AHEAD_M,
+        LaneTracker,
+        lane_polyline_robot,
+        render_lane_bgra,
+    )
+    from src.rowfit_control import RowfitController
+
+    cam = _load("camera_s_track")
+    geom = load_track("camera_s")
+    left = geom.lane_line(1.0)
+    right = geom.lane_line(-1.0)
+
+    def frames(x, drop=None):
+        y, hd = cam.centerline(x)
+        lines = []
+        if drop != "left":
+            lines.append(lane_polyline_robot(left, (x, y), hd))
+        if drop != "right":
+            lines.append(lane_polyline_robot(right, (x, y), hd))
+        imgs = {n: (render_lane_bgra(c, lines), 128, 128) for n, c in NADIR_CAMS.items()}
+        return imgs, y, hd
+
+    tr = LaneTracker()
+    prev = None
+    width_err = []
+    center_err = []
+    x = 1.0
+    while x <= 17.5 + 1e-9:
+        imgs, y, hd = frames(x)
+        ds = dyaw = 0.0
+        if prev is not None:
+            ds = math.hypot(x - prev[0], y - prev[1])
+            dyaw = math.atan2(math.sin(hd - prev[2]), math.cos(hd - prev[2]))
+        est = tr.process(imgs, dx_m=ds, dyaw_rad=dyaw)
+        assert est.valid and est.width_live
+        assert est.n_left >= 4 and est.n_right >= 4
+        pr = geom.project(x, y)
+        true_near = geom.width_at_s(pr["s_m"] + WIDTH_FIT_AHEAD_M)
+        width_err.append(est.lane_width_m - true_near)
+        center_err.append(est.offset_m - pr["lateral_m"])
+        prev = (x, y, hd)
+        x += 0.5
+    width_rms = math.sqrt(sum(v * v for v in width_err) / len(width_err))
+    assert width_rms < 0.03
+    assert max(abs(v) for v in width_err) < 0.05
+    assert max(abs(v) for v in center_err) < 0.04
+    # A fitter locked at 1.30 m would miss the paint by the full sine.
+    assert max(abs(geom.width_at_s(s) - 1.30) for s in (0.0, geom.length_m / 4, geom.length_m / 2)) > 0.10
+
+    wide = LaneTracker()
+    seen = wide.process(frames(4.62)[0])
+    assert seen.width_live and seen.lane_width_m == pytest.approx(1.45, abs=0.04)
+    one = wide.process(frames(4.62, drop="left")[0], dx_m=0.2)
+    assert one.valid and one.n_left == 0 and not one.width_live
+    assert one.lane_width_m == pytest.approx(wide.lane_w, abs=1e-6)
+    assert abs(one.lane_width_m - 1.30) > 0.05
+
+    ctl = RowfitController()
+    ctl.tracker = wide
+    assert ctl._lane_width(seen) == pytest.approx(seen.lane_width_m, abs=1e-6)
+    assert ctl._lane_width(one) == pytest.approx(wide.lane_w, abs=1e-6)
+
+
+def test_lane_frame_fields_and_lap_summary_name_both_errors():
+    import importlib.util
+
+    from src.lane_vision import LaneEstimate
+
+    spec = importlib.util.spec_from_file_location(
+        "controller_rowfit_width",
+        ROOT / "webots" / "controllers" / "butlerbot_controller" / "controller_rowfit.py",
+    )
+    glue = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(glue)
+
+    geom = load_track("camera_s")
+    est = LaneEstimate(valid=True, offset_m=0.04, lane_width_m=1.40, width_live=True, n_left=20, n_right=20)
+    wp = min(geom.spec.waypoints, key=lambda p: abs(p[0] - 4.62))
+    fields = glue.lane_frame_fields(est, geom, wp[0], wp[1], 0.01)
+    assert fields["width_live"] == 1
+    assert fields["width_err_m"] == pytest.approx(1.40 - fields["true_width_near_m"], abs=1e-6)
+    assert fields["center_err_m"] == pytest.approx(0.03, abs=1e-6)
+    assert abs(fields["true_width_m"] - 1.30) > 0.10
+    held = LaneEstimate(valid=True, offset_m=0.0, lane_width_m=1.40, width_live=False, n_left=0, n_right=20)
+    fallback = glue.lane_frame_fields(held, geom, wp[0], wp[1], 0.0)
+    assert fallback["width_err_m"] is None
+    assert fallback["lane_width_m"] == pytest.approx(1.40)
+
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0) | {"steer_source": "camera", "width_err_m": 0.02, "center_err_m": -0.01})
+    done = log.observe(
+        _sample(5.0, 2.0, event="complete")
+        | {"steer_source": "camera", "width_err_m": -0.04, "center_err_m": 0.03, "ct_max_m": 0.05}
+    )
+    summary = _fields(next(line for line in done if line.startswith("MISSION_SUMMARY")))
+    assert float(summary["width_err_rms_m"]) == pytest.approx(math.sqrt((0.02 ** 2 + 0.04 ** 2) / 2), abs=0.002)
+    assert float(summary["width_err_max_m"]) == pytest.approx(0.04, abs=1e-9)
+    assert float(summary["width_err_n"]) == 2
+    assert float(summary["center_err_rms_m"]) == pytest.approx(math.sqrt((0.01 ** 2 + 0.03 ** 2) / 2), abs=0.002)
+    assert float(summary["center_err_max_m"]) == pytest.approx(0.03, abs=1e-9)
+    assert float(summary["ct_max_m"]) == pytest.approx(0.05, abs=1e-9)
 
 
 def test_lap_summary_names_the_camera_fraction_and_the_cross_track_peak():

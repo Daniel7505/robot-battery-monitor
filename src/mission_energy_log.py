@@ -330,6 +330,8 @@ class MissionEnergyLog:
         self._steer_m = {key: 0.0 for key in _STEER_KEYS}
         self._steer_s = {key: 0.0 for key in _STEER_KEYS}
         self._ct_max: float | None = None
+        self._width_err: list[float] = []
+        self._center_err: list[float] = []
 
     def _clear_segment(self) -> None:
         self._seg_idx = 0
@@ -371,6 +373,7 @@ class MissionEnergyLog:
             self._remember_cumulative(sample)
             self._remember_steer(sample)
             self._note_cross_track(sample)
+            self._note_lane_fit(sample)
             return lines
 
         wall_dt = (ts - self._last_ts).total_seconds() if self._last_ts else 0.0
@@ -384,8 +387,10 @@ class MissionEnergyLog:
             self._remember_cumulative(sample)
             self._remember_steer(sample)
             self._note_cross_track(sample)
+            self._note_lane_fit(sample)
             return lines
         self._note_cross_track(sample)
+        self._note_lane_fit(sample)
         self._note_interval(wall_dt, sample, deltas)
         self._remember_steer(sample)
 
@@ -615,6 +620,25 @@ class MissionEnergyLog:
             return
         got = max(vals)
         self._ct_max = got if self._ct_max is None else max(self._ct_max, got)
+
+    def _note_lane_fit(self, sample: dict) -> None:
+        """One camera frame's width error and center error, when the controller sent them."""
+        width = _as_float(sample.get("width_err_m"))
+        if width is not None:
+            self._width_err.append(width)
+        center = _as_float(sample.get("center_err_m"))
+        if center is not None:
+            self._center_err.append(center)
+
+    def _fit_err_suffix(self) -> str:
+        def pack(name: str, vals: list[float]) -> str:
+            if not vals:
+                return ""
+            rms = math.sqrt(sum(v * v for v in vals) / len(vals))
+            peak = max(abs(v) for v in vals)
+            return f" {name}_rms_m={rms:.3f} {name}_max_m={peak:.3f} {name}_n={len(vals)}"
+
+        return pack("width_err", self._width_err) + pack("center_err", self._center_err)
 
     def _steer_source_line(self) -> str | None:
         total_m = sum(self._steer_m.values())
@@ -907,6 +931,7 @@ class MissionEnergyLog:
             )
         if self._ct_max is not None:
             steer += f" ct_max_m={self._ct_max:.3f}"
+        steer += self._fit_err_suffix()
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "

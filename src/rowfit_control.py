@@ -500,10 +500,21 @@ class RowfitController:
                 )
 
     def _lane_width(self, est) -> float:
-        w = getattr(est, "lane_width_m", 0.0) if est is not None else 0.0
+        """Live near-window width when both lines are in this frame.
+
+        The tracker's smoothed width, then 1.30 m, are the fallback for a
+        frame that can see only one line (or none).
+        """
+        if est is not None and getattr(est, "width_live", False):
+            w = float(getattr(est, "lane_width_m", 0.0) or 0.0)
+            if 0.4 < w < 3.0:
+                return w
         if self.tracker is not None and getattr(self.tracker, "lane_w", None):
-            w = self.tracker.lane_w
-        return float(w) if w and 0.4 < w < 3.0 else 1.30
+            w = float(self.tracker.lane_w)
+            if 0.4 < w < 3.0:
+                return w
+        w = float(getattr(est, "lane_width_m", 0.0) or 0.0) if est is not None else 0.0
+        return w if 0.4 < w < 3.0 else 1.30
 
 
     @staticmethod

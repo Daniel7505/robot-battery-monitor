@@ -82,7 +82,8 @@ def spec_from_dict(d: dict, path: str | None = None) -> TrackSpec:
         else:
             pts.append((float(w[0]), float(w[1])))
             radii.append(0.0)
-            widths.append(None)
+            # Optional third value is the lane width at that waypoint.
+            widths.append(None if len(w) < 3 else float(w[2]))
     if len(pts) < 2:
         raise ValueError("a track needs at least 2 waypoints")
     for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -197,6 +198,22 @@ class TrackGeometry:
         for j in range(1, n - 1):
             A0, B0, v0 = legs[j - 1]
             A1, B1, v1 = legs[j]
+            # A miter of two short legs is unstable once the width is changing:
+            # the joint lands behind the vertex and the paint folds. Offset the
+            # vertex along its angle bisector instead. Constant width keeps the
+            # miter, so existing tracks paint the same line.
+            if abs(o[j] - o[j - 1]) > 1e-6 or abs(o[j + 1] - o[j]) > 1e-6:
+                u0, u1 = self._u[j - 1], self._u[j]
+                bx = -u0[1] - u1[1]
+                by = u0[0] + u1[0]
+                bl2 = bx * bx + by * by
+                if bl2 < 1e-12:
+                    X = (P[j][0] - u0[1] * o[j], P[j][1] + u0[0] * o[j])
+                else:
+                    scale = 2.0 * o[j] / bl2
+                    X = (P[j][0] + bx * scale, P[j][1] + by * scale)
+                out.extend([X] * self._k[j])
+                continue
             X = _intersect(A0, v0, A1, v1)
             if X is None:  # collinear legs
                 X = ((B0[0] + A1[0]) / 2.0, (B0[1] + A1[1]) / 2.0)

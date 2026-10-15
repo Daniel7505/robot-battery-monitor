@@ -276,6 +276,12 @@ LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "fit_reject",
     "cross_track_m",
     "ct_max_m",
+    "lane_width_m",
+    "width_live",
+    "true_width_m",
+    "true_width_near_m",
+    "width_err_m",
+    "center_err_m",
     "energy_elec_gaps",
 )
 

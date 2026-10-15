@@ -130,6 +130,7 @@ from controller_rowfit import (
     world_check_warnings,
     RowfitRuntime,
     guard_per_frame as _guard_per_frame,
+    lane_frame_fields,
     lane_mode as _lane_mode,
     log_dir as _log_dir,
 )
@@ -990,6 +991,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             tick += 1
             dt = timestep / 1000.0
+            lane_fit_fields = {}
             mission_event = "complete" if mission_complete else None
             if nadir_lobe_done and not mission_complete:
                 finish_age_s += dt
@@ -1371,6 +1373,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         lane_eyes["steer_lateral"] = lk.get("steer_lateral")
                         lane_eyes["fit_reject"] = lk.get("fit_reject") or ""
                 if rowfit_rt is not None and rowfit_new:
+                    try:
+                        _meas = lane_frame_fields(
+                            rowfit_rt.est,
+                            getattr(finish_ref, "track", None),
+                            None if gps_xy is None else gps_xy[0],
+                            None if gps_xy is None else gps_xy[1],
+                            ct_latest_m,
+                        )
+                    except Exception:
+                        _meas = {}
+                    lane_fit_fields = {k: v for k, v in _meas.items() if v is not None}
                     if lane_vision_log is not None:
                         lane_vision_log.write(
                             x_m=None if gps_xy is None else round(float(gps_xy[0]), 3),
@@ -1380,6 +1393,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             cmd=lk,
                             new_frame=True,
                             yaw=prev_yaw,
+                            measure=_meas,
                         )
                     _e = rowfit_rt.est
                     if _e is not None and getattr(_e, "held", False):
@@ -1399,7 +1413,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} "
                             f"k={_e.curvature_1pm:+.2f} conf={_e.confidence:.2f} "
                             f"nL={_e.n_left} nR={_e.n_right} "
-                            f"v*={lk.get('target_speed')} phase={lk.get('phase')} "
+                            f"w={_e.lane_width_m:.3f}"
+                            + (
+                                ""
+                                if _meas.get("true_width_near_m") is None
+                                else f" true={_meas['true_width_near_m']:.3f}"
+                            )
+                            + (" live" if _e.width_live else "")
+                            + f" v*={lk.get('target_speed')} phase={lk.get('phase')} "
                             f"steer_source={lk.get('steer_source')}"
                             if _e.valid
                             else f"Rowfit no lane (frame {rowfit_rt.frames}) phase={lk.get('phase')}"
@@ -2060,6 +2081,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "fit_reject": lane_eyes.get("fit_reject"),
                         "cross_track_m": None if ct_latest_m is None else round(ct_latest_m, 4),
                         "ct_max_m": None if ct_latest_m is None else round(ct_peak_m, 4),
+                        **lane_fit_fields,
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -2103,6 +2125,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 if ct_latest_m is not None:
                     loco["cross_track_m"] = round(ct_latest_m, 4)
                     loco["ct_max_m"] = round(ct_peak_m, 4)
+                loco.update(lane_fit_fields)
                 if speed_trace.steer_text:
                     loco["steer_split"] = speed_trace.steer_text
                     if isinstance(sensors_out, dict):

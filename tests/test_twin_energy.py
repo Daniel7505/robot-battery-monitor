@@ -154,9 +154,28 @@ def test_mission_energy_over_a_duration_includes_idle():
         line = format_mission_energy_line(0.0, payload_kg=0, wh_measured=0.5, duration_s=450)
         assert "wh_model=1.245" in line
         assert "wh_measured=0.50" in line
+        assert "err_pct=na" not in line
+        assert "err_pct=" in line
         moving = bom_run_energy_wh(TEN_FT_M, 450.0, 0.0)
         assert moving["wh_model"] > moving["wh_model_drive"] > 0
         assert moving["wh_model_idle"] == pytest.approx(1.245, abs=0.001)
+    finally:
+        _restore_bom(old)
+
+
+def test_default_build_energy_error_is_na():
+    """V1's blended cruise lump is not measured drive plus channel idle."""
+    old = _use_bom(None)
+    try:
+        line = format_mission_energy_line(
+            19.82, payload_kg=0.0, wh_measured=0.72, duration_s=60.5
+        )
+        assert line.startswith("MISSION_ENERGY build=default ")
+        assert "wh_measured=0.72" in line
+        assert "err_pct=na" in line
+        model = line.split("wh_model=", 1)[1].split()[0]
+        assert model not in ("", "na")
+        assert float(model) == pytest.approx(19.82 * 40.0 / 0.44 / 3600.0, abs=0.002)
     finally:
         _restore_bom(old)
 

@@ -264,6 +264,132 @@ def test_lane_frame_fields_and_lap_summary_name_both_errors():
     assert float(summary["ct_max_m"]) == pytest.approx(0.05, abs=1e-9)
 
 
+def test_apply_lane_steer_copies_camera_and_the_finish_override():
+    spec = importlib.util.spec_from_file_location(
+        "controller_rowfit_steer",
+        ROOT / "webots" / "controllers" / "butlerbot_controller" / "controller_rowfit.py",
+    )
+    glue = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(glue)
+    eyes = {"steer": None, "phase": None, "error_source": "nadir"}
+    glue.apply_lane_steer(
+        eyes,
+        {
+            "steer": 0.2,
+            "phase": "cruise",
+            "error_source": "rowfit",
+            "steer_source": "camera",
+            "steer_lateral": "fit",
+            "fit_reject": "",
+        },
+    )
+    assert eyes["steer_source"] == "camera"
+    assert eyes["steer"] == 0.2
+    assert eyes["error_source"] == "rowfit"
+    glue.apply_lane_steer(
+        eyes,
+        {
+            "steer": 0.0,
+            "phase": "first_lobe_done",
+            "error_source": "rowfit",
+            "steer_source": "stopped",
+            "steer_lateral": "stopped",
+            "fit_reject": "",
+        },
+    )
+    assert eyes["steer_source"] == "stopped"
+
+
+def test_controller_stamps_steer_every_step_and_notes_each_frame():
+    """875eb13 copied steer_source only inside the finish branch."""
+    ctrl = (
+        ROOT / "webots" / "controllers" / "butlerbot_controller" / "butlerbot_controller.py"
+    ).read_text(encoding="utf-8")
+    lines = ctrl.splitlines()
+    finish = next(i for i, line in enumerate(lines) if line.strip() == "if _crossed or _at_cap:")
+    calls = [i for i, line in enumerate(lines) if "apply_lane_steer(lane_eyes, lk)" in line]
+    assert calls
+    finish_indent = len(lines[finish]) - len(lines[finish].lstrip())
+    for i in calls:
+        indent = len(lines[i]) - len(lines[i].lstrip())
+        assert indent <= finish_indent
+        assert i > finish
+    assert 'lane_eyes["steer_source"]' not in ctrl
+    assert "controller_energy_log.note_lane_frame(lane_fit_fields)" in ctrl
+    loop = ctrl[ctrl.index("while robot.step"):]
+    assert "lane_fit_fields = {}" not in loop
+
+
+def test_camera_steer_accumulates_for_the_whole_lap():
+    """A 60.5 s / 19.82 m lap of camera samples is not a 0.1 s stopped stub."""
+    log = MissionEnergyLog()
+    dist = 19.82
+    duration = 60.5
+    step = 0.5
+    log.observe(_sample(0.0, 0.0) | {"steer_source": "camera"})
+    t = step
+    while t < duration - 1e-9:
+        log.observe(
+            _sample(t, dist * t / duration) | {"steer_source": "camera"}
+        )
+        t += step
+    done = log.observe(
+        _sample(duration, dist, event="complete") | {"steer_source": "stopped"}
+    )
+    summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
+    steer = next(line for line in done if line.startswith("STEER_SOURCE"))
+    fields = _fields(summary)
+    split = _fields(steer)
+    assert float(fields["duration_s"]) == pytest.approx(duration, abs=0.05)
+    assert float(fields["dist_m"]) == pytest.approx(dist, abs=0.05)
+    assert float(split["camera_s"]) == pytest.approx(duration - step, abs=0.05)
+    assert float(split["camera_m"]) == pytest.approx(dist * (duration - step) / duration, abs=0.05)
+    assert float(split["stopped_s"]) == pytest.approx(step, abs=0.05)
+    assert float(split["stopped_m"]) < 0.2
+    assert float(fields["steer_frac_camera"]) == pytest.approx(
+        (duration - step) / duration, abs=0.02
+    )
+    assert float(split["time_s"]) == pytest.approx(duration, abs=0.05)
+    assert float(split["dist_m"]) == pytest.approx(dist, abs=0.05)
+
+
+def test_width_and_center_errors_from_frames_between_posts():
+    """Posts are ~0.5 s. Camera frames in between still land on the summary."""
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0) | {"steer_source": "camera"})
+    log.note_lane_frame({"lane_frame_n": 1, "width_err_m": 0.0114, "center_err_m": 0.0057})
+    log.note_lane_frame({"lane_frame_n": 2, "width_err_m": -0.0164, "center_err_m": -0.0151})
+    log.note_lane_frame({"lane_frame_n": 3, "width_err_m": 0.0100, "center_err_m": 0.0040})
+    # The post repeats frame 3. It must not double-count.
+    done = log.observe(
+        _sample(2.0, 1.0, event="complete")
+        | {
+            "steer_source": "camera",
+            "lane_frame_n": 3,
+            "width_err_m": 0.0100,
+            "center_err_m": 0.0040,
+        }
+    )
+    summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
+    fields = _fields(summary)
+    widths = (0.0114, -0.0164, 0.0100)
+    centers = (0.0057, -0.0151, 0.0040)
+    assert fields["width_err_n"] == "3"
+    assert fields["center_err_n"] == "3"
+    assert float(fields["width_err_rms_m"]) == pytest.approx(
+        math.sqrt(sum(v * v for v in widths) / 3), abs=5e-5
+    )
+    assert float(fields["width_err_max_m"]) == pytest.approx(0.0164, abs=5e-5)
+    assert float(fields["center_err_rms_m"]) == pytest.approx(
+        math.sqrt(sum(v * v for v in centers) / 3), abs=5e-5
+    )
+    assert float(fields["center_err_max_m"]) == pytest.approx(0.0151, abs=5e-5)
+    assert "width_err_rms_m=" in summary
+    assert "width_err_max_m=" in summary
+    assert "center_err_rms_m=" in summary
+    assert "center_err_max_m=" in summary
+
+
 def test_lap_summary_names_the_camera_fraction_and_the_cross_track_peak():
     log = MissionEnergyLog()
     log.observe(_sample(0.0, 0.0) | {"steer_source": "camera", "cross_track_m": 0.04})

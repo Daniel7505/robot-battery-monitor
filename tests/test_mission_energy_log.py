@@ -1108,6 +1108,83 @@ def test_controller_counter_keeps_energy_the_15s_rule_used_to_drop():
     assert any(line.startswith("STEER_SPLIT ") for line in done)
 
 
+def test_post_hole_keeps_the_counter_and_elec_gaps_are_steps():
+    """camera_s on 875eb13 reported 106/246 samples and max 0.8 s.
+
+    ``n`` is the number of post intervals. ``elec_gaps`` is physics steps
+    whose electrical watts were missing, not a fraction of those posts.
+    106 steps at 8 ms is 0.848 s, about 1.4% of a 60.5 s lap. A 0.8 s
+    hole between posts does not drop watt-hours already in the controller
+    counter. Gap steps add 0 drive Wh, so they undercount only while the
+    hinge was turning without feedback.
+    """
+    from src.twin_energy import SimPackMeter
+
+    meter = SimPackMeter()
+    for _ in range(106):
+        meter.step(0.008, shaft_w=None, elec_w=None, idle_w=19.0)
+    assert meter.elec_gaps == 106
+    assert meter.wh_elec == 0.0
+    assert meter.sim_s == pytest.approx(106 * 0.008, abs=1e-12)
+    assert meter.sim_s / 60.5 == pytest.approx(0.014016, abs=1e-6)
+    meter.step(0.008, shaft_w=4.0, elec_w=20.0, idle_w=19.0)
+    assert meter.wh_elec == pytest.approx(20.0 * 0.008 / 3600.0, rel=1e-9)
+
+    idle_w = 7.20 + 2.66
+    elec_w = 20.0
+    shaft_w = 4.0
+    sim_s = 60.5
+    pack = (elec_w + idle_w) * sim_s / 3600.0
+    log = MissionEnergyLog()
+    assert log.observe(
+        _with_counter(
+            _sample(
+                0.0, 0.0,
+                report_measured=True, measured_drive_w=shaft_w,
+                report_elec=True, measured_drive_elec_w=elec_w,
+            ),
+            controller_run_id="camera-s",
+            energy_sim_s=0.0,
+            energy_wh_shaft=0.0,
+            energy_wh_elec=0.0,
+            energy_wh_idle=0.0,
+            energy_wh_pack=0.0,
+            energy_elec_gaps=0,
+            steer_source="camera",
+        )
+    ) == []
+    done = log.observe(
+        _with_counter(
+            _sample(
+                0.8, 0.26, event="complete",
+                report_measured=True, measured_drive_w=shaft_w,
+                report_elec=True, measured_drive_elec_w=elec_w,
+            ),
+            controller_run_id="camera-s",
+            energy_sim_s=sim_s,
+            energy_wh_shaft=shaft_w * sim_s / 3600.0,
+            energy_wh_elec=elec_w * sim_s / 3600.0,
+            energy_wh_idle=idle_w * sim_s / 3600.0,
+            energy_wh_pack=pack,
+            energy_elec_gaps=106,
+            steer_source="camera",
+        )
+    )
+    summary = _fields(next(line for line in done if line.startswith("MISSION_SUMMARY")))
+    gaps = _fields(next(line for line in done if line.startswith("TELEMETRY_GAPS")))
+    assert float(summary["duration_s"]) == pytest.approx(sim_s, abs=0.05)
+    assert float(summary["wh_measured_drive_elec"]) == pytest.approx(
+        elec_w * sim_s / 3600.0, abs=0.001
+    )
+    assert float(summary["wh_measured"]) == pytest.approx(pack, abs=0.001)
+    assert gaps["n"] == "1"
+    assert float(gaps["max_s"]) == pytest.approx(0.8, abs=0.01)
+    assert gaps["elec_gaps"] == "106"
+    assert gaps["cumulative"] == "1"
+    assert float(gaps["skipped_s"]) == pytest.approx(0.0, abs=1e-9)
+    assert float(summary["duration_s"]) != pytest.approx(0.8, abs=0.05)
+
+
 def test_legacy_integrator_records_a_skipped_gap_and_does_not_bill_it():
     idle_w = 7.20 + 2.66
     elec_w = 20.0
@@ -1338,6 +1415,8 @@ def test_summary_file_keeps_body_summary_and_measured_without_a_bom_build(tmp_pa
         assert energy_fields["wh_measured"] not in ("", "na")
         assert float(energy_fields["wh_measured"]) == pytest.approx(0.26, abs=0.02)
         assert energy_fields["wh_model"] not in ("", "na")
+        # V1 cruise lump vs measured drive + idle is not a like-for-like error.
+        assert energy_fields["err_pct"] == "na"
         text = Path(written).read_text(encoding="utf-8")
         assert "BOM BODY build=default" in text
         assert "MISSION_SUMMARY" in text

@@ -77,6 +77,24 @@ def log_dir() -> str:
     return DEFAULT_LOG_DIR
 
 
+def apply_lane_steer(lane_eyes: dict, lk: dict | None) -> None:
+    """Copy the command that just steered onto the telemetry eyes.
+
+    Called on every lane-keep step, including the finish override. Copying
+    only inside the finish branch left the lap counter at a 0.1 s ``stopped``
+    stub, so ``steer_frac_camera`` stayed 0 while every vision row was rowfit.
+    """
+    if not isinstance(lane_eyes, dict) or not isinstance(lk, dict):
+        return
+    lane_eyes["steer"] = lk.get("steer")
+    lane_eyes["phase"] = lk.get("phase")
+    lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+    if lk.get("steer_source"):
+        lane_eyes["steer_source"] = lk.get("steer_source")
+        lane_eyes["steer_lateral"] = lk.get("steer_lateral")
+        lane_eyes["fit_reject"] = lk.get("fit_reject") or ""
+
+
 def lane_frame_fields(est, track, x_m, y_m, cross_track_m) -> dict:
     """Measured width and center versus the painted track, for one camera frame.
 

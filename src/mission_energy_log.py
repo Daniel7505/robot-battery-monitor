@@ -15,7 +15,11 @@ The dashboard logger writes three lines, in the usual
   line). Model vs measured, SoC start/end, turns. When samples carry
   ``steer_source``, the same close also prints ``STEER_SOURCE``:
   metres and time on camera, held (odometry of a rejected fit), and
-  track (map distance during a committed turn). The controller also
+  track (map distance during a committed turn). The controller stamps
+  that field on every lane-keep step, so the buckets cover the lap
+  and not only the finish ``stopped`` interval. Width and center
+  errors (``width_err_rms_m``, ``width_err_max_m``, ``center_err_rms_m``,
+  ``center_err_max_m``) are one sample per camera frame. The controller also
   writes these lines, plus ``BOM BODY`` and ``MISSION_ENERGY``, to
   ``logs/mission_summary_<ts>.json`` (repo or ``RBM_LOG_DIR``). The
   webots-bin console cannot be redirected on Windows.
@@ -335,6 +339,7 @@ class MissionEnergyLog:
         self._ct_max: float | None = None
         self._width_err: list[float] = []
         self._center_err: list[float] = []
+        self._fit_seen: set = set()
 
     def _clear_segment(self) -> None:
         self._seg_idx = 0
@@ -624,8 +629,26 @@ class MissionEnergyLog:
         got = max(vals)
         self._ct_max = got if self._ct_max is None else max(self._ct_max, got)
 
+    def note_lane_frame(self, fields: dict) -> None:
+        """Record one new camera frame. A later post of the same frame is ignored."""
+        self._note_lane_fit(fields)
+
     def _note_lane_fit(self, sample: dict) -> None:
-        """One camera frame's width error and center error, when the controller sent them."""
+        """One camera frame's width error and center error, when the controller sent them.
+
+        ``lane_frame_n`` dedupes. Telemetry is slower than the camera, and
+        the same frame used to be either missed (not on a post) or counted
+        again on the next post.
+        """
+        frame = sample.get("lane_frame_n")
+        if frame is not None and frame != "":
+            try:
+                key: object = int(frame)
+            except (TypeError, ValueError):
+                key = str(frame)
+            if key in self._fit_seen:
+                return
+            self._fit_seen.add(key)
         width = _as_float(sample.get("width_err_m"))
         if width is not None:
             self._width_err.append(width)
@@ -639,7 +662,7 @@ class MissionEnergyLog:
                 return ""
             rms = math.sqrt(sum(v * v for v in vals) / len(vals))
             peak = max(abs(v) for v in vals)
-            return f" {name}_rms_m={rms:.3f} {name}_max_m={peak:.3f} {name}_n={len(vals)}"
+            return f" {name}_rms_m={rms:.4f} {name}_max_m={peak:.4f} {name}_n={len(vals)}"
 
         return pack("width_err", self._width_err) + pack("center_err", self._center_err)
 

@@ -130,6 +130,7 @@ from controller_rowfit import (
     world_check_warnings,
     RowfitRuntime,
     guard_per_frame as _guard_per_frame,
+    apply_lane_steer,
     lane_frame_fields,
     lane_mode as _lane_mode,
     log_dir as _log_dir,
@@ -1014,11 +1015,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         motors[_w].setPosition(float("inf"))
         motors[_w].setVelocity(0.0)
 
+    # Kept across ticks. A new camera frame rarely lands on a telemetry
+    # post; clearing this every step dropped width and center errors
+    # before MISSION_SUMMARY could see them. Each frame is also noted
+    # once on the energy log (see note_lane_frame) so a later post of
+    # the same frame does not count twice.
+    lane_fit_fields: dict = {}
     while robot.step(timestep) != -1:
         try:
             tick += 1
             dt = timestep / 1000.0
-            lane_fit_fields = {}
             mission_event = "complete" if mission_complete else None
             if nadir_lobe_done and not mission_complete:
                 finish_age_s += dt
@@ -1392,13 +1398,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "fit_reject": "",
                         "reason": "finish",
                     }
-                    lane_eyes["steer"] = lk.get("steer")
-                    lane_eyes["phase"] = lk.get("phase")
-                    lane_eyes["error_source"] = lk.get("error_source") or "nadir"
-                    if lk.get("steer_source"):
-                        lane_eyes["steer_source"] = lk.get("steer_source")
-                        lane_eyes["steer_lateral"] = lk.get("steer_lateral")
-                        lane_eyes["fit_reject"] = lk.get("fit_reject") or ""
+                # Every command, not only the finish ``stopped`` override.
+                # Telemetry is what STEER_SOURCE integrates.
+                apply_lane_steer(lane_eyes, lk)
                 if rowfit_rt is not None and rowfit_new:
                     try:
                         _meas = lane_frame_fields(
@@ -1411,6 +1413,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     except Exception:
                         _meas = {}
                     lane_fit_fields = {k: v for k, v in _meas.items() if v is not None}
+                    lane_fit_fields["lane_frame_n"] = int(rowfit_rt.frames)
+                    if controller_energy_log is not None:
+                        controller_energy_log.note_lane_frame(lane_fit_fields)
                     if lane_vision_log is not None:
                         lane_vision_log.write(
                             x_m=None if gps_xy is None else round(float(gps_xy[0]), 3),
@@ -2292,6 +2297,10 @@ def _read_joints(
         if wheel_parked and not _uses_bom_pack():
             # Legacy sim: a flat 2 W so a parked hub is not free. A BoM build
             # falls through and uses the published encoder idle instead.
+            # torque_feedback is left off, so this step counts as an
+            # electrical gap. Shaft power is ~0 here, so the gap does not
+            # move the moving-lap watt-hour integral. A miss while the
+            # hinge is turning does undercount that step.
             joints.append({
                 "name": motor_name,
                 "position": round(position, 4),

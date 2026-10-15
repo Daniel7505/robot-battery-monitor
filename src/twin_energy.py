@@ -282,6 +282,7 @@ LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "true_width_near_m",
     "width_err_m",
     "center_err_m",
+    "lane_frame_n",
     "energy_elec_gaps",
 )
 
@@ -505,8 +506,14 @@ class SimPackMeter:
     late or dropped POST cannot move SoC without moving ``wh_measured``.
 
     A missing electrical sample adds no drive watts and increments
-    ``elec_gaps``. Idle is still billed. The rolling prediction is not
-    written in place of the missing drive. A single step longer than
+    ``elec_gaps``. That counter is physics steps, not telemetry posts.
+    Idle is still billed. The rolling prediction is not written in
+    place of the missing drive. The dashboard bills the snapshot
+    delta, so a short hole between posts (the camera_s lap's 0.8 s
+    max) does not drop watt-hours already in the counter. A gap step
+    undercounts drive only while the hinge was turning without
+    feedback. A parked default-build wheel omits feedback and counts
+    as a gap at about 0 W. A single step longer than
     ``PACK_DRAW_MAX_DT_S`` adds nothing: a physics step is 8 ms, so that
     guard is only a bad clock.
     """
@@ -1121,7 +1128,13 @@ def format_mission_energy_line(
 
     With ``duration_s`` and a BoM build, the model is idle over the whole
     run plus drive for ``dist_m``, not drive-only and not idle only while
-    the wheels are turning.
+    the wheels are turning. ``err_pct`` is that total against measured
+    drive plus idle.
+
+    With no BoM build the printed model is the V1 cruise lump (idle and
+    drive in one number, blank drive terms). Measured is hinge drive
+    plus channel idle. Those are not the same split, so ``err_pct`` is
+    ``na`` instead of a percent.
     """
     from src.config import config
     from src.hardware_profile import active_bom_build
@@ -1157,7 +1170,10 @@ def format_mission_energy_line(
         err_txt = ""
     else:
         measured_txt = f"{float(wh_measured):.2f}"
-        if wh_model:
+        # No BoM: V1 lump vs measured drive+idle is not a like-for-like error.
+        if not active_bom_build():
+            err_txt = "na"
+        elif wh_model:
             err_txt = f"{(float(wh_measured) - wh_model) / wh_model * 100.0:.1f}"
         else:
             err_txt = ""

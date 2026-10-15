@@ -339,6 +339,7 @@ class MissionEnergyLog:
         self._ct_max: float | None = None
         self._width_err: list[float] = []
         self._center_err: list[float] = []
+        self._true_width: list[float] = []
         self._fit_seen: set = set()
 
     def _clear_segment(self) -> None:
@@ -655,6 +656,9 @@ class MissionEnergyLog:
         center = _as_float(sample.get("center_err_m"))
         if center is not None:
             self._center_err.append(center)
+        true_w = _as_float(sample.get("true_width_m"))
+        if true_w is not None:
+            self._true_width.append(true_w)
 
     def _fit_err_suffix(self) -> str:
         def pack(name: str, vals: list[float]) -> str:
@@ -664,7 +668,14 @@ class MissionEnergyLog:
             peak = max(abs(v) for v in vals)
             return f" {name}_rms_m={rms:.4f} {name}_max_m={peak:.4f} {name}_n={len(vals)}"
 
-        return pack("width_err", self._width_err) + pack("center_err", self._center_err)
+        span = ""
+        if self._true_width:
+            span = (
+                f" true_width_min_m={min(self._true_width):.4f}"
+                f" true_width_max_m={max(self._true_width):.4f}"
+                f" true_width_n={len(self._true_width)}"
+            )
+        return pack("width_err", self._width_err) + pack("center_err", self._center_err) + span
 
     def _steer_source_line(self) -> str | None:
         total_m = sum(self._steer_m.values())

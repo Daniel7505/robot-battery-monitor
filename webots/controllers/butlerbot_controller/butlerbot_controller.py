@@ -824,10 +824,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             rowfit_rt = RowfitRuntime()
             lane_vision_log = LaneVisionLog()
+            _lane_csv = os.path.abspath(lane_vision_log.path)
             print(
                 f"LANE MODE rowfit (run_id {_RUN_ID}) — lane_vision fit, "
-                f"log → {lane_vision_log.path}"
+                f"log → {_lane_csv}"
             )
+            _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")

@@ -42,6 +42,27 @@ if (-not $WorldFile) {
     Get-ChildItem $WorldsDir -Filter *.wbt | ForEach-Object { Write-Host "  $($_.BaseName)" }
     exit 1
 }
+# Stronger camera_s paint. Unset keeps the shipped 1.15–1.45 m world.
+# RBM_CAMERA_S_WIDTH=1.0,1.6 writes a sibling and opens that.
+$ResolvedBase = [System.IO.Path]::GetFileNameWithoutExtension($WorldFile)
+if ($ResolvedBase -eq "butlerbot_camera_s" -and $env:RBM_CAMERA_S_WIDTH) {
+    $WidthScript = Join-Path $ProjectRoot "scripts\camera_s_track.py"
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $generated = & python $WidthScript
+        if ($LASTEXITCODE -eq 0) {
+            $hit = $generated | Select-String -Pattern '^CAMERA_S_WORLD (.+)$' | Select-Object -Last 1
+            if ($hit) {
+                $WorldFile = $hit.Matches[0].Groups[1].Value.Trim()
+                Write-Host "Lane width: RBM_CAMERA_S_WIDTH=$($env:RBM_CAMERA_S_WIDTH)"
+                Write-Host "           $WorldFile"
+            }
+        } else {
+            Write-Host "WARNING: RBM_CAMERA_S_WIDTH world was not generated. Opening the shipped 1.15-1.45 m paint." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "WARNING: python not on PATH. Opening the shipped 1.15-1.45 m paint." -ForegroundColor Yellow
+    }
+}
 # Selected bom_build: open a sibling world whose body mass and contact
 # wheel match the BoM. The drawn mesh stays 0.08 m. Unset bom_build
 # leaves $WorldFile unchanged. The sibling is gitignored.
@@ -103,6 +124,9 @@ Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else {
 Write-Host "Obstacles: RBM_OBSTACLES=$(if ($env:RBM_OBSTACLES) { $env:RBM_OBSTACLES } else { '(unset: on only in worlds tagged # OBSTACLES on)' })  RBM_STEREO_BACKEND=$(if ($env:RBM_STEREO_BACKEND) { $env:RBM_STEREO_BACKEND } else { '(auto)' })  radar with obstacles when on"
 Write-Host "HUD paint: RBM_HUD=$(if ($env:RBM_HUD) { $env:RBM_HUD } else { '(unset: off — lane keeping still uses the nadir cameras)' })  A black magenta overlay is an unused stereo camera. Close it under Robot → Camera Devices."
 Write-Host "Speed trace: RBM_SPEED_TRACE=$(if ($env:RBM_SPEED_TRACE) { $env:RBM_SPEED_TRACE } else { '(unset: on for a 1-lap run, off otherwise)' })  CSV logs/speed_trace_<timestamp>.csv (gitignored). Console off unless RBM_SPEED_TRACE_CONSOLE=1."
+$LaneDir = if ($env:RBM_LOG_DIR) { $env:RBM_LOG_DIR } else { Join-Path $env:USERPROFILE "OneDrive\Desktop\Grok Workspace" }
+Write-Host "Lane vision CSV: $(Join-Path $LaneDir 'lane-vision.csv')"
+Write-Host "           Not in the repo logs folder. The summary JSON also records LANE_VISION file=..."
 Write-Host "Pick:      RBM_PICK_SKU=$(if ($env:RBM_PICK_SKU) { $env:RBM_PICK_SKU } else { '(unset: trolley follow only; set demo for one-SKU pretend pick)' })"
 Write-Host ""
 

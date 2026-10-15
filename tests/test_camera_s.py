@@ -224,6 +224,107 @@ def test_live_width_tracks_the_paint_and_one_line_falls_back():
     assert ctl._lane_width(one) == pytest.approx(wide.lane_w, abs=1e-6)
 
 
+def _stripe_centers(world: Path, name: str) -> list[tuple[float, float]]:
+    """Centre of each 6 cm stripe station in a generated lane mesh."""
+    import re
+
+    text = world.read_text(encoding="utf-8")
+    start = text.index(f"DEF {name} Shape")
+    point = text.index("point [", start)
+    end = text.index("]", point)
+    nums = [float(v) for v in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text[point:end])]
+    xyz = list(zip(nums[0::3], nums[1::3], nums[2::3]))
+    out = []
+    for i in range(0, len(xyz) - 3, 4):
+        tops = [p for p in xyz[i:i + 4] if abs(p[2] - 0.013) < 0.002]
+        assert len(tops) == 2
+        out.append(((tops[0][0] + tops[1][0]) / 2.0, (tops[0][1] + tops[1][1]) / 2.0))
+    return out
+
+
+def _mesh_separation(world: Path) -> list[tuple[float, float, float]]:
+    """(centre-to-centre m, mid x, mid y) of the two painted stripes, station by station."""
+    import math
+
+    left = _stripe_centers(world, "TRACK_LINE_L")
+    right = _stripe_centers(world, "TRACK_LINE_R")
+    assert len(left) == len(right) > 100
+    rows = []
+    for lp, rp in zip(left, right):
+        sep = math.hypot(lp[0] - rp[0], lp[1] - rp[1])
+        rows.append((sep, (lp[0] + rp[0]) / 2.0, (lp[1] + rp[1]) / 2.0))
+    return rows
+
+
+def test_painted_meshes_span_1_15_to_1_45_along_the_s():
+    """The yellow ribbons in the world Dan loaded are not a constant 1.30 m."""
+    rows = _mesh_separation(WORLD)
+    narrow = min(rows, key=lambda t: t[0])
+    wide = max(rows, key=lambda t: t[0])
+    assert narrow[0] == pytest.approx(1.15, abs=0.002)
+    assert wide[0] == pytest.approx(1.45, abs=0.002)
+    # Widest on the climb of the first north lobe, before the crest at x=6, y=1.5.
+    assert 4.4 < wide[1] < 5.0
+    assert wide[2] > 0.5
+    # Narrowest after the south trough (x=12, y=-1.5), climbing back toward the finish.
+    assert 13.5 < narrow[1] < 14.3
+    assert narrow[2] < 0.0
+    assert narrow[2] > -1.0
+
+
+def test_stronger_width_option_paints_1_0_to_1_6_and_both_lines_stay_in_view(tmp_path):
+    """RBM_CAMERA_S_WIDTH=1.0,1.6 is visible, and both nadir cameras still see both lines."""
+    from src.lane_vision import NADIR_CAMS, LaneTracker, lane_polyline_robot, render_lane_bgra
+    from src.track_geometry import TrackGeometry, spec_from_dict
+
+    gen = _load("camera_s_track")
+    assert gen.parse_width_range("1.0,1.6") == (1.0, 1.6)
+    assert gen.parse_width_range("1.0-1.6") == (1.0, 1.6)
+    assert gen.parse_width_range("") == pytest.approx((1.15, 1.45))
+    with pytest.raises(ValueError):
+        gen.parse_width_range("wide")
+
+    world = gen.write_files(1.0, 1.6, root=str(tmp_path))
+    text = Path(world).read_text(encoding="utf-8")
+    assert "Lane width 1.00 to 1.60 m" in text
+    assert "STEER_TRACK off" in text
+    assert "camera_s_w1.00-1.60.json" in text.replace("\\", "/")
+    rows = _mesh_separation(Path(world))
+    assert min(r[0] for r in rows) == pytest.approx(1.0, abs=0.002)
+    assert max(r[0] for r in rows) == pytest.approx(1.6, abs=0.002)
+    # The shipped world is not the sibling.
+    assert "Lane width 1.15 to 1.45 m" in WORLD.read_text(encoding="utf-8")
+
+    geom = TrackGeometry(spec_from_dict(gen.track_dict(1.0, 1.6)))
+    left = geom.lane_line(1.0)
+    right = geom.lane_line(-1.0)
+    tr = LaneTracker()
+    prev = None
+    seen = 0
+    x = 0.0
+    while x <= 17.5 + 1e-9:
+        y, hd = gen.centerline(x)
+        lines = [
+            lane_polyline_robot(left, (x, y), hd),
+            lane_polyline_robot(right, (x, y), hd),
+        ]
+        imgs = {n: (render_lane_bgra(c, lines), 128, 128) for n, c in NADIR_CAMS.items()}
+        ds = dyaw = 0.0
+        if prev is not None:
+            ds = math.hypot(x - prev[0], y - prev[1])
+            dyaw = math.atan2(math.sin(hd - prev[2]), math.cos(hd - prev[2]))
+        est = tr.process(imgs, dx_m=ds, dyaw_rad=dyaw)
+        assert est.valid and est.width_live, f"x={x:.2f} lost the lane"
+        assert est.n_left >= 4 and est.n_right >= 4, f"x={x:.2f} L={est.n_left} R={est.n_right}"
+        seen += 1
+        prev = (x, y, hd)
+        x += 0.5
+    assert seen > 20
+    # The 1.6 m station and the 1.0 m station are both in that walk.
+    assert max(geom.spec.widths) == pytest.approx(1.6, abs=0.002)
+    assert min(geom.spec.widths) == pytest.approx(1.0, abs=0.002)
+
+
 def test_lane_frame_fields_and_lap_summary_name_both_errors():
     import importlib.util
 
@@ -316,6 +417,7 @@ def test_controller_stamps_steer_every_step_and_notes_each_frame():
         assert i > finish
     assert 'lane_eyes["steer_source"]' not in ctrl
     assert "controller_energy_log.note_lane_frame(lane_fit_fields)" in ctrl
+    assert "LANE_VISION file=" in ctrl
     loop = ctrl[ctrl.index("while robot.step"):]
     assert "lane_fit_fields = {}" not in loop
 
@@ -362,9 +464,9 @@ def test_width_and_center_errors_from_frames_between_posts(tmp_path):
     reset_mission_summary_file()
     log = MissionEnergyLog()
     log.observe(_sample(0.0, 0.0) | {"steer_source": "camera"})
-    log.note_lane_frame({"lane_frame_n": 1, "width_err_m": 0.0114, "center_err_m": 0.0057})
-    log.note_lane_frame({"lane_frame_n": 2, "width_err_m": -0.0164, "center_err_m": -0.0151})
-    log.note_lane_frame({"lane_frame_n": 3, "width_err_m": 0.0100, "center_err_m": 0.0040})
+    log.note_lane_frame({"lane_frame_n": 1, "width_err_m": 0.0114, "center_err_m": 0.0057, "true_width_m": 1.45})
+    log.note_lane_frame({"lane_frame_n": 2, "width_err_m": -0.0164, "center_err_m": -0.0151, "true_width_m": 1.15})
+    log.note_lane_frame({"lane_frame_n": 3, "width_err_m": 0.0100, "center_err_m": 0.0040, "true_width_m": 1.30})
     # The post repeats frame 3. It must not double-count.
     done = log.observe(
         _sample(2.0, 1.0, event="complete")
@@ -393,6 +495,8 @@ def test_width_and_center_errors_from_frames_between_posts(tmp_path):
     assert "width_err_max_m=" in summary
     assert "center_err_rms_m=" in summary
     assert "center_err_max_m=" in summary
+    assert float(fields["true_width_min_m"]) == pytest.approx(1.15, abs=1e-4)
+    assert float(fields["true_width_max_m"]) == pytest.approx(1.45, abs=1e-4)
     written = append_mission_lines(done, source="controller", directory=str(tmp_path))
     payload = json.loads(Path(written).read_text(encoding="utf-8"))
     joined = "\n".join(payload["lines"])

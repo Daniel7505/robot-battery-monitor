@@ -132,14 +132,17 @@ def bom_body_physics(build_id: str | None = None) -> BomBodyPhysics | None:
 
 
 def format_bom_body_log_line(build_id: str | None = None) -> str | None:
-    """The physics line the Webots console prints, for the dashboard log.
+    """The physics line for the dashboard log and ``mission_summary_*.json``.
 
-    ``None`` when no BoM build is selected. Contact radius stays 0.08 m;
-    the catalog diameter is named and not applied to the tire.
+    A selected build names catalog radius and the 0.08 m contact cylinder.
+    No build selected still returns a line: the shipped 3.2 kg / 0.08 m
+    body, with the YAML catalog radius logged and not applied. The Webots
+    console used to be the only place this text appeared, and a blank
+    ``bom_build`` skipped it entirely.
     """
     physics = bom_body_physics(build_id)
     if physics is None:
-        return None
+        return _default_body_log_line()
     return (
         f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
         f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
@@ -147,6 +150,26 @@ def format_bom_body_log_line(build_id: str | None = None) -> str | None:
         f"drawn_wheel_radius_m={physics.drawn_radius_m:g} "
         f"(contact cylinder stays {physics.contact_radius_m:g} m; "
         f"v=ω·r and the viscous bill use that, not the catalog diameter)"
+    )
+
+
+def _default_body_log_line() -> str:
+    """Shipped world when ``bom_build`` is blank. Catalog radius is not applied."""
+    catalog = None
+    try:
+        from src.hardware_profile import get_active_profile
+
+        catalog = (get_active_profile().get("geometry") or {}).get("wheel_radius_m")
+    except Exception:
+        catalog = None
+    catalog_txt = "na" if catalog is None else f"{float(catalog):g}"
+    return (
+        f"BOM BODY build=default mass_kg={BODY_MASS_KG:g} "
+        f"catalog_wheel_radius_m={catalog_txt} "
+        f"contact_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
+        f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
+        f"(no BoM build selected; contact cylinder stays {DRAWN_WHEEL_RADIUS_M:g} m; "
+        f"catalog diameter is not applied to the tire)"
     )
 
 

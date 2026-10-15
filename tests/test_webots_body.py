@@ -204,4 +204,9 @@ def test_bom_body_log_line_names_contact_and_catalog_radius():
     assert "mass_kg=9.812" in heavy
     assert "catalog_wheel_radius_m=0.1" in heavy
     assert "contact_radius_m=0.08" in heavy
-    assert format_bom_body_log_line("") is None
+    default = format_bom_body_log_line("")
+    assert default is not None
+    assert default.startswith("BOM BODY build=default ")
+    assert "mass_kg=3.2" in default
+    assert "contact_radius_m=0.08" in default
+    assert "no BoM build selected" in default

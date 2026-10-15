@@ -36,6 +36,7 @@ env/
 logs/*.db
 logs/*.log
 logs/speed_trace_*.csv
+logs/mission_summary_*.json
 archives/
 webots/controllers/**/logs/
 webots/worlds/*.jpg

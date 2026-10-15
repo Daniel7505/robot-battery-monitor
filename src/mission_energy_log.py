@@ -15,7 +15,10 @@ The dashboard logger writes three lines, in the usual
   line). Model vs measured, SoC start/end, turns. When samples carry
   ``steer_source``, the same close also prints ``STEER_SOURCE``:
   metres and time on camera, held (odometry of a rejected fit), and
-  track (map distance during a committed turn).
+  track (map distance during a committed turn). The controller also
+  writes these lines, plus ``BOM BODY`` and ``MISSION_ENERGY``, to
+  ``logs/mission_summary_<ts>.json`` (repo or ``RBM_LOG_DIR``). The
+  webots-bin console cannot be redirected on Windows.
 
 Measured values come only from telemetry samples. A subsystem that was
 not metered is logged as ``na``, not as zero. A BoM build does meter

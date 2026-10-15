@@ -248,13 +248,21 @@ class DigitalTwinBridge:
                     body_line = format_bom_body_log_line()
                     if body_line:
                         logger.info(body_line)
+                        from src.mission_summary_file import append_mission_lines
+
+                        append_mission_lines([body_line], source="dashboard")
                 except Exception:
                     pass
             for key in LOCO_PASSTHROUGH_KEYS:
                 if key in loc:
                     sample[key] = loc.get(key)
-            for line in self._energy_log.observe(sample):
+            lines = list(self._energy_log.observe(sample))
+            for line in lines:
                 logger.info(line)
+            if lines:
+                from src.mission_summary_file import append_mission_lines
+
+                append_mission_lines(lines, source="dashboard")
         except Exception as exc:
             logger.warning(f"mission energy log failed: {exc}")
 

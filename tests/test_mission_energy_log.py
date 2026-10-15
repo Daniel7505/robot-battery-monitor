@@ -1208,3 +1208,158 @@ def test_same_run_id_does_not_reset_the_segment_index():
     )
     seg = _fields(next(line for line in second if line.startswith("SEGMENT_ENERGY")))
     assert seg["seg_idx"] == "1"
+
+
+def test_blank_bom_stamps_measured_from_the_yaml_motor():
+    """Shaft |τ|·|ω| does not need a catalog build. Legs are left alone."""
+    from src.hardware_profile import active_bom_build, get_active_profile
+    from src.twin.webots_power import (
+        build_webots_telemetry,
+        measured_drive_split,
+        restamp_active_bom,
+    )
+
+    old = _use_bom(None)
+    try:
+        assert active_bom_build() is None
+        v = 0.16
+        omega = v / 0.08
+        tau = 0.2
+        joints = [
+            {"name": "left_wheel", "velocity": omega, "torque": 0.4, "torque_feedback_nm": tau},
+            {"name": "right_wheel", "velocity": omega, "torque": 0.4, "torque_feedback_nm": tau},
+        ]
+        prof = get_active_profile()
+        payload = build_webots_telemetry(
+            joints=joints, gait="drive", phase="teleop", speed_m_s=v, profile=prof
+        )
+        legs = payload["channel_draws"]["Legs"]
+        stamped = restamp_active_bom(payload)
+        split = measured_drive_split(joints, v, prof)
+        assert split is not None and split["elec_w"] is not None
+        assert split["shaft_w"] == pytest.approx(2 * tau * omega)
+        assert stamped["channel_draws"]["Legs"] == legs
+        assert stamped["locomotion"]["measured_drive_w"] == pytest.approx(split["shaft_w"])
+        assert stamped["locomotion"]["measured_drive_elec_w"] == pytest.approx(split["elec_w"])
+        assert split["elec_w"] > split["shaft_w"]
+        quiet = build_webots_telemetry(
+            joints=[
+                {"name": "left_wheel", "velocity": omega, "torque": 0.4},
+                {"name": "right_wheel", "velocity": omega, "torque": 0.4},
+            ],
+            gait="drive",
+            phase="teleop",
+            speed_m_s=v,
+            profile=prof,
+        )
+        missing = restamp_active_bom(quiet)
+        assert missing["locomotion"]["measured_drive_w"] is None
+        assert missing["locomotion"]["measured_drive_elec_w"] is None
+        assert missing["channel_draws"]["Legs"] == quiet["channel_draws"]["Legs"]
+    finally:
+        _restore_bom(old)
+
+
+def test_summary_file_keeps_body_summary_and_measured_without_a_bom_build(tmp_path):
+    """The three lines land in a file. Measured Wh is the hinge integral."""
+    from src.mission_summary_file import (
+        append_mission_lines,
+        observe_controller_payload,
+        reset_mission_summary_file,
+    )
+    from src.webots_body import format_bom_body_log_line
+
+    old = _use_bom(None)
+    reset_mission_summary_file()
+    try:
+        body = format_bom_body_log_line()
+        assert body is not None and body.startswith("BOM BODY build=default ")
+        assert "contact_radius_m=0.08" in body
+        append_mission_lines(
+            [body],
+            source="controller",
+            directory=str(tmp_path),
+            mirror_dashboard_log=True,
+        )
+        log = MissionEnergyLog()
+        loco = {
+            "gait": "drive",
+            "speed_m_s": 0.4,
+            "energy_sim_s": 0.0,
+            "energy_wh_shaft": 0.0,
+            "energy_wh_elec": 0.0,
+            "energy_wh_idle": 0.0,
+            "energy_wh_pack": 0.0,
+            "steer_source": "camera",
+        }
+        base = {
+            "source": "webots",
+            "robot": {"name": "ButlerBot", "main_battery_pct": 99.0, "battery_capacity_wh": 480},
+            "channel_draws": {"Compute": 10.0, "Legs": 3.0, "Arms": 0.0, "Torso": 0.0},
+            "pose": {"x_m": 0.0, "y_m": 0.0, "heading_rad": 0.0},
+            "locomotion": loco,
+            "sensors": {},
+            "timestamp": _T0.isoformat(),
+        }
+        observe_controller_payload(log, base, directory=str(tmp_path))
+        done_payload = {
+            **base,
+            "timestamp": (_T0 + timedelta(seconds=20)).isoformat(),
+            "pose": {"x_m": 8.0, "y_m": 0.2, "heading_rad": 0.1},
+            "sensors": {"mission_event": "complete"},
+            "locomotion": {
+                **loco,
+                "energy_sim_s": 20.0,
+                "energy_wh_shaft": 0.05,
+                "energy_wh_elec": 0.20,
+                "energy_wh_idle": 0.06,
+                "energy_wh_pack": 0.26,
+                "steer_source": "camera",
+                "width_err_m": 0.011,
+                "center_err_m": -0.006,
+                "ct_max_m": 0.02,
+            },
+        }
+        lines, written = observe_controller_payload(log, done_payload, directory=str(tmp_path))
+        summary = next(line for line in lines if line.startswith("MISSION_SUMMARY"))
+        energy = next(line for line in lines if line.startswith("MISSION_ENERGY"))
+        assert "steer_frac_camera=" in summary
+        assert "ct_max_m=" in summary
+        assert "width_err_rms_m=" in summary
+        assert "center_err_rms_m=" in summary
+        fields = _fields(summary)
+        assert fields["wh_measured"] != "na"
+        assert float(fields["wh_measured"]) == pytest.approx(0.26, abs=0.001)
+        # No BoM build: the summary model column is blank. Measured is the hinge integral.
+        assert fields["wh_model"] == ""
+        assert fields["build"] == "default"
+        energy_fields = _fields(energy)
+        assert energy_fields["build"] == "default"
+        assert energy_fields["wh_measured"] not in ("", "na")
+        assert float(energy_fields["wh_measured"]) == pytest.approx(0.26, abs=0.02)
+        assert energy_fields["wh_model"] not in ("", "na")
+        text = Path(written).read_text(encoding="utf-8")
+        assert "BOM BODY build=default" in text
+        assert "MISSION_SUMMARY" in text
+        assert "MISSION_ENERGY" in text
+        assert "steer_frac_camera=" in text
+        assert "width_err_rms_m=" in text
+        logged = next(tmp_path.glob("robot_monitor_*.log")).read_text(encoding="utf-8")
+        assert "BOM BODY build=default" in logged
+        assert "MISSION_SUMMARY" in logged
+        assert "wh_measured=" in logged
+    finally:
+        reset_mission_summary_file()
+        _restore_bom(old)
+
+
+def test_controller_writes_the_summary_file_and_meters_a_blank_build():
+    controller = Path(
+        "webots/controllers/butlerbot_controller/butlerbot_controller.py"
+    ).read_text(encoding="utf-8")
+    assert "observe_controller_payload" in controller
+    assert "MISSION_SUMMARY written" in controller
+    assert "append_mission_lines" in controller
+    assert "if pack_meter is not None and _uses_bom_pack():" not in controller
+    assert "loco.update(pack_meter.snapshot())" in controller
+

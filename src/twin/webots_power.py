@@ -957,20 +957,24 @@ def restamp_active_bom(payload: dict) -> dict:
     The dashboard and the controller do not share a working directory.
     Webots used to miss ``config/config.yaml``, post the YAML profile
     (arms and torso watts, ``sensors=na``, ``build=default``), while the
-    dashboard log said ``BOM build=light``.     With a build selected, joint samples are recomputed on the BoM line
+    dashboard log said ``BOM build=light``. With a build selected, joint samples are recomputed on the BoM line
     even if the controller already stamped that build. That rebuild is
     the predicted Legs bill. ``measured_drive_w`` is shaft |τ|·|ω| on
     the 0.08 m hinge. ``measured_drive_elec_w`` is that same (τ, ω)
     through the published motor line. Missing feedback is None on both,
     and the rolling line is not written in their place.
+
+    A blank ``bom_build`` does not rebuild Legs. It still stamps those
+    two measured fields from the YAML profile's motor line (Pololu 4753
+    on ``butlerbot_wheeled``). Shaft power does not need a catalog build.
     """
-    from src.hardware_profile import active_bom_build
+    from src.hardware_profile import active_bom_build, get_active_profile
 
     if not isinstance(payload, dict):
         return payload
     build = active_bom_build()
     if not build:
-        return payload
+        return _stamp_measured_drive(payload, get_active_profile())
     loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
     hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
     # Always recompute when joints are present. Channel Legs stay on the
@@ -1057,3 +1061,33 @@ def restamp_active_bom(payload: dict) -> dict:
         stamped_joints.append(copied)
     rebuilt["joints"] = stamped_joints
     return rebuilt
+
+
+def _stamp_measured_drive(payload: dict, profile: dict | None) -> dict:
+    """Attach hinge shaft and electrical watts without rebuilding channel draws.
+
+    Used when no BoM build is selected. Legs stay whatever the controller
+    posted. Missing torque feedback stores None, not rolling resistance.
+    """
+    joints = [j for j in (payload.get("joints") or []) if isinstance(j, dict)]
+    if not joints:
+        return payload
+    loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
+    speed = loc.get("speed_m_s")
+    if speed is None:
+        speed = payload.get("speed_m_s") or 0.0
+    try:
+        speed_f = float(speed)
+    except (TypeError, ValueError):
+        speed_f = 0.0
+    split = measured_drive_split(joints, speed_f, profile)
+    measured = None if split is None else split["shaft_w"]
+    measured_elec = None if split is None else split["elec_w"]
+    out = dict(payload)
+    loc_out = dict(loc)
+    loc_out["measured_drive_w"] = measured
+    loc_out["measured_drive_elec_w"] = measured_elec
+    out["locomotion"] = loc_out
+    out["measured_drive_w"] = measured
+    out["measured_drive_elec_w"] = measured_elec
+    return out

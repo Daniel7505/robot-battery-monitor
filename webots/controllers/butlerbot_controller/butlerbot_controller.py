@@ -685,6 +685,12 @@ def _sync_bom_body(robot: Robot) -> bool:
         return False
     physics = bom_body_physics()
     if physics is None:
+        # Blank bom_build still names the shipped 3.2 kg / 0.08 m body.
+        # print() stays in the webots-bin console, which Windows cannot redirect.
+        line = format_bom_body_log_line()
+        if line:
+            print(line)
+            _record_mission_lines([line])
         return False
     try:
         loaded = str(robot.getWorldPath() or "")
@@ -707,6 +713,7 @@ def _sync_bom_body(robot: Robot) -> bool:
             f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
             f"-> {os.path.basename(target)} (reloading; contact stays {physics.contact_radius_m:g} m)"
         )
+        _record_mission_lines([format_bom_body_log_line(physics.build) or ""])
         if not hasattr(robot, "worldLoad"):
             print(f"BOM BODY open this world and restart: {target}")
             return False
@@ -720,11 +727,24 @@ def _sync_bom_body(robot: Robot) -> bool:
     bind_drive_radius(physics.contact_radius_m)
     global WHEEL_RADIUS_M
     WHEEL_RADIUS_M = physics.contact_radius_m
-    print(format_bom_body_log_line(physics.build) or (
+    body_line = format_bom_body_log_line(physics.build) or (
         f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
         f"contact_radius_m={physics.contact_radius_m:g}"
-    ))
+    )
+    print(body_line)
+    _record_mission_lines([body_line])
     return False
+
+
+def _record_mission_lines(lines: list[str]) -> str | None:
+    """Append lines to logs/mission_summary_<ts>.json and the repo dashboard log."""
+    try:
+        from src.mission_summary_file import append_mission_lines
+
+        return append_mission_lines(lines, source="controller", mirror_dashboard_log=True)
+    except Exception as exc:
+        print(f"MISSION log file skipped ({type(exc).__name__}: {exc})")
+        return None
 
 
 def _run_loop(robot: Robot, opts: dict) -> None:
@@ -752,12 +772,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     # restart changes this, and the energy log summarizes the old mission.
     controller_run_id = f"{_RUN_ID}-{os.getpid()}"
     pack_meter = None
+    controller_energy_log = None
     try:
         from src.twin_energy import SimPackMeter
 
         pack_meter = SimPackMeter()
     except Exception as exc:
         print(f"Pack energy meter failed ({type(exc).__name__}: {exc})")
+    try:
+        from src.mission_energy_log import MissionEnergyLog
+
+        controller_energy_log = MissionEnergyLog()
+    except Exception as exc:
+        print(f"Mission energy log failed ({type(exc).__name__}: {exc})")
     thermal_c = 22.0
     tick = 0
     publish_fail_streak = 0
@@ -1691,7 +1718,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
             cap_wh = 0.0
-            if _uses_bom_pack() and pack_meter is not None:
+            pack_step_wh = None
+            if pack_meter is not None:
                 # Pack draw is measured electrical drive plus the non-drive
                 # channels. Legs in the preview are the rolling prediction;
                 # substituting that for hinge torque made wh_measured_soc
@@ -1702,6 +1730,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 # seconds blocked in HTTP used to bill that many seconds of
                 # sim watts, and a hole over 15 s was dropped by the log
                 # (run #11, wh_measured 6.381 vs wh_measured_soc 7.224).
+                # A blank bom_build still integrates. Shaft |τ|·|ω| uses the
+                # YAML motor line. Only the battery percent stays on the old
+                # joint-watt drain unless a BoM pack is selected.
                 try:
                     from src.twin.webots_power import measured_drive_split
 
@@ -1723,16 +1754,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         for name, watts in channels.items()
                         if name != "Legs" and watts is not None
                     )
-                    pack_step_wh = pack_meter.step(
+                    pack_meter.step(
                         dt, shaft_w=shaft_w, elec_w=elec_w, idle_w=idle_w
                     )
-                    total_draw = float(pack_meter.last_pack_w)
-                    cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
-                    drain_dt = dt
+                    if _uses_bom_pack():
+                        pack_step_wh = pack_meter.last_step_wh
+                        total_draw = float(pack_meter.last_pack_w)
+                        cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
+                        drain_dt = dt
                 except Exception:
-                    cap_wh = 0.0
-                    drain_dt = dt
-                    pack_step_wh = None
+                    if _uses_bom_pack():
+                        cap_wh = 0.0
+                        drain_dt = dt
+                        pack_step_wh = None
             if pack_step_wh is not None:
                 if cap_wh <= 0:
                     cap_wh = float(
@@ -2116,7 +2150,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 sensors_out = payload.get("sensors")
                 if isinstance(sensors_out, dict):
                     sensors_out["controller_run_id"] = controller_run_id
-                if pack_meter is not None and _uses_bom_pack():
+                if pack_meter is not None:
                     loco.update(pack_meter.snapshot())
                 if lane_eyes.get("steer_source"):
                     loco["steer_source"] = lane_eyes.get("steer_source")
@@ -2130,6 +2164,17 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     loco["steer_split"] = speed_trace.steer_text
                     if isinstance(sensors_out, dict):
                         sensors_out["steer_split"] = speed_trace.steer_text
+                if controller_energy_log is not None:
+                    try:
+                        from src.mission_summary_file import observe_controller_payload
+
+                        _sum_lines, _sum_path = observe_controller_payload(
+                            controller_energy_log, payload
+                        )
+                        if any(line.startswith("MISSION_SUMMARY") for line in _sum_lines):
+                            print(f"MISSION_SUMMARY written → {_sum_path}")
+                    except Exception as exc:
+                        print(f"MISSION_SUMMARY file skipped ({type(exc).__name__}: {exc})")
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0

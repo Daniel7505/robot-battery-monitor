@@ -840,6 +840,13 @@ class MissionEnergyLog:
         )
 
     def _mission_energy_line(self) -> str:
+        """``MISSION_ENERGY`` err_pct uses total measured over total model.
+
+        ``MISSION_SUMMARY`` err_pct (``_err_pct``) is drive electrical over
+        model drive only, so the two percentages on one lap are different
+        on purpose: idle sits in the energy line and not in the summary
+        denominator.
+        """
         from src.twin_energy import format_mission_energy_line
 
         measured = None if not self._mission_elec_known else (

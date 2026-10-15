@@ -29,12 +29,12 @@ TEN_FT_M = 3.048
 GRAVITY_M_S2 = 9.81
 DEFAULT_CRR = 0.015
 DEFAULT_DRIVER_EFF = 0.92
-# Drawn wheel mesh, and the contact radius, in every shipped butlerbot*.wbt.
-# This is not a fit to a logged run. A selected bom_build does not resize
-# that mesh. It writes a sibling world whose contact cylinder uses the BoM
-# radius (src/webots_body.py) and points the controller's m/s conversion at
-# that radius. This constant stays the unpatched hinge, including the
-# viscous bill below. That bill is not refit when the contact radius changes.
+# Drawn mesh and contact cylinder in every shipped butlerbot*.wbt, and the
+# radius the controller's v = ω·r uses. A selected bom_build changes body
+# mass only (src/webots_body.py). The catalog wheel diameter is not written
+# onto the contact cylinder: hinge-damper shaft energy scales as 1/r², and
+# a 0.04 m / 0.10 m tire made light and heavy disagree with this bill.
+# This constant is that bill. It is not refit per build.
 SIM_WHEEL_RADIUS_M = 0.08
 SIM_HINGE_DAMPING_NM_S_RAD = 0.15
 # butlerbot_warehouse.wbt WorldInfo contactProperties, drive_wheel vs

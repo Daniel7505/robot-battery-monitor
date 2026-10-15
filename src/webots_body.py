@@ -1,9 +1,9 @@
-"""Put the selected BoM build's mass and wheel radius on the Webots robot.
+"""Put the selected BoM build's mass on the Webots robot.
 
 The shipped ``butlerbot*.wbt`` files keep a 3.2 kg body and a 0.08 m drive
-wheel. That 0.08 m is the drawn mesh (the ``Shape`` cylinder). It is also
-the contact cylinder in those files, which is why a light lap and a heavy
-lap measured the same shaft energy: the 3D body never changed.
+wheel. That 0.08 m is both the drawn mesh and the contact cylinder. The
+controller, odometry (``v = ω · r``), and the calibrated viscous energy bill
+all assume that same 0.08 m.
 
 When ``config.yaml`` sets ``bom_build`` to ``light``, ``heavy``, or
 ``budget``:
@@ -12,19 +12,22 @@ When ``config.yaml`` sets ``bom_build`` to ``light``, ``heavy``, or
   ``config/bom/bom.json`` (via the same profile the twin already loads).
 * That solid's inertia diagonal scales by ``mass / 3.2`` from the shipped
   diagonal. The shape of the body box does not change.
-* Each drive wheel's contact cylinder (``boundingObject``) uses the BoM
-  wheel radius, ``diameter_mm / 2000``. The hinge anchor and the wheel
-  solid's height move with it so the tire still meets the floor. Wheel
-  inertia scales by ``(radius / 0.08)²``. The wheel solid's mass stays
-  0.085 kg: the BoM listing is already inside ``mass_kg_known``, and the
+* The contact cylinder stays 0.08 m on purpose. A warehouse check with the
+  catalog radius on the contact cylinder (light 0.04 m, heavy 0.10 m) made
+  shaft energy follow the hinge damper, which scales as ``1/r²``: the light
+  lap's shaft rose from ~0.866 Wh to 3.096 Wh, and the heavy lap used *less*
+  shaft energy per metre than the light one. The viscous model still bills
+  0.08 m, so the comparison error left the ~5% band. Catalog diameter stays
+  on the profile for motor math; it is not written onto the tire.
+* Wheel solid mass stays 0.085 kg and wheel inertia stays the shipped
+  diagonal. The listing is already inside ``mass_kg_known``, and the
   light/budget pages do not say whether ``mass_g`` is per wheel or per pair.
-* The drawn ``Shape`` cylinder stays 0.08 m on purpose. Cameras, lane
-  paint, and the rest of the world are not resized.
+* The drawn ``Shape`` cylinder stays 0.08 m. Cameras, lane paint, and the
+  rest of the world are not resized.
 
 Unset ``bom_build`` leaves the world text untouched. A selected build is
 written to a sibling ``<world>.bom-<build>.wbt`` (gitignored). The shipped
-file stays the 0.08 m baseline, so clearing ``bom_build`` and relaunching
-puts the old body back.
+file stays the 3.2 kg / 0.08 m baseline.
 """
 
 from __future__ import annotations
@@ -41,12 +44,6 @@ WHEEL_INERTIA_DIAG = (1.4e-4, 2.7e-4, 1.4e-4)
 WHEEL_SOLID_MASS_KG = 0.085
 
 _BODY_PHYSICS = "\n  physics Physics {"
-_JOINTS = ("LEFT_WHEEL_JOINT", "RIGHT_WHEEL_JOINT")
-_WHEEL_NOTE = (
-    "Contact cylinder follows the BoM radius. "
-    "The Shape radius above stays 0.08 m on purpose "
-    "(drawn mesh is not the physics radius)."
-)
 _INERTIA_LINE = re.compile(
     r"(inertiaMatrix \[\n\s+)([0-9.eE+-]+) ([0-9.eE+-]+) ([0-9.eE+-]+)"
 )
@@ -54,18 +51,23 @@ _MASS_LINE = re.compile(r"(    mass )([0-9.eE+-]+)")
 _COMMENT_BEFORE_MASS = re.compile(r"    # [^\n]*\n(?=    mass )")
 _RADIUS_LINE = re.compile(r"(radius\s+)([0-9.eE+-]+)")
 _ANCHOR_Z = re.compile(r"(anchor 0 -?0\.17 )([0-9.eE+-]+)")
-_TRANSLATION_Z = re.compile(r"(translation 0 -?0\.17 )([0-9.eE+-]+)")
 _TRANSLATION_Y = re.compile(r"translation 0 (-?[0-9.eE+-]+) ([0-9.eE+-]+)")
 _BOM_SUFFIX = re.compile(r"^(?P<stem>.+)\.bom-[a-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
 class BomBodyPhysics:
-    """Mass and contact radius to write onto the robot. Drawn radius stays 0.08 m."""
+    """Mass to write onto the robot. Contact radius stays 0.08 m.
+
+    ``wheel_radius_m`` is the catalog radius (``diameter_mm / 2000``). It is
+    logged and used by motor math. ``contact_radius_m`` is what the physics
+    cylinder, the controller, and the viscous bill share.
+    """
 
     build: str
     mass_kg: float
     wheel_radius_m: float
+    contact_radius_m: float
     drawn_radius_m: float
     body_inertia: tuple[float, float, float]
     wheel_inertia: tuple[float, float, float]
@@ -118,14 +120,14 @@ def bom_body_physics(build_id: str | None = None) -> BomBodyPhysics | None:
     if mass_f <= 0 or radius_f <= 0:
         return None
     mass_scale = mass_f / BODY_MASS_KG
-    radius_scale = (radius_f / DRAWN_WHEEL_RADIUS_M) ** 2
     return BomBodyPhysics(
         build=str(profile.get("bom_build") or build_id),
         mass_kg=mass_f,
         wheel_radius_m=radius_f,
+        contact_radius_m=DRAWN_WHEEL_RADIUS_M,
         drawn_radius_m=DRAWN_WHEEL_RADIUS_M,
         body_inertia=tuple(v * mass_scale for v in BODY_INERTIA_DIAG),
-        wheel_inertia=tuple(v * radius_scale for v in WHEEL_INERTIA_DIAG),
+        wheel_inertia=WHEEL_INERTIA_DIAG,
     )
 
 
@@ -142,11 +144,8 @@ def apply_active_bom_body(text: str) -> str:
 
 
 def apply_bom_body_vrml(text: str, physics: BomBodyPhysics) -> str:
-    """Set body mass, body inertia, and both drive wheels' contact radius."""
-    text = _patch_body_solid(text, physics)
-    for name in _JOINTS:
-        text = _patch_wheel_joint(text, name, physics)
-    return text
+    """Set body mass and body inertia. The contact cylinder stays 0.08 m."""
+    return _patch_body_solid(text, physics)
 
 
 def read_robot_body(text: str) -> RobotBody:
@@ -168,7 +167,7 @@ def read_robot_body(text: str) -> RobotBody:
 
 
 def body_matches(text: str, physics: BomBodyPhysics, tol: float = 1e-6) -> bool:
-    """True when mass, inertia, and both contact wheels already match ``physics``."""
+    """True when mass and inertia match and both contact wheels are still 0.08 m."""
     try:
         body = read_robot_body(text)
     except ValueError:
@@ -182,11 +181,11 @@ def body_matches(text: str, physics: BomBodyPhysics, tol: float = 1e-6) -> bool:
     if any(not close(a, b) for a, b in zip(body.inertia, physics.body_inertia)):
         return False
     for wheel in (body.left, body.right):
-        if not close(wheel.physics_radius_m, physics.wheel_radius_m):
+        if not close(wheel.physics_radius_m, physics.contact_radius_m):
             return False
-        if not close(wheel.anchor_z_m, physics.wheel_radius_m):
+        if not close(wheel.anchor_z_m, physics.contact_radius_m):
             return False
-        if not close(wheel.translation_z_m, physics.wheel_radius_m):
+        if not close(wheel.translation_z_m, physics.contact_radius_m):
             return False
         if not close(wheel.drawn_radius_m, physics.drawn_radius_m):
             return False
@@ -221,10 +220,10 @@ def plan_bom_world(world_path: str | Path) -> WorldPlan:
     """Decide which world file to run.
 
     No ``bom_build``: the given path, no write. A file that already has this
-    build's mass and contact radius: that path, no reload. Otherwise write
-    ``<name>.bom-<build>.wbt`` beside the shipped world (the shipped file
-    is not modified) and ask for a reload so a running controller picks up
-    the contact cylinder.
+    build's mass (and the 0.08 m contact wheel): that path, no reload.
+    Otherwise write ``<name>.bom-<build>.wbt`` beside the shipped world (the
+    shipped file is not modified) and ask for a reload so a running
+    controller picks up the new mass. The contact cylinder is not resized.
     """
     path = Path(world_path)
     physics = bom_body_physics()
@@ -247,12 +246,12 @@ def prepare_bom_world(world_path: str | Path) -> str:
 
 
 def install_command_radius(radius_m: float) -> None:
-    """Point m/s ↔ rad/s conversions at the contact radius.
+    """Point m/s ↔ rad/s conversions at ``radius_m``.
 
-    The drawn mesh stays 0.08 m. Lane geometry does not move. This only
-    changes the wheel-rate conversion for the current process, so a body
-    speed command still matches ``v = ω · r`` after the contact cylinder
-    changes. Callers that want the shipped 0.08 m pass that radius back.
+    The BoM body path passes ``contact_radius_m`` (0.08 m), the same radius
+    as the contact cylinder and the viscous bill. Passing the catalog radius
+    (0.04 m / 0.10 m) makes ground speed and shaft power disagree with the
+    model. Lane geometry does not move.
     """
     import sys
 
@@ -276,8 +275,8 @@ def _patch_body_solid(text: str, physics: BomBodyPhysics) -> str:
     comment = (
         f"    # BoM {physics.build}: body mass is mass_kg_known {_fmt(physics.mass_kg)} kg "
         f"(shipped placeholder was {_fmt(BODY_MASS_KG)} kg). "
-        f"Drawn wheel mesh stays {_fmt(DRAWN_WHEEL_RADIUS_M)} m; "
-        f"contact cylinder is {_fmt(physics.wheel_radius_m)} m. "
+        f"Catalog wheel {_fmt(physics.wheel_radius_m)} m; contact cylinder stays "
+        f"{_fmt(physics.contact_radius_m)} m so odometry and the viscous bill match. "
         f"Body inertia scales with mass/{_fmt(BODY_MASS_KG)}. "
         f"Wheel solid mass stays {_fmt(WHEEL_SOLID_MASS_KG)} kg.\n"
     )
@@ -288,37 +287,6 @@ def _patch_body_solid(text: str, physics: BomBodyPhysics) -> str:
     block = _MASS_LINE.sub(lambda m: m.group(1) + _fmt(physics.mass_kg), block, count=1)
     block = _set_inertia(block, physics.body_inertia)
     return text[:start] + block + text[end:]
-
-
-def _patch_wheel_joint(text: str, name: str, physics: BomBodyPhysics) -> str:
-    start, end = _joint_span(text, name)
-    if start < 0:
-        return text
-    block = text[start:end]
-    radius = _fmt(physics.wheel_radius_m)
-    block = _ANCHOR_Z.sub(lambda m: m.group(1) + radius, block, count=1)
-    block = _TRANSLATION_Z.sub(lambda m: m.group(1) + radius, block, count=1)
-    marker = "boundingObject"
-    idx = block.find(marker)
-    if idx >= 0:
-        head, tail = block[:idx], block[idx:]
-        tail = _RADIUS_LINE.sub(lambda m: m.group(1) + radius, tail, count=1)
-        block = head + tail
-    block = _insert_wheel_note(block)
-    block = _set_inertia(block, physics.wheel_inertia)
-    return text[:start] + block + text[end:]
-
-
-def _insert_wheel_note(block: str) -> str:
-    if "drawn mesh is not the physics radius" in block:
-        return block
-    idx = block.find("boundingObject")
-    if idx < 0:
-        return block
-    line_start = block.rfind("\n", 0, idx) + 1
-    indent = block[line_start:idx]
-    note = f"{indent}# {_WHEEL_NOTE}\n"
-    return block[:line_start] + note + block[line_start:]
 
 
 def _set_inertia(block: str, diag: tuple[float, float, float]) -> str:

@@ -548,6 +548,12 @@ def test_dans_finish_frame_is_rejected():
         LaneEstimate(valid=True, lookahead_m=1.5, confidence=0.38, n_left=0, n_right=218), tr.prior_near, 0.14)
     assert "short view" in tr.gate_reason(
         LaneEstimate(valid=True, lookahead_m=0.3, confidence=0.9, n_left=20, n_right=20), tr.prior_near, 0.14)
+    # A corner clip is allowed to be short: the paint ended on purpose.
+    assert tr.gate_reason(
+        LaneEstimate(valid=True, lookahead_m=0.2, confidence=0.9, n_left=20, n_right=20,
+                     offset_m=0.0, heading_rad=0.0),
+        tr.prior_near, 0.10, allow_short=True,
+    ) == ""
     # a normal next frame passes; bigger jumps pass when the robot drove farther
     ok = LaneEstimate(valid=True, offset_m=0.03, heading_rad=0.05, lookahead_m=1.8, confidence=0.9,
                       n_left=60, n_right=60)

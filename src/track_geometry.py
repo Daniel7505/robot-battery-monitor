@@ -369,6 +369,62 @@ class TrackGeometry:
         return self.project(x, y)["s_m"] >= 0.5 * self.length_m
 
 
+def distance_to_next_corner(
+    track,
+    x: float,
+    y: float,
+    yaw: float,
+    *,
+    max_lateral_m: float = 0.9,
+    max_heading_rad: float = math.radians(35.0),
+    min_turn_rad: float = math.radians(20.0),
+) -> float | None:
+    """Forward metres from (x, y) to the next sharp corner on the road under the pose.
+
+    None when the pose is off the road, the heading disagrees with the leg,
+    or no corner lies ahead. This is the axle-to-vertex distance the pivot
+    should use, not a camera measurement. ``track`` is a TrackGeometry or a
+    TrackNetwork.
+    """
+    if track is None or yaw is None:
+        return None
+    try:
+        xf, yf, yawf = float(x), float(y), float(yaw)
+        if hasattr(track, "roads"):
+            which = track.project(xf, yf)
+            geom = track.roads[int(which.get("road") or 0)]
+        else:
+            geom = track
+        pr = geom.project(xf, yf)
+    except Exception:
+        return None
+    if pr is None or float(pr.get("dist_m", 99.0)) > max_lateral_m:
+        return None
+    hd = float(pr["heading_rad"])
+    err = math.atan2(math.sin(hd - yawf), math.cos(hd - yawf))
+    if abs(err) > max_heading_rad:
+        return None
+    ux, uy = math.cos(yawf), math.sin(yawf)
+    pts = geom.spec.waypoints
+    best = None
+    for j in range(1, len(pts) - 1):
+        if abs(geom._phi[j]) < min_turn_rad:
+            continue
+        leg = geom._u[j - 1]
+        leg_h = math.atan2(leg[1], leg[0])
+        herr = math.atan2(math.sin(leg_h - yawf), math.cos(leg_h - yawf))
+        if abs(herr) > max_heading_rad:
+            continue
+        dx, dy = pts[j][0] - xf, pts[j][1] - yf
+        along = dx * ux + dy * uy
+        side = abs(-dx * uy + dy * ux)
+        if along < 0.03 or side > max_lateral_m + 0.4:
+            continue
+        if best is None or along < best:
+            best = along
+    return best
+
+
 class FinishReferee:
     """Controller-side referee: S default (x >= 16.5) or a track file's finish."""
 

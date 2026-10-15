@@ -662,12 +662,14 @@ def _harvest_nadir(cams: dict, nadir_fn, gps_xy, yaw: float) -> dict:
 
 
 def _sync_bom_body(robot: Robot) -> bool:
-    """Load BoM mass and contact-wheel radius. True means stop for a reload.
+    """Load BoM mass. True means stop for a reload.
 
-    The shipped world keeps the 0.08 m mesh. A selected ``bom_build`` writes
-    a sibling world (see ``src.webots_body``) and reloads it so the contact
-    cylinder is the BoM radius. The command radius then matches that
-    cylinder (``v = ω · r``). No build selected: this does nothing.
+    The shipped world keeps the 0.08 m wheel. A selected ``bom_build`` writes
+    a sibling world (see ``src.webots_body``) whose body mass and inertia
+    follow the BoM, then reloads it. The contact cylinder stays 0.08 m, and
+    ``v = ω · r`` stays on that radius, matching odometry and the viscous
+    energy bill. The catalog wheel diameter is only logged. No build
+    selected: this does nothing.
     """
     try:
         from src.webots_body import (
@@ -698,9 +700,10 @@ def _sync_bom_body(robot: Robot) -> bool:
     if plan.reload:
         print(
             f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
-            f"physics_wheel_radius_m={physics.wheel_radius_m:g} "
+            f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
+            f"contact_radius_m={physics.contact_radius_m:g} "
             f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
-            f"-> {os.path.basename(target)} (reloading so contact uses the BoM wheel)"
+            f"-> {os.path.basename(target)} (reloading; contact stays {physics.contact_radius_m:g} m)"
         )
         if not hasattr(robot, "worldLoad"):
             print(f"BOM BODY open this world and restart: {target}")
@@ -711,15 +714,17 @@ def _sync_bom_body(robot: Robot) -> bool:
             print(f"BOM BODY reload failed ({type(exc).__name__}: {exc}); drawn wheel stays")
             return False
         return True
-    install_command_radius(physics.wheel_radius_m)
-    bind_drive_radius(physics.wheel_radius_m)
+    install_command_radius(physics.contact_radius_m)
+    bind_drive_radius(physics.contact_radius_m)
     global WHEEL_RADIUS_M
-    WHEEL_RADIUS_M = physics.wheel_radius_m
+    WHEEL_RADIUS_M = physics.contact_radius_m
     print(
         f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
-        f"physics_wheel_radius_m={physics.wheel_radius_m:g} "
+        f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
+        f"contact_radius_m={physics.contact_radius_m:g} "
         f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
-        f"(Shape mesh stays {DRAWN_WHEEL_RADIUS_M:g} m; contact cylinder and v=ω·r use the BoM)"
+        f"(contact cylinder stays {physics.contact_radius_m:g} m; "
+        f"v=ω·r and the viscous bill use that, not the catalog diameter)"
     )
     return False
 
@@ -807,7 +812,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         guard_kw = {"guard_new_frame": False}
         print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
     finish_ref = _load_finish_referee(robot)
-    print(f"FINISH REFEREE {finish_ref.describe()} — GPS referee only, not used for steering")
+    print(f"FINISH REFEREE {finish_ref.describe()} — GPS finish line, not used to steer")
+    if rowfit_rt is not None and getattr(finish_ref, "track", None) is not None:
+        rowfit_rt.ctl.set_track(finish_ref.track)
+        print(
+            f"ROWFIT corners use track {finish_ref.name} for pivot distance "
+            "(a short camera view cannot start the turn early)"
+        )
     for _wmsg in world_check_warnings(robot, finish_ref):
         print("!" * 78)
         print(f"WARNING {_wmsg}")
@@ -1261,7 +1272,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     # Pretend-pick stop after obstacle apply (harvest), before wheel command
                     if getattr(rowfit_rt, "inventory", None) is not None:
                         rowfit_rt.inventory.update(gps_xy, prev_yaw, dt, ctl=rowfit_rt.ctl)
-                    lk = rowfit_rt.command(dt, yaw=prev_yaw if imu is not None else None)
+                    lk = rowfit_rt.command(
+                        dt,
+                        yaw=prev_yaw if imu is not None else None,
+                        pose=None if gps_xy is None else (float(gps_xy[0]), float(gps_xy[1])),
+                    )
                 else:
                     if guard_kw:
                         guard_kw["guard_new_frame"] = bool(harvest_now)

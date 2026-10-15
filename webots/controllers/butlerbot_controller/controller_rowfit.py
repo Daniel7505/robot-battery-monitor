@@ -359,15 +359,18 @@ class RowfitRuntime:
         self.frames += 1
         return est
 
-    def command(self, dt: float, yaw: float | None = None, *, log=print) -> dict:
+    def command(self, dt: float, yaw: float | None = None, *, pose=None, log=print) -> dict:
         """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
         sharp-corner pivot (without it a corner ends in the lost-lane brake).
-        Corner state changes are printed through ``log``."""
+        ``pose`` is ``(x, y)`` metres; with a track loaded it sets pivot
+        distance. Corner state changes are printed through ``log``."""
         new = self._has_pending
         est = self._pending if new else None
         self._has_pending = False
         self._pending = None
-        cmd = self.ctl.step(est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw)
+        cmd = self.ctl.step(
+            est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw, pose=pose
+        )
         if self.obstacles is not None:
             gate = self.obstacles.gate
             if gate.emergency and not cmd.get("brake"):
@@ -400,6 +403,8 @@ class RowfitRuntime:
             return f"PIVOT {side}"
         if c.state == "REACQUIRE":
             return f"REACQUIRE {c.reacq_ok}/3"
+        if c.state == "RECOVER":
+            return f"RECOVER {c.recover_m:.2f}m"
         if c.state == "JUNCTION_APPROACH" and c.junction is not None:
             return f"JCT {c.junction.kind} {c.jn_center_m or 0:.2f}m {c.junction.openings().replace(' ', '')}"
         if c.state == "GAP_CROSS":

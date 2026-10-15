@@ -1336,7 +1336,9 @@ class LaneTracker:
                 per_cam.append((cam, traced, cc))
         corner = self._update_corner(cues, float(dx_m))
         junction = self._update_junction(per_cam, float(dx_m))
+        clipped = False
         if junction is not None and not junction.kind.startswith(("corner", "opening")):
+            clipped = True
             lim = junction.near_m - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M
             if junction.kind in ("side_L", "side_R"):
                 left = junction.kind == "side_L"
@@ -1347,13 +1349,14 @@ class LaneTracker:
         if corner is not None:
             # The lane ends at the crossbar: fit only what is before it, so the
             # turning paint neither bends the fit nor trips the jump gate.
+            clipped = True
             pts = [p for p in pts if p.x < corner.clip_x_m]
             for c in corner.cues:
                 if c.role == "inner":  # the inner line bends away here: what is past it is the new leg
                     lim = c.x_m - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M
                     pts = [p for p in pts if not (p.x >= lim and (p.y > 0.0) == (c.line_y_m > 0.0))]
         self.corner = corner
-        est = self.fit_points_gated(pts, dx_m=float(dx_m))
+        est = self.fit_points_gated(pts, dx_m=float(dx_m), allow_short=clipped)
         est.corner = corner
         est.junction = junction
         est.view = self.view
@@ -1368,8 +1371,13 @@ class LaneTracker:
         self.last = est
         return est
 
-    def gate_reason(self, est: LaneEstimate, pred_near, dx_m: float) -> str:
-        """Why a fitted lane is physically implausible ("" = accept)."""
+    def gate_reason(self, est: LaneEstimate, pred_near, dx_m: float, allow_short: bool = False) -> str:
+        """Why a fitted lane is physically implausible ("" = accept).
+
+        ``allow_short`` is set when a corner or junction clip already cut the
+        fit at the crossbar. A lookahead under ``GATE_MIN_VIEW_M`` is then the
+        paint ending, not a lost lane, and must not reject the fit.
+        """
         if not est.valid:
             return ""
         if abs(est.heading_rad) > GATE_MAX_HEADING_RAD:
@@ -1384,7 +1392,11 @@ class LaneTracker:
                         f"{side} side vanished (L{est.n_left} R{est.n_right}, was "
                         f"L{last.n_left} R{last.n_right}) at conf {est.confidence:.2f}"
                     )
-        if pred_near is not None and est.lookahead_m < GATE_MIN_VIEW_M:
+        if (
+            not allow_short
+            and pred_near is not None
+            and est.lookahead_m < GATE_MIN_VIEW_M
+        ):
             return f"short view: lane seen only {est.lookahead_m:.2f} m ahead (< {GATE_MIN_VIEW_M:.2f})"
         if pred_near is not None:
             a0, psi, k = pred_near
@@ -1439,14 +1451,20 @@ class LaneTracker:
             rejected=rej,
         )
 
-    def fit_points_gated(self, pts: list[LinePoint], *, dx_m: float = 0.0) -> LaneEstimate:
+    def fit_points_gated(
+        self, pts: list[LinePoint], *, dx_m: float = 0.0, allow_short: bool = False
+    ) -> LaneEstimate:
         """:meth:`fit_points` + plausibility gate. A rejected fit does not touch
         the priors / lane width; it counts as a lost frame (priors dropped after
-        GATE_MAX_HELD_FRAMES in a row, as for a missing lane)."""
+        GATE_MAX_HELD_FRAMES in a row, as for a missing lane).
+
+        ``allow_short`` skips the short-view reject. The corner/junction clip
+        passes it so the lane ending at a crossbar is still a fit.
+        """
         pred_near, pred_far = self.prior_near, self.prior_far
         lane_w, lost = self.lane_w, self.frames_lost
         est = self.fit_points(pts)
-        reason = self.gate_reason(est, pred_near, dx_m)
+        reason = self.gate_reason(est, pred_near, dx_m, allow_short=allow_short)
         if not reason:
             if est.valid:
                 self._last_good = est

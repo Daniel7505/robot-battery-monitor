@@ -298,8 +298,8 @@ def measured_drive_w(
     τ is ``torque_feedback_nm`` only. The ``torque`` field is the load
     the electrical model used, and a BoM build stores 0 there, so it is
     not a measurement. ω is the wheel position-sensor rate. When that
-    rate is missing and the body is moving, ω = speed / R. R is the
-    drawn 0.08 m wheel until a BoM body loads, then the contact radius.
+    rate is missing and the body is moving, ω = speed / R. R stays the
+    0.08 m contact cylinder (a BoM build does not substitute the catalog diameter).
 
     Returns None when any drive wheel has no torque feedback. The energy
     log writes ``na`` in that case.
@@ -436,16 +436,16 @@ def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
             speed = None
         if speed is not None and not math.isfinite(speed):
             speed = None
-    # Encoder quiet while the body is moving. Unset bom_build uses the drawn
-    # 0.08 m wheel. After a BoM body is loaded, the command radius is the
-    # contact radius (src.webots_body.install_command_radius).
+    # Encoder quiet while the body is moving. Command radius stays the
+    # contact cylinder (0.08 m). A BoM build does not point this at the
+    # catalog diameter (src.webots_body.install_command_radius).
     if speed is not None and speed > 0.02 and (omega is None or omega < 1e-3):
         return speed / _command_wheel_radius_m()
     return omega
 
 
 def _command_wheel_radius_m() -> float:
-    """Hinge radius for a body-speed fallback. 0.08 m until a BoM build loads."""
+    """Hinge radius for a body-speed fallback. Stays 0.08 m with the contact cylinder."""
     try:
         from src.lane_keep import WHEEL_RADIUS_M as command_r
 

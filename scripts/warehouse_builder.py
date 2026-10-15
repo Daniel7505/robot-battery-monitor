@@ -706,12 +706,11 @@ def sourced_trolley_mass_kg() -> float | None:
 
 
 def apply_bom_build_to_robot(text: str) -> str:
-    """Set Robot mass and drive-wheel contact radius from ``bom_build``.
+    """Set Robot mass from ``bom_build``. The contact wheel stays 0.08 m.
 
     When ``bom_build`` is unset this returns ``text`` unchanged, so generated
     worlds stay byte-identical to today. The shipped ``.wbt`` files are not
-    rewritten by importing this module. The drawn wheel mesh stays 0.08 m;
-    the contact cylinder follows the BoM. See ``src/webots_body.py``.
+    rewritten by importing this module. See ``src/webots_body.py``.
     """
     try:
         from src.webots_body import apply_active_bom_body

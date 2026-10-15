@@ -479,6 +479,31 @@ class FinishReferee:
 TRACK_FILE_TAG = "# TRACK_FILE "
 
 
+STEER_TRACK_TAG = "# STEER_TRACK "
+_STEER_TRACK_OFF = {"off", "0", "no", "false"}
+
+
+def steer_track_enabled(world_path: str | None = None, env: dict | None = None) -> bool:
+    """Whether the loaded track may set pivot distance.
+
+    The finish referee still uses the track. This switch only stops
+    ``set_track`` on the lane controller. ``RBM_NO_TRACK=1`` wins. A world
+    line ``# STEER_TRACK off`` does the same, so a camera-proof course
+    cannot be driven from its waypoint file.
+    """
+    env = os.environ if env is None else env
+    raw = (env.get("RBM_NO_TRACK") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return False
+    if not world_path or not os.path.isfile(world_path):
+        return True
+    with open(world_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith(STEER_TRACK_TAG):
+                return line[len(STEER_TRACK_TAG):].strip().lower() not in _STEER_TRACK_OFF
+    return True
+
+
 def track_file_from_world(world_path: str | None) -> str | None:
     """The ``# TRACK_FILE tracks/x.json`` tag written by track_builder into a world."""
     if not world_path or not os.path.isfile(world_path):

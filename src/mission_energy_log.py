@@ -329,6 +329,7 @@ class MissionEnergyLog:
         self._elec_gaps: int | None = None
         self._steer_m = {key: 0.0 for key in _STEER_KEYS}
         self._steer_s = {key: 0.0 for key in _STEER_KEYS}
+        self._ct_max: float | None = None
 
     def _clear_segment(self) -> None:
         self._seg_idx = 0
@@ -369,6 +370,7 @@ class MissionEnergyLog:
             self._run_id = run_id
             self._remember_cumulative(sample)
             self._remember_steer(sample)
+            self._note_cross_track(sample)
             return lines
 
         wall_dt = (ts - self._last_ts).total_seconds() if self._last_ts else 0.0
@@ -381,7 +383,9 @@ class MissionEnergyLog:
             self._run_id = run_id
             self._remember_cumulative(sample)
             self._remember_steer(sample)
+            self._note_cross_track(sample)
             return lines
+        self._note_cross_track(sample)
         self._note_interval(wall_dt, sample, deltas)
         self._remember_steer(sample)
 
@@ -598,6 +602,20 @@ class MissionEnergyLog:
         self._steer_m[name] += max(0.0, float(step_m))
         self._steer_s[name] += max(0.0, float(dt))
 
+    def _note_cross_track(self, sample: dict) -> None:
+        """Largest |sideways error| this lap, from the referee centerline."""
+        vals = []
+        peak = _as_float(sample.get("ct_max_m"))
+        if peak is not None:
+            vals.append(abs(peak))
+        inst = _as_float(sample.get("cross_track_m"))
+        if inst is not None:
+            vals.append(abs(inst))
+        if not vals:
+            return
+        got = max(vals)
+        self._ct_max = got if self._ct_max is None else max(self._ct_max, got)
+
     def _steer_source_line(self) -> str | None:
         total_m = sum(self._steer_m.values())
         total_s = sum(self._steer_s.values())
@@ -620,6 +638,7 @@ class MissionEnergyLog:
             f"frac_camera_t={frac(self._steer_s['camera'], total_s)} "
             f"frac_held_t={frac(self._steer_s['held'], total_s)} "
             f"frac_track_t={frac(self._steer_s['track'], total_s)}"
+            + ("" if self._ct_max is None else f" ct_max_m={self._ct_max:.3f}")
         )
 
     def _note_interval(self, wall_dt: float, sample: dict, deltas: dict | None) -> None:
@@ -886,6 +905,8 @@ class MissionEnergyLog:
                 f" steer_frac_held={self._steer_m['held'] / steer_m:.3f}"
                 f" steer_frac_track={self._steer_m['track'] / steer_m:.3f}"
             )
+        if self._ct_max is not None:
+            steer += f" ct_max_m={self._ct_max:.3f}"
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "

@@ -6,9 +6,13 @@
 # to POST telemetry and GET teleop/throttle state.
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
-#   -World: butlerbot (default, the S), corner90, corner_mix, widen, plus, t_end,
+#   -World: butlerbot (default, the S), camera_s (camera-only S; track does not steer),
+#   corner90, corner_mix, widen, plus, t_end,
 #   gap45, warehouse, warehouse_obstacles, radar_motion, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
 #   the same default.
+# Camera proof (dashboard already running), from the repo root:
+#   set RBM_MISSION_LAPS=1
+#   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World camera_s
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90
 # RBM_TRACK is set from the world's "# TRACK_FILE" tag (a different RBM_TRACK
@@ -91,6 +95,10 @@ Write-Host "ButlerBot Webots Digital Twin" -ForegroundColor Cyan
 Write-Host "Dashboard: $DashboardUrl"
 Write-Host "World:     $WorldFile"
 Write-Host "Track:     $(if ($env:RBM_TRACK) { $env:RBM_TRACK } else { '(none: S default)' })"
+$SteerOff = Select-String -Path $WorldFile -Pattern '^# STEER_TRACK off\s*$' | Select-Object -First 1
+if ($SteerOff) {
+    Write-Host "Steer:     camera only (STEER_TRACK off). GPS scores the finish and cross-track. It does not command the wheels."
+}
 Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else { '(unset: straight if possible, else left)' })  RBM_MAX_BLIND_M=$(if ($env:RBM_MAX_BLIND_M) { $env:RBM_MAX_BLIND_M } else { '(4.0)' })"
 Write-Host "Obstacles: RBM_OBSTACLES=$(if ($env:RBM_OBSTACLES) { $env:RBM_OBSTACLES } else { '(unset: on only in worlds tagged # OBSTACLES on)' })  RBM_STEREO_BACKEND=$(if ($env:RBM_STEREO_BACKEND) { $env:RBM_STEREO_BACKEND } else { '(auto)' })  radar with obstacles when on"
 Write-Host "HUD paint: RBM_HUD=$(if ($env:RBM_HUD) { $env:RBM_HUD } else { '(unset: off — lane keeping still uses the nadir cameras)' })  A black magenta overlay is an unused stereo camera. Close it under Robot → Camera Devices."

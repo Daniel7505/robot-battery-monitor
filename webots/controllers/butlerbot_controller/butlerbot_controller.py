@@ -810,11 +810,25 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
     finish_ref = _load_finish_referee(robot)
     print(f"FINISH REFEREE {finish_ref.describe()} — GPS finish line, not used to steer")
-    if rowfit_rt is not None and getattr(finish_ref, "track", None) is not None:
+    try:
+        from src.track_geometry import steer_track_enabled
+
+        _loaded_world = str(robot.getWorldPath() or "")
+        _steer_track = steer_track_enabled(_loaded_world)
+    except Exception:
+        _steer_track = True
+    if rowfit_rt is not None and _steer_track and getattr(finish_ref, "track", None) is not None:
         rowfit_rt.ctl.set_track(finish_ref.track)
         print(
             f"ROWFIT corners use track {finish_ref.name} for pivot distance "
-            "(a short camera view cannot start the turn early)"
+            "(a short camera view cannot start the turn early). "
+            "The track does not set wheel curvature."
+        )
+    elif rowfit_rt is not None:
+        print(
+            "ROWFIT steer track off — wheels follow the nadir cameras. "
+            "GPS still scores the finish line and cross-track. "
+            "It is not given to the wheel command."
         )
     for _wmsg in world_check_warnings(robot, finish_ref):
         print("!" * 78)
@@ -823,6 +837,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     if lane_vision_log is not None:
         lane_vision_log.write_run_meta(robot, finish_ref, rowfit_rt)
     lane_keep_on = False
+    ct_peak_m = 0.0
+    ct_latest_m = None
     last_lane_sig = ""
     lane_eyes = _empty_lane_eyes()
     yaw_rate = 0.0
@@ -1031,6 +1047,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
             gps_xy = _gps_xy(gps)
+            if gps_xy is not None and hasattr(finish_ref, "cross_track"):
+                try:
+                    _ct_now = finish_ref.cross_track(float(gps_xy[0]), float(gps_xy[1]))
+                except Exception:
+                    _ct_now = None
+                if _ct_now is not None:
+                    ct_latest_m = float(_ct_now)
+                    ct_peak_m = max(ct_peak_m, abs(ct_latest_m))
             if not mission_capped and gps_xy is not None:
                 if mission_prev_xy is not None:
                     _step_m = math.hypot(
@@ -2034,6 +2058,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "steer_source": lane_eyes.get("steer_source"),
                         "steer_lateral": lane_eyes.get("steer_lateral"),
                         "fit_reject": lane_eyes.get("fit_reject"),
+                        "cross_track_m": None if ct_latest_m is None else round(ct_latest_m, 4),
+                        "ct_max_m": None if ct_latest_m is None else round(ct_peak_m, 4),
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -2074,6 +2100,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     loco["steer_source"] = lane_eyes.get("steer_source")
                     loco["steer_lateral"] = lane_eyes.get("steer_lateral")
                     loco["fit_reject"] = lane_eyes.get("fit_reject") or ""
+                if ct_latest_m is not None:
+                    loco["cross_track_m"] = round(ct_latest_m, 4)
+                    loco["ct_max_m"] = round(ct_peak_m, 4)
                 if speed_trace.steer_text:
                     loco["steer_split"] = speed_trace.steer_text
                     if isinstance(sensors_out, dict):

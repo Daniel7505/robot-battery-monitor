@@ -274,6 +274,8 @@ LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "steer_source",
     "steer_lateral",
     "fit_reject",
+    "cross_track_m",
+    "ct_max_m",
     "energy_elec_gaps",
 )
 

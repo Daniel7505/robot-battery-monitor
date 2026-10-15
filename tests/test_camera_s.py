@@ -353,8 +353,13 @@ def test_camera_steer_accumulates_for_the_whole_lap():
     assert float(split["dist_m"]) == pytest.approx(dist, abs=0.05)
 
 
-def test_width_and_center_errors_from_frames_between_posts():
-    """Posts are ~0.5 s. Camera frames in between still land on the summary."""
+def test_width_and_center_errors_from_frames_between_posts(tmp_path):
+    """Posts are ~0.5 s. Camera frames in between still land on the summary and the JSON file."""
+    import json
+
+    from src.mission_summary_file import append_mission_lines, reset_mission_summary_file
+
+    reset_mission_summary_file()
     log = MissionEnergyLog()
     log.observe(_sample(0.0, 0.0) | {"steer_source": "camera"})
     log.note_lane_frame({"lane_frame_n": 1, "width_err_m": 0.0114, "center_err_m": 0.0057})
@@ -388,6 +393,14 @@ def test_width_and_center_errors_from_frames_between_posts():
     assert "width_err_max_m=" in summary
     assert "center_err_rms_m=" in summary
     assert "center_err_max_m=" in summary
+    written = append_mission_lines(done, source="controller", directory=str(tmp_path))
+    payload = json.loads(Path(written).read_text(encoding="utf-8"))
+    joined = "\n".join(payload["lines"])
+    assert "width_err_rms_m=" in joined
+    assert "width_err_max_m=" in joined
+    assert "center_err_rms_m=" in joined
+    assert "center_err_max_m=" in joined
+    reset_mission_summary_file()
 
 
 def test_lap_summary_names_the_camera_fraction_and_the_cross_track_peak():

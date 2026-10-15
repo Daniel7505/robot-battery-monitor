@@ -213,6 +213,14 @@ class SimulationDriver:
         from src.hardware_profile import format_bom_log_line, log_profile_flags
 
         logger.info(format_bom_log_line())
+        try:
+            from src.webots_body import format_bom_body_log_line
+
+            body_line = format_bom_body_log_line()
+            if body_line:
+                logger.info(body_line)
+        except Exception as exc:
+            logger.warning(f"BOM BODY log skipped ({type(exc).__name__}: {exc})")
         log_profile_flags()
         self._log_mission_energy()
 

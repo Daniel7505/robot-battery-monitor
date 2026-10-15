@@ -224,6 +224,9 @@ def build_twin_control_status(bridge, hardware) -> dict:
         "nadir_r_ahead_px": sensors.get("nadir_r_ahead_px"),
         "error_source": sensors.get("error_source") or "nadir",
         "steer": sensors.get("steer"),
+        "steer_source": sensors.get("steer_source"),
+        "steer_lateral": sensors.get("steer_lateral"),
+        "fit_reject": sensors.get("fit_reject"),
         # Running mission totals (time / Wh / distance) from DigitalTwinBridge.
         "efficiency": twin_status.get("efficiency") or {},
     }

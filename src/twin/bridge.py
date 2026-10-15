@@ -237,6 +237,19 @@ class DigitalTwinBridge:
             steer = loc.get("steer_split") or sensors.get("steer_split")
             if steer:
                 sample["steer_split"] = steer
+            source = loc.get("steer_source") or sensors.get("steer_source")
+            if source:
+                sample["steer_source"] = source
+            if not getattr(self, "_bom_body_logged", False):
+                self._bom_body_logged = True
+                try:
+                    from src.webots_body import format_bom_body_log_line
+
+                    body_line = format_bom_body_log_line()
+                    if body_line:
+                        logger.info(body_line)
+                except Exception:
+                    pass
             for key in LOCO_PASSTHROUGH_KEYS:
                 if key in loc:
                     sample[key] = loc.get(key)

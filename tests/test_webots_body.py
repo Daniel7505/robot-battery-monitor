@@ -23,6 +23,7 @@ from src.webots_body import (
     apply_bom_body_vrml,
     body_matches,
     bom_body_physics,
+    format_bom_body_log_line,
     install_command_radius,
     plan_bom_world,
     read_robot_body,
@@ -190,3 +191,17 @@ def test_command_radius_stays_on_the_contact_wheel():
         )
     finally:
         lane_keep.WHEEL_RADIUS_M, rowfit.WHEEL_RADIUS_M, teleop.WHEEL_RADIUS_M = saved
+
+
+def test_bom_body_log_line_names_contact_and_catalog_radius():
+    light = format_bom_body_log_line("light")
+    heavy = format_bom_body_log_line("heavy")
+    assert light is not None and heavy is not None
+    assert light.startswith("BOM BODY build=light ")
+    assert "mass_kg=6.142" in light
+    assert "catalog_wheel_radius_m=0.04" in light
+    assert "contact_radius_m=0.08" in light
+    assert "mass_kg=9.812" in heavy
+    assert "catalog_wheel_radius_m=0.1" in heavy
+    assert "contact_radius_m=0.08" in heavy
+    assert format_bom_body_log_line("") is None

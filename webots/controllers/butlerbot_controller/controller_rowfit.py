@@ -378,6 +378,7 @@ class RowfitRuntime:
                 gate.emergency = False
                 self.ctl.gov.v = 0.0
                 cmd = {**cmd, "left": 0.0, "right": 0.0, "brake": True, "phase": "rowfit_stop",
+                       "steer_source": "stopped", "steer_lateral": "stopped",
                        "reason": "obstacle inside braking distance"}
                 log("OBSTACLE emergency stop — inside the braking distance, ABS")
             cmd = {**cmd, **self.obstacles.fields()}

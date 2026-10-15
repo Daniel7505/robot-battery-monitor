@@ -675,6 +675,7 @@ def _sync_bom_body(robot: Robot) -> bool:
         from src.webots_body import (
             DRAWN_WHEEL_RADIUS_M,
             bom_body_physics,
+            format_bom_body_log_line,
             install_command_radius,
             plan_bom_world,
         )
@@ -718,14 +719,10 @@ def _sync_bom_body(robot: Robot) -> bool:
     bind_drive_radius(physics.contact_radius_m)
     global WHEEL_RADIUS_M
     WHEEL_RADIUS_M = physics.contact_radius_m
-    print(
+    print(format_bom_body_log_line(physics.build) or (
         f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
-        f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
-        f"contact_radius_m={physics.contact_radius_m:g} "
-        f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
-        f"(contact cylinder stays {physics.contact_radius_m:g} m; "
-        f"v=ω·r and the viscous bill use that, not the catalog diameter)"
-    )
+        f"contact_radius_m={physics.contact_radius_m:g}"
+    ))
     return False
 
 
@@ -1336,11 +1333,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "brake": True,
                         "steer": 0.0,
                         "phase": "first_lobe_done",
-                        "error_source": "nadir",
+                        "error_source": "rowfit" if rowfit_rt is not None else "nadir",
+                        "steer_source": "stopped",
+                        "steer_lateral": "stopped",
+                        "fit_reject": "",
+                        "reason": "finish",
                     }
-                lane_eyes["steer"] = lk.get("steer")
-                lane_eyes["phase"] = lk.get("phase")
-                lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+                    lane_eyes["steer"] = lk.get("steer")
+                    lane_eyes["phase"] = lk.get("phase")
+                    lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+                    if lk.get("steer_source"):
+                        lane_eyes["steer_source"] = lk.get("steer_source")
+                        lane_eyes["steer_lateral"] = lk.get("steer_lateral")
+                        lane_eyes["fit_reject"] = lk.get("fit_reject") or ""
                 if rowfit_rt is not None and rowfit_new:
                     if lane_vision_log is not None:
                         lane_vision_log.write(
@@ -1356,7 +1361,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if _e is not None and getattr(_e, "held", False):
                         _rj = _e.rejected or {}
                         print(
-                            f"Rowfit REJECTED fit ({_e.reject_reason}) — holding last lane "
+                            f"Rowfit REJECTED fit ({_e.reject_reason}) — steer={lk.get('steer_source')} holding last lane "
                             f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} k={_e.curvature_1pm:+.2f}; "
                             f"rejected off={_rj.get('offset_m', float('nan')):+.3f} "
                             f"hd={_rj.get('heading_rad', float('nan')):+.3f} "
@@ -1370,7 +1375,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} "
                             f"k={_e.curvature_1pm:+.2f} conf={_e.confidence:.2f} "
                             f"nL={_e.n_left} nR={_e.n_right} "
-                            f"v*={lk.get('target_speed')} phase={lk.get('phase')}"
+                            f"v*={lk.get('target_speed')} phase={lk.get('phase')} "
+                            f"steer_source={lk.get('steer_source')}"
                             if _e.valid
                             else f"Rowfit no lane (frame {rowfit_rt.frames}) phase={lk.get('phase')}"
                         )
@@ -2025,6 +2031,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "error_source": lane_eyes.get("error_source") or "nadir",
                         "lane_phase": lane_eyes.get("phase"),
                         "steer": lane_eyes.get("steer"),
+                        "steer_source": lane_eyes.get("steer_source"),
+                        "steer_lateral": lane_eyes.get("steer_lateral"),
+                        "fit_reject": lane_eyes.get("fit_reject"),
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -2061,6 +2070,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     sensors_out["controller_run_id"] = controller_run_id
                 if pack_meter is not None and _uses_bom_pack():
                     loco.update(pack_meter.snapshot())
+                if lane_eyes.get("steer_source"):
+                    loco["steer_source"] = lane_eyes.get("steer_source")
+                    loco["steer_lateral"] = lane_eyes.get("steer_lateral")
+                    loco["fit_reject"] = lane_eyes.get("fit_reject") or ""
                 if speed_trace.steer_text:
                     loco["steer_split"] = speed_trace.steer_text
                     if isinstance(sensors_out, dict):

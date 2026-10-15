@@ -12,7 +12,10 @@ The dashboard logger writes three lines, in the usual
   ``total``, which is the system draw.
 * ``MISSION_SUMMARY`` — once, when the controller reports
   ``mission_event=complete`` (ABS park finished after the track finish
-  line). Model vs measured, SoC start/end, turns.
+  line). Model vs measured, SoC start/end, turns. When samples carry
+  ``steer_source``, the same close also prints ``STEER_SOURCE``:
+  metres and time on camera, held (odometry of a rejected fit), and
+  track (map distance during a committed turn).
 
 Measured values come only from telemetry samples. A subsystem that was
 not metered is logged as ``na``, not as zero. A BoM build does meter
@@ -222,6 +225,20 @@ MAX_DT_S = 15.0
 # and a few centimetres. That is not a mission summary.
 MIN_SUMMARY_DIST_M = 0.5
 MIN_SUMMARY_DURATION_S = 2.0
+# Wheel-command source for one sample. ``held`` is the odometry copy of
+# a rejected camera fit (0.30 m/s). ``track`` is map distance during a
+# turn that is already committed. A straight with a track loaded is not
+# ``track``.
+_STEER_KEYS = (
+    "camera",
+    "held",
+    "track",
+    "pivot",
+    "recover",
+    "blind",
+    "stopped",
+    "other",
+)
 
 
 def _has_energy_counter(sample: dict) -> bool:
@@ -310,6 +327,8 @@ class MissionEnergyLog:
         self._skipped_wh = 0.0
         self._steer_split = ""
         self._elec_gaps: int | None = None
+        self._steer_m = {key: 0.0 for key in _STEER_KEYS}
+        self._steer_s = {key: 0.0 for key in _STEER_KEYS}
 
     def _clear_segment(self) -> None:
         self._seg_idx = 0
@@ -447,6 +466,7 @@ class MissionEnergyLog:
         self._mission_wh_idle += wh_idle
         self._mission_wh_accel += wh_accel_step
         self._mission_wh_turn += wh_turn_step
+        self._note_steer_motion(sample, step_m if trusted else 0.0, dt)
         self._note_soc(sample)
         if trusted:
             self._note_turn(heading_deg)
@@ -567,6 +587,40 @@ class MissionEnergyLog:
         text = sample.get("steer_split")
         if text:
             self._steer_split = str(text).strip()
+
+    def _note_steer_motion(self, sample: dict, step_m: float, dt: float) -> None:
+        raw = sample.get("steer_source")
+        if raw is None or str(raw).strip() == "":
+            return
+        name = str(raw).strip().lower()
+        if name not in self._steer_m:
+            name = "other"
+        self._steer_m[name] += max(0.0, float(step_m))
+        self._steer_s[name] += max(0.0, float(dt))
+
+    def _steer_source_line(self) -> str | None:
+        total_m = sum(self._steer_m.values())
+        total_s = sum(self._steer_s.values())
+        if total_m <= 1e-6 and total_s <= 1e-6:
+            return None
+
+        def frac(part: float, total: float) -> str:
+            if total <= 1e-6:
+                return "na"
+            return f"{part / total:.3f}"
+
+        metres = " ".join(f"{key}_m={self._steer_m[key]:.2f}" for key in _STEER_KEYS)
+        seconds = " ".join(f"{key}_s={self._steer_s[key]:.1f}" for key in _STEER_KEYS)
+        return (
+            f"STEER_SOURCE dist_m={total_m:.2f} time_s={total_s:.1f} "
+            f"{metres} {seconds} "
+            f"frac_camera={frac(self._steer_m['camera'], total_m)} "
+            f"frac_held={frac(self._steer_m['held'], total_m)} "
+            f"frac_track={frac(self._steer_m['track'], total_m)} "
+            f"frac_camera_t={frac(self._steer_s['camera'], total_s)} "
+            f"frac_held_t={frac(self._steer_s['held'], total_s)} "
+            f"frac_track_t={frac(self._steer_s['track'], total_s)}"
+        )
 
     def _note_interval(self, wall_dt: float, sample: dict, deltas: dict | None) -> None:
         """Count one telemetry gap, including one the old 15 s rule skips."""
@@ -767,6 +821,9 @@ class MissionEnergyLog:
 
     def _summary_bundle(self) -> list[str]:
         lines = [self._summary_line(), self._mission_energy_line(), self._gaps_line()]
+        steer = self._steer_source_line()
+        if steer:
+            lines.append(steer)
         if self._steer_split:
             lines.append(self._steer_split)
         return lines
@@ -821,6 +878,14 @@ class MissionEnergyLog:
             soc_wh = max(0.0, self._soc_start - self._soc_end) * self._capacity_wh / 100.0
         err = _err_pct(elec, drive)
         eta = _eta(shaft, elec)
+        steer_m = sum(self._steer_m.values())
+        steer = ""
+        if steer_m > 1e-6:
+            steer = (
+                f" steer_frac_camera={self._steer_m['camera'] / steer_m:.3f}"
+                f" steer_frac_held={self._steer_m['held'] / steer_m:.3f}"
+                f" steer_frac_track={self._steer_m['track'] / steer_m:.3f}"
+            )
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "
@@ -837,6 +902,7 @@ class MissionEnergyLog:
             f"wh_measured={_na(None if measured is None else round(measured, 3), 3)} "
             f"wh_measured_soc={_fmt(None if soc_wh is None else round(soc_wh, 3), 3)} "
             f"err_pct={err}"
+            f"{steer}"
         )
 
     def _mission_energy_line(self) -> str:

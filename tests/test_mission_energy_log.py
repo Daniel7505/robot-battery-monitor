@@ -24,6 +24,28 @@ _SUBS = {
 }
 
 
+def test_steer_source_fraction_on_the_lap_summary():
+    """Camera, held, and track metres are a partition of the lap."""
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, speed=0.44))
+    log.observe(_sample(10.0, 4.4, speed=0.44) | {"steer_source": "camera"})
+    log.observe(_sample(20.0, 7.4, speed=0.30) | {"steer_source": "held"})
+    done = log.observe(
+        _sample(30.0, 9.4, speed=0.25, event="complete") | {"steer_source": "track"}
+    )
+    summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
+    steer = next(line for line in done if line.startswith("STEER_SOURCE"))
+    fields = _fields(summary)
+    split = _fields(steer)
+    assert float(fields["steer_frac_camera"]) == pytest.approx(4.4 / 9.4, abs=0.02)
+    assert float(fields["steer_frac_held"]) == pytest.approx(3.0 / 9.4, abs=0.02)
+    assert float(fields["steer_frac_track"]) == pytest.approx(2.0 / 9.4, abs=0.02)
+    assert float(split["camera_m"]) == pytest.approx(4.4, abs=0.05)
+    assert float(split["held_m"]) == pytest.approx(3.0, abs=0.05)
+    assert float(split["track_m"]) == pytest.approx(2.0, abs=0.05)
+    assert float(split["frac_camera"]) + float(split["frac_held"]) + float(split["frac_track"]) == pytest.approx(1.0, abs=0.02)
+
+
 def test_shell_scripts_checkout_as_lf():
     text = Path(".gitattributes").read_text(encoding="utf-8")
     assert "*.sh text eol=lf" in text

@@ -131,6 +131,42 @@ STATE_JUNCTION = "JUNCTION_APPROACH"
 STATE_GAP = "GAP_CROSS"
 STATE_LOOK = "LOOK_AROUND"
 STATE_STOPPED = "STOPPED"
+
+# What actually set the wheel command this tick. The dashboard used to
+# re-run the gap lane keeper, see empty nadir pixels, and log a nadir
+# stop while these wheels were still turning.
+STEER_CAMERA = "camera"  # fresh lane fit
+STEER_HELD = "held"  # last fit, moved by odometry; speed cap 0.30 m/s
+STEER_TRACK = "track"  # committed turn; remaining distance is the map
+STEER_PIVOT = "pivot"  # in-place yaw on the IMU
+STEER_RECOVER = "recover"  # creep along the exit heading
+STEER_BLIND = "blind"  # gap cross / look-around, heading held
+STEER_STOPPED = "stopped"
+
+
+def classify_steer_source(state: str, est, *, brake: bool, map_owns: bool) -> str:
+    """Which source commanded the wheels.
+
+    A loaded track does not steer a straight. It owns distance only while
+    a turn is already committed (approach or junction) and GPS is on that
+    road. A rejected fit is ``held``, not camera and not track. 0.30 m/s
+    is that hold cap.
+    """
+    if brake or state == STATE_STOPPED:
+        return STEER_STOPPED
+    if state == STATE_PIVOT:
+        return STEER_PIVOT
+    if state == STATE_RECOVER:
+        return STEER_RECOVER
+    if state in (STATE_GAP, STATE_LOOK):
+        return STEER_BLIND
+    if map_owns and state in (STATE_APPROACH, STATE_JUNCTION):
+        return STEER_TRACK
+    if est is not None and getattr(est, "held", False):
+        return STEER_HELD
+    if est is not None and getattr(est, "valid", False):
+        return STEER_CAMERA
+    return STEER_HELD
 V_JUNCTION_M_S = 0.25  # cap from the first sign of an opening until past the junction
 V_GAP_M_S = 0.15  # blind creep over a gap / crossing
 OPENING_SLOW_M = 0.6  # one side opens (branch or corner inner line): V_JUNCTION cap this far
@@ -244,6 +280,7 @@ class RowfitController:
         self._map_dist_logged = False
         self.recover_m = 0.0
         self.recover_t = 0.0
+        self._steer_est = None  # last camera frame; held between frames
         # intersections
         from src.route_policy import RoutePolicy
 
@@ -566,8 +603,37 @@ class RowfitController:
         half = 0.5 * w * TRACK_M
         return (v - half) / WHEEL_RADIUS_M, (v + half) / WHEEL_RADIUS_M
 
+    def _map_owns_distance(self) -> bool:
+        """True when this tick's remaining distance came from the track."""
+        if self.state not in (STATE_APPROACH, STATE_JUNCTION):
+            return False
+        return self._map_corner_m(self._yaw) is not None
+
+    def _lateral_source(self, est) -> str:
+        if est is not None and getattr(est, "held", False):
+            return STEER_HELD
+        if est is not None and getattr(est, "valid", False):
+            return STEER_CAMERA
+        return STEER_HELD
+
+    def _stamp_steer(self, cmd: dict) -> dict:
+        est = self._steer_est
+        source = classify_steer_source(
+            self.state,
+            est,
+            brake=bool(cmd.get("brake")),
+            map_owns=self._map_owns_distance(),
+        )
+        cmd["steer_source"] = source
+        cmd["steer_lateral"] = self._lateral_source(est)
+        reject = ""
+        if est is not None and getattr(est, "held", False):
+            reject = str(getattr(est, "reject_reason", "") or "")
+        cmd["fit_reject"] = reject
+        return cmd
+
     def _cmd(self, left, right, *, steer=0.0, reason, phase, v=0.0, brake=False, new_frame=False) -> dict:
-        return {
+        return self._stamp_steer({
             "left": round(left, 3),
             "right": round(right, 3),
             "brake": bool(brake),
@@ -583,7 +649,7 @@ class RowfitController:
             "new_frame": bool(new_frame),
             "straight_boost": bool(self.straight_boost),
             **self.corner_fields(),
-        }
+        })
 
     def corner_fields(self) -> dict:
         return {
@@ -690,6 +756,7 @@ class RowfitController:
             self.pose = (float(pose[0]), float(pose[1]))
         self._yaw = yaw
         if new_frame:
+            self._steer_est = est
             self._corner_frame(est, yaw)
         if self.state != STATE_LANE:
             self._straight_reset()  # the bump never outlives plain LANE following
@@ -730,7 +797,7 @@ class RowfitController:
                     )
                 self._enter_recover()
                 return self._recover_tick(est, new_frame, dt, yaw)
-            return {
+            return self._stamp_steer({
                 "left": 0.0,
                 "right": 0.0,
                 "brake": True,
@@ -743,7 +810,7 @@ class RowfitController:
                 "kappa_cmd": 0.0,
                 "new_frame": bool(new_frame),
                 **self.corner_fields(),
-            }
+            })
         v = self.gov.step(self.target_speed, dt)
         if self.cooldown_m > 0.0:
             self.cooldown_m = max(0.0, self.cooldown_m - v * dt)

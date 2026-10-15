@@ -131,6 +131,25 @@ def bom_body_physics(build_id: str | None = None) -> BomBodyPhysics | None:
     )
 
 
+def format_bom_body_log_line(build_id: str | None = None) -> str | None:
+    """The physics line the Webots console prints, for the dashboard log.
+
+    ``None`` when no BoM build is selected. Contact radius stays 0.08 m;
+    the catalog diameter is named and not applied to the tire.
+    """
+    physics = bom_body_physics(build_id)
+    if physics is None:
+        return None
+    return (
+        f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
+        f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
+        f"contact_radius_m={physics.contact_radius_m:g} "
+        f"drawn_wheel_radius_m={physics.drawn_radius_m:g} "
+        f"(contact cylinder stays {physics.contact_radius_m:g} m; "
+        f"v=ω·r and the viscous bill use that, not the catalog diameter)"
+    )
+
+
 def apply_active_bom_body(text: str) -> str:
     """Patch robot VRML from the active ``bom_build``.
 

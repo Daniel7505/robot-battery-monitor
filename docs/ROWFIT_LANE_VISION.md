@@ -1,10 +1,9 @@
 # Row-fit lane vision (default lane mode)
 
-The **default** lane keep (since 2026-10-01): it **measures the lane in
-metres** from the two shoulder cameras and steers from that, instead of
-counting pixels against fixed 33/33 targets. `RBM_LANE_MODE` unset (or
-`rowfit`) runs it; `RBM_LANE_MODE=gap` still runs the old pixel-fan mode with
-unchanged code.
+The lane keep (since 2026-10-01): it **measures the lane in metres**
+from the two shoulder cameras and steers from that. `RBM_LANE_MODE`
+unset or `rowfit` runs it. A leftover `gap` is ignored. The old
+pixel-fan keeper has been removed.
 
 Code: `src/lane_vision.py` (camera model + detection + fit),
 `src/rowfit_control.py` (steer + speed),
@@ -522,7 +521,8 @@ start/finish bars (tests).
 ## Run it
 
 Nothing to set: open `webots/worlds/butlerbot.wbt` and it runs rowfit.
-(If your repo `.env` still has `RBM_LANE_MODE=gap` from earlier, remove it.)
+A leftover `RBM_LANE_MODE=gap` in `.env` is ignored, with a warning.
+Delete that line when you next edit `.env`.
 
 How to tell it's on: the Webots console prints
 `LANE MODE rowfit (run_id 2026…) — lane_vision fit, log → …lane-vision.csv`,
@@ -536,14 +536,10 @@ line says so). About once a second it also prints a `Rowfit … off=… hd=… k
 line. The shoulder HUDs show green (left-line) and magenta (right-line)
 dots plus offset, heading, curvature and confidence.
 
-**Old gap mode:** `set RBM_LANE_MODE=gap` in a cmd window and start Webots
-from it (PowerShell: `$env:RBM_LANE_MODE="gap"`), or put
-`RBM_LANE_MODE=gap` in the repo `.env` and reload. A value set with `set`
-always wins over `.env`. Unset, empty or unknown values mean `rowfit`.
-Gap-mode code is unchanged, but its 33/33 px targets and "tape → drive
-wheel" ruler were tuned on the old z 1.31 m view, where the drive wheel was
-in the picture. In the box view the wheel only shows in the bottom corner
-next to the robot, so gap mode needs re-tuning before it can be trusted again.
+The old pixel-gap keeper is retired. It counted gaps against 33/33 px
+targets tuned on the z 1.31 m camera, and empty gap pixels logged a
+false "nadir stop" while row-fit was still driving. Unset, empty,
+`rowfit`, or a leftover `gap` all run row-fit.
 
 ## Logs and comparing runs
 
@@ -564,14 +560,6 @@ python scripts\drift_report.py "%USERPROFILE%\OneDrive\Desktop\Grok Workspace\la
 `--track s` scores sideways error against the S centre line. Without it the
 report keeps its old meaning (|y_m| from world y=0, which is only fair on a
 straight). For `lane-vision.csv`, runs are split by `run_id`.
-
-## Other switches
-
-* `RBM_NADIR_GUARD_PER_FRAME=1` (gap mode only, opt-in): the "both gaps moved the
-  same way" guard counts per camera frame. Without it, the guard is called
-  every 8 ms tick on a frame that only changes every 320 ms, so its counter
-  resets and it can never fire. Off by default because turning it on can
-  add new stops to the gap mode.
 
 ## Obstacles (stereo + radar)
 

@@ -1,8 +1,7 @@
 """Row-fit lane keep: steer + speed from a fitted lane model.
 
-Used by the Webots controller in the default lane mode (``RBM_LANE_MODE``
-unset or ``rowfit``). ``RBM_LANE_MODE=gap`` runs the old pixel path
-(``lane_keep.lane_keep_command``), which this module does not touch.
+Used by the Webots controller. ``RBM_LANE_MODE=gap`` is ignored; the
+pixel-gap keeper has been removed.
 
 Per NEW camera frame (every ~320 ms) the controller:
 
@@ -18,7 +17,7 @@ Per NEW camera frame (every ~320 ms) the controller:
 
 Between frames the curvature command and target speed are HELD. Each
 physics tick only the speed ramp and steer slew run, and wheel speeds
-come from ``lane_keep.wheels_from_steer`` (same limits as the gap path).
+come from ``lane_keep.wheels_from_steer`` (same limits as before).
 Sign conventions match ``lane_keep``: steer > 0 = yaw right.
 """
 
@@ -35,7 +34,7 @@ from src.lane_keep import (
 )
 
 TRACK_M = 2.0 * WHEEL_Y_LEFT_M  # 0.34 m between drive wheels
-V_CRUISE_M_S = 0.44  # = 5.5 rad/s, the gap path cruise
+V_CRUISE_M_S = 0.44  # = 5.5 rad/s on the 0.08 m contact wheel
 V_MIN_M_S = 0.20
 V_HELD_M_S = 0.30  # cap while steering a held (rejected-fit) lane
 A_LAT_M_S2 = 0.12  # curve speed: v = sqrt(a_lat / |kappa|)

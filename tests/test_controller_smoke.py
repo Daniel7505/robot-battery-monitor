@@ -1,7 +1,8 @@
 """Run the real Webots controller loop against a fake ``controller`` module.
 
-Catches wiring errors in butlerbot_controller.py for both lane modes
-(no physics: GPS/IMU are frozen, so only start-up + first frames run).
+Catches wiring errors in butlerbot_controller.py (no physics: GPS/IMU
+are frozen, so only start-up + first frames run). A leftover gap mode
+must still come up as row-fit.
 """
 import os
 import subprocess
@@ -51,26 +52,24 @@ def test_controller_loop_runs(tmp_path, mode):
     assert "HUD paint is off" in text, text
     assert "SPEED_TRACE off" in text, text
     assert "HUD hud_nadir" not in text
-    if mode in ("rowfit", None):  # unset = rowfit (default)
-        assert "LANE MODE rowfit" in text
-        assert "ROWFIT STEER ON" in text
-        assert "CAM POSE nadir_left from supervisor: t=(0.0354, 0.4181, 0.7042)" in text, text
-        assert "CAM POSE nadir_right from supervisor: t=(0.0354, -0.4181, 0.7042)" in text
-        assert "pitch=53.9deg" in text
-        assert "WARNING rowfit camera model" not in text, text
-        log = (tmp_path / "lane-vision.csv").read_text().splitlines()
-        assert "new_frame,run_id," in log[0]
-        assert log[0].endswith(
-            "obstacle_moving,lane_width_m,width_live,true_width_m,true_width_near_m,width_err_m,center_err_m"
-        )
-        assert "OBSTACLES off (RBM_OBSTACLES unset" in text, text
-        row = dict(zip(log[0].split(","), log[1].split(",")))
-        assert row["state"] in ("LANE", "CORNER_APPROACH", "PIVOT", "REACQUIRE")
-        assert len(log) > 1 and ",rowfit," in log[1]
-    else:
-        assert "LANE MODE rowfit" not in text and "CAM POSE" not in text
-        assert "NADIR STEER ON" in text
-        assert not (tmp_path / "lane-vision.csv").exists()
+    if mode == "gap":
+        assert "RBM_LANE_MODE=gap is retired" in text
+    assert "NADIR STEER ON" not in text
+    assert "LANE MODE rowfit" in text
+    assert "ROWFIT STEER ON" in text
+    assert "CAM POSE nadir_left from supervisor: t=(0.0354, 0.4181, 0.7042)" in text, text
+    assert "CAM POSE nadir_right from supervisor: t=(0.0354, -0.4181, 0.7042)" in text
+    assert "pitch=53.9deg" in text
+    assert "WARNING rowfit camera model" not in text, text
+    log = (tmp_path / "lane-vision.csv").read_text().splitlines()
+    assert "new_frame,run_id," in log[0]
+    assert log[0].endswith(
+        "obstacle_moving,lane_width_m,width_live,true_width_m,true_width_near_m,width_err_m,center_err_m"
+    )
+    assert "OBSTACLES off (RBM_OBSTACLES unset" in text, text
+    row = dict(zip(log[0].split(","), log[1].split(",")))
+    assert row["state"] in ("LANE", "CORNER_APPROACH", "PIVOT", "REACQUIRE")
+    assert len(log) > 1 and ",rowfit," in log[1]
 
 
 @pytest.mark.parametrize(

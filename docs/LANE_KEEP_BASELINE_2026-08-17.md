@@ -80,7 +80,10 @@ Do not retry A / D / preview-off / Z/W meters / H / H2 / I / metric-on-wheel / S
 
 ```text
 python -u scripts/measure_clocks.py
-python -u scripts/measure_s_lane_keep.py
 ```
+
+`scripts/measure_s_lane_keep.py` was removed. It scored the old gap keeper
+and read choir fields (wall meters, mark phase, fill) the controller no
+longer publishes.
 
 S timeout is **900 s** wall (128 molasses). Integrate rt as Δsim/Δwall.

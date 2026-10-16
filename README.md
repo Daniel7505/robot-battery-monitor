@@ -435,7 +435,7 @@ All in `.env` (copied from [`.env.example`](.env.example)). After editing, resta
 | `POSTGRES_PASSWORD` | `robot` | Dev-only password. Change it (and `DATABASE_URL`) for anything beyond your own laptop |
 | `RBM_API_TOKEN` | empty | Optional lock on the buttons and API. If set, open `http://127.0.0.1:5000/?token=<value>` once in the browser. Webots and the scripts pick it up automatically |
 | `RBM_ROUTE` | unset | Which way the robot goes at each junction, e.g. `L,S,R` |
-| `RBM_LANE_MODE` | `rowfit` | Lane-following method (leave as is) |
+| `RBM_LANE_MODE` | unset | Lane following is row-fit. A leftover `gap` is ignored. |
 
 Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware profiles in `config/hardware_profiles/`.
 

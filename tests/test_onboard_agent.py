@@ -286,7 +286,8 @@ def test_lane_keep_rule_logs_when_armed():
     assert agent.status_dict(result)["intervening"] is False
 
 
-def test_lane_keep_nadir_stop_is_not_red():
+def test_empty_nadir_gaps_are_not_a_nadir_stop():
+    """Gap pixels stay empty under row-fit. That used to log a false stop."""
     agent = OnboardAgent()
     result = agent.evaluate(
         battery_pct=94,
@@ -304,11 +305,12 @@ def test_lane_keep_nadir_stop_is_not_red():
         },
     )
     msgs = " ".join((r.message or "") for r in result.recommendations).lower()
-    assert "nadir" in msgs
+    assert "steer unknown" in msgs
+    assert "nadir stop" not in msgs
     assert "red" not in msgs
 
 
-def test_lane_keep_without_nadir_gaps_is_nadir_stop():
+def test_lane_keep_without_gap_pixels_does_not_invent_a_stop():
     agent = OnboardAgent()
     result = agent.evaluate(
         battery_pct=94,
@@ -326,7 +328,8 @@ def test_lane_keep_without_nadir_gaps_is_nadir_stop():
         },
     )
     msgs = " ".join((r.message or "") for r in result.recommendations).lower()
-    assert "nadir" in msgs
+    assert "steer unknown" in msgs
+    assert "nadir stop" not in msgs
     assert "red" not in msgs
 
 

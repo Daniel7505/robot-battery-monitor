@@ -81,8 +81,11 @@ STRAIGHT_FRAMES = 3  # ~1 s of clean straight at 320 ms frames before the bump
 V_MAX_M_S = max(V_CRUISE_M_S, V_STRAIGHT_M_S)  # top forward speed (sizes the obstacle slow zone)
 
 # --- Sharp corners (lane_vision corner cue: "the line widens, then disappears")
-# LANE -> CORNER_APPROACH -> PIVOT -> REACQUIRE -> LANE. Distances come from
-# the cue and the measured lane width; nothing about the track is known.
+# LANE -> CORNER_APPROACH -> PIVOT -> REACQUIRE -> LANE.
+# REACQUIRE that never sees the new lane goes to RECOVER (creep) instead of
+# parking. The cue says a turn is coming. How far to the pivot is odometry
+# from the first confident distance, and the loaded track when GPS is on
+# that road. A later short camera view must not pull the pivot forward.
 STATE_LANE = "LANE"
 STATE_APPROACH = "CORNER_APPROACH"
 STATE_PIVOT = "PIVOT"
@@ -92,6 +95,11 @@ V_APPROACH_M_S = 0.25  # cap while closing on the pivot point
 A_APPROACH_M_S2 = 0.30  # stopping profile v = sqrt(2 a remaining)
 V_CREEP_M_S = 0.04  # last centimetres (no zero-speed stall short of the point)
 PIVOT_ARRIVE_M = 0.015  # remaining distance that starts the pivot
+# One fresh fit may pull the pivot closer by this much. A short view
+# (lookahead under the lane gate) may not move it at all.
+VISION_SHRINK_MAX_M = 0.20
+# Camera distance shorter than the track by this much is "early": use the track.
+EARLY_VS_MAP_M = 0.25
 PIVOT_ANGLE_RAD = math.pi / 2  # a sharp corner of this kind is 90 deg
 PIVOT_K_YAW = 2.0  # yaw rate per rad of yaw error (1/s)
 PIVOT_W_MAX = 0.9  # rad/s cap on the in-place turn rate
@@ -108,6 +116,11 @@ REACQUIRE_OK_FRAMES = 3  # valid frames in a row back to LANE
 V_REACQUIRE_M_S = 0.20
 REACQUIRE_MAX_HEADING_RAD = math.radians(20.0)
 CORNER_COOLDOWN_M = 0.5  # no new corner until this far into the new leg
+# After a pivot, a missing lane creeps along the exit heading instead of
+# latching the park brake. A fresh lane goes back to REACQUIRE.
+STATE_RECOVER = "RECOVER"
+RECOVER_CREEP_M = 1.5
+RECOVER_MAX_S = 12.0
 
 # --- Intersections (src.junction_vision + src.route_policy)
 # LANE -> JUNCTION_APPROACH -> (turn) CORNER_APPROACH -> PIVOT -> REACQUIRE
@@ -118,6 +131,42 @@ STATE_JUNCTION = "JUNCTION_APPROACH"
 STATE_GAP = "GAP_CROSS"
 STATE_LOOK = "LOOK_AROUND"
 STATE_STOPPED = "STOPPED"
+
+# What actually set the wheel command this tick. The dashboard used to
+# re-run the gap lane keeper, see empty nadir pixels, and log a nadir
+# stop while these wheels were still turning.
+STEER_CAMERA = "camera"  # fresh lane fit
+STEER_HELD = "held"  # last fit, moved by odometry; speed cap 0.30 m/s
+STEER_TRACK = "track"  # committed turn; remaining distance is the map
+STEER_PIVOT = "pivot"  # in-place yaw on the IMU
+STEER_RECOVER = "recover"  # creep along the exit heading
+STEER_BLIND = "blind"  # gap cross / look-around, heading held
+STEER_STOPPED = "stopped"
+
+
+def classify_steer_source(state: str, est, *, brake: bool, map_owns: bool) -> str:
+    """Which source commanded the wheels.
+
+    A loaded track does not steer a straight. It owns distance only while
+    a turn is already committed (approach or junction) and GPS is on that
+    road. A rejected fit is ``held``, not camera and not track. 0.30 m/s
+    is that hold cap.
+    """
+    if brake or state == STATE_STOPPED:
+        return STEER_STOPPED
+    if state == STATE_PIVOT:
+        return STEER_PIVOT
+    if state == STATE_RECOVER:
+        return STEER_RECOVER
+    if state in (STATE_GAP, STATE_LOOK):
+        return STEER_BLIND
+    if map_owns and state in (STATE_APPROACH, STATE_JUNCTION):
+        return STEER_TRACK
+    if est is not None and getattr(est, "held", False):
+        return STEER_HELD
+    if est is not None and getattr(est, "valid", False):
+        return STEER_CAMERA
+    return STEER_HELD
 V_JUNCTION_M_S = 0.25  # cap from the first sign of an opening until past the junction
 V_GAP_M_S = 0.15  # blind creep over a gap / crossing
 OPENING_SLOW_M = 0.6  # one side opens (branch or corner inner line): V_JUNCTION cap this far
@@ -225,6 +274,13 @@ class RowfitController:
         self.cooldown_m = 0.0
         self.pivots = 0
         self._reacq_fail_logged = False
+        self.track = None  # optional TrackGeometry / TrackNetwork (GPS corner distance)
+        self.pose = None  # (x, y) world metres when GPS is known
+        self._yaw = None
+        self._map_dist_logged = False
+        self.recover_m = 0.0
+        self.recover_t = 0.0
+        self._steer_est = None  # last camera frame; held between frames
         # intersections
         from src.route_policy import RoutePolicy
 
@@ -254,8 +310,10 @@ class RowfitController:
 
     def reset(self) -> None:
         tracker, route, mb, la = self.tracker, self.policy.route, self.max_blind_m, self.look_around
+        track = self.track
         self.__init__(k_steer=self.k_steer, ld_min=self.ld_min, ld_max=self.ld_max)
         self.tracker = tracker
+        self.track = track
         self.set_route(route, max_blind_m=mb, look_around=la)
 
     def set_route(self, route=None, *, max_blind_m: float | None = None, look_around: bool | None = None) -> None:
@@ -266,6 +324,10 @@ class RowfitController:
             self.max_blind_m = float(max_blind_m)
         if look_around is not None:
             self.look_around = bool(look_around)
+
+    def set_track(self, track) -> None:
+        """World track for pivot distance. None keeps vision + odometry only."""
+        self.track = track
 
     def drain_events(self) -> list[str]:
         out, self.events = self.events, []
@@ -293,7 +355,11 @@ class RowfitController:
             self.held_frames += 1
             self._straight_reset()
             if getattr(est, "counts_as_lost", True):
-                self.frames_lost += 1
+                short = str(getattr(est, "reject_reason", "") or "").startswith("short view")
+                # The new leg is often only a short view for a few frames. That
+                # is not a lost lane, and it must not park the robot.
+                if not (short and self.state == STATE_REACQUIRE):
+                    self.frames_lost += 1
             self.target_speed = min(self.target_speed, V_HELD_M_S)
             self.last_offset = None
             self.kappa_cmd = max(-KAPPA_MAX, min(KAPPA_MAX, self._pursuit(est, self.gov.v)[0]))
@@ -371,6 +437,7 @@ class RowfitController:
                 self.lane_yaw = None
                 if yaw is not None and self._est_usable_for_lane_yaw(est):
                     self.lane_yaw = float(yaw) - float(est.heading_rad)
+                self.remaining_m = self._prefer_map_distance(self.remaining_m, yaw)
                 self._event(
                     f"CORNER seen {corner.side} {corner.distance_m:.2f} m conf {corner.confidence:.2f} "
                     f"({corner.cams}) — approach, pivot point in {self.remaining_m:.2f} m "
@@ -396,17 +463,15 @@ class RowfitController:
                         and _family(j.kind) == _family(self.junction.kind)):
                     # Vision centre may be one frame late: never push remaining back out
                     # (that delayed the pivot ~v*frame_dt ≈ 8 cm at 0.25 m/s).
-                    new_rem = float(j.center_m)
-                    if self.remaining_m is None:
-                        self.remaining_m = new_rem
-                    else:
-                        self.remaining_m = min(float(self.remaining_m), new_rem)
+                    if self._vision_distance_ok(est):
+                        prev = self.remaining_m
+                        self.remaining_m = float(j.center_m)
+                        self._cap_remaining(prev)
             elif (self.turn_src == "corner" and corner is not None and corner.direction == self.corner_dir
-                  and corner.confidence >= 0.4):
+                  and corner.confidence >= 0.4 and self._vision_distance_ok(est)):
                 prev = self.remaining_m
                 self._take_corner(corner)
-                if prev is not None and self.remaining_m is not None:
-                    self.remaining_m = min(float(prev), float(self.remaining_m))
+                self._cap_remaining(prev)
             if yaw is not None and self._est_usable_for_lane_yaw(est):
                 # Prefer held / high-conf fits; ignore low-conf fresh fits near the junction.
                 ly = float(yaw) - float(est.heading_rad)
@@ -435,10 +500,21 @@ class RowfitController:
                 )
 
     def _lane_width(self, est) -> float:
-        w = getattr(est, "lane_width_m", 0.0) if est is not None else 0.0
+        """Live near-window width when both lines are in this frame.
+
+        The tracker's smoothed width, then 1.30 m, are the fallback for a
+        frame that can see only one line (or none).
+        """
+        if est is not None and getattr(est, "width_live", False):
+            w = float(getattr(est, "lane_width_m", 0.0) or 0.0)
+            if 0.4 < w < 3.0:
+                return w
         if self.tracker is not None and getattr(self.tracker, "lane_w", None):
-            w = self.tracker.lane_w
-        return float(w) if w and 0.4 < w < 3.0 else 1.30
+            w = float(self.tracker.lane_w)
+            if 0.4 < w < 3.0:
+                return w
+        w = float(getattr(est, "lane_width_m", 0.0) or 0.0) if est is not None else 0.0
+        return w if 0.4 < w < 3.0 else 1.30
 
 
     @staticmethod
@@ -472,13 +548,103 @@ class RowfitController:
         # lane. Turning 90 deg there puts the axle on the new leg's centre line.
         self.remaining_m = self.corner_dist_m - 0.5 * float(self.lane_w_m or 1.30)
 
+    def _vision_distance_ok(self, est) -> bool:
+        """A short or rejected view must not move the pivot point.
+
+        A held fit with a normal lookahead may still refine it (one frame
+        late), but only by ``VISION_SHRINK_MAX_M``.
+        """
+        if est is None:
+            return False
+        reason = str(getattr(est, "reject_reason", "") or "")
+        if reason.startswith("short view"):
+            return False
+        look = getattr(est, "lookahead_m", None)
+        if look is not None and float(look) < 0.50:
+            return False
+        return True
+
+    def _cap_remaining(self, prev) -> None:
+        """Keep a vision update from jumping the pivot forward.
+
+        Never push remaining back out. Never pull it in by more than
+        ``VISION_SHRINK_MAX_M`` in one frame. The track, when it owns the
+        distance, is applied in the approach tick and is left alone here.
+        """
+        if self._map_corner_m(self._yaw) is not None:
+            return
+        new = self.remaining_m
+        if prev is None or new is None:
+            return
+        shrunk = min(float(prev), float(new))
+        self.remaining_m = max(float(prev) - VISION_SHRINK_MAX_M, shrunk)
+
+    def _map_corner_m(self, yaw) -> float | None:
+        """Track distance to the next corner, or None when pose/track don't apply."""
+        if self.track is None or self.pose is None or yaw is None:
+            return None
+        from src.track_geometry import distance_to_next_corner
+
+        return distance_to_next_corner(self.track, self.pose[0], self.pose[1], float(yaw))
+
+    def _prefer_map_distance(self, vision_m, yaw) -> float:
+        """Use the track when the camera distance is early. Otherwise keep vision."""
+        vision = 0.0 if vision_m is None else float(vision_m)
+        mapped = self._map_corner_m(yaw)
+        if mapped is not None and mapped > vision + EARLY_VS_MAP_M:
+            self._map_dist_logged = True
+            self._event(
+                f"TURN distance {mapped:.2f} m from the track "
+                f"(camera {vision:.2f} m was early)"
+            )
+            return float(mapped)
+        return vision
+
+    def _fresh_lane(self, est) -> bool:
+        return (
+            est is not None
+            and getattr(est, "valid", False)
+            and not getattr(est, "held", False)
+            and float(getattr(est, "confidence", 0.0) or 0.0) >= MIN_CONF
+            and abs(float(getattr(est, "heading_rad", 9.0))) < REACQUIRE_MAX_HEADING_RAD
+        )
+
     def _wheels(self, v: float, w: float) -> tuple[float, float]:
         """Wheel rad/s for forward speed v (m/s) and yaw rate w (rad/s, + = left)."""
         half = 0.5 * w * TRACK_M
         return (v - half) / WHEEL_RADIUS_M, (v + half) / WHEEL_RADIUS_M
 
+    def _map_owns_distance(self) -> bool:
+        """True when this tick's remaining distance came from the track."""
+        if self.state not in (STATE_APPROACH, STATE_JUNCTION):
+            return False
+        return self._map_corner_m(self._yaw) is not None
+
+    def _lateral_source(self, est) -> str:
+        if est is not None and getattr(est, "held", False):
+            return STEER_HELD
+        if est is not None and getattr(est, "valid", False):
+            return STEER_CAMERA
+        return STEER_HELD
+
+    def _stamp_steer(self, cmd: dict) -> dict:
+        est = self._steer_est
+        source = classify_steer_source(
+            self.state,
+            est,
+            brake=bool(cmd.get("brake")),
+            map_owns=self._map_owns_distance(),
+        )
+        cmd["steer_source"] = source
+        cmd["steer_lateral"] = self._lateral_source(est)
+        reject = ""
+        if est is not None and getattr(est, "held", False):
+            reject = str(getattr(est, "reject_reason", "") or "")
+        cmd["fit_reject"] = reject
+        return cmd
+
     def _cmd(self, left, right, *, steer=0.0, reason, phase, v=0.0, brake=False, new_frame=False) -> dict:
-        return {
+        return self._stamp_steer({
             "left": round(left, 3),
             "right": round(right, 3),
             "brake": bool(brake),
@@ -494,7 +660,7 @@ class RowfitController:
             "new_frame": bool(new_frame),
             "straight_boost": bool(self.straight_boost),
             **self.corner_fields(),
-        }
+        })
 
     def corner_fields(self) -> dict:
         return {
@@ -521,6 +687,7 @@ class RowfitController:
         self.state = STATE_PIVOT
         self.gov.v = 0.0
         self.filter = SteerFilter()
+        self._map_dist_logged = False
         self._event(
             f"PIVOT start {'left' if self.corner_dir > 0 else 'right'} yaw {math.degrees(yaw):+.1f}deg -> "
             f"target {math.degrees(self.yaw_target):+.1f}deg (lane {math.degrees(base):+.1f}deg, "
@@ -588,10 +755,19 @@ class RowfitController:
                          phase="rowfit_pivot", new_frame=new_frame)
 
     def step(self, est=None, *, new_frame: bool = False, dt: float = 0.008, frame_dt: float = 0.32,
-             yaw: float | None = None) -> dict:
+             yaw: float | None = None, pose=None) -> dict:
         """One physics tick. ``yaw``: IMU yaw (rad, + = left/CCW). Without it a
-        corner is still approached, but the robot brakes at the pivot point."""
+        corner is still approached, but the robot brakes at the pivot point.
+
+        ``pose`` is ``(x, y)`` in world metres. With a track set, it is the
+        pivot distance while a turn is already committed. It does not start
+        a turn by itself.
+        """
+        if pose is not None:
+            self.pose = (float(pose[0]), float(pose[1]))
+        self._yaw = yaw
         if new_frame:
+            self._steer_est = est
             self._corner_frame(est, yaw)
         if self.state != STATE_LANE:
             self._straight_reset()  # the bump never outlives plain LANE following
@@ -609,6 +785,8 @@ class RowfitController:
             return self._gap_tick(est, new_frame, dt, yaw)
         if self.state == STATE_LOOK:
             return self._look_tick(est, new_frame, dt, yaw)
+        if self.state == STATE_RECOVER:
+            return self._recover_tick(est, new_frame, dt, yaw)
         if self.state == STATE_STOPPED:
             return self._cmd(0.0, 0.0, reason="stopped (no lane after the blind crossing)", phase="rowfit_stop",
                              brake=True, new_frame=new_frame)
@@ -621,10 +799,16 @@ class RowfitController:
         if self.obstacle_v_cap is not None:
             self.target_speed = min(self.target_speed, max(0.0, float(self.obstacle_v_cap)))
         if self.frames_lost >= LOST_FRAMES_STOP:
-            if self.state == STATE_REACQUIRE and not self._reacq_fail_logged:
-                self._reacq_fail_logged = True
-                self._event(f"REACQUIRE failed — no lane {self.frames_lost} frames after the pivot, braking")
-            return {
+            if self.state == STATE_REACQUIRE:
+                if not self._reacq_fail_logged:
+                    self._reacq_fail_logged = True
+                    self._event(
+                        f"REACQUIRE failed — no lane {self.frames_lost} frames after the pivot "
+                        "— RECOVER (creep along the exit heading, do not park)"
+                    )
+                self._enter_recover()
+                return self._recover_tick(est, new_frame, dt, yaw)
+            return self._stamp_steer({
                 "left": 0.0,
                 "right": 0.0,
                 "brake": True,
@@ -637,7 +821,7 @@ class RowfitController:
                 "kappa_cmd": 0.0,
                 "new_frame": bool(new_frame),
                 **self.corner_fields(),
-            }
+            })
         v = self.gov.step(self.target_speed, dt)
         if self.cooldown_m > 0.0:
             self.cooldown_m = max(0.0, self.cooldown_m - v * dt)
@@ -668,7 +852,22 @@ class RowfitController:
             else:
                 self.kappa_cmd = 0.0
             self.last_offset = None
-        rem = float(self.remaining_m if self.remaining_m is not None else 0.0)
+        mapped = self._map_corner_m(yaw)
+        if mapped is not None:
+            if (
+                not self._map_dist_logged
+                and self.remaining_m is not None
+                and mapped > float(self.remaining_m) + EARLY_VS_MAP_M
+            ):
+                self._map_dist_logged = True
+                self._event(
+                    f"TURN distance {mapped:.2f} m from the track "
+                    f"(camera {float(self.remaining_m):.2f} m was early)"
+                )
+            self.remaining_m = mapped
+            rem = mapped
+        else:
+            rem = float(self.remaining_m if self.remaining_m is not None else 0.0)
         if rem <= PIVOT_ARRIVE_M:
             if yaw is None:
                 self.state = STATE_LANE
@@ -689,13 +888,81 @@ class RowfitController:
         else:
             self.gov.step(target, dt)
         v = self.gov.v
-        self.remaining_m = rem - v * dt
+        if mapped is None:
+            self.remaining_m = rem - v * dt
         raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
         raw = max(-STEER_CAP, min(STEER_CAP, raw))
         steer = self.filter.step(raw, dt)
         left, right = wheels_from_steer(steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0)
         return self._cmd(left, right, steer=steer, reason=f"corner approach {rem:.2f} m to pivot",
                          phase="rowfit_approach", v=v, new_frame=new_frame)
+
+    def _enter_recover(self) -> None:
+        self.state = STATE_RECOVER
+        self.recover_m = 0.0
+        self.recover_t = 0.0
+        self.frames_lost = 0
+        self.gov.v = 0.0
+        self.target_speed = V_REACQUIRE_M_S
+        if self.tracker is not None and hasattr(self.tracker, "begin_reacquire"):
+            self.tracker.begin_reacquire(REACQUIRE_RELAX_FRAMES)
+
+    def _recover_tick(self, est, new_frame: bool, dt: float, yaw) -> dict:
+        """Creep along the exit heading until a lane shows up, then reacquire.
+
+        A hard park here latches the ABS brake, and the robot stays off the
+        lane. The creep is bounded; past that bound this does stop.
+        """
+        if new_frame and self._fresh_lane(est):
+            self.state = STATE_REACQUIRE
+            self.reacq_ok = 0
+            self.reacq_frames = 0
+            self.frames_lost = 0
+            self._reacq_fail_logged = False
+            self.target_speed = V_REACQUIRE_M_S
+            self._event(
+                f"RECOVER found the lane off {est.offset_m * 100:+.0f}cm "
+                f"hd {math.degrees(est.heading_rad):+.1f}deg — REACQUIRE"
+            )
+            if self.tracker is not None and hasattr(self.tracker, "begin_reacquire"):
+                self.tracker.begin_reacquire(REACQUIRE_RELAX_FRAMES)
+            v = V_REACQUIRE_M_S
+            self.gov.v = v
+            left, right = self._wheels(v, 0.0)
+            return self._cmd(
+                left, right, reason="recover found lane", phase="rowfit_reacquire",
+                v=v, new_frame=new_frame,
+            )
+        self.recover_t += max(0.0, float(dt))
+        if self.recover_m >= RECOVER_CREEP_M or self.recover_t >= RECOVER_MAX_S:
+            self.state = STATE_STOPPED
+            self._event(
+                f"RECOVER no lane after {self.recover_m:.2f} m / {self.recover_t:.1f} s — STOPPED"
+            )
+            return self._cmd(
+                0.0, 0.0, reason="recover gave up", phase="rowfit_stop", brake=True,
+                new_frame=new_frame,
+            )
+        v_cap = V_REACQUIRE_M_S
+        if self.obstacle_v_cap is not None:
+            v_cap = min(v_cap, max(0.0, float(self.obstacle_v_cap)))
+        self.target_speed = v_cap
+        if self.gov.v > v_cap:
+            self.gov.v = max(v_cap, self.gov.v - DECEL_M_S2 * dt)
+        else:
+            self.gov.step(v_cap, dt)
+        v = self.gov.v
+        w = 0.0
+        tgt = self.yaw_target if self.yaw_target is not None else self.lane_yaw
+        if yaw is not None and tgt is not None:
+            err = math.atan2(math.sin(tgt - float(yaw)), math.cos(tgt - float(yaw)))
+            w = max(-GAP_W_MAX, min(GAP_W_MAX, GAP_K_YAW * err))
+        self.recover_m += v * dt
+        left, right = self._wheels(v, w)
+        return self._cmd(
+            left, right, reason=f"recover creep {self.recover_m:.2f} m",
+            phase="rowfit_recover", v=v, new_frame=new_frame,
+        )
 
     # ------------------------------------------------------------------
     # intersections
@@ -790,7 +1057,7 @@ class RowfitController:
             self.corner_dir = 1 if choice == "L" else -1
             self.corner_dist_m = float(j.near_m)
             self.corner_conf = float(j.confidence)
-            self.remaining_m = float(self.jn_center_m)
+            self.remaining_m = self._prefer_map_distance(float(self.jn_center_m), yaw)
             self._event(f"TURN {choice} at the junction centre, pivot point in {self.remaining_m:.2f} m"
                         + ("" if yaw is not None else " — NO IMU yaw: will stop there"))
             return

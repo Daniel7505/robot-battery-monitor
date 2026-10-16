@@ -162,11 +162,13 @@ class _Bot:
 
 def test_state_machine_full_corner():
     b = _Bot()
+    cmd = None
     for _ in range(3):
-        b.tick(_lane(), new=True)
+        cmd = b.tick(_lane(), new=True)
         for _ in range(39):
-            b.tick()
+            cmd = b.tick()
     assert b.ctl.state == rc.STATE_LANE
+    assert cmd["steer_source"] == "camera"
     b.ctl.gov.v = 0.44
     x0 = b.x
     cmd = b.tick(_lane(corner=_corner(1.40)), new=True)
@@ -190,6 +192,8 @@ def test_state_machine_full_corner():
         y0 = b.yaw
         cmd = b.tick()
         assert not cmd["brake"]
+        if b.ctl.state == rc.STATE_PIVOT:
+            assert cmd["steer_source"] == "pivot"
         assert cmd["left"] == pytest.approx(-cmd["right"], abs=1e-3)  # in place
         max_rate = max(max_rate, abs(b.yaw - y0) / 0.008)
         n += 1
@@ -210,7 +214,7 @@ def test_state_machine_full_corner():
     assert b.ctl.state == rc.STATE_LANE
 
 
-def test_no_lane_after_pivot_brakes():
+def test_no_lane_after_pivot_creeps_instead_of_parking():
     b = _Bot()
     b.tick(_lane(corner=_corner(0.70)), new=True)
     n = 0
@@ -221,7 +225,101 @@ def test_no_lane_after_pivot_brakes():
     cmd = None
     for _ in range(rc.LOST_FRAMES_STOP):
         cmd = b.tick(LaneEstimate(valid=False), new=True)
-    assert cmd["brake"] and any(e.startswith("REACQUIRE failed") for e in b.events)
+    assert b.ctl.state == rc.STATE_RECOVER
+    assert not cmd["brake"] and cmd["phase"] == "rowfit_recover"
+    assert cmd["steer_source"] == "recover"
+    assert any(e.startswith("REACQUIRE failed") for e in b.events)
+    # a fresh lane ends the creep and goes back to reacquire, then LANE
+    for _ in range(rc.REACQUIRE_OK_FRAMES + 1):
+        cmd = b.tick(_lane(), new=True)
+    assert b.ctl.state == rc.STATE_LANE
+    assert any("RECOVER found the lane" in e for e in b.events)
+
+
+def test_recover_stops_only_after_the_creep_budget():
+    b = _Bot()
+    b.ctl.state = rc.STATE_RECOVER
+    b.ctl.yaw_target = 0.0
+    b.ctl.recover_m = rc.RECOVER_CREEP_M
+    cmd = b.tick(LaneEstimate(valid=False), new=True)
+    assert cmd["brake"] and b.ctl.state == rc.STATE_STOPPED
+    assert any(e.startswith("RECOVER no lane") for e in b.events)
+
+
+def test_short_view_cannot_collapse_the_pivot_distance():
+    b = _Bot()
+    b.ctl.gov.v = 0.25
+    b.tick(_lane(corner=_corner(1.40)), new=True)
+    assert b.ctl.remaining_m == pytest.approx(1.40 - 0.65, abs=0.02)
+    short = _lane(corner=_corner(0.20))
+    short.held = True
+    short.valid = False
+    short.lookahead_m = 0.18
+    short.reject_reason = "short view: lane seen only 0.18 m ahead (< 0.50)"
+    b.tick(short, new=True)
+    assert b.ctl.remaining_m > 0.50
+
+
+def test_track_distance_overrides_an_early_camera():
+    from src.track_geometry import load_track
+
+    b = _Bot()
+    b.ctl.set_track(load_track("corner90"))
+    x0 = 3.0
+    b.ctl.pose = (x0, 0.0)
+    b.ctl.gov.v = 0.25
+
+    def tick(est=None, new=False):
+        b.ctl.pose = (x0 + b.x, 0.0)
+        return b.tick(est, new=new)
+
+    tick(_lane(corner=_corner(0.30)), new=True)
+    assert b.ctl.state == rc.STATE_APPROACH
+    assert b.ctl.remaining_m == pytest.approx(1.0, abs=0.05)
+    assert any("from the track" in e for e in b.events)
+    tracked = b.ctl.step(
+        _lane(corner=_corner(0.30)), new_frame=True, yaw=0.0, pose=b.ctl.pose
+    )
+    assert tracked["steer_source"] == "track"
+    n = 0
+    while b.ctl.state == rc.STATE_APPROACH and n < 5000:
+        new = n % 40 == 39
+        est = _lane(corner=_corner(0.20)) if new else None
+        if est is not None:
+            est.lookahead_m = 0.18
+            est.held = True
+            est.valid = False
+            est.reject_reason = "short view: lane seen only 0.18 m ahead (< 0.50)"
+        tick(est, new=new)
+        n += 1
+    assert b.ctl.state == rc.STATE_PIVOT
+    assert b.x == pytest.approx(1.0, abs=0.08)
+
+
+def test_held_straight_is_not_track_even_with_gps():
+    """A rejected fit on the aisle centreline is odometry, not the map.
+
+    0.30 m/s is the hold cap. The track is only the pivot distance after
+    a turn is committed. Empty nadir gaps are not a stop.
+    """
+    from src.track_geometry import load_track
+
+    b = _Bot()
+    b.ctl.set_track(load_track("warehouse"))
+    held = _lane()
+    held.held = True
+    held.valid = False
+    held.reject_reason = "heading jump +29deg > 20deg"
+    cmd = b.ctl.step(held, new_frame=True, dt=0.32, yaw=0.0, pose=(18.0, 10.0))
+    assert b.ctl.state == rc.STATE_LANE
+    assert cmd["steer_source"] == "held"
+    assert cmd["error_source"] == "rowfit"
+    assert cmd["fit_reject"].startswith("heading jump")
+    assert not cmd["brake"]
+    assert cmd["target_speed"] <= rc.V_HELD_M_S
+    # Between frames the same held fit still owns the wheels.
+    held_again = b.ctl.step(None, new_frame=False, dt=0.008, yaw=0.0, pose=(18.0, 10.1))
+    assert held_again["steer_source"] == "held"
 
 
 def test_without_imu_it_stops_at_the_corner():

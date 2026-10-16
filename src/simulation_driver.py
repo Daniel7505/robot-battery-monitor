@@ -213,13 +213,27 @@ class SimulationDriver:
         from src.hardware_profile import format_bom_log_line, log_profile_flags
 
         logger.info(format_bom_log_line())
+        try:
+            from src.webots_body import format_bom_body_log_line
+
+            body_line = format_bom_body_log_line()
+            if body_line:
+                logger.info(body_line)
+                from src.mission_summary_file import append_mission_lines
+
+                append_mission_lines([body_line], source="dashboard")
+        except Exception as exc:
+            logger.warning(f"BOM BODY log skipped ({type(exc).__name__}: {exc})")
         log_profile_flags()
         self._log_mission_energy()
 
     def _log_mission_energy(self) -> None:
+        from src.mission_summary_file import append_mission_lines
         from src.twin_energy import format_mission_energy_line
 
-        logger.info(format_mission_energy_line(self._scripted_distance_m()))
+        line = format_mission_energy_line(self._scripted_distance_m())
+        logger.info(line)
+        append_mission_lines([line], source="dashboard")
 
     def status(self, mission: MissionTaskManager | None = None) -> dict:
         """Dashboard-facing simulation panel payload for the internal script."""

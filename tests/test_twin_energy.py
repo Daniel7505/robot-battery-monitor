@@ -154,9 +154,28 @@ def test_mission_energy_over_a_duration_includes_idle():
         line = format_mission_energy_line(0.0, payload_kg=0, wh_measured=0.5, duration_s=450)
         assert "wh_model=1.245" in line
         assert "wh_measured=0.50" in line
+        assert "err_pct=na" not in line
+        assert "err_pct=" in line
         moving = bom_run_energy_wh(TEN_FT_M, 450.0, 0.0)
         assert moving["wh_model"] > moving["wh_model_drive"] > 0
         assert moving["wh_model_idle"] == pytest.approx(1.245, abs=0.001)
+    finally:
+        _restore_bom(old)
+
+
+def test_default_build_energy_error_is_na():
+    """V1's blended cruise lump is not measured drive plus channel idle."""
+    old = _use_bom(None)
+    try:
+        line = format_mission_energy_line(
+            19.82, payload_kg=0.0, wh_measured=0.72, duration_s=60.5
+        )
+        assert line.startswith("MISSION_ENERGY build=default ")
+        assert "wh_measured=0.72" in line
+        assert "err_pct=na" in line
+        model = line.split("wh_model=", 1)[1].split()[0]
+        assert model not in ("", "na")
+        assert float(model) == pytest.approx(19.82 * 40.0 / 0.44 / 3600.0, abs=0.002)
     finally:
         _restore_bom(old)
 
@@ -346,15 +365,21 @@ def test_turning_scrub_uses_world_contact_and_the_4693_curve():
             assert current < 3.0
             return duty * 24.0 * current / 0.92
 
-        # Turn delta stays at the BoM electrical rate. The straight visc
-        # bill is the same torque at the hinge rate.
-        straight = 2.0 * one(v, 0.0, r_bom)
-        turned = one(v - v_slip, tau_scrub, r_bom) + one(v + v_slip, tau_scrub, r_bom)
-        hinge = 2.0 * one(v, 0.0, SIM_WHEEL_RADIUS_M)
+        # Turn delta uses the contact hinge rate, same as measured electrical
+        # and the straight viscous bill. Catalog radius stays in the rolling
+        # torque only. v/0.04 doubled light corner watts.
+        straight = 2.0 * one(v, 0.0, SIM_WHEEL_RADIUS_M)
+        turned = one(v - v_slip, tau_scrub, SIM_WHEEL_RADIUS_M) + one(v + v_slip, tau_scrub, SIM_WHEEL_RADIUS_M)
+        catalog = (
+            one(v - v_slip, tau_scrub, r_bom) + one(v + v_slip, tau_scrub, r_bom)
+            - 2.0 * one(v, 0.0, r_bom)
+        )
+        hinge = straight
         assert sim_drive_terms(prof, v)["drive_w"] == pytest.approx(hinge, rel=1e-9)
+        assert turned - straight < catalog
         point = electrical_from_shaft_w(
             crr * mass * g * r_bom / 2.0 + SIM_HINGE_DAMPING_NM_S_RAD * v / SIM_WHEEL_RADIUS_M,
-            v / r_bom,
+            v / SIM_WHEEL_RADIUS_M,
             voltage_v=24.0,
             no_load_rpm=200.0,
             no_load_current_a=0.1,

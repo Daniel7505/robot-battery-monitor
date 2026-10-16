@@ -706,56 +706,20 @@ def sourced_trolley_mass_kg() -> float | None:
 
 
 def apply_bom_build_to_robot(text: str) -> str:
-    """Set Robot mass and drive-wheel radius from ``bom_build``.
+    """Set Robot mass from ``bom_build``. The contact wheel stays 0.08 m.
 
     When ``bom_build`` is unset this returns ``text`` unchanged, so generated
     worlds stay byte-identical to today. The shipped ``.wbt`` files are not
-    rewritten by importing this module.
+    rewritten by importing this module. See ``src/webots_body.py``.
     """
     try:
-        from src.hardware_profile import active_bom_build, build_profile_from_bom
+        from src.webots_body import apply_active_bom_body
     except Exception:
-        return text
-    build_id = active_bom_build()
-    if not build_id:
         return text
     try:
-        prof = build_profile_from_bom(build_id)
+        return apply_active_bom_body(text)
     except Exception:
         return text
-    geom = prof.get("geometry") or {}
-    mass = geom.get("mass_kg_known")
-    radius = geom.get("wheel_radius_m")
-    if mass is not None:
-        text = text.replace("    mass 3.2\n", f"    mass {float(mass):g}\n", 1)
-    if radius is not None:
-        text = _patch_drive_wheel_radius(text, float(radius))
-    return text
-
-
-def _patch_drive_wheel_radius(text: str, radius: float) -> str:
-    """Resize the two drive wheels. Casters (already 0.04) are left alone."""
-    import re
-
-    rtxt = f"{radius:g}"
-    for joint in ("LEFT_WHEEL_JOINT", "RIGHT_WHEEL_JOINT"):
-        token = f"DEF {joint}"
-        start = text.find(token)
-        if start < 0:
-            continue
-        nxt = text.find("\n    DEF ", start + len(token))
-        if nxt < 0:
-            nxt = len(text)
-        block = text[start:nxt]
-        block = block.replace("radius 0.08", f"radius {rtxt}")
-        block = re.sub(r"anchor 0 0\.17 0\.08", f"anchor 0 0.17 {rtxt}", block)
-        block = re.sub(
-            r"translation 0 0\.17 0\.08",
-            f"translation 0 0.17 {rtxt}",
-            block,
-        )
-        text = text[:start] + block + text[nxt:]
-    return text
 
 
 def trolley_vrml(lay: Layout, app) -> str:

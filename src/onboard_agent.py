@@ -906,6 +906,10 @@ class OnboardAgent:
         if not ctx.lane_keep_armed:
             return []
         sense = ctx.lane_sensors or {}
+        # Rowfit never fills nadir_gap_px. Re-running the gap keeper on those
+        # empties logged "nadir stop" while the robot kept moving.
+        if sense.get("steer_source") or sense.get("error_source") == "rowfit":
+            return [self._rowfit_steer_rec(sense)]
         steer = sense.get("steer")
         x_m = sense.get("x_m")
         y_m = sense.get("y_m")
@@ -957,12 +961,40 @@ class OnboardAgent:
                 action="status",
                 priority="info",
                 reason=f"Push off {wall} yellow wall",
-                message=(
-                    f"LANE KEEP — push off {wall} {live_f:+.2f} "
-                    f"oL={o_l} oR={o_r}{where}"
-                ),
+                message=f"LANE KEEP — push off {wall} {live_f:+.2f}{where}",
             )
         ]
+
+    def _rowfit_steer_rec(self, sense: dict) -> AgentRecommendation:
+        """Name the source that commanded the wheels. Not a nadir brake."""
+        source = str(sense.get("steer_source") or "unknown").strip().lower()
+        phase = sense.get("lane_phase") or sense.get("phase") or ""
+        speed = sense.get("speed_m_s")
+        v = "" if speed is None else f" v={float(speed):.1f}"
+        reject = str(sense.get("fit_reject") or "").strip()
+        why = ""
+        if source == "held" and reject:
+            why = f" reject={reject[:48]}"
+        lateral = str(sense.get("steer_lateral") or "").strip().lower()
+        lat = f" lateral={lateral}" if lateral and lateral != source else ""
+        x_m = sense.get("x_m")
+        y_m = sense.get("y_m")
+        where = ""
+        if x_m is not None and y_m is not None:
+            # 10 m buckets so a long held aisle is a trail, not one line per tick.
+            bx = round(float(x_m) / 10.0) * 10.0
+            by = round(float(y_m) / 10.0) * 10.0
+            where = f" @ ({bx:.0f}, {by:.0f})"
+        stopped = source == "stopped"
+        return AgentRecommendation(
+            action="safety_alert" if stopped else "status",
+            priority="medium" if stopped else "info",
+            reason=(
+                f"rowfit steer {source}"
+                + (f" ({reject})" if reject and source == "held" else "")
+            ),
+            message=f"LANE KEEP — steer {source}{lat}{v} phase={phase}{why}{where}",
+        )
 
     def _rule_prediction_risk(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
         risk = (ctx.prediction.get("risk_level") or "low").lower()

@@ -82,7 +82,8 @@ def spec_from_dict(d: dict, path: str | None = None) -> TrackSpec:
         else:
             pts.append((float(w[0]), float(w[1])))
             radii.append(0.0)
-            widths.append(None)
+            # Optional third value is the lane width at that waypoint.
+            widths.append(None if len(w) < 3 else float(w[2]))
     if len(pts) < 2:
         raise ValueError("a track needs at least 2 waypoints")
     for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
@@ -197,6 +198,22 @@ class TrackGeometry:
         for j in range(1, n - 1):
             A0, B0, v0 = legs[j - 1]
             A1, B1, v1 = legs[j]
+            # A miter of two short legs is unstable once the width is changing:
+            # the joint lands behind the vertex and the paint folds. Offset the
+            # vertex along its angle bisector instead. Constant width keeps the
+            # miter, so existing tracks paint the same line.
+            if abs(o[j] - o[j - 1]) > 1e-6 or abs(o[j + 1] - o[j]) > 1e-6:
+                u0, u1 = self._u[j - 1], self._u[j]
+                bx = -u0[1] - u1[1]
+                by = u0[0] + u1[0]
+                bl2 = bx * bx + by * by
+                if bl2 < 1e-12:
+                    X = (P[j][0] - u0[1] * o[j], P[j][1] + u0[0] * o[j])
+                else:
+                    scale = 2.0 * o[j] / bl2
+                    X = (P[j][0] + bx * scale, P[j][1] + by * scale)
+                out.extend([X] * self._k[j])
+                continue
             X = _intersect(A0, v0, A1, v1)
             if X is None:  # collinear legs
                 X = ((B0[0] + A1[0]) / 2.0, (B0[1] + A1[1]) / 2.0)
@@ -369,6 +386,62 @@ class TrackGeometry:
         return self.project(x, y)["s_m"] >= 0.5 * self.length_m
 
 
+def distance_to_next_corner(
+    track,
+    x: float,
+    y: float,
+    yaw: float,
+    *,
+    max_lateral_m: float = 0.9,
+    max_heading_rad: float = math.radians(35.0),
+    min_turn_rad: float = math.radians(20.0),
+) -> float | None:
+    """Forward metres from (x, y) to the next sharp corner on the road under the pose.
+
+    None when the pose is off the road, the heading disagrees with the leg,
+    or no corner lies ahead. This is the axle-to-vertex distance the pivot
+    should use, not a camera measurement. ``track`` is a TrackGeometry or a
+    TrackNetwork.
+    """
+    if track is None or yaw is None:
+        return None
+    try:
+        xf, yf, yawf = float(x), float(y), float(yaw)
+        if hasattr(track, "roads"):
+            which = track.project(xf, yf)
+            geom = track.roads[int(which.get("road") or 0)]
+        else:
+            geom = track
+        pr = geom.project(xf, yf)
+    except Exception:
+        return None
+    if pr is None or float(pr.get("dist_m", 99.0)) > max_lateral_m:
+        return None
+    hd = float(pr["heading_rad"])
+    err = math.atan2(math.sin(hd - yawf), math.cos(hd - yawf))
+    if abs(err) > max_heading_rad:
+        return None
+    ux, uy = math.cos(yawf), math.sin(yawf)
+    pts = geom.spec.waypoints
+    best = None
+    for j in range(1, len(pts) - 1):
+        if abs(geom._phi[j]) < min_turn_rad:
+            continue
+        leg = geom._u[j - 1]
+        leg_h = math.atan2(leg[1], leg[0])
+        herr = math.atan2(math.sin(leg_h - yawf), math.cos(leg_h - yawf))
+        if abs(herr) > max_heading_rad:
+            continue
+        dx, dy = pts[j][0] - xf, pts[j][1] - yf
+        along = dx * ux + dy * uy
+        side = abs(-dx * uy + dy * ux)
+        if along < 0.03 or side > max_lateral_m + 0.4:
+            continue
+        if best is None or along < best:
+            best = along
+    return best
+
+
 class FinishReferee:
     """Controller-side referee: S default (x >= 16.5) or a track file's finish."""
 
@@ -421,6 +494,31 @@ class FinishReferee:
 
 
 TRACK_FILE_TAG = "# TRACK_FILE "
+
+
+STEER_TRACK_TAG = "# STEER_TRACK "
+_STEER_TRACK_OFF = {"off", "0", "no", "false"}
+
+
+def steer_track_enabled(world_path: str | None = None, env: dict | None = None) -> bool:
+    """Whether the loaded track may set pivot distance.
+
+    The finish referee still uses the track. This switch only stops
+    ``set_track`` on the lane controller. ``RBM_NO_TRACK=1`` wins. A world
+    line ``# STEER_TRACK off`` does the same, so a camera-proof course
+    cannot be driven from its waypoint file.
+    """
+    env = os.environ if env is None else env
+    raw = (env.get("RBM_NO_TRACK") or "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return False
+    if not world_path or not os.path.isfile(world_path):
+        return True
+    with open(world_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith(STEER_TRACK_TAG):
+                return line[len(STEER_TRACK_TAG):].strip().lower() not in _STEER_TRACK_OFF
+    return True
 
 
 def track_file_from_world(world_path: str | None) -> str | None:

@@ -382,7 +382,7 @@ def abs_brake_wheel_velocity_latched(
     *,
     min_brake_v: float = MIN_BRAKE_WHEEL_V,
     oppose_factor: float = BRAKE_OPPOSE_FACTOR,
-    wheel_radius_m: float = WHEEL_RADIUS_M,
+    wheel_radius_m: float | None = None,
     stop_speed_m_s: float = STOP_SPEED_M_S,
 ) -> float:
     """Oppose latched direction with ~1:1 wheel-equivalent cmd — works at cruise speed.
@@ -391,6 +391,8 @@ def abs_brake_wheel_velocity_latched(
     speed-tiered cap. Sign is opposite the latched travel direction so both
     wheels get the same reverse command (linear ABS, not spin halt).
     """
+    if wheel_radius_m is None:
+        wheel_radius_m = WHEEL_RADIUS_M
     if motion_sign == 0.0 or speed_m_s < stop_speed_m_s:
         return 0.0
     equiv_rad_s = speed_m_s / max(wheel_radius_m, 1e-6)

@@ -136,7 +136,8 @@ repo `.env`. A value set with `set` wins.
 | `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
 | `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
 | `RBM_LOOK_AROUND` | `0` = after the max blind distance just stop (no +90/−90 look-around). Default on. |
-| `RBM_LOG_DIR` | Folder for `lane-vision.csv` and `steer-actions.csv`. Default: `%USERPROFILE%\OneDrive\Desktop\Grok Workspace` |
+| `RBM_LOG_DIR` | Folder for `lane-vision.csv` and `steer-actions.csv`. Default: `%USERPROFILE%\OneDrive\Desktop\Grok Workspace` (not the repo `logs/` folder). The controller also writes `LANE_VISION file=...` into `logs/mission_summary_<ts>.json`. |
+| `RBM_CAMERA_S_WIDTH` | Opt-in paint for `-World camera_s`. Unset keeps the shipped 1.15–1.45 m sine. `1.0,1.6` writes a sibling world (`butlerbot_camera_s_w1.00-1.60.wbt`) so the widen and narrow are obvious on screen. Both lines still fit in the nadir cameras at that range. |
 | `RBM_OBSTACLES` | `1` = stereo+radar obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`, `radar_motion`), off everywhere else. |
 | `RBM_STEREO_BACKEND` | `auto` (default: OpenCV StereoSGBM if `cv2` imports, else numpy), `sgbm` or `numpy`. numpy works without OpenCV but costs ~170 ms per frame. |
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |

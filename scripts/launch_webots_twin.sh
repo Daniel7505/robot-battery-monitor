@@ -6,7 +6,8 @@
 # Exports TWIN_DASHBOARD_URL for the controller's twin_publisher HTTP client.
 #
 # Usage: ./scripts/launch_webots_twin.sh [dashboard_url] [world]
-#   world: butlerbot (default), corner90, corner_mix, widen, plus, t_end, gap45, warehouse, warehouse_obstacles, radar_motion, or a .wbt path (RBM_WORLD too)
+#   world: butlerbot (default), camera_s (camera-only S; track does not steer), corner90, corner_mix, widen, plus, t_end, gap45, warehouse, warehouse_obstacles, radar_motion, or a .wbt path (RBM_WORLD too)
+# Camera proof: RBM_MISSION_LAPS=1 ./scripts/launch_webots_twin.sh http://127.0.0.1:5000 camera_s
 #   RBM_TRACK is set from the world's # TRACK_FILE tag.
 # The controller lane-keeps on its own (rowfit); the agent drives via the twin API.
 # =============================================================================
@@ -26,6 +27,26 @@ if [ -z "$WORLD" ]; then
   exit 1
 fi
 
+# Selected bom_build: open a sibling world whose body mass and contact
+# wheel match the BoM. The drawn mesh stays 0.08 m. Unset bom_build
+# leaves WORLD unchanged. The sibling is gitignored.
+PY=""
+if command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+elif command -v python >/dev/null 2>&1; then
+  PY="python"
+fi
+if [ -n "$PY" ]; then
+  if PATCHED="$("$PY" "$PROJECT_ROOT/scripts/prepare_bom_world.py" "$WORLD")"; then
+    if [ -n "$PATCHED" ] && [ "$PATCHED" != "$WORLD" ]; then
+      echo "BoM body: $PATCHED"
+      WORLD="$PATCHED"
+    fi
+  else
+    echo "WARNING: BoM body patch skipped; opening the shipped world" >&2
+  fi
+fi
+
 # Track for the finish referee from the world's "# TRACK_FILE" tag; a different
 # RBM_TRACK left in the shell is a leftover from an earlier run: override it.
 TAG="$(sed -n 's/^# TRACK_FILE \(.*\)$/\1/p' "$WORLD" | head -n 1 | tr -d '\r')"
@@ -42,6 +63,9 @@ echo "ButlerBot Webots Digital Twin"
 echo "Dashboard: $DASHBOARD_URL"
 echo "World:     $WORLD"
 echo "Track:     ${RBM_TRACK:-(none: S default)}"
+if grep -q '^# STEER_TRACK off' "$WORLD"; then
+  echo "Steer:     camera only (STEER_TRACK off). GPS scores the finish and cross-track. It does not command the wheels."
+fi
 echo "Route:     RBM_ROUTE=${RBM_ROUTE:-(unset)}  RBM_MAX_BLIND_M=${RBM_MAX_BLIND_M:-(4.0)}"
 echo ""
 

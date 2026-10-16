@@ -24,6 +24,28 @@ _SUBS = {
 }
 
 
+def test_steer_source_fraction_on_the_lap_summary():
+    """Camera, held, and track metres are a partition of the lap."""
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, speed=0.44))
+    log.observe(_sample(10.0, 4.4, speed=0.44) | {"steer_source": "camera"})
+    log.observe(_sample(20.0, 7.4, speed=0.30) | {"steer_source": "held"})
+    done = log.observe(
+        _sample(30.0, 9.4, speed=0.25, event="complete") | {"steer_source": "track"}
+    )
+    summary = next(line for line in done if line.startswith("MISSION_SUMMARY"))
+    steer = next(line for line in done if line.startswith("STEER_SOURCE"))
+    fields = _fields(summary)
+    split = _fields(steer)
+    assert float(fields["steer_frac_camera"]) == pytest.approx(4.4 / 9.4, abs=0.02)
+    assert float(fields["steer_frac_held"]) == pytest.approx(3.0 / 9.4, abs=0.02)
+    assert float(fields["steer_frac_track"]) == pytest.approx(2.0 / 9.4, abs=0.02)
+    assert float(split["camera_m"]) == pytest.approx(4.4, abs=0.05)
+    assert float(split["held_m"]) == pytest.approx(3.0, abs=0.05)
+    assert float(split["track_m"]) == pytest.approx(2.0, abs=0.05)
+    assert float(split["frac_camera"]) + float(split["frac_held"]) + float(split["frac_track"]) == pytest.approx(1.0, abs=0.02)
+
+
 def test_shell_scripts_checkout_as_lf():
     text = Path(".gitattributes").read_text(encoding="utf-8")
     assert "*.sh text eol=lf" in text
@@ -1086,6 +1108,83 @@ def test_controller_counter_keeps_energy_the_15s_rule_used_to_drop():
     assert any(line.startswith("STEER_SPLIT ") for line in done)
 
 
+def test_post_hole_keeps_the_counter_and_elec_gaps_are_steps():
+    """camera_s on 875eb13 reported 106/246 samples and max 0.8 s.
+
+    ``n`` is the number of post intervals. ``elec_gaps`` is physics steps
+    whose electrical watts were missing, not a fraction of those posts.
+    106 steps at 8 ms is 0.848 s, about 1.4% of a 60.5 s lap. A 0.8 s
+    hole between posts does not drop watt-hours already in the controller
+    counter. Gap steps add 0 drive Wh, so they undercount only while the
+    hinge was turning without feedback.
+    """
+    from src.twin_energy import SimPackMeter
+
+    meter = SimPackMeter()
+    for _ in range(106):
+        meter.step(0.008, shaft_w=None, elec_w=None, idle_w=19.0)
+    assert meter.elec_gaps == 106
+    assert meter.wh_elec == 0.0
+    assert meter.sim_s == pytest.approx(106 * 0.008, abs=1e-12)
+    assert meter.sim_s / 60.5 == pytest.approx(0.014016, abs=1e-6)
+    meter.step(0.008, shaft_w=4.0, elec_w=20.0, idle_w=19.0)
+    assert meter.wh_elec == pytest.approx(20.0 * 0.008 / 3600.0, rel=1e-9)
+
+    idle_w = 7.20 + 2.66
+    elec_w = 20.0
+    shaft_w = 4.0
+    sim_s = 60.5
+    pack = (elec_w + idle_w) * sim_s / 3600.0
+    log = MissionEnergyLog()
+    assert log.observe(
+        _with_counter(
+            _sample(
+                0.0, 0.0,
+                report_measured=True, measured_drive_w=shaft_w,
+                report_elec=True, measured_drive_elec_w=elec_w,
+            ),
+            controller_run_id="camera-s",
+            energy_sim_s=0.0,
+            energy_wh_shaft=0.0,
+            energy_wh_elec=0.0,
+            energy_wh_idle=0.0,
+            energy_wh_pack=0.0,
+            energy_elec_gaps=0,
+            steer_source="camera",
+        )
+    ) == []
+    done = log.observe(
+        _with_counter(
+            _sample(
+                0.8, 0.26, event="complete",
+                report_measured=True, measured_drive_w=shaft_w,
+                report_elec=True, measured_drive_elec_w=elec_w,
+            ),
+            controller_run_id="camera-s",
+            energy_sim_s=sim_s,
+            energy_wh_shaft=shaft_w * sim_s / 3600.0,
+            energy_wh_elec=elec_w * sim_s / 3600.0,
+            energy_wh_idle=idle_w * sim_s / 3600.0,
+            energy_wh_pack=pack,
+            energy_elec_gaps=106,
+            steer_source="camera",
+        )
+    )
+    summary = _fields(next(line for line in done if line.startswith("MISSION_SUMMARY")))
+    gaps = _fields(next(line for line in done if line.startswith("TELEMETRY_GAPS")))
+    assert float(summary["duration_s"]) == pytest.approx(sim_s, abs=0.05)
+    assert float(summary["wh_measured_drive_elec"]) == pytest.approx(
+        elec_w * sim_s / 3600.0, abs=0.001
+    )
+    assert float(summary["wh_measured"]) == pytest.approx(pack, abs=0.001)
+    assert gaps["n"] == "1"
+    assert float(gaps["max_s"]) == pytest.approx(0.8, abs=0.01)
+    assert gaps["elec_gaps"] == "106"
+    assert gaps["cumulative"] == "1"
+    assert float(gaps["skipped_s"]) == pytest.approx(0.0, abs=1e-9)
+    assert float(summary["duration_s"]) != pytest.approx(0.8, abs=0.05)
+
+
 def test_legacy_integrator_records_a_skipped_gap_and_does_not_bill_it():
     idle_w = 7.20 + 2.66
     elec_w = 20.0
@@ -1186,3 +1285,160 @@ def test_same_run_id_does_not_reset_the_segment_index():
     )
     seg = _fields(next(line for line in second if line.startswith("SEGMENT_ENERGY")))
     assert seg["seg_idx"] == "1"
+
+
+def test_blank_bom_stamps_measured_from_the_yaml_motor():
+    """Shaft |τ|·|ω| does not need a catalog build. Legs are left alone."""
+    from src.hardware_profile import active_bom_build, get_active_profile
+    from src.twin.webots_power import (
+        build_webots_telemetry,
+        measured_drive_split,
+        restamp_active_bom,
+    )
+
+    old = _use_bom(None)
+    try:
+        assert active_bom_build() is None
+        v = 0.16
+        omega = v / 0.08
+        tau = 0.2
+        joints = [
+            {"name": "left_wheel", "velocity": omega, "torque": 0.4, "torque_feedback_nm": tau},
+            {"name": "right_wheel", "velocity": omega, "torque": 0.4, "torque_feedback_nm": tau},
+        ]
+        prof = get_active_profile()
+        payload = build_webots_telemetry(
+            joints=joints, gait="drive", phase="teleop", speed_m_s=v, profile=prof
+        )
+        legs = payload["channel_draws"]["Legs"]
+        stamped = restamp_active_bom(payload)
+        split = measured_drive_split(joints, v, prof)
+        assert split is not None and split["elec_w"] is not None
+        assert split["shaft_w"] == pytest.approx(2 * tau * omega)
+        assert stamped["channel_draws"]["Legs"] == legs
+        assert stamped["locomotion"]["measured_drive_w"] == pytest.approx(split["shaft_w"])
+        assert stamped["locomotion"]["measured_drive_elec_w"] == pytest.approx(split["elec_w"])
+        assert split["elec_w"] > split["shaft_w"]
+        quiet = build_webots_telemetry(
+            joints=[
+                {"name": "left_wheel", "velocity": omega, "torque": 0.4},
+                {"name": "right_wheel", "velocity": omega, "torque": 0.4},
+            ],
+            gait="drive",
+            phase="teleop",
+            speed_m_s=v,
+            profile=prof,
+        )
+        missing = restamp_active_bom(quiet)
+        assert missing["locomotion"]["measured_drive_w"] is None
+        assert missing["locomotion"]["measured_drive_elec_w"] is None
+        assert missing["channel_draws"]["Legs"] == quiet["channel_draws"]["Legs"]
+    finally:
+        _restore_bom(old)
+
+
+def test_summary_file_keeps_body_summary_and_measured_without_a_bom_build(tmp_path):
+    """The three lines land in a file. Measured Wh is the hinge integral."""
+    from src.mission_summary_file import (
+        append_mission_lines,
+        observe_controller_payload,
+        reset_mission_summary_file,
+    )
+    from src.webots_body import format_bom_body_log_line
+
+    old = _use_bom(None)
+    reset_mission_summary_file()
+    try:
+        body = format_bom_body_log_line()
+        assert body is not None and body.startswith("BOM BODY build=default ")
+        assert "contact_radius_m=0.08" in body
+        append_mission_lines(
+            [body],
+            source="controller",
+            directory=str(tmp_path),
+            mirror_dashboard_log=True,
+        )
+        log = MissionEnergyLog()
+        loco = {
+            "gait": "drive",
+            "speed_m_s": 0.4,
+            "energy_sim_s": 0.0,
+            "energy_wh_shaft": 0.0,
+            "energy_wh_elec": 0.0,
+            "energy_wh_idle": 0.0,
+            "energy_wh_pack": 0.0,
+            "steer_source": "camera",
+        }
+        base = {
+            "source": "webots",
+            "robot": {"name": "ButlerBot", "main_battery_pct": 99.0, "battery_capacity_wh": 480},
+            "channel_draws": {"Compute": 10.0, "Legs": 3.0, "Arms": 0.0, "Torso": 0.0},
+            "pose": {"x_m": 0.0, "y_m": 0.0, "heading_rad": 0.0},
+            "locomotion": loco,
+            "sensors": {},
+            "timestamp": _T0.isoformat(),
+        }
+        observe_controller_payload(log, base, directory=str(tmp_path))
+        done_payload = {
+            **base,
+            "timestamp": (_T0 + timedelta(seconds=20)).isoformat(),
+            "pose": {"x_m": 8.0, "y_m": 0.2, "heading_rad": 0.1},
+            "sensors": {"mission_event": "complete"},
+            "locomotion": {
+                **loco,
+                "energy_sim_s": 20.0,
+                "energy_wh_shaft": 0.05,
+                "energy_wh_elec": 0.20,
+                "energy_wh_idle": 0.06,
+                "energy_wh_pack": 0.26,
+                "steer_source": "camera",
+                "width_err_m": 0.011,
+                "center_err_m": -0.006,
+                "ct_max_m": 0.02,
+            },
+        }
+        lines, written = observe_controller_payload(log, done_payload, directory=str(tmp_path))
+        summary = next(line for line in lines if line.startswith("MISSION_SUMMARY"))
+        energy = next(line for line in lines if line.startswith("MISSION_ENERGY"))
+        assert "steer_frac_camera=" in summary
+        assert "ct_max_m=" in summary
+        assert "width_err_rms_m=" in summary
+        assert "center_err_rms_m=" in summary
+        fields = _fields(summary)
+        assert fields["wh_measured"] != "na"
+        assert float(fields["wh_measured"]) == pytest.approx(0.26, abs=0.001)
+        # No BoM build: the summary model column is blank. Measured is the hinge integral.
+        assert fields["wh_model"] == ""
+        assert fields["build"] == "default"
+        energy_fields = _fields(energy)
+        assert energy_fields["build"] == "default"
+        assert energy_fields["wh_measured"] not in ("", "na")
+        assert float(energy_fields["wh_measured"]) == pytest.approx(0.26, abs=0.02)
+        assert energy_fields["wh_model"] not in ("", "na")
+        # V1 cruise lump vs measured drive + idle is not a like-for-like error.
+        assert energy_fields["err_pct"] == "na"
+        text = Path(written).read_text(encoding="utf-8")
+        assert "BOM BODY build=default" in text
+        assert "MISSION_SUMMARY" in text
+        assert "MISSION_ENERGY" in text
+        assert "steer_frac_camera=" in text
+        assert "width_err_rms_m=" in text
+        logged = next(tmp_path.glob("robot_monitor_*.log")).read_text(encoding="utf-8")
+        assert "BOM BODY build=default" in logged
+        assert "MISSION_SUMMARY" in logged
+        assert "wh_measured=" in logged
+    finally:
+        reset_mission_summary_file()
+        _restore_bom(old)
+
+
+def test_controller_writes_the_summary_file_and_meters_a_blank_build():
+    controller = Path(
+        "webots/controllers/butlerbot_controller/butlerbot_controller.py"
+    ).read_text(encoding="utf-8")
+    assert "observe_controller_payload" in controller
+    assert "MISSION_SUMMARY written" in controller
+    assert "append_mission_lines" in controller
+    assert "if pack_meter is not None and _uses_bom_pack():" not in controller
+    assert "loco.update(pack_meter.snapshot())" in controller
+

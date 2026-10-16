@@ -36,10 +36,16 @@ env/
 logs/*.db
 logs/*.log
 logs/speed_trace_*.csv
+logs/mission_summary_*.json
 archives/
 webots/controllers/**/logs/
 webots/worlds/*.jpg
 webots/worlds/.*.wbproj
+# BoM body siblings (mass + contact radius). Shipped worlds stay the 0.08 m mesh.
+webots/worlds/*.bom-*.wbt
+# Stronger camera_s paint (RBM_CAMERA_S_WIDTH). Shipped world stays 1.15–1.45 m.
+tracks/camera_s_w*.json
+webots/worlds/butlerbot_camera_s_w*.wbt
 __pycache__/
 
 # OS

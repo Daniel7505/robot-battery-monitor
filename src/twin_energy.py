@@ -29,9 +29,12 @@ TEN_FT_M = 3.048
 GRAVITY_M_S2 = 9.81
 DEFAULT_CRR = 0.015
 DEFAULT_DRIVER_EFF = 0.92
-# Drive-wheel hinge in every butlerbot*.wbt. The mesh stays 0.08 m and
-# lane_keep.WHEEL_RADIUS_M stays 0.08. These are world-file constants,
-# not a fit to a logged run.
+# Drawn mesh and contact cylinder in every shipped butlerbot*.wbt, and the
+# radius the controller's v = ω·r uses. A selected bom_build changes body
+# mass only (src/webots_body.py). The catalog wheel diameter is not written
+# onto the contact cylinder: hinge-damper shaft energy scales as 1/r², and
+# a 0.04 m / 0.10 m tire made light and heavy disagree with this bill.
+# This constant is that bill. It is not refit per build.
 SIM_WHEEL_RADIUS_M = 0.08
 SIM_HINGE_DAMPING_NM_S_RAD = 0.15
 # butlerbot_warehouse.wbt WorldInfo contactProperties, drive_wheel vs
@@ -268,6 +271,18 @@ ENERGY_COUNTER_KEYS = (
 LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "controller_run_id",
     "steer_split",
+    "steer_source",
+    "steer_lateral",
+    "fit_reject",
+    "cross_track_m",
+    "ct_max_m",
+    "lane_width_m",
+    "width_live",
+    "true_width_m",
+    "true_width_near_m",
+    "width_err_m",
+    "center_err_m",
+    "lane_frame_n",
     "energy_elec_gaps",
 )
 
@@ -491,8 +506,14 @@ class SimPackMeter:
     late or dropped POST cannot move SoC without moving ``wh_measured``.
 
     A missing electrical sample adds no drive watts and increments
-    ``elec_gaps``. Idle is still billed. The rolling prediction is not
-    written in place of the missing drive. A single step longer than
+    ``elec_gaps``. That counter is physics steps, not telemetry posts.
+    Idle is still billed. The rolling prediction is not written in
+    place of the missing drive. The dashboard bills the snapshot
+    delta, so a short hole between posts (the camera_s lap's 0.8 s
+    max) does not drop watt-hours already in the counter. A gap step
+    undercounts drive only while the hinge was turning without
+    feedback. A parked default-build wheel omits feedback and counts
+    as a gap at about 0 W. A single step longer than
     ``PACK_DRAW_MAX_DT_S`` adds nothing: a physics step is 8 ms, so that
     guard is only a bad clock.
     """
@@ -720,24 +741,30 @@ def _profile_motor_args(profile: dict) -> dict:
 def _hub_electrical_w(args: dict, mass_kg: float, speed_m_s: float, tau_scrub_nm: float) -> tuple[float, bool]:
     """One hub's pack watts at body speed, plus an optional scrub torque.
 
-    Electrical speed stays body speed / BoM radius. ``turning_scrub_point``
-    bills only the difference between a yawed pair and this straight pair,
-    which is the turn term already checked on warehouse laps. The straight
-    viscous bill is ``sim_drive_terms`` at the hinge rate, not this helper.
-    A hub at 0 m/s bills 0 W. Scrub torque is clamped at stall.
+    Electrical speed is body speed / 0.08 m. That is the contact hinge
+    the measured pack watts use, and the same rate as ``sim_drive_terms``.
+    Rolling torque still uses the catalog BoM radius, so the 3.43 W
+    design bill does not move. ``turning_scrub_point`` bills only the
+    difference between a yawed pair and this straight pair.
+
+    Billing that difference at ``v / catalog radius`` doubled the light
+    shaft speed (0.04 m vs 0.08 m) and over-billed light corners. Heavy's
+    catalog radius is 0.10 m, close to the hinge, so the same mistake
+    stayed small. A hub at 0 m/s bills 0 W. Scrub torque is clamped at stall.
     """
     speed = float(speed_m_s)
     if speed <= 1e-9:
         return 0.0, False
     radius = max(float(args["wheel_radius_m"]), 1e-6)
+    hinge = SIM_WHEEL_RADIUS_M if SIM_WHEEL_RADIUS_M > 0.0 else radius
     tau = (
         float(args["crr"]) * float(mass_kg) * GRAVITY_M_S2 * radius / 2.0
-        + SIM_HINGE_DAMPING_NM_S_RAD * speed / SIM_WHEEL_RADIUS_M
+        + SIM_HINGE_DAMPING_NM_S_RAD * speed / hinge
         + max(0.0, float(tau_scrub_nm))
     )
     point = electrical_from_shaft_w(
         tau,
-        speed / radius,
+        speed / hinge,
         voltage_v=args["voltage_v"],
         no_load_rpm=args["no_load_rpm"],
         no_load_current_a=args["no_load_current_a"],
@@ -1101,7 +1128,13 @@ def format_mission_energy_line(
 
     With ``duration_s`` and a BoM build, the model is idle over the whole
     run plus drive for ``dist_m``, not drive-only and not idle only while
-    the wheels are turning.
+    the wheels are turning. ``err_pct`` is that total against measured
+    drive plus idle.
+
+    With no BoM build the printed model is the V1 cruise lump (idle and
+    drive in one number, blank drive terms). Measured is hinge drive
+    plus channel idle. Those are not the same split, so ``err_pct`` is
+    ``na`` instead of a percent.
     """
     from src.config import config
     from src.hardware_profile import active_bom_build
@@ -1137,7 +1170,10 @@ def format_mission_energy_line(
         err_txt = ""
     else:
         measured_txt = f"{float(wh_measured):.2f}"
-        if wh_model:
+        # No BoM: V1 lump vs measured drive+idle is not a like-for-like error.
+        if not active_bom_build():
+            err_txt = "na"
+        elif wh_model:
             err_txt = f"{(float(wh_measured) - wh_model) / wh_model * 100.0:.1f}"
         else:
             err_txt = ""

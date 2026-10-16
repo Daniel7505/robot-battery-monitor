@@ -34,12 +34,13 @@ LANE_VISION_HEADER = (
     "nL_pts,nR_pts,steer,target_speed,new_frame,run_id,"
     "state,corner_dir,corner_m,corner_conf,yaw_deg,yaw_target_deg,"
     "junction_type,junction_m,openings,route_choice,blind_m,"
-    "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving"
+    "obstacle_state,obstacle_m,obstacle_band,obstacle_conf,obstacle_moving,"
+    "lane_width_m,width_live,true_width_m,true_width_near_m,width_err_m,center_err_m"
 )
 # Corner columns sit AFTER run_id, junction columns after those, obstacle
-# columns (empty when RBM_OBSTACLES is off) last, so rows
-# appended to an older lane-vision.csv (old header) still line up for every
-# column the old header names.
+# columns (empty when RBM_OBSTACLES is off) after those, and the width
+# columns last, so rows appended to an older lane-vision.csv (old header)
+# still line up for every column the old header names.
 # One row per controller start (run_id) next to lane-vision.csv: which world /
 # track / route the run had. A side file, so lane-vision.csv keeps its header.
 RUN_META_LOG_NAME = "lane-vision-runs.csv"
@@ -74,6 +75,63 @@ def log_dir() -> str:
             pass
         return d
     return DEFAULT_LOG_DIR
+
+
+def apply_lane_steer(lane_eyes: dict, lk: dict | None) -> None:
+    """Copy the command that just steered onto the telemetry eyes.
+
+    Called on every lane-keep step, including the finish override. Copying
+    only inside the finish branch left the lap counter at a 0.1 s ``stopped``
+    stub, so ``steer_frac_camera`` stayed 0 while every vision row was rowfit.
+    """
+    if not isinstance(lane_eyes, dict) or not isinstance(lk, dict):
+        return
+    lane_eyes["steer"] = lk.get("steer")
+    lane_eyes["phase"] = lk.get("phase")
+    lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+    if lk.get("steer_source"):
+        lane_eyes["steer_source"] = lk.get("steer_source")
+        lane_eyes["steer_lateral"] = lk.get("steer_lateral")
+        lane_eyes["fit_reject"] = lk.get("fit_reject") or ""
+
+
+def lane_frame_fields(est, track, x_m, y_m, cross_track_m) -> dict:
+    """Measured width and center versus the painted track, for one camera frame.
+
+    ``width_err_m`` is set only when this frame fitted the width from both
+    lines. It is measured width minus the painted width ``WIDTH_FIT_AHEAD_M``
+    ahead of the axle, which is where the near fit looks. ``center_err_m`` is
+    the fitted offset minus the GPS cross-track (both + = robot left of centre).
+    """
+    from src.lane_vision import WIDTH_FIT_AHEAD_M
+
+    out = {
+        "lane_width_m": None,
+        "width_live": 0,
+        "true_width_m": None,
+        "true_width_near_m": None,
+        "width_err_m": None,
+        "center_err_m": None,
+    }
+    live = bool(est is not None and getattr(est, "valid", False) and getattr(est, "width_live", False))
+    if est is not None and (getattr(est, "valid", False) or getattr(est, "held", False)):
+        out["lane_width_m"] = round(float(est.lane_width_m), 4)
+        out["width_live"] = 1 if live else 0
+    if track is not None and x_m is not None and y_m is not None:
+        pr = track.project(float(x_m), float(y_m))
+        s = float(pr["s_m"])
+        out["true_width_m"] = round(float(track.width_at_s(s)), 4)
+        out["true_width_near_m"] = round(float(track.width_at_s(s + WIDTH_FIT_AHEAD_M)), 4)
+    if live and out["lane_width_m"] is not None and out["true_width_near_m"] is not None:
+        out["width_err_m"] = round(out["lane_width_m"] - out["true_width_near_m"], 4)
+    if (
+        est is not None
+        and getattr(est, "valid", False)
+        and not getattr(est, "held", False)
+        and cross_track_m is not None
+    ):
+        out["center_err_m"] = round(float(est.offset_m) - float(cross_track_m), 4)
+    return out
 
 
 def _fmt(v, nd=4) -> str:
@@ -148,7 +206,7 @@ class LaneVisionLog:
         except OSError:
             pass
 
-    def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool, yaw=None) -> None:
+    def write(self, *, x_m, y_m, mode, est, cmd: dict, new_frame: bool, yaw=None, measure: dict | None = None) -> None:
         try:
             if not self._ready:
                 new = not os.path.isfile(self.path) or os.path.getsize(self.path) == 0
@@ -190,6 +248,18 @@ class LaneVisionLog:
                 _fmt(cmd.get("obstacle_conf"), 2),
                 ("1" if cmd.get("obstacle_moving") else ""),
             ]
+            meas = measure if new_frame and measure else {}
+            width_known = est is not None and (
+                getattr(est, "valid", False) or getattr(est, "held", False)
+            )
+            vals.extend([
+                _fmt(est.lane_width_m if width_known else None, 4),
+                "1" if est is not None and getattr(est, "width_live", False) and getattr(est, "valid", False) else "0",
+                _fmt(meas.get("true_width_m"), 4),
+                _fmt(meas.get("true_width_near_m"), 4),
+                _fmt(meas.get("width_err_m"), 4),
+                _fmt(meas.get("center_err_m"), 4),
+            ])
             with open(self.path, "a", encoding="ascii") as fh:
                 fh.write(",".join(vals) + "\n")
         except OSError:
@@ -359,15 +429,18 @@ class RowfitRuntime:
         self.frames += 1
         return est
 
-    def command(self, dt: float, yaw: float | None = None, *, log=print) -> dict:
+    def command(self, dt: float, yaw: float | None = None, *, pose=None, log=print) -> dict:
         """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
         sharp-corner pivot (without it a corner ends in the lost-lane brake).
-        Corner state changes are printed through ``log``."""
+        ``pose`` is ``(x, y)`` metres; with a track loaded it sets pivot
+        distance. Corner state changes are printed through ``log``."""
         new = self._has_pending
         est = self._pending if new else None
         self._has_pending = False
         self._pending = None
-        cmd = self.ctl.step(est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw)
+        cmd = self.ctl.step(
+            est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw, pose=pose
+        )
         if self.obstacles is not None:
             gate = self.obstacles.gate
             if gate.emergency and not cmd.get("brake"):
@@ -375,6 +448,7 @@ class RowfitRuntime:
                 gate.emergency = False
                 self.ctl.gov.v = 0.0
                 cmd = {**cmd, "left": 0.0, "right": 0.0, "brake": True, "phase": "rowfit_stop",
+                       "steer_source": "stopped", "steer_lateral": "stopped",
                        "reason": "obstacle inside braking distance"}
                 log("OBSTACLE emergency stop — inside the braking distance, ABS")
             cmd = {**cmd, **self.obstacles.fields()}
@@ -400,6 +474,8 @@ class RowfitRuntime:
             return f"PIVOT {side}"
         if c.state == "REACQUIRE":
             return f"REACQUIRE {c.reacq_ok}/3"
+        if c.state == "RECOVER":
+            return f"RECOVER {c.recover_m:.2f}m"
         if c.state == "JUNCTION_APPROACH" and c.junction is not None:
             return f"JCT {c.junction.kind} {c.jn_center_m or 0:.2f}m {c.junction.openings().replace(' ', '')}"
         if c.state == "GAP_CROSS":

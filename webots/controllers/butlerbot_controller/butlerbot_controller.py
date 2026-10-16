@@ -130,6 +130,8 @@ from controller_rowfit import (
     world_check_warnings,
     RowfitRuntime,
     guard_per_frame as _guard_per_frame,
+    apply_lane_steer,
+    lane_frame_fields,
     lane_mode as _lane_mode,
     log_dir as _log_dir,
 )
@@ -147,6 +149,7 @@ from controller_wheels import (
     STOP_YAW_RATE_RAD_S,
     WHEEL_RADIUS_M,
     AbsBrakeController,
+    bind_drive_radius,
     SpeedEstimator,
     _apply_soft_grip,
     _clamp,
@@ -660,8 +663,95 @@ def _harvest_nadir(cams: dict, nadir_fn, gps_xy, yaw: float) -> dict:
     return eyes
 
 
+def _sync_bom_body(robot: Robot) -> bool:
+    """Load BoM mass. True means stop for a reload.
+
+    The shipped world keeps the 0.08 m wheel. A selected ``bom_build`` writes
+    a sibling world (see ``src.webots_body``) whose body mass and inertia
+    follow the BoM, then reloads it. The contact cylinder stays 0.08 m, and
+    ``v = ω · r`` stays on that radius, matching odometry and the viscous
+    energy bill. The catalog wheel diameter is only logged. No build
+    selected: this does nothing.
+    """
+    try:
+        from src.webots_body import (
+            DRAWN_WHEEL_RADIUS_M,
+            bom_body_physics,
+            format_bom_body_log_line,
+            install_command_radius,
+            plan_bom_world,
+        )
+    except Exception as exc:
+        print(f"BOM BODY skipped ({type(exc).__name__}: {exc})")
+        return False
+    physics = bom_body_physics()
+    if physics is None:
+        # Blank bom_build still names the shipped 3.2 kg / 0.08 m body.
+        # print() stays in the webots-bin console, which Windows cannot redirect.
+        line = format_bom_body_log_line()
+        if line:
+            print(line)
+            _record_mission_lines([line])
+        return False
+    try:
+        loaded = str(robot.getWorldPath() or "")
+    except Exception:
+        loaded = ""
+    if not loaded:
+        print("BOM BODY skipped: controller has no world path")
+        return False
+    try:
+        plan = plan_bom_world(loaded)
+    except Exception as exc:
+        print(f"BOM BODY patch failed ({type(exc).__name__}: {exc})")
+        return False
+    target = plan.path
+    if plan.reload:
+        print(
+            f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
+            f"catalog_wheel_radius_m={physics.wheel_radius_m:g} "
+            f"contact_radius_m={physics.contact_radius_m:g} "
+            f"drawn_wheel_radius_m={DRAWN_WHEEL_RADIUS_M:g} "
+            f"-> {os.path.basename(target)} (reloading; contact stays {physics.contact_radius_m:g} m)"
+        )
+        _record_mission_lines([format_bom_body_log_line(physics.build) or ""])
+        if not hasattr(robot, "worldLoad"):
+            print(f"BOM BODY open this world and restart: {target}")
+            return False
+        try:
+            robot.worldLoad(os.path.abspath(target))
+        except Exception as exc:
+            print(f"BOM BODY reload failed ({type(exc).__name__}: {exc}); drawn wheel stays")
+            return False
+        return True
+    install_command_radius(physics.contact_radius_m)
+    bind_drive_radius(physics.contact_radius_m)
+    global WHEEL_RADIUS_M
+    WHEEL_RADIUS_M = physics.contact_radius_m
+    body_line = format_bom_body_log_line(physics.build) or (
+        f"BOM BODY build={physics.build} mass_kg={physics.mass_kg:g} "
+        f"contact_radius_m={physics.contact_radius_m:g}"
+    )
+    print(body_line)
+    _record_mission_lines([body_line])
+    return False
+
+
+def _record_mission_lines(lines: list[str]) -> str | None:
+    """Append lines to logs/mission_summary_<ts>.json and the repo dashboard log."""
+    try:
+        from src.mission_summary_file import append_mission_lines
+
+        return append_mission_lines(lines, source="controller", mirror_dashboard_log=True)
+    except Exception as exc:
+        print(f"MISSION log file skipped ({type(exc).__name__}: {exc})")
+        return None
+
+
 def _run_loop(robot: Robot, opts: dict) -> None:
     """Priority: ABS → dashboard API → keyboard → nadir keep → residual park."""
+    if _sync_bom_body(robot):
+        return
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
@@ -683,12 +773,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     # restart changes this, and the energy log summarizes the old mission.
     controller_run_id = f"{_RUN_ID}-{os.getpid()}"
     pack_meter = None
+    controller_energy_log = None
     try:
         from src.twin_energy import SimPackMeter
 
         pack_meter = SimPackMeter()
     except Exception as exc:
         print(f"Pack energy meter failed ({type(exc).__name__}: {exc})")
+    try:
+        from src.mission_energy_log import MissionEnergyLog
+
+        controller_energy_log = MissionEnergyLog()
+    except Exception as exc:
+        print(f"Mission energy log failed ({type(exc).__name__}: {exc})")
     thermal_c = 22.0
     tick = 0
     publish_fail_streak = 0
@@ -727,10 +824,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         try:
             rowfit_rt = RowfitRuntime()
             lane_vision_log = LaneVisionLog()
+            _lane_csv = os.path.abspath(lane_vision_log.path)
             print(
                 f"LANE MODE rowfit (run_id {_RUN_ID}) — lane_vision fit, "
-                f"log → {lane_vision_log.path}"
+                f"log → {_lane_csv}"
             )
+            _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
@@ -741,7 +840,27 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         guard_kw = {"guard_new_frame": False}
         print("NadirGuard: per-frame unison check ON (RBM_NADIR_GUARD_PER_FRAME)")
     finish_ref = _load_finish_referee(robot)
-    print(f"FINISH REFEREE {finish_ref.describe()} — GPS referee only, not used for steering")
+    print(f"FINISH REFEREE {finish_ref.describe()} — GPS finish line, not used to steer")
+    try:
+        from src.track_geometry import steer_track_enabled
+
+        _loaded_world = str(robot.getWorldPath() or "")
+        _steer_track = steer_track_enabled(_loaded_world)
+    except Exception:
+        _steer_track = True
+    if rowfit_rt is not None and _steer_track and getattr(finish_ref, "track", None) is not None:
+        rowfit_rt.ctl.set_track(finish_ref.track)
+        print(
+            f"ROWFIT corners use track {finish_ref.name} for pivot distance "
+            "(a short camera view cannot start the turn early). "
+            "The track does not set wheel curvature."
+        )
+    elif rowfit_rt is not None:
+        print(
+            "ROWFIT steer track off — wheels follow the nadir cameras. "
+            "GPS still scores the finish line and cross-track. "
+            "It is not given to the wheel command."
+        )
     for _wmsg in world_check_warnings(robot, finish_ref):
         print("!" * 78)
         print(f"WARNING {_wmsg}")
@@ -749,6 +868,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     if lane_vision_log is not None:
         lane_vision_log.write_run_meta(robot, finish_ref, rowfit_rt)
     lane_keep_on = False
+    ct_peak_m = 0.0
+    ct_latest_m = None
     last_lane_sig = ""
     lane_eyes = _empty_lane_eyes()
     yaw_rate = 0.0
@@ -896,6 +1017,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         motors[_w].setPosition(float("inf"))
         motors[_w].setVelocity(0.0)
 
+    # Kept across ticks. A new camera frame rarely lands on a telemetry
+    # post; clearing this every step dropped width and center errors
+    # before MISSION_SUMMARY could see them. Each frame is also noted
+    # once on the energy log (see note_lane_frame) so a later post of
+    # the same frame does not count twice.
+    lane_fit_fields: dict = {}
     while robot.step(timestep) != -1:
         try:
             tick += 1
@@ -957,6 +1084,14 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
             gps_xy = _gps_xy(gps)
+            if gps_xy is not None and hasattr(finish_ref, "cross_track"):
+                try:
+                    _ct_now = finish_ref.cross_track(float(gps_xy[0]), float(gps_xy[1]))
+                except Exception:
+                    _ct_now = None
+                if _ct_now is not None:
+                    ct_latest_m = float(_ct_now)
+                    ct_peak_m = max(ct_peak_m, abs(ct_latest_m))
             if not mission_capped and gps_xy is not None:
                 if mission_prev_xy is not None:
                     _step_m = math.hypot(
@@ -1195,7 +1330,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     # Pretend-pick stop after obstacle apply (harvest), before wheel command
                     if getattr(rowfit_rt, "inventory", None) is not None:
                         rowfit_rt.inventory.update(gps_xy, prev_yaw, dt, ctl=rowfit_rt.ctl)
-                    lk = rowfit_rt.command(dt, yaw=prev_yaw if imu is not None else None)
+                    lk = rowfit_rt.command(
+                        dt,
+                        yaw=prev_yaw if imu is not None else None,
+                        pose=None if gps_xy is None else (float(gps_xy[0]), float(gps_xy[1])),
+                    )
                 else:
                     if guard_kw:
                         guard_kw["guard_new_frame"] = bool(harvest_now)
@@ -1255,12 +1394,30 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "brake": True,
                         "steer": 0.0,
                         "phase": "first_lobe_done",
-                        "error_source": "nadir",
+                        "error_source": "rowfit" if rowfit_rt is not None else "nadir",
+                        "steer_source": "stopped",
+                        "steer_lateral": "stopped",
+                        "fit_reject": "",
+                        "reason": "finish",
                     }
-                lane_eyes["steer"] = lk.get("steer")
-                lane_eyes["phase"] = lk.get("phase")
-                lane_eyes["error_source"] = lk.get("error_source") or "nadir"
+                # Every command, not only the finish ``stopped`` override.
+                # Telemetry is what STEER_SOURCE integrates.
+                apply_lane_steer(lane_eyes, lk)
                 if rowfit_rt is not None and rowfit_new:
+                    try:
+                        _meas = lane_frame_fields(
+                            rowfit_rt.est,
+                            getattr(finish_ref, "track", None),
+                            None if gps_xy is None else gps_xy[0],
+                            None if gps_xy is None else gps_xy[1],
+                            ct_latest_m,
+                        )
+                    except Exception:
+                        _meas = {}
+                    lane_fit_fields = {k: v for k, v in _meas.items() if v is not None}
+                    lane_fit_fields["lane_frame_n"] = int(rowfit_rt.frames)
+                    if controller_energy_log is not None:
+                        controller_energy_log.note_lane_frame(lane_fit_fields)
                     if lane_vision_log is not None:
                         lane_vision_log.write(
                             x_m=None if gps_xy is None else round(float(gps_xy[0]), 3),
@@ -1270,12 +1427,13 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             cmd=lk,
                             new_frame=True,
                             yaw=prev_yaw,
+                            measure=_meas,
                         )
                     _e = rowfit_rt.est
                     if _e is not None and getattr(_e, "held", False):
                         _rj = _e.rejected or {}
                         print(
-                            f"Rowfit REJECTED fit ({_e.reject_reason}) — holding last lane "
+                            f"Rowfit REJECTED fit ({_e.reject_reason}) — steer={lk.get('steer_source')} holding last lane "
                             f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} k={_e.curvature_1pm:+.2f}; "
                             f"rejected off={_rj.get('offset_m', float('nan')):+.3f} "
                             f"hd={_rj.get('heading_rad', float('nan')):+.3f} "
@@ -1289,7 +1447,15 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                             f"off={_e.offset_m:+.3f} hd={_e.heading_rad:+.3f} "
                             f"k={_e.curvature_1pm:+.2f} conf={_e.confidence:.2f} "
                             f"nL={_e.n_left} nR={_e.n_right} "
-                            f"v*={lk.get('target_speed')} phase={lk.get('phase')}"
+                            f"w={_e.lane_width_m:.3f}"
+                            + (
+                                ""
+                                if _meas.get("true_width_near_m") is None
+                                else f" true={_meas['true_width_near_m']:.3f}"
+                            )
+                            + (" live" if _e.width_live else "")
+                            + f" v*={lk.get('target_speed')} phase={lk.get('phase')} "
+                            f"steer_source={lk.get('steer_source')}"
                             if _e.valid
                             else f"Rowfit no lane (frame {rowfit_rt.frames}) phase={lk.get('phase')}"
                         )
@@ -1559,7 +1725,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 phase_name = "teleop"
             motion_factor = 1.0 if (moving or turning) else 0.0
             cap_wh = 0.0
-            if _uses_bom_pack() and pack_meter is not None:
+            pack_step_wh = None
+            if pack_meter is not None:
                 # Pack draw is measured electrical drive plus the non-drive
                 # channels. Legs in the preview are the rolling prediction;
                 # substituting that for hinge torque made wh_measured_soc
@@ -1570,6 +1737,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 # seconds blocked in HTTP used to bill that many seconds of
                 # sim watts, and a hole over 15 s was dropped by the log
                 # (run #11, wh_measured 6.381 vs wh_measured_soc 7.224).
+                # A blank bom_build still integrates. Shaft |τ|·|ω| uses the
+                # YAML motor line. Only the battery percent stays on the old
+                # joint-watt drain unless a BoM pack is selected.
                 try:
                     from src.twin.webots_power import measured_drive_split
 
@@ -1591,16 +1761,19 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         for name, watts in channels.items()
                         if name != "Legs" and watts is not None
                     )
-                    pack_step_wh = pack_meter.step(
+                    pack_meter.step(
                         dt, shaft_w=shaft_w, elec_w=elec_w, idle_w=idle_w
                     )
-                    total_draw = float(pack_meter.last_pack_w)
-                    cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
-                    drain_dt = dt
+                    if _uses_bom_pack():
+                        pack_step_wh = pack_meter.last_step_wh
+                        total_draw = float(pack_meter.last_pack_w)
+                        cap_wh = float((preview.get("robot") or {}).get("battery_capacity_wh") or 0.0)
+                        drain_dt = dt
                 except Exception:
-                    cap_wh = 0.0
-                    drain_dt = dt
-                    pack_step_wh = None
+                    if _uses_bom_pack():
+                        cap_wh = 0.0
+                        drain_dt = dt
+                        pack_step_wh = None
             if pack_step_wh is not None:
                 if cap_wh <= 0:
                     cap_wh = float(
@@ -1944,6 +2117,12 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         "error_source": lane_eyes.get("error_source") or "nadir",
                         "lane_phase": lane_eyes.get("phase"),
                         "steer": lane_eyes.get("steer"),
+                        "steer_source": lane_eyes.get("steer_source"),
+                        "steer_lateral": lane_eyes.get("steer_lateral"),
+                        "fit_reject": lane_eyes.get("fit_reject"),
+                        "cross_track_m": None if ct_latest_m is None else round(ct_latest_m, 4),
+                        "ct_max_m": None if ct_latest_m is None else round(ct_peak_m, 4),
+                        **lane_fit_fields,
                         "agent_throttle": throttle_factor,
                         "braking": abs_brake.active,
                         "residual_spin": residual_spin,
@@ -1978,12 +2157,31 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 sensors_out = payload.get("sensors")
                 if isinstance(sensors_out, dict):
                     sensors_out["controller_run_id"] = controller_run_id
-                if pack_meter is not None and _uses_bom_pack():
+                if pack_meter is not None:
                     loco.update(pack_meter.snapshot())
+                if lane_eyes.get("steer_source"):
+                    loco["steer_source"] = lane_eyes.get("steer_source")
+                    loco["steer_lateral"] = lane_eyes.get("steer_lateral")
+                    loco["fit_reject"] = lane_eyes.get("fit_reject") or ""
+                if ct_latest_m is not None:
+                    loco["cross_track_m"] = round(ct_latest_m, 4)
+                    loco["ct_max_m"] = round(ct_peak_m, 4)
+                loco.update(lane_fit_fields)
                 if speed_trace.steer_text:
                     loco["steer_split"] = speed_trace.steer_text
                     if isinstance(sensors_out, dict):
                         sensors_out["steer_split"] = speed_trace.steer_text
+                if controller_energy_log is not None:
+                    try:
+                        from src.mission_summary_file import observe_controller_payload
+
+                        _sum_lines, _sum_path = observe_controller_payload(
+                            controller_energy_log, payload
+                        )
+                        if any(line.startswith("MISSION_SUMMARY") for line in _sum_lines):
+                            print(f"MISSION_SUMMARY written → {_sum_path}")
+                    except Exception as exc:
+                        print(f"MISSION_SUMMARY file skipped ({type(exc).__name__}: {exc})")
                 result = publish_telemetry(payload, dashboard)
                 if result.get("ok", False):
                     publish_fail_streak = 0
@@ -2101,6 +2299,10 @@ def _read_joints(
         if wheel_parked and not _uses_bom_pack():
             # Legacy sim: a flat 2 W so a parked hub is not free. A BoM build
             # falls through and uses the published encoder idle instead.
+            # torque_feedback is left off, so this step counts as an
+            # electrical gap. Shaft power is ~0 here, so the gap does not
+            # move the moving-lap watt-hour integral. A miss while the
+            # hinge is turning does undercount that step.
             joints.append({
                 "name": motor_name,
                 "position": round(position, 4),

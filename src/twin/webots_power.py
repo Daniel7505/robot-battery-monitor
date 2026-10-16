@@ -297,9 +297,9 @@ def measured_drive_w(
 
     τ is ``torque_feedback_nm`` only. The ``torque`` field is the load
     the electrical model used, and a BoM build stores 0 there, so it is
-    not a measurement. ω is the wheel position-sensor rate (rad/s of the
-    0.08 m world wheel). When that rate is missing and the body is
-    moving, ω = speed / 0.08. The BoM radius 0.04 m is not used.
+    not a measurement. ω is the wheel position-sensor rate. When that
+    rate is missing and the body is moving, ω = speed / R. R stays the
+    0.08 m contact cylinder (a BoM build does not substitute the catalog diameter).
 
     Returns None when any drive wheel has no torque feedback. The energy
     log writes ``na`` in that case.
@@ -419,7 +419,7 @@ def _drive_motor_spec(profile: dict | None) -> tuple[dict | None, float]:
 
 
 def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
-    """Hinge rate in rad/s. Body speed converts through the 0.08 m wheel."""
+    """Hinge rate in rad/s. A quiet encoder uses the command wheel radius."""
     omega = None
     if joint.get("velocity") is not None and joint.get("velocity") != "":
         try:
@@ -436,10 +436,25 @@ def _hinge_rad_s(joint: dict, speed_m_s: float | None) -> float | None:
             speed = None
         if speed is not None and not math.isfinite(speed):
             speed = None
-    # Encoder quiet while the body is moving: use the drawn wheel, not 0.04 m.
+    # Encoder quiet while the body is moving. Command radius stays the
+    # contact cylinder (0.08 m). A BoM build does not point this at the
+    # catalog diameter (src.webots_body.install_command_radius).
     if speed is not None and speed > 0.02 and (omega is None or omega < 1e-3):
-        return speed / SIM_WHEEL_RADIUS_M
+        return speed / _command_wheel_radius_m()
     return omega
+
+
+def _command_wheel_radius_m() -> float:
+    """Hinge radius for a body-speed fallback. Stays 0.08 m with the contact cylinder."""
+    try:
+        from src.lane_keep import WHEEL_RADIUS_M as command_r
+
+        radius = float(command_r)
+        if radius > 0:
+            return radius
+    except Exception:
+        pass
+    return SIM_WHEEL_RADIUS_M
 
 
 def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
@@ -452,9 +467,10 @@ def _rolling_torque_nm(profile: dict, radius_m: float) -> float:
     return crr * mass * 9.81 * float(radius_m) / 2.0
 
 
-# Drawn wheel in the Webots worlds (butlerbot.wbt cylinder). Odometry in the
-# controller uses this same radius. The BoM wheel is 80 mm diameter, 0.04 m.
-# Do not resize the mesh and do not change lane_keep.WHEEL_RADIUS_M.
+# Drawn wheel mesh in the shipped butlerbot*.wbt cylinders (Shape radius).
+# The contact cylinder matches it until a BoM build is loaded. Do not resize
+# the Shape. src.webots_body sets the contact cylinder and lane_keep's
+# command radius from the BoM; this constant stays the drawn mesh.
 SIM_WHEEL_RADIUS_M = 0.08
 
 
@@ -941,20 +957,24 @@ def restamp_active_bom(payload: dict) -> dict:
     The dashboard and the controller do not share a working directory.
     Webots used to miss ``config/config.yaml``, post the YAML profile
     (arms and torso watts, ``sensors=na``, ``build=default``), while the
-    dashboard log said ``BOM build=light``.     With a build selected, joint samples are recomputed on the BoM line
+    dashboard log said ``BOM build=light``. With a build selected, joint samples are recomputed on the BoM line
     even if the controller already stamped that build. That rebuild is
     the predicted Legs bill. ``measured_drive_w`` is shaft |τ|·|ω| on
     the 0.08 m hinge. ``measured_drive_elec_w`` is that same (τ, ω)
     through the published motor line. Missing feedback is None on both,
     and the rolling line is not written in their place.
+
+    A blank ``bom_build`` does not rebuild Legs. It still stamps those
+    two measured fields from the YAML profile's motor line (Pololu 4753
+    on ``butlerbot_wheeled``). Shaft power does not need a catalog build.
     """
-    from src.hardware_profile import active_bom_build
+    from src.hardware_profile import active_bom_build, get_active_profile
 
     if not isinstance(payload, dict):
         return payload
     build = active_bom_build()
     if not build:
-        return payload
+        return _stamp_measured_drive(payload, get_active_profile())
     loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
     hw = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
     # Always recompute when joints are present. Channel Legs stay on the
@@ -1041,3 +1061,33 @@ def restamp_active_bom(payload: dict) -> dict:
         stamped_joints.append(copied)
     rebuilt["joints"] = stamped_joints
     return rebuilt
+
+
+def _stamp_measured_drive(payload: dict, profile: dict | None) -> dict:
+    """Attach hinge shaft and electrical watts without rebuilding channel draws.
+
+    Used when no BoM build is selected. Legs stay whatever the controller
+    posted. Missing torque feedback stores None, not rolling resistance.
+    """
+    joints = [j for j in (payload.get("joints") or []) if isinstance(j, dict)]
+    if not joints:
+        return payload
+    loc = payload.get("locomotion") if isinstance(payload.get("locomotion"), dict) else {}
+    speed = loc.get("speed_m_s")
+    if speed is None:
+        speed = payload.get("speed_m_s") or 0.0
+    try:
+        speed_f = float(speed)
+    except (TypeError, ValueError):
+        speed_f = 0.0
+    split = measured_drive_split(joints, speed_f, profile)
+    measured = None if split is None else split["shaft_w"]
+    measured_elec = None if split is None else split["elec_w"]
+    out = dict(payload)
+    loc_out = dict(loc)
+    loc_out["measured_drive_w"] = measured
+    loc_out["measured_drive_elec_w"] = measured_elec
+    out["locomotion"] = loc_out
+    out["measured_drive_w"] = measured
+    out["measured_drive_elec_w"] = measured_elec
+    return out

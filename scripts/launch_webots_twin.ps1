@@ -6,9 +6,13 @@
 # to POST telemetry and GET teleop/throttle state.
 #
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
-#   -World: butlerbot (default, the S), corner90, corner_mix, widen, plus, t_end,
+#   -World: butlerbot (default, the S), camera_s (camera-only S; track does not steer),
+#   corner90, corner_mix, widen, plus, t_end,
 #   gap45, warehouse, warehouse_obstacles, radar_motion, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
 #   the same default.
+# Camera proof (dashboard already running), from the repo root:
+#   set RBM_MISSION_LAPS=1
+#   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World camera_s
 # From cmd.exe:
 #   powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World corner90
 # RBM_TRACK is set from the world's "# TRACK_FILE" tag (a different RBM_TRACK
@@ -37,6 +41,42 @@ if (-not $WorldFile) {
     Write-Host "ERROR: world '$World' not found. Available:" -ForegroundColor Red
     Get-ChildItem $WorldsDir -Filter *.wbt | ForEach-Object { Write-Host "  $($_.BaseName)" }
     exit 1
+}
+# Stronger camera_s paint. Unset keeps the shipped 1.15–1.45 m world.
+# RBM_CAMERA_S_WIDTH=1.0,1.6 writes a sibling and opens that.
+$ResolvedBase = [System.IO.Path]::GetFileNameWithoutExtension($WorldFile)
+if ($ResolvedBase -eq "butlerbot_camera_s" -and $env:RBM_CAMERA_S_WIDTH) {
+    $WidthScript = Join-Path $ProjectRoot "scripts\camera_s_track.py"
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $generated = & python $WidthScript
+        if ($LASTEXITCODE -eq 0) {
+            $hit = $generated | Select-String -Pattern '^CAMERA_S_WORLD (.+)$' | Select-Object -Last 1
+            if ($hit) {
+                $WorldFile = $hit.Matches[0].Groups[1].Value.Trim()
+                Write-Host "Lane width: RBM_CAMERA_S_WIDTH=$($env:RBM_CAMERA_S_WIDTH)"
+                Write-Host "           $WorldFile"
+            }
+        } else {
+            Write-Host "WARNING: RBM_CAMERA_S_WIDTH world was not generated. Opening the shipped 1.15-1.45 m paint." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "WARNING: python not on PATH. Opening the shipped 1.15-1.45 m paint." -ForegroundColor Yellow
+    }
+}
+# Selected bom_build: open a sibling world whose body mass and contact
+# wheel match the BoM. The drawn mesh stays 0.08 m. Unset bom_build
+# leaves $WorldFile unchanged. The sibling is gitignored.
+$Prepare = Join-Path $ProjectRoot "scripts\prepare_bom_world.py"
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    try {
+        $patched = (& python $Prepare $WorldFile).Trim()
+        if ($patched -and $patched -ne $WorldFile) {
+            Write-Host "BoM body: $patched"
+            $WorldFile = $patched
+        }
+    } catch {
+        Write-Host "WARNING: BoM body patch skipped; opening the shipped world" -ForegroundColor Yellow
+    }
 }
 # Webots keeps HUD overlay placement per world in worlds\.<world>.wbproj; start a
 # new world with the S world's layout so the shoulder HUDs land in the same spots.
@@ -76,10 +116,17 @@ Write-Host "ButlerBot Webots Digital Twin" -ForegroundColor Cyan
 Write-Host "Dashboard: $DashboardUrl"
 Write-Host "World:     $WorldFile"
 Write-Host "Track:     $(if ($env:RBM_TRACK) { $env:RBM_TRACK } else { '(none: S default)' })"
+$SteerOff = Select-String -Path $WorldFile -Pattern '^# STEER_TRACK off\s*$' | Select-Object -First 1
+if ($SteerOff) {
+    Write-Host "Steer:     camera only (STEER_TRACK off). GPS scores the finish and cross-track. It does not command the wheels."
+}
 Write-Host "Route:     RBM_ROUTE=$(if ($env:RBM_ROUTE) { $env:RBM_ROUTE } else { '(unset: straight if possible, else left)' })  RBM_MAX_BLIND_M=$(if ($env:RBM_MAX_BLIND_M) { $env:RBM_MAX_BLIND_M } else { '(4.0)' })"
 Write-Host "Obstacles: RBM_OBSTACLES=$(if ($env:RBM_OBSTACLES) { $env:RBM_OBSTACLES } else { '(unset: on only in worlds tagged # OBSTACLES on)' })  RBM_STEREO_BACKEND=$(if ($env:RBM_STEREO_BACKEND) { $env:RBM_STEREO_BACKEND } else { '(auto)' })  radar with obstacles when on"
 Write-Host "HUD paint: RBM_HUD=$(if ($env:RBM_HUD) { $env:RBM_HUD } else { '(unset: off — lane keeping still uses the nadir cameras)' })  A black magenta overlay is an unused stereo camera. Close it under Robot → Camera Devices."
 Write-Host "Speed trace: RBM_SPEED_TRACE=$(if ($env:RBM_SPEED_TRACE) { $env:RBM_SPEED_TRACE } else { '(unset: on for a 1-lap run, off otherwise)' })  CSV logs/speed_trace_<timestamp>.csv (gitignored). Console off unless RBM_SPEED_TRACE_CONSOLE=1."
+$LaneDir = if ($env:RBM_LOG_DIR) { $env:RBM_LOG_DIR } else { Join-Path $env:USERPROFILE "OneDrive\Desktop\Grok Workspace" }
+Write-Host "Lane vision CSV: $(Join-Path $LaneDir 'lane-vision.csv')"
+Write-Host "           Not in the repo logs folder. The summary JSON also records LANE_VISION file=..."
 Write-Host "Pick:      RBM_PICK_SKU=$(if ($env:RBM_PICK_SKU) { $env:RBM_PICK_SKU } else { '(unset: trolley follow only; set demo for one-SKU pretend pick)' })"
 Write-Host ""
 

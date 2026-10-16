@@ -330,6 +330,43 @@ def test_lane_keep_without_nadir_gaps_is_nadir_stop():
     assert "red" not in msgs
 
 
+def test_rowfit_empty_nadir_gaps_name_the_steer_source():
+    """Rowfit does not fill nadir pixels. That is not a nadir stop."""
+    agent = OnboardAgent()
+    result = agent.evaluate(
+        battery_pct=94,
+        task_id="moving",
+        allocation=_base_allocation(task="moving"),
+        safety=_base_safety(),
+        prediction={"risk_level": "low", "mission_energy_ok": True},
+        mission={"task": "moving"},
+        readings={},
+        twin_context={
+            "phase": "teleop",
+            "source": "webots",
+            "lane_keep": True,
+            "lane_sensors": {
+                "error_source": "rowfit",
+                "steer_source": "held",
+                "steer_lateral": "held",
+                "fit_reject": "heading jump +29deg > 20deg",
+                "lane_phase": "rowfit_hold",
+                "speed_m_s": 0.30,
+                "nadir_gap_px": None,
+                "nadir_r_gap_px": None,
+                "x_m": 18.2,
+                "y_m": 14.0,
+            },
+        },
+    )
+    msgs = " ".join((r.message or "") for r in result.recommendations)
+    assert "steer held" in msgs
+    assert "v=0.3" in msgs
+    assert "heading jump" in msgs
+    assert "nadir stop" not in msgs.lower()
+    assert "(20, 10)" in msgs or "(20, 20)" in msgs or "(10, 10)" in msgs
+
+
 def test_status_dict_includes_log():
     agent = OnboardAgent()
     agent.evaluate(

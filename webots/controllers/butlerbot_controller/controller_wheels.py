@@ -35,6 +35,12 @@ MAX_JOINT_V = 1.8
 WHEEL_RADIUS_M = 0.08
 # Differential track width (left/right wheel y anchors ±0.17 m)
 WHEEL_TRACK_M = 0.34
+
+
+def bind_drive_radius(radius_m: float) -> None:
+    """Use this contact radius for m/s ↔ rad/s. Default stays 0.08 m."""
+    global WHEEL_RADIUS_M
+    WHEEL_RADIUS_M = float(radius_m)
 # Soft grip coupling gain while intentionally driving (0=ODE only, 1=full odo lock).
 # Thin cylinder tires in ODE under-deliver continuous contact; this pulls body linear
 # velocity toward wheel odometry so track free-roll matches v=ωr without hop/spin.

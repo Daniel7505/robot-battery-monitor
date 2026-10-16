@@ -23,8 +23,9 @@ Pipeline (one call per new camera frame, see :class:`LaneTracker`):
 4. One lane model is fitted to both lines at once: a centre line that is a
    circle arc (straight when curvature = 0) through (0, a0) with direction
    psi and curvature kappa; left/right paint sit at +/- width/2 from it.
-   Robust Gauss-Newton (Huber + gate). Lane width is measured online and
-   reused when only one line is visible.
+   Robust Gauss-Newton (Huber + gate). When both lines are in the near
+   window the width is the live fit. The constant 1.30 m, and the smoothed
+   width from earlier frames, are used only when a line is missing.
 5. The known 6 cm stripe width is only a CHECK: each run's floor length
    times |cos| to the fitted line normal should be ~6 cm.
 """
@@ -41,7 +42,10 @@ STRIPE_W_M = 0.06
 PAINT_TOP_Z_M = 0.013
 YELLOW_THRESH = 0.22  # same as nadir_wheel_to_tape
 YELLOW_MODE = "rg"  # yellow_mask: "rg" = min(R,G)-B (rejects red/green bars), "lane_keep" = gap score
-FALLBACK_LANE_W_M = 1.30  # only until both lines have been seen once
+FALLBACK_LANE_W_M = 1.30  # one-line frames, and the first frames before both lines have been seen
+# The near fit looks about this far ahead of the axle. Width logged against
+# the paint is the track width there, not the width under the axle.
+WIDTH_FIT_AHEAD_M = 0.30
 MAX_RANGE_M = 3.5
 MIN_SIDE_PTS = 4
 # Fit windows (floor x ahead of the axle). The cameras no longer see behind
@@ -1009,7 +1013,8 @@ class LaneEstimate:
     n_left: int = 0
     n_right: int = 0
     lane_width_m: float = 0.0
-    width_measured: bool = False
+    width_measured: bool = False  # a both-line width has been seen this run
+    width_live: bool = False  # this frame's width is the near-window fit, not the fallback
     rms_m: float = 0.0
     width_ok_frac: float = 0.0  # share of points whose floor width ~ 6 cm
     a0: float = 0.0
@@ -1336,7 +1341,9 @@ class LaneTracker:
                 per_cam.append((cam, traced, cc))
         corner = self._update_corner(cues, float(dx_m))
         junction = self._update_junction(per_cam, float(dx_m))
+        clipped = False
         if junction is not None and not junction.kind.startswith(("corner", "opening")):
+            clipped = True
             lim = junction.near_m - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M
             if junction.kind in ("side_L", "side_R"):
                 left = junction.kind == "side_L"
@@ -1347,13 +1354,14 @@ class LaneTracker:
         if corner is not None:
             # The lane ends at the crossbar: fit only what is before it, so the
             # turning paint neither bends the fit nor trips the jump gate.
+            clipped = True
             pts = [p for p in pts if p.x < corner.clip_x_m]
             for c in corner.cues:
                 if c.role == "inner":  # the inner line bends away here: what is past it is the new leg
                     lim = c.x_m - 0.5 * STRIPE_W_M - CORNER_CLIP_MARGIN_M
                     pts = [p for p in pts if not (p.x >= lim and (p.y > 0.0) == (c.line_y_m > 0.0))]
         self.corner = corner
-        est = self.fit_points_gated(pts, dx_m=float(dx_m))
+        est = self.fit_points_gated(pts, dx_m=float(dx_m), allow_short=clipped)
         est.corner = corner
         est.junction = junction
         est.view = self.view
@@ -1368,8 +1376,13 @@ class LaneTracker:
         self.last = est
         return est
 
-    def gate_reason(self, est: LaneEstimate, pred_near, dx_m: float) -> str:
-        """Why a fitted lane is physically implausible ("" = accept)."""
+    def gate_reason(self, est: LaneEstimate, pred_near, dx_m: float, allow_short: bool = False) -> str:
+        """Why a fitted lane is physically implausible ("" = accept).
+
+        ``allow_short`` is set when a corner or junction clip already cut the
+        fit at the crossbar. A lookahead under ``GATE_MIN_VIEW_M`` is then the
+        paint ending, not a lost lane, and must not reject the fit.
+        """
         if not est.valid:
             return ""
         if abs(est.heading_rad) > GATE_MAX_HEADING_RAD:
@@ -1384,7 +1397,11 @@ class LaneTracker:
                         f"{side} side vanished (L{est.n_left} R{est.n_right}, was "
                         f"L{last.n_left} R{last.n_right}) at conf {est.confidence:.2f}"
                     )
-        if pred_near is not None and est.lookahead_m < GATE_MIN_VIEW_M:
+        if (
+            not allow_short
+            and pred_near is not None
+            and est.lookahead_m < GATE_MIN_VIEW_M
+        ):
             return f"short view: lane seen only {est.lookahead_m:.2f} m ahead (< {GATE_MIN_VIEW_M:.2f})"
         if pred_near is not None:
             a0, psi, k = pred_near
@@ -1439,14 +1456,20 @@ class LaneTracker:
             rejected=rej,
         )
 
-    def fit_points_gated(self, pts: list[LinePoint], *, dx_m: float = 0.0) -> LaneEstimate:
+    def fit_points_gated(
+        self, pts: list[LinePoint], *, dx_m: float = 0.0, allow_short: bool = False
+    ) -> LaneEstimate:
         """:meth:`fit_points` + plausibility gate. A rejected fit does not touch
         the priors / lane width; it counts as a lost frame (priors dropped after
-        GATE_MAX_HELD_FRAMES in a row, as for a missing lane)."""
+        GATE_MAX_HELD_FRAMES in a row, as for a missing lane).
+
+        ``allow_short`` skips the short-view reject. The corner/junction clip
+        passes it so the lane ending at a crossbar is still a fit.
+        """
         pred_near, pred_far = self.prior_near, self.prior_far
         lane_w, lost = self.lane_w, self.frames_lost
         est = self.fit_points(pts)
-        reason = self.gate_reason(est, pred_near, dx_m)
+        reason = self.gate_reason(est, pred_near, dx_m, allow_short=allow_short)
         if not reason:
             if est.valid:
                 self._last_good = est
@@ -1469,6 +1492,7 @@ class LaneTracker:
     def fit_points(self, pts: list[LinePoint]) -> LaneEstimate:
         lane_w = self.lane_w if self.lane_w is not None else FALLBACK_LANE_W_M
         width = lane_w
+        fitted_width = False  # both near lines produced a width this frame
         if self.prior_near is not None and self.prior_far is not None:
             near_m, far_m = self.prior_near, self.prior_far
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.25)
@@ -1489,6 +1513,7 @@ class LaneTracker:
             near_m = far_m = (res[0][0], res[0][1], res[0][2])
             if both and 0.4 < res[0][3] < 3.0:
                 width = res[0][3]
+                fitted_width = True
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.15)
         got = False
         for it in range(3):
@@ -1511,6 +1536,7 @@ class LaneTracker:
             near_m, far_m = near[0], far[0]
             if near_both and 0.4 < near[1] < 3.0:
                 width = near[1]
+                fitted_width = True
             got = True
             self._assign_piecewise(pts, near_m, far_m, width, gate=0.15 if it < 2 else 0.10)
         if not got:
@@ -1570,6 +1596,7 @@ class LaneTracker:
             n_right=n_right,
             lane_width_m=width if both else lane_w,
             width_measured=measured,
+            width_live=bool(fitted_width and both),
             rms_m=rms,
             width_ok_frac=width_ok,
             a0=a0,

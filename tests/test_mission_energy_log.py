@@ -46,6 +46,30 @@ def test_steer_source_fraction_on_the_lap_summary():
     assert float(split["frac_camera"]) + float(split["frac_held"]) + float(split["frac_track"]) == pytest.approx(1.0, abs=0.02)
 
 
+def test_proof_status_is_available_before_the_lap_ends():
+    """The dashboard reads this while the robot is still moving."""
+    log = MissionEnergyLog()
+    log.observe(_sample(0.0, 0.0, speed=0.44) | {"cross_track_m": 0.02})
+    log.observe(
+        _sample(10.0, 4.4, speed=0.44)
+        | {
+            "steer_source": "camera",
+            "cross_track_m": 0.041,
+            "width_err_m": 0.012,
+            "center_err_m": -0.008,
+            "lane_frame_n": 1,
+        }
+    )
+    proof = log.proof_status()
+    assert proof["ok"] is True
+    assert proof["steer_frac_camera"] == pytest.approx(1.0)
+    assert proof["ct_max_m"] == pytest.approx(0.041)
+    assert proof["cross_track_m"] == pytest.approx(0.041)
+    assert proof["width_err_rms_m"] == pytest.approx(0.012)
+    assert proof["center_err_rms_m"] == pytest.approx(0.008)
+    assert proof["err_pct"] is None
+
+
 def test_shell_scripts_checkout_as_lf():
     text = Path(".gitattributes").read_text(encoding="utf-8")
     assert "*.sh text eol=lf" in text

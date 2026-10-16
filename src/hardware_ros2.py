@@ -109,6 +109,8 @@ class ROS2BatterySource(RealHardwareSource):
         self.power_source: str = "internal"
         # RLock: _build_readings → sync_to_hardware → apply_power_feed may re-enter.
         self._readings_lock = threading.RLock()
+        # Filled inside the tick, written after the lock is released.
+        self._pending_db_snapshot: dict | None = None
 
     def _apply_ros2_commands(self) -> None:
         """Consume one-shot ROS2 mission/throttle commands for this tick."""
@@ -420,6 +422,7 @@ class ROS2BatterySource(RealHardwareSource):
 
         Returns channel_id → reading dict for dashboard / DB / ROS2.
         """
+        self._pending_db_snapshot = None
         self.twin_status = self._twin.status()
         twin_active = self._twin._is_external_active()
         self._sync_twin_feed(twin_active)
@@ -775,10 +778,17 @@ class ROS2BatterySource(RealHardwareSource):
         # When twin owns SOC, skip local drain so pack energy is not double-counted.
         if not (twin_active and self._twin._apply_battery):
             self._drain_battery(total_draw)
-        try:
-            log_power_snapshot(allocation, readings, battery_pct, self.prediction_status)
-        except Exception as e:
-            logger.warning(f"DB snapshot failed (non-fatal): {e}")
+        # Copy now. The next tick mutates allocation, and the write itself
+        # must not run while this lock is held (Postgres can stall for the
+        # connect timeout).
+        alloc_copy = dict(allocation)
+        alloc_copy["warnings"] = list(allocation.get("warnings") or [])
+        self._pending_db_snapshot = {
+            "allocation": alloc_copy,
+            "readings": {ch_id: dict(data) for ch_id, data in readings.items()},
+            "battery_pct": battery_pct,
+            "prediction": dict(self.prediction_status) if self.prediction_status else None,
+        }
 
         try:
             self._ros2.publish(battery_pct, readings, allocation, self.mission_info)
@@ -839,10 +849,27 @@ class ROS2BatterySource(RealHardwareSource):
         self.requirements_status = {"startup": startup}
 
         self.last_readings = self._build_readings()
+        self.flush_db_snapshot()
         self.last_successful_read = datetime.now()
         self.ros2_status = self._ros2.status
 
         threading.Thread(target=self._telemetry_loop, daemon=True, name="ROS2Telemetry").start()
+
+    def flush_db_snapshot(self) -> None:
+        """Write the tick's Postgres snapshot. Call this outside ``_readings_lock``."""
+        snap = self._pending_db_snapshot
+        self._pending_db_snapshot = None
+        if not snap or not snap.get("readings"):
+            return
+        try:
+            log_power_snapshot(
+                snap["allocation"],
+                snap["readings"],
+                snap["battery_pct"],
+                snap.get("prediction"),
+            )
+        except Exception as e:
+            logger.warning(f"DB snapshot failed (non-fatal): {e}")
 
     def _telemetry_loop(self):
         """Daemon loop: rebuild readings every TICK_SECONDS under the readings lock."""
@@ -852,6 +879,7 @@ class ROS2BatterySource(RealHardwareSource):
                     self.last_readings = self._build_readings()
                     self.last_successful_read = datetime.now()
                     self.ros2_status = self._ros2.status
+                self.flush_db_snapshot()
             except Exception as e:
                 logger.error(f"Telemetry loop error: {e}", exc_info=True)
                 self.health_status = "DEGRADED"

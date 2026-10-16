@@ -38,4 +38,48 @@ def test_ros2_source_can_be_instantiated():
     assert isinstance(source, HardwareSource)
 
 
+def test_db_snapshot_is_written_after_the_readings_lock():
+    """Postgres must not run while the twin post is waiting on the readings lock."""
+    from unittest.mock import patch
+
+    from src.hardware_ros2 import ROS2BatterySource
+
+    source = ROS2BatterySource()
+    source.running = True
+    inside = {"flag": False}
+
+    class _Lock:
+        def __enter__(self):
+            inside["flag"] = True
+            return self
+
+        def __exit__(self, *args):
+            inside["flag"] = False
+            return False
+
+    source._readings_lock = _Lock()
+    seen = {}
+
+    def build():
+        source._pending_db_snapshot = {
+            "allocation": {"warnings": []},
+            "readings": {"Legs": {"draw": 1.0, "battery": 90}},
+            "battery_pct": 90,
+            "prediction": None,
+        }
+        return {"Legs": {}}
+
+    def write(*_args, **_kwargs):
+        seen["inside"] = inside["flag"]
+
+    def stop(_seconds):
+        source.running = False
+
+    with patch.object(source, "_build_readings", build), patch(
+        "src.hardware_ros2.log_power_snapshot", write
+    ), patch("src.hardware_ros2.time.sleep", stop):
+        source._telemetry_loop()
+    assert seen["inside"] is False
+
+
 print("✅ Basic hardware tests loaded successfully")

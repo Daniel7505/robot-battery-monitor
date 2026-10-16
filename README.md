@@ -409,6 +409,8 @@ Same as C, with these differences:
 
 ## 6. Reading the dashboard
 
+The old engineering view is saved on branch `archive/engineering-dashboard`. See [`docs/ENGINEERING_DASHBOARD_ARCHIVE.md`](docs/ENGINEERING_DASHBOARD_ARCHIVE.md).
+
 | Panel | Meaning |
 |-------|---------|
 | **Main Battery** | The big battery % for the whole robot |

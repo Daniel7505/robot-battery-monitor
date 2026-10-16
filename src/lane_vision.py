@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 STRIPE_W_M = 0.06
 # s_track.PAINT_Z (0.008 m box centre) + half the 0.010 m box height.
 PAINT_TOP_Z_M = 0.013
-YELLOW_THRESH = 0.22  # same as nadir_wheel_to_tape
+YELLOW_THRESH = 0.22  # same cutoff as lane_keep.yellow_score
 YELLOW_MODE = "rg"  # yellow_mask: "rg" = min(R,G)-B (rejects red/green bars), "lane_keep" = gap score
 FALLBACK_LANE_W_M = 1.30  # one-line frames, and the first frames before both lines have been seen
 # The near fit looks about this far ahead of the axle. Width logged against

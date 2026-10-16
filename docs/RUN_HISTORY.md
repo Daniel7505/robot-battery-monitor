@@ -29,7 +29,7 @@ lane mode. The top row still reaches ~1.96 m, but the bottom row now lands
 just ahead of the axle instead of 0.55 m behind it, and the stripe is ~2× wider in
 pixels near the robot. Runs after this change are a **new baseline**: don't
 compare them 1:1 with the rows above.
-Gap-mode rows above are from the old view; gap mode is not re-tuned for this one.
+Rows marked gap mode are from the old camera. That keeper has been removed.
 
 | Date | run_id | Mode | Finished | Time s | Max | @x | Mean | RMS | Speed | Notes |
 |------|--------|------|----------|--------|-----|----|------|-----|-------|-------|

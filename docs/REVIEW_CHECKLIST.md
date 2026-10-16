@@ -192,6 +192,7 @@ No micro-opts unless correctness/demo reliability. Do not edit until ranked.
 | 2026-08-25 | Grok Build 4.6 + Daniel | Drawing-2 left nadir + 20 cm shove probe (`src/metric_probe.py`). LINE_CAM identity locked. Nadir **not on the wheel**. |
 | 2026-09-02 | Grok Build 4.6 + Daniel | Nadir-only `lane_keep.py`. Full S champ: max ct **3.2 cm** at 0.44 m/s, parked on red. v-scale 2.10. This S closed. |
 | 2026-09-02 | Grok Build 4.6 + Daniel | Choir cleanup: thin controller / `lane_keep` / HUD / eyes. Repeatable 3.2 cm ties. Unused LINE/SIDE/FINISH/Z/W + pucks removed from `butlerbot.wbt`. August 128 docs marked historical. |
+| 2026-10-16 | Cursor Grok 4.7 | Retired the pixel-gap keeper (`RBM_LANE_MODE=gap`, NadirGuard, the false "LANE KEEP — nadir stop" alert) and the unused 20 cm shove probe. Row-fit, the 0.08 m wheel, and `config.yaml` are unchanged. |
 | _(template)_ | e.g. Grok 4.6 Build | e.g. Ranked audit; extracted X from dashboard |
 
 ---

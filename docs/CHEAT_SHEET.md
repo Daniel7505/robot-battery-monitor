@@ -130,9 +130,9 @@ repo `.env`. A value set with `set` wins.
 
 | var | meaning |
 |---|---|
-| `RBM_LANE_MODE` | `rowfit` (default when unset) or `gap`, the old pixel-gap lane keep, not re-tuned for the box cameras |
+| `RBM_LANE_MODE` | Leave unset. The only lane mode is `rowfit`. A leftover `gap` is ignored, with a warning. |
 | `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value (never steering). The launcher sets it from the world's `# TRACK_FILE` tag; a different value left in the cmd window is overridden with a loud `WARNING`, and the controller does the same. Only needed when the world has no tag. |
-| `RBM_WORLD` | World for the launcher: `butlerbot`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion` or a `.wbt` file. Same as `-World`. |
+| `RBM_WORLD` | World for the launcher: `butlerbot`, `camera_s`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion` or a `.wbt` file. Same as `-World`. |
 | `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
 | `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
 | `RBM_LOOK_AROUND` | `0` = after the max blind distance just stop (no +90/−90 look-around). Default on. |
@@ -143,7 +143,6 @@ repo `.env`. A value set with `set` wins.
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |
 | `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube onto the trolley, then continues to shipping. Ignored when `RBM_SHOPPING_LIST` is set. See `docs/INVENTORY_TROLLEY.md`. |
 | `RBM_SHOPPING_LIST` | Multi-trip shopping list: `demo`/`1`…`N` = that trip (use matching `shopping_list_trip_N` `RBM_ROUTE`); `all` = multi-trip state machine. Capacity 2, fill then ship. See `docs/SHOPPING_LIST.md`. |
-| `RBM_NADIR_GUARD_PER_FRAME` | `1` = gap-mode NadirGuard counts per camera frame (opt-in; gap mode only) |
 
 ## Commands (Windows cmd, from the repo folder)
 
@@ -423,8 +422,9 @@ See `docs/RUN_HISTORY.md`.
   that lookup failed. Then `set RBM_TRACK=corner90` before launching.
   Otherwise the GPS finish and the `ct=` values are wrong. Steering is not
   affected.
-* **Gap mode** (`RBM_LANE_MODE=gap`) was tuned on the old z 1.31 m camera
-  view. Do not trust it on the box cameras.
+* **`RBM_LANE_MODE=gap` is ignored.** That pixel-gap keeper was tuned on
+  the old z 1.31 m camera and logged false "nadir stop" alerts. The
+  controller prints a warning and runs row-fit.
 * **Obstacles: `OBSTACLES on — backend numpy`** means OpenCV is not
   installed in the Python Webots runs the controller with. Run
   `pip install opencv-python` with that same Python, then relaunch. numpy works
@@ -440,7 +440,6 @@ See `docs/RUN_HISTORY.md`.
   reset at shipping, export to run_report, SoC vs ∫P preference.
 * **Camera yaw 10° toe-out** (`docs/CAMERA_YAW_STUDY.md`): it widens lane
   coverage. Dan has not applied it yet; he likes the current look-ahead.
-* **Gap mode:** retire it, or re-tune it for the box view.
 * **Track importer from Paint, Unity or CAD.** It only needs to write the
   `tracks/*.json` format.
 * **Intersections, next steps.** Built (see the Intersections section of

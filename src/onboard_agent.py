@@ -51,7 +51,6 @@ from typing import Callable
 
 from src.config import config
 from src.logger import logger
-from src.lane_keep import lane_keep_command
 from src.mission_context import context_summary, is_standby_lru, throttle_exempt_channels
 from src.mission_tasks import TASK_PROFILES
 
@@ -70,9 +69,6 @@ _DEFAULT_AGENT = {
     "prediction_risk_min_battery_pct": 25,
     "loop_margin_warn_pct": 18,
     "loop_margin_critical_pct": 8,
-    "lane_keep_cruise": 5.5,
-    "lane_keep_k_steer": 2.4,
-    "lane_keep_red_thresh": 0.28,
 }
 
 # Align with control.TWIN_STRESS_PHASES — high-draw scripted segments.
@@ -901,69 +897,16 @@ class OnboardAgent:
             return False
         return True
 
-    def _rule_lane_keep(self, ctx: AgentContext, cfg: dict) -> list[AgentRecommendation]:
-        """Log what the driving policy sees. Wheels are commanded in Webots."""
+    def _rule_lane_keep(self, ctx: AgentContext, _cfg: dict) -> list[AgentRecommendation]:
+        """Log what the driving policy sees. Wheels are commanded in Webots.
+
+        Empty nadir gap pixels are not a stop. Row-fit does not fill them,
+        and the old gap keeper that turned those empties into "nadir stop"
+        is retired.
+        """
         if not ctx.lane_keep_armed:
             return []
-        sense = ctx.lane_sensors or {}
-        # Rowfit never fills nadir_gap_px. Re-running the gap keeper on those
-        # empties logged "nadir stop" while the robot kept moving.
-        if sense.get("steer_source") or sense.get("error_source") == "rowfit":
-            return [self._rowfit_steer_rec(sense)]
-        steer = sense.get("steer")
-        x_m = sense.get("x_m")
-        y_m = sense.get("y_m")
-        where = ""
-        if x_m is not None and y_m is not None:
-            where = f" @ ({float(x_m):.2f}, {float(y_m):.2f})"
-        cmd = lane_keep_command(
-            cruise=float(cfg.get("lane_keep_cruise", 5.5)),
-            k_steer=float(cfg.get("lane_keep_k_steer", 2.4)),
-            left_gap_px=sense.get("nadir_gap_px"),
-            right_gap_px=sense.get("nadir_r_gap_px"),
-            left_ahead_px=sense.get("nadir_ahead_px"),
-            right_ahead_px=sense.get("nadir_r_ahead_px"),
-        )
-        live = cmd.get("steer") if cmd.get("steer") is not None else steer
-        if cmd["brake"]:
-            why = str(cmd.get("reason") or "")
-            nadir_stop = "nadir" in why or "eyes gone" in why
-            watched = "watch" in why
-            if watched:
-                label = "geometry watch — stop"
-            elif nadir_stop:
-                label = "nadir stop"
-            else:
-                label = "lane-keep stop"
-            return [
-                AgentRecommendation(
-                    action="safety_alert",
-                    priority="medium",
-                    reason=why or label,
-                    message=f"LANE KEEP — {label}{where}",
-                )
-            ]
-        if live is None:
-            live = cmd.get("error") or 0.0
-        live_f = float(live)
-        if abs(live_f) < 0.05:
-            return [
-                AgentRecommendation(
-                    action="status",
-                    priority="info",
-                    reason="Corridor clear — keep rolling",
-                    message=f"LANE KEEP — corridor clear {live_f:+.2f}{where}",
-                )
-            ]
-        wall = "right" if live_f < 0 else "left"
-        return [
-            AgentRecommendation(
-                action="status",
-                priority="info",
-                reason=f"Push off {wall} yellow wall",
-                message=f"LANE KEEP — push off {wall} {live_f:+.2f}{where}",
-            )
-        ]
+        return [self._rowfit_steer_rec(ctx.lane_sensors or {})]
 
     def _rowfit_steer_rec(self, sense: dict) -> AgentRecommendation:
         """Name the source that commanded the wheels. Not a nadir brake."""

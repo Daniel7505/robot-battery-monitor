@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.lane_keep import MAX_WHEEL_RAD_S, NadirGuard, WHEEL_RADIUS_M, lane_keep_command
+from src.lane_keep import MAX_WHEEL_RAD_S, WHEEL_RADIUS_M
 from src.lane_vision import LaneEstimate
 from src import rowfit_control as rc
 
@@ -144,49 +144,6 @@ def test_closed_loop_ninety_degree_turn():
     assert res["max_v"] == pytest.approx(rc.V_STRAIGHT_M_S, abs=0.01)
 
 
-# ---------------------------------------------------------- NadirGuard (bug b)
-
-
-def test_nadir_guard_legacy_per_tick_never_fires():
-    # Documents the bug: same frame repeated 40 ticks resets the counter.
-    g = NadirGuard()
-    l, r = 33, 33
-    for _frame in range(10):
-        l, r = l - 3, r - 3
-        for _ in range(40):
-            assert not g.step(l, r)["abort"]
-
-
-def test_nadir_guard_per_frame_fires_on_unison():
-    g = NadirGuard()
-    l, r = 33, 33
-    fired = False
-    for _frame in range(10):
-        l, r = l - 3, r - 3
-        for t in range(40):
-            if g.step(l, r, new_frame=(t == 0))["abort"]:
-                fired = True
-    assert fired and "unison" in g.reason
-
-
-def test_nadir_guard_per_frame_ignores_opposite_moves():
-    g = NadirGuard()
-    l, r = 33, 33
-    for _frame in range(10):
-        l, r = l - 3, r + 3  # normal steering: one gap shrinks, other grows
-        for t in range(40):
-            assert not g.step(l, r, new_frame=(t == 0))["abort"]
-
-
-def test_gap_lane_keep_default_unchanged_by_new_kwarg():
-    from src.lane_keep import SteerFilter
-
-    a = lane_keep_command(left_gap_px=20, right_gap_px=40, nadir_guard=NadirGuard(), steer_filter=SteerFilter())
-    b = lane_keep_command(left_gap_px=20, right_gap_px=40, nadir_guard=NadirGuard(), steer_filter=SteerFilter(),
-                          guard_new_frame=None)
-    assert a == b
-
-
 # ---------------------------------------------------------- controller glue
 
 
@@ -209,14 +166,14 @@ def test_lane_mode_default_env_and_dotenv(monkeypatch, tmp_path):
     assert glue.DEFAULT_LANE_MODE == "rowfit"
     assert glue.lane_mode() == "rowfit"  # unset -> rowfit (new default)
     env.write_text("# x\nRBM_LANE_MODE=gap  # old pixel fan\n")
-    assert glue.lane_mode() == "gap"
+    assert glue.lane_mode() == "rowfit"  # gap is retired
     env.write_text("RBM_LANE_MODE=\n")
     assert glue.lane_mode() == "rowfit"
     monkeypatch.setenv("RBM_LANE_MODE", "rowfit")  # process env wins over .env
     env.write_text("RBM_LANE_MODE=gap\n")
     assert glue.lane_mode() == "rowfit"
     monkeypatch.setenv("RBM_LANE_MODE", " GAP ")
-    assert glue.lane_mode() == "gap"
+    assert glue.lane_mode() == "rowfit"
     monkeypatch.setenv("RBM_LANE_MODE", "bogus")
     assert glue.lane_mode() == "rowfit"
 

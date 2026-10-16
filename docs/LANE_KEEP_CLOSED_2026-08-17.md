@@ -73,5 +73,5 @@ Remaining tightness is the L/R planner (far-preview, grab/release), **not** anot
 ## Measure
 
 - Clocks: `python -u scripts/measure_clocks.py` (needs `control_diag.sim_time_s`)
-- Scored S: `python -u scripts/measure_s_lane_keep.py` (timeout **900 s** wall at 128)
+- The old S scorer `scripts/measure_s_lane_keep.py` was removed. It read choir fields the controller no longer publishes.
 - Integrate rt as Δsim/Δwall. `rt=0` rows are stale twin POST, not stopped physics.

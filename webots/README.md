@@ -89,11 +89,11 @@ Full picture with file names: [`docs/ARCHITECTURE.md` §2](../docs/ARCHITECTURE.
 |--------|------|
 | `controller_hud.py` | Display gauges + camera overlays |
 | `controller_keys.py` | Legacy debug key input (not a user feature) |
-| `controller_eyes.py` | Shoulder nadir harvest only |
+| `controller_rowfit.py` | Row-fit camera bind, lane log, route |
 | `controller_wheels.py` | ABS, residual-spin, soft-grip |
 | `twin_publisher.py` | `POST /api/twin/telemetry` |
 
-Do not re-merge these. Residual-spin history (NaN `setPosition`, GPS-only idle, dual-hub hard-zero) is documented on `controller_wheels`. Lane-keep **policy** stays in `src/lane_keep.py`.
+Do not re-merge these. Residual-spin history (NaN `setPosition`, GPS-only idle, dual-hub hard-zero) is documented on `controller_wheels`. Wheel slew and the S centre line stay in `src/lane_keep.py`. The pixel-gap keeper that used to live there is gone.
 
 ## Controller options
 

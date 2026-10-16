@@ -1,8 +1,7 @@
 """Row-fit lane mode glue for the Webots controller. No physics, no Webots import.
 
-Row-fit is the DEFAULT lane mode (``RBM_LANE_MODE`` unset, empty or
-``rowfit``). ``RBM_LANE_MODE=gap`` (process env or the repo ``.env``) selects
-the old pixel-fan lane keep, unchanged.
+Row-fit is the only lane mode. ``RBM_LANE_MODE`` unset, empty, or ``rowfit``
+runs it. A leftover ``gap`` is ignored with a warning.
 
 * :func:`lane_mode`   — resolve the mode once at start-up.
 * :meth:`RowfitRuntime.bind_cameras` — build the camera models from the LIVE
@@ -23,7 +22,7 @@ except Exception:  # pragma: no cover - twin_publisher sits next to this file
     def project_env(name, default=None):  # type: ignore[misc]
         return os.environ.get(name) or default
 
-LANE_MODES = ("gap", "rowfit")
+LANE_MODES = ("rowfit",)
 DEFAULT_LANE_MODE = "rowfit"
 # Webots DEF names of the lane cameras (only used if getFromDevice is missing).
 CAMERA_DEFS = {"nadir_left": "NADIR_CAM_L", "nadir_right": "NADIR_CAM_R"}
@@ -53,16 +52,16 @@ def lane_mode() -> str:
     raw = (project_env("RBM_LANE_MODE", DEFAULT_LANE_MODE) or DEFAULT_LANE_MODE).strip().lower()
     if not raw:
         return DEFAULT_LANE_MODE
+    if raw == "gap":
+        print(
+            "WARNING: RBM_LANE_MODE=gap is retired "
+            "(old pixel-gap keeper, false nadir stops). Using rowfit."
+        )
+        return DEFAULT_LANE_MODE
     if raw not in LANE_MODES:
         print(f"WARNING: RBM_LANE_MODE={raw!r} unknown — using {DEFAULT_LANE_MODE!r}")
         return DEFAULT_LANE_MODE
     return raw
-
-
-def guard_per_frame() -> bool:
-    """Opt-in NadirGuard per-frame unison counting for the gap path."""
-    raw = (project_env("RBM_NADIR_GUARD_PER_FRAME", "") or "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
 
 
 def log_dir() -> str:

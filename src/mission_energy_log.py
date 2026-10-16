@@ -337,6 +337,7 @@ class MissionEnergyLog:
         self._steer_m = {key: 0.0 for key in _STEER_KEYS}
         self._steer_s = {key: 0.0 for key in _STEER_KEYS}
         self._ct_max: float | None = None
+        self._ct_latest: float | None = None
         self._width_err: list[float] = []
         self._center_err: list[float] = []
         self._true_width: list[float] = []
@@ -624,6 +625,7 @@ class MissionEnergyLog:
             vals.append(abs(peak))
         inst = _as_float(sample.get("cross_track_m"))
         if inst is not None:
+            self._ct_latest = inst
             vals.append(abs(inst))
         if not vals:
             return
@@ -659,6 +661,74 @@ class MissionEnergyLog:
         true_w = _as_float(sample.get("true_width_m"))
         if true_w is not None:
             self._true_width.append(true_w)
+
+    def proof_status(self) -> dict:
+        """Running lap proof for the dashboard. Same maths as the summary line.
+
+        ``err_pct`` is drive electrical watt-hours against the drive model
+        (the ``MISSION_SUMMARY`` percentage). It stays null until a
+        parts-catalog build can price the model. Steer fractions are shares
+        of distance on camera, held, and track. Width and center errors are
+        one sample per camera frame.
+        """
+        if not self._armed:
+            return {"ok": False}
+
+        shaft = self._mission_wh_shaft if self._mission_shaft_known else None
+        elec = self._mission_wh_elec if self._mission_elec_known else None
+        model = _model(
+            self._mission_dist,
+            self._mission_dt,
+            self._payload_kg,
+            self._heading_accum_deg,
+            self._mission_wh_accel,
+        )
+        roll = None if model is None else model.get("wh_model_roll")
+        visc = None if model is None else model.get("wh_model_visc")
+        accel_wh = None if model is None else model.get("wh_model_accel")
+        turn = round(self._mission_wh_turn, 3)
+        drive = None
+        if model is not None:
+            drive = round(
+                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0),
+                3,
+            )
+        err_txt = _err_pct(elec, drive)
+        err = None if err_txt == "na" else float(err_txt)
+        steer_m = sum(self._steer_m.values())
+
+        def frac(name: str) -> float | None:
+            if steer_m <= 1e-6:
+                return None
+            return round(self._steer_m[name] / steer_m, 3)
+
+        def rms(vals: list[float]) -> float | None:
+            if not vals:
+                return None
+            return round(math.sqrt(sum(v * v for v in vals) / len(vals)), 4)
+
+        def peak(vals: list[float]) -> float | None:
+            if not vals:
+                return None
+            return round(max(abs(v) for v in vals), 4)
+
+        return {
+            "ok": True,
+            "err_pct": err,
+            "wh_measured_drive_elec": None if elec is None else round(elec, 3),
+            "wh_model_drive": drive,
+            "steer_frac_camera": frac("camera"),
+            "steer_frac_held": frac("held"),
+            "steer_frac_track": frac("track"),
+            "cross_track_m": None if self._ct_latest is None else round(self._ct_latest, 4),
+            "ct_max_m": None if self._ct_max is None else round(self._ct_max, 4),
+            "width_err_rms_m": rms(self._width_err),
+            "width_err_max_m": peak(self._width_err),
+            "center_err_rms_m": rms(self._center_err),
+            "center_err_max_m": peak(self._center_err),
+            "width_err_n": len(self._width_err),
+            "center_err_n": len(self._center_err),
+        }
 
     def _fit_err_suffix(self) -> str:
         def pack(name: str, vals: list[float]) -> str:

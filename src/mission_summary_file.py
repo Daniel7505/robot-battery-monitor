@@ -14,6 +14,7 @@ so the lap summary is on disk even when the console cannot be captured.
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 from datetime import datetime, timezone
@@ -92,6 +93,87 @@ def _mirror_robot_monitor(lines: list[str], folder: str) -> None:
     with open(path, "a", encoding="utf-8") as fh:
         for line in lines:
             fh.write(f"{stamp} | INFO     | robot_monitor | {line}\n")
+
+
+_PROOF_NUMBER_KEYS = (
+    "err_pct",
+    "wh_measured_drive_elec",
+    "wh_model_drive",
+    "steer_frac_camera",
+    "steer_frac_held",
+    "steer_frac_track",
+    "ct_max_m",
+    "width_err_rms_m",
+    "width_err_max_m",
+    "center_err_rms_m",
+    "center_err_max_m",
+)
+
+
+def _kv_tokens(line: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for token in str(line).split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        out[key] = value
+    return out
+
+
+def _proof_number(raw: str | None) -> float | None:
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if text in {"", "na", "none", "null"}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def proof_from_summary_lines(lines: list[str]) -> dict | None:
+    """Pull the lap-proof fields off a finished ``MISSION_SUMMARY`` line."""
+    summary = next((line for line in lines if "MISSION_SUMMARY" in line), None)
+    if not summary:
+        return None
+    fields = _kv_tokens(summary)
+    proof = {key: _proof_number(fields.get(key)) for key in _PROOF_NUMBER_KEYS}
+    if not any(value is not None for value in proof.values()):
+        return None
+    proof["ok"] = True
+    proof["cross_track_m"] = proof.get("ct_max_m")
+    proof["width_err_n"] = None
+    proof["center_err_n"] = None
+    return proof
+
+
+def latest_proof_from_disk(directory: str | None = None) -> dict | None:
+    """Newest ``logs/mission_summary_*.json``, or None when the folder is empty.
+
+    Used when the dashboard process was not the one that drove the lap, so
+    the in-memory energy log has nothing to show.
+    """
+    folder = summary_directory(directory)
+    if not os.path.isdir(folder):
+        return None
+    paths = glob.glob(os.path.join(folder, "mission_summary_*.json"))
+    if not paths:
+        return None
+    path = max(paths, key=os.path.getmtime)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    lines = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(lines, list):
+        return None
+    proof = proof_from_summary_lines([str(line) for line in lines])
+    if proof is None:
+        return None
+    proof["path"] = path
+    return proof
 
 
 def _timestamp(value):

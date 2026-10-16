@@ -65,6 +65,10 @@ RETENTION_STATEMENT_TIMEOUT = os.getenv("DB_RETENTION_STATEMENT_TIMEOUT", "30s")
 RETENTION_LOCK_TIMEOUT = os.getenv("DB_RETENTION_LOCK_TIMEOUT", "5s")
 # PG14+: abort the running query if the client (e.g. a killed container) is gone.
 RETENTION_CLIENT_CHECK_INTERVAL = os.getenv("DB_RETENTION_CLIENT_CHECK", "10s")
+# libpq waits forever when Postgres is down. A short cap keeps a tick from
+# stalling the twin ingest that shares no lock with this connect, and keeps
+# the page from hanging if a route still opens a connection.
+CONNECT_TIMEOUT_S = int(os.getenv("DB_CONNECT_TIMEOUT", "5"))
 
 # Backends on *this* database (never our own) that are retention deletes:
 # either tagged by the current code, or the legacy unbatched statements
@@ -201,8 +205,14 @@ def _connection_params() -> dict:
 def get_db_connection():
     """Return a new PostgreSQL connection (caller must close)."""
     params = _connection_params()
+    timeout = CONNECT_TIMEOUT_S
     if "dsn" in params:
-        return psycopg2.connect(params["dsn"])
+        dsn = params["dsn"]
+        if "connect_timeout" in dsn:
+            return psycopg2.connect(dsn)
+        return psycopg2.connect(dsn, connect_timeout=timeout)
+    params = dict(params)
+    params["connect_timeout"] = timeout
     return psycopg2.connect(**params)
 
 

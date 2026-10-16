@@ -120,7 +120,7 @@ HTML_TEMPLATE = '''
             <button type="button" id="teleop-stop-btn">Stop</button>
             <button type="button" id="lane-keep-btn">Lane keep</button>
         </div>
-        <p class="note" id="lane-keep-status">Lane keep off</p>
+        <p class="note" id="lane-keep-status">Lane keep off. GPS stop at 16.5 m.</p>
         <div class="steer-bar"><div class="steer-center"></div><div id="steer-needle" class="steer-needle" style="left:50%"></div></div>
         <div id="steer-readout">steer —</div>
     </div>
@@ -258,7 +258,7 @@ HTML_TEMPLATE = '''
         }
 
         laneKeepArmed = !!live.lane_keep;
-        setText('lane-keep-status', laneKeepArmed ? 'Lane keep on' : 'Lane keep off');
+        setText('lane-keep-status', (laneKeepArmed ? 'Lane keep on' : 'Lane keep off') + '. GPS stop at 16.5 m.');
         const lkBtn = document.getElementById('lane-keep-btn');
         const lkTxt = laneKeepArmed ? 'Lane keep on' : 'Lane keep';
         if (lkBtn.textContent !== lkTxt) lkBtn.textContent = lkTxt;

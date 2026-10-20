@@ -222,6 +222,8 @@ def _judge(
     before: Diagnosis | None,
     after: Diagnosis | None,
     flat: bool,
+    within_noise: bool = False,
+    noise_detail: str = "",
 ) -> tuple[str, str, str]:
     """Return verdict, mechanism paragraph, and the plain lesson."""
     if action == "invalid":
@@ -278,6 +280,28 @@ def _judge(
             "refuted",
             "The held-out lap did not back the provisional keep, so the change does not travel.",
             f"Do not keep pushing {knob} {direction}. The held-out lap disagreed.",
+        )
+    if action == "inconclusive" or (
+        within_noise and action in {"rollback", "inconclusive"}
+    ):
+        if (
+            param == "controller.pivot_w_max_rad_s"
+            and direction == "down"
+            and _turn_improved(before, after)
+        ):
+            return (
+                "inconclusive",
+                "Turn-segment error moved the way a slower pivot predicts, but the combined "
+                "score or overall |err| stayed inside the lap noise band, so this lap is not "
+                "enough to keep or refute the knob.",
+                f"Do not treat pivot-down as refuted. {noise_detail}".strip(),
+            )
+        detail = noise_detail or "The move was within the configured noise band."
+        return (
+            "inconclusive",
+            "The lap did not clear the keep threshold and the measured move was within lap "
+            "noise, so this direction is not refuted.",
+            f"Do not block {knob} {direction} in the picker from this lap alone. {detail}",
         )
     kept = action == "keep"
     if param == "bom_build":
@@ -372,6 +396,10 @@ def build_postmortem(
     before: Diagnosis | None,
     after: Diagnosis | None,
     intended: dict | None = None,
+    within_noise: bool = False,
+    noise_detail: str = "",
+    summary_trusted: bool = True,
+    evidence: dict | None = None,
 ) -> dict:
     """Structured post-mortem for one trial. ``next_hypothesis`` is filled by the loop."""
     direction = "switch" if param is None else step_direction(old, new)
@@ -383,6 +411,8 @@ def build_postmortem(
         before=before,
         after=after,
         flat=flat,
+        within_noise=within_noise,
+        noise_detail=noise_detail,
     )
     if action in {"confirm-pass", "confirm-fail"}:
         predicted = {
@@ -407,7 +437,9 @@ def build_postmortem(
         verdict = "inconclusive"
     if verdict == "invalid":
         tag = ""
-    limit_note = limits_match_intended(None if after is None else after.summary, intended)
+    limit_note = None
+    if summary_trusted:
+        limit_note = limits_match_intended(None if after is None else after.summary, intended)
     if limit_note and action != "invalid":
         verdict = "invalid"
         mechanism = limit_note
@@ -415,7 +447,7 @@ def build_postmortem(
         tag = ""
     elif limit_note and action == "invalid":
         mechanism = limit_note
-    return {
+    payload = {
         "verdict": verdict,
         "param": param,
         "direction": direction if param else "",
@@ -426,3 +458,6 @@ def build_postmortem(
         "next_hypothesis": "",
         "metrics": _metric_rows(before, after, predicted),
     }
+    if evidence:
+        payload["evidence"] = evidence
+    return payload

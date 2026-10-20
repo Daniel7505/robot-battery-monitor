@@ -191,6 +191,21 @@ def _lap_body(text: str) -> str:
     return chunks[-2] if len(chunks) >= 2 else text
 
 
+def diagnose_lap(text: str) -> Diagnosis:
+    """Diagnose only when this capture includes a ``MISSION_SUMMARY`` line."""
+    if "MISSION_SUMMARY" not in (text or ""):
+        empty = Diagnosis(
+            summary=None,
+            segments=[],
+            straight_err=None,
+            turn_err=None,
+            notes=["No MISSION_SUMMARY in the log. The lap did not finish a scored mission."],
+            per_build={},
+        )
+        return empty
+    return diagnose(text)
+
+
 def diagnose(text: str) -> Diagnosis:
     """Last mission in ``text``, plus the last summary seen for each build."""
     summaries: list[MissionSummary] = []

@@ -7,6 +7,15 @@ each try under **Learnings**. It does not rewrite the seeded facts.
 The loop may change only the tuning keys in `config/config.yaml`
 (`controller.cruise_m_s`, `controller.pivot_w_max_rad_s`,
 `controller.k_steer`). `bom_build` stays **light** for the whole run.
+
+**Step sizes (warehouse noise):** lap evidence needs roughly **>1.5 pp**
+on |err|, **>1.5%** on Wh/m, or a turn-segment move above the segment
+noise band (~2.5 pp). The allowlisted steps are therefore coarse:
+`controller.pivot_w_max_rad_s` **0.30** rad/s (e.g. 0.9→0.6),
+`controller.cruise_m_s` **±0.06** m/s, `controller.k_steer` **±0.5**.
+Smaller grid steps were scoring as 1.000 and could not clear the band.
+Repeating the same knob is reserved for invalid laps (one retry), not for
+noise-band inconclusive trials.
 `controller.straight_m_s` is still in config for the row-fit controller,
 but the overnight loop does **not** tune it: on the warehouse track the
 straightaway bump rarely qualifies. The picker tries **pivot** and

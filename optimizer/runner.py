@@ -89,7 +89,9 @@ def _mission_summary_text(since_local: datetime | None) -> str:
     """Lines from the newest host ``mission_summary_*.json`` for this lap.
 
     Main writes that file because the Webots console cannot be captured.
-    ``since_local`` drops a file left by an earlier lap.
+    ``since_local`` drops a file left by an earlier lap. Only files that
+    contain a finished ``MISSION_SUMMARY`` line are used, so an incomplete
+    lap does not reuse an earlier lap's metrics.
     """
     try:
         from src.mission_summary_file import summary_directory
@@ -102,19 +104,29 @@ def _mission_summary_text(since_local: datetime | None) -> str:
     files = [path for path in folder.glob("mission_summary_*.json") if path.is_file()]
     if not files:
         return ""
-    path = max(files, key=lambda item: item.stat().st_mtime)
-    if since_local is not None:
-        mtime = datetime.fromtimestamp(path.stat().st_mtime)
-        if mtime < since_local:
-            return ""
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    candidates: list[tuple[float, str]] = []
+    for path in files:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if since_local is not None:
+            if datetime.fromtimestamp(mtime) < since_local:
+                continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        lines = payload.get("lines") if isinstance(payload, dict) else None
+        if not isinstance(lines, list):
+            continue
+        text = "\n".join(str(line) for line in lines if line)
+        if "MISSION_SUMMARY" not in text:
+            continue
+        candidates.append((mtime, text))
+    if not candidates:
         return ""
-    lines = payload.get("lines") if isinstance(payload, dict) else None
-    if not isinstance(lines, list):
-        return ""
-    return "\n".join(str(line) for line in lines if line)
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 def _append_mission_summary(text: str, since_local: datetime | None, note: str) -> tuple[str, str]:

@@ -45,6 +45,26 @@ def _trial_story(row: dict) -> list[str]:
         lesson = (post.get("lesson") or row.get("lesson") or "").strip()
         if lesson:
             lines.append(f"Lesson: {lesson}")
+        evidence = post.get("evidence") if isinstance(post.get("evidence"), dict) else None
+        status = row.get("evidence_status") or (evidence and evidence.get("evidence_status"))
+        if status or evidence or row.get("turn_noise_band_pp") is not None:
+            lines.append("")
+            lines.append("Evidence:")
+            if status:
+                lines.append(f"- Status: {status}")
+            if row.get("err_gain_pp") is not None:
+                lines.append(f"- |err| gain vs reference: {row.get('err_gain_pp'):.2f} pp")
+            if row.get("wpm_gain_rel") is not None:
+                lines.append(f"- Wh/m gain vs reference: {float(row.get('wpm_gain_rel')):.1%}")
+            if row.get("turn_delta_pp") is not None:
+                lines.append(
+                    f"- Turn |err| delta: {row.get('turn_delta_pp'):.2f} pp "
+                    f"(noise band {row.get('turn_noise_band_pp')} pp)"
+                )
+            elif row.get("turn_noise_band_pp") is not None:
+                lines.append(f"- Turn segment noise band: {row.get('turn_noise_band_pp')} pp")
+            if evidence and evidence.get("detail"):
+                lines.append(f"- Detail: {evidence.get('detail')}")
         nxt = (post.get("next_hypothesis") or row.get("next_hypothesis") or "").strip()
         if nxt:
             lines.append(f"Next hypothesis: {nxt}")
@@ -89,20 +109,24 @@ def render_report(
     lines.append("")
     lines.append("## Trials")
     lines.append("")
-    lines.append("| # | phase | change | decision | build | err_pct | Wh/m | dist_m |")
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    lines.append(
+        "| # | phase | change | decision | evidence | build | err_pct | Wh/m | score | dist_m |"
+    )
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
     narrative: list[str] = []
     for row in records:
         change = f"`{row.get('param')}` {_fmt(row.get('old'))} → {_fmt(row.get('new'))}"
         lines.append(
-            "| {iteration} | {phase} | {change} | {decision} | {build} | {err} | {wpm} | {dist} |".format(
+            "| {iteration} | {phase} | {change} | {decision} | {evidence} | {build} | {err} | {wpm} | {score} | {dist} |".format(
                 iteration=row.get("iteration", ""),
                 phase=row.get("phase", ""),
                 change=change,
                 decision=row.get("decision", ""),
+                evidence=_fmt(row.get("evidence_status")),
                 build=row.get("build", ""),
                 err=_fmt(row.get("err_pct")),
                 wpm=_fmt(row.get("wh_per_m")),
+                score=_fmt(row.get("score")),
                 dist=_fmt(row.get("dist_m")),
             )
         )

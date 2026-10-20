@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from optimizer.config_store import ConfigStore
-from optimizer.diagnose import Diagnosis, diagnose
+from optimizer.diagnose import Diagnosis, diagnose, diagnose_lap
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
 from optimizer.notify import notify_run_finished
@@ -16,8 +16,14 @@ from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
-from optimizer.evidence import meaningful_improvement
-from optimizer.score import KEEP_MARGIN, confirmation_ok, decide
+from optimizer.evidence import evidence_status, measure_effects, meaningful_improvement
+from optimizer.score import (
+    ERR_REGRESS_POINTS,
+    KEEP_MARGIN,
+    confirmation_ok,
+    decide,
+    lap_metrics_match,
+)
 from optimizer.trial_validity import body_matches_run, run_body_from_params, trial_invalid_reason
 
 SESSION_NAME = "session.json"
@@ -78,6 +84,14 @@ def _knowledge_text(path: Path) -> str:
 def _next_hypothesis(picker, diag, knowledge_path: Path, history: list[dict], rec: dict, store) -> str:
     """What the picker would try next, after this trial's lesson is in the book."""
     post = rec.get("postmortem") or {}
+    if rec.get("decision") == "invalid":
+        param = rec.get("param")
+        new = rec.get("new")
+        if param:
+            return (
+                f"Retry `{param}` at {new} once more before trying another knob or direction. "
+                "The last lap was invalid (missing summary, limits, or body mismatch)."
+            )
     if rec.get("decision") == "keep":
         return (
             f"From that lesson, hold `{rec.get('param')}` at {rec.get('new')} and run the "
@@ -105,6 +119,23 @@ def _next_hypothesis(picker, diag, knowledge_path: Path, history: list[dict], re
     )
 
 
+def _apply_evidence(rec: dict, effects: dict | None, *, flat: bool = False) -> None:
+    if not effects:
+        return
+    post = rec.get("postmortem") if isinstance(rec.get("postmortem"), dict) else {}
+    verdict = str(post.get("verdict") or "")
+    rec["err_gain_pp"] = effects.get("err_gain_pp")
+    rec["wpm_gain_rel"] = effects.get("wpm_gain_rel")
+    rec["turn_delta_pp"] = effects.get("turn_delta_pp")
+    rec["turn_noise_band_pp"] = effects.get("turn_noise_band_pp")
+    rec["evidence_status"] = evidence_status(
+        action=str(rec.get("decision") or ""),
+        post_verdict=verdict,
+        meaningful=bool(effects.get("meaningful")),
+        flat=flat,
+    )
+
+
 def _attach_postmortem(
     rec: dict,
     *,
@@ -115,6 +146,10 @@ def _attach_postmortem(
     picker,
     store,
     next_diag,
+    within_noise: bool = False,
+    noise_detail: str = "",
+    summary_trusted: bool = True,
+    effects: dict | None = None,
 ) -> dict:
     post = build_postmortem(
         param=rec.get("param"),
@@ -124,6 +159,10 @@ def _attach_postmortem(
         before=before,
         after=after,
         intended=rec.get("intended_params"),
+        within_noise=within_noise,
+        noise_detail=noise_detail,
+        summary_trusted=summary_trusted,
+        evidence=effects,
     )
     rec["postmortem"] = post
     if rec.get("decision") == "invalid" and rec.get("reason"):
@@ -134,6 +173,7 @@ def _attach_postmortem(
     rec["mechanism"] = post["mechanism"]
     post["next_hypothesis"] = _next_hypothesis(picker, next_diag, knowledge_path, history, rec, store)
     rec["next_hypothesis"] = post["next_hypothesis"]
+    _apply_evidence(rec, effects, flat=bool(post.get("flat")))
     return rec
 
 
@@ -257,6 +297,8 @@ def run_loop(
     diagnoses: dict = {}
     references: dict = {}
     pending: dict | None = None
+    retry_search: Proposal | None = None
+    retry_search_old = None
     stop_reason = "iteration limit"
     iteration = 0
     run_failed = False
@@ -440,12 +482,22 @@ def run_loop(
                 pending = None
                 continue
 
-            proposal = picker.pick(diag, knowledge, history, params)
+            search_is_retry = False
+            old = None
+            if retry_search is not None:
+                proposal = retry_search
+                old = retry_search_old
+                search_is_retry = True
+                retry_search = None
+                retry_search_old = None
+            else:
+                proposal = picker.pick(diag, knowledge, history, params)
             if proposal is None:
                 stop_reason = "picker had no further allowlisted change"
                 break
             iteration += 1
-            old = params.get(proposal.param)
+            if old is None:
+                old = params.get(proposal.param)
             try:
                 store.apply_one(proposal.param, proposal.value)
             except Exception as exc:
@@ -483,37 +535,72 @@ def run_loop(
             outcome = _run_with_retry(
                 runner, store.read(), lap_timeout_s, world, run_dir / f"launch_{iteration}.log"
             )
-            new_diag = diagnose(outcome.log_text)
+            summary_trusted = "MISSION_SUMMARY" in (outcome.log_text or "")
+            new_diag = diagnose_lap(outcome.log_text) if summary_trusted else diagnose_lap("")
             summary = new_diag.summary
             intended_params = store.read()
             reference = references.get(run_body)
             before_diag = diag
-            if outcome.status != "ok":
+            effects: dict | None = None
+            within_noise = False
+            noise_detail = ""
+            if outcome.status == "no_summary" or (
+                outcome.status == "ok" and not summary_trusted
+            ):
                 store.apply_one(proposal.param, old)
-                action = "rollback"
+                action = "invalid"
+                reason = (
+                    "lap had no MISSION_SUMMARY / did not finish; "
+                    "no metrics from this lap were scored"
+                )
+                score = None
+                summary = None
+                new_diag = diagnose_lap("")
+                diag = before_diag
+                if not search_is_retry:
+                    retry_search = proposal
+                    retry_search_old = old
+            elif outcome.status != "ok":
+                store.apply_one(proposal.param, old)
+                action = "invalid"
                 reason = f"{outcome.status}: {outcome.note or 'lap failed'}"
                 score = None
                 diag = before_diag
+                if not search_is_retry:
+                    retry_search = proposal
+                    retry_search_old = old
             elif (invalid := trial_invalid_reason(summary, intended_params, run_body)):
                 store.apply_one(proposal.param, old)
                 action = "invalid"
                 reason = invalid
                 score = None
                 diag = before_diag
+                if not search_is_retry:
+                    retry_search = proposal
+                    retry_search_old = old
             else:
+                effects = measure_effects(before_diag, new_diag, reference)
+                within_noise = not effects.get("meaningful")
+                noise_detail = str(effects.get("detail") or "")
+                clearly_worse = False
+                if (
+                    summary is not None
+                    and reference is not None
+                    and summary.err_pct is not None
+                    and reference.err_pct is not None
+                ):
+                    err_regress = abs(summary.err_pct) - abs(reference.err_pct)
+                    clearly_worse = err_regress > ERR_REGRESS_POINTS
                 decision = decide(summary, reference)
                 score = decision.score
                 reason = decision.reason
                 if decision.action == "keep" and summary is not None:
-                    meaningful, noise = meaningful_improvement(
-                        before_diag, new_diag, reference
-                    )
-                    if not meaningful:
+                    if within_noise:
                         store.apply_one(proposal.param, old)
-                        action = "rollback"
+                        action = "inconclusive"
                         reason = (
                             f"score {decision.score:.3f} beat {KEEP_MARGIN} but the move was "
-                            f"within lap noise ({noise})"
+                            f"within lap noise ({noise_detail})"
                         )
                         diag = before_diag
                     else:
@@ -533,11 +620,21 @@ def run_loop(
                         diag = new_diag
                 elif decision.action == "baseline":
                     store.apply_one(proposal.param, old)
-                    action = "rollback"
+                    action = "inconclusive"
                     reason = (
                         "no reference lap was recorded for this build; "
                         "the trial was not scored"
                     )
+                    diag = before_diag
+                elif lap_metrics_match(summary, reference) if reference else False:
+                    store.apply_one(proposal.param, old)
+                    action = "inconclusive"
+                    reason = decision.reason
+                    diag = before_diag
+                elif within_noise and not clearly_worse:
+                    store.apply_one(proposal.param, old)
+                    action = "inconclusive"
+                    reason = f"{decision.reason}; {noise_detail}".strip("; ")
                     diag = before_diag
                 else:
                     store.apply_one(proposal.param, old)
@@ -563,6 +660,10 @@ def run_loop(
                 picker=picker,
                 store=store,
                 next_diag=diag,
+                within_noise=within_noise and action == "inconclusive",
+                noise_detail=noise_detail,
+                summary_trusted=summary_trusted,
+                effects=effects,
             )
             records.append(book.append(rec))
             history.append(rec)

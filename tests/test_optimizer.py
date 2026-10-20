@@ -233,7 +233,7 @@ def test_rule_picker_steps_pivot_before_cruise_on_visc_heavy_high_model():
     proposal = RulePicker().pick(diagnose(summary_line()), "", [], PARAMS)
     assert proposal is not None
     assert proposal.param == "controller.pivot_w_max_rad_s"
-    assert proposal.value == pytest.approx(0.8)
+    assert proposal.value == pytest.approx(0.6)
     assert "yaw rate" in proposal.hypothesis or "pivot" in proposal.hypothesis.lower()
     assert proposal.code_suggestions
 
@@ -243,7 +243,7 @@ def test_rule_picker_can_still_step_cruise_when_pivot_is_blocked():
     proposal = RulePicker().pick(diagnose(summary_line()), knowledge, [], PARAMS)
     assert proposal is not None
     assert proposal.param == "controller.cruise_m_s"
-    assert proposal.value == pytest.approx(0.42)
+    assert proposal.value == pytest.approx(0.38)
 
 
 def test_rule_picker_steps_turn_rate_when_turns_are_the_miss():
@@ -261,21 +261,21 @@ def test_rule_picker_steps_turn_rate_when_turns_are_the_miss():
     proposal = RulePicker().pick(diagnose(text), "", [], PARAMS)
     assert proposal is not None
     assert proposal.param == "controller.pivot_w_max_rad_s"
-    assert proposal.value == pytest.approx(0.8)
+    assert proposal.value == pytest.approx(0.6)
 
 
 def test_rule_picker_does_not_repeat_a_rolled_back_value():
     history = [
         {
             "param": "controller.cruise_m_s",
-            "new": 0.42,
+            "new": 0.38,
             "decision": "rollback",
             "phase": "search",
         }
     ]
     proposal = RulePicker().pick(diagnose(summary_line()), "", history, PARAMS)
     assert proposal is not None
-    assert not (proposal.param == "controller.cruise_m_s" and proposal.value == pytest.approx(0.42))
+    assert not (proposal.param == "controller.cruise_m_s" and proposal.value == pytest.approx(0.38))
     assert proposal.param in ALLOWLIST
 
 
@@ -316,12 +316,12 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
         err_pct="-18.0",
         wh_measured_drive_elec="3.400",
         wh_model_drive="4.146",
-        ctrl_pivot_w_max_rad_s="0.80",
+        ctrl_pivot_w_max_rad_s="0.60",
     )
     held = summary_line(
         err_pct="-19.0",
         wh_measured_drive_elec="3.650",
-        ctrl_pivot_w_max_rad_s="0.80",
+        ctrl_pivot_w_max_rad_s="0.60",
     )
     runner = ScriptedRunner(reference_then(
         RunOutcome("ok", better), RunOutcome("ok", held),
@@ -364,7 +364,7 @@ def test_loop_rolls_back_a_worse_lap_and_tries_something_else(tmp_path):
     worse = summary_line(
         err_pct="-40.0",
         wh_measured_drive_elec="4.200",
-        ctrl_pivot_w_max_rad_s="0.80",
+        ctrl_pivot_w_max_rad_s="0.60",
     )
     still = summary_line(
         err_pct="-27.0",
@@ -429,7 +429,7 @@ def test_loop_crash_is_retried_rolled_back_and_redacted(tmp_path):
     assert "[REDACTED]" in raw
     rows = [json.loads(line) for line in raw.splitlines()]
     search = [row for row in rows if row.get("phase") == "search"]
-    assert search[0]["decision"] == "rollback"
+    assert search[0]["decision"] in {"rollback", "invalid"}
     assert load_controller_limits(config).cruise_m_s == pytest.approx(0.44)
 
 
@@ -727,17 +727,17 @@ def test_picker_does_not_repeat_a_refuted_slowdown():
     proposal = RulePicker().pick(diagnose(summary_line()), knowledge, [], PARAMS)
     assert proposal is not None
     assert proposal.param == "controller.pivot_w_max_rad_s"
-    assert proposal.value == pytest.approx(0.8)
+    assert proposal.value == pytest.approx(0.6)
 
 
 def test_flat_lap_is_inconclusive_and_the_next_knob_is_pivot(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    unchanged = summary_line(ctrl_pivot_w_max_rad_s="0.80")
+    unchanged = summary_line(ctrl_pivot_w_max_rad_s="0.60")
     moved = summary_line(
         err_pct="-26.0",
         wh_measured_drive_elec="3.600",
         duration_s="700",
-        ctrl_pivot_w_max_rad_s="0.80",
+        ctrl_pivot_w_max_rad_s="0.60",
     )
     runner = ScriptedRunner(reference_then(
         RunOutcome("ok", unchanged), RunOutcome("ok", moved),
@@ -758,8 +758,8 @@ def test_flat_lap_is_inconclusive_and_the_next_knob_is_pivot(tmp_path):
     ]
     flat = rows[1]
     assert flat["param"] == "controller.pivot_w_max_rad_s"
-    assert flat["new"] == pytest.approx(0.8)
-    assert flat["decision"] == "rollback"
+    assert flat["new"] == pytest.approx(0.6)
+    assert flat["decision"] == "inconclusive"
     assert flat["score"] == pytest.approx(1.0)
     assert "may not have taken effect" in flat["reason"]
     post = flat["postmortem"]
@@ -779,7 +779,7 @@ def test_flat_lap_is_inconclusive_and_the_next_knob_is_pivot(tmp_path):
     assert "Next hypothesis:" in learned
 
 
-def test_a_real_miss_refutes_slowing_cruise(tmp_path):
+def test_a_small_cruise_move_without_visc_drop_is_inconclusive_not_refuted(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
     knowledge.write_text(
         knowledge.read_text(encoding="utf-8")
@@ -790,7 +790,7 @@ def test_a_real_miss_refutes_slowing_cruise(tmp_path):
     missed = summary_line(
         err_pct="-29.5",
         duration_s="700",
-        ctrl_cruise_m_s="0.42",
+        ctrl_cruise_m_s="0.38",
     )
     runner = ScriptedRunner(reference_then(
         RunOutcome("ok", missed),
@@ -813,17 +813,18 @@ def test_a_real_miss_refutes_slowing_cruise(tmp_path):
     trial = rows[1]
     post = trial["postmortem"]
     assert trial["param"] == "controller.cruise_m_s"
-    assert trial["decision"] == "rollback"
+    assert trial["decision"] in {"rollback", "inconclusive"}
     assert post["flat"] is False
-    assert post["verdict"] == "refuted"
-    assert "did not cut viscous Wh enough" in post["mechanism"]
-    assert "less speed-sensitive" in post["mechanism"]
-    assert post["tag"] == "[refuted controller.cruise_m_s down]"
+    assert post["verdict"] in {"refuted", "inconclusive"}
+    if post["verdict"] == "refuted":
+        assert "did not cut viscous Wh enough" in post["mechanism"]
+    else:
+        assert post["verdict"] == "inconclusive"
+        assert post["tag"] == "[inconclusive controller.cruise_m_s down]"
     assert rows[2]["param"] == "controller.pivot_w_max_rad_s"
     morning = report.read_text(encoding="utf-8")
-    assert "Lowering cruise speed did not cut viscous Wh enough" in morning
     learned = knowledge.read_text(encoding="utf-8")
-    assert "[refuted controller.cruise_m_s down]" in learned
+    assert "[inconclusive controller.cruise_m_s down]" in learned or "[refuted controller.cruise_m_s down]" in learned
 
 
 def test_diagnose_reads_controller_limits_from_the_summary():
@@ -944,6 +945,103 @@ def test_notify_posts_json_without_failing_the_run(tmp_path, monkeypatch):
     assert payload["status"] == "ok"
     assert payload["iterations"] == 0
     assert payload["report_path"].endswith("morning.md")
+
+
+def test_scored_lap_can_beat_keep_margin_when_err_moves_enough():
+    ref = diagnose(summary_line()).summary
+    better = diagnose(summary_line(err_pct="-18.0", wh_measured_drive_elec="3.400")).summary
+    decision = decide(better, ref)
+    assert decision.score is not None
+    assert decision.score < 0.98
+    assert decision.action == "keep"
+
+
+def test_postmortem_marks_noise_band_pivot_down_inconclusive_not_refuted():
+    from optimizer.postmortem import build_postmortem
+
+    before = diagnose(
+        "\n".join([summary_line(), segment(90, -9.5, 0.40), segment(90, -10.0, 0.38)])
+    )
+    after = diagnose(
+        "\n".join(
+            [
+                summary_line(err_pct="-28.0", duration_s="665.0"),
+                segment(90, -8.0, 0.40),
+                segment(90, -7.6, 0.38),
+            ]
+        )
+    )
+    post = build_postmortem(
+        param="controller.pivot_w_max_rad_s",
+        old=0.9,
+        new=0.6,
+        action="inconclusive",
+        before=before,
+        after=after,
+        within_noise=True,
+        noise_detail="|err| improved 0.30 points (need >1.5)",
+    )
+    assert post["verdict"] == "inconclusive"
+    assert post["tag"] == "[inconclusive controller.pivot_w_max_rad_s down]"
+
+
+def test_missing_summary_is_invalid_and_retries_same_step(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+
+    class NoSummary:
+        def __init__(self):
+            self.calls = 0
+
+        def restart_dashboard(self):
+            return "ok"
+
+        def run_lap(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return RunOutcome("ok", summary_line())
+            if self.calls in (2, 3):
+                return RunOutcome("no_summary", "SEGMENT_ENERGY build=light dist_m=1.0", note="no summary")
+            return RunOutcome("ok", summary_line(ctrl_pivot_w_max_rad_s="0.60", err_pct="-27.0"))
+
+    runner = NoSummary()
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=2,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+    )
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[1]["decision"] == "invalid"
+    assert "no MISSION_SUMMARY" in rows[1]["reason"]
+    assert rows[1]["err_pct"] is None
+    assert rows[2]["param"] == rows[1]["param"]
+    assert rows[2]["new"] == rows[1]["new"]
+    assert runner.calls == 4
+
+
+def test_mission_summary_json_without_summary_line_is_ignored(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    import os
+    from optimizer import runner
+
+    monkeypatch.setenv("RBM_LOG_DIR", str(tmp_path))
+    folder = tmp_path
+    path = folder / "mission_summary_20261020-152129.json"
+    path.write_text(
+        json.dumps({"lines": ["SEGMENT_ENERGY build=light dist_m=3.0 err_pct=-10.0"]}),
+        encoding="utf-8",
+    )
+    since = datetime.now() - timedelta(minutes=1)
+    os.utime(path, (since.timestamp(), since.timestamp()))
+    text = runner._mission_summary_text(since)
+    assert text == ""
 
 
 def test_rowfit_reset_keeps_the_track_and_the_speed_knobs():

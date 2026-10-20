@@ -145,7 +145,15 @@ def read_dashboard_log(
     elif since_utc is not None:
         cmd[2:2] = ["--since", since_utc.strftime("%Y-%m-%dT%H:%M:%SZ")]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, check=False)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=90,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         text = _file_log(since_local)
         note = f"docker logs failed ({exc}); used the dashboard file log"
@@ -195,6 +203,8 @@ class WebotsLapRunner:
                 ["docker", "restart", DASHBOARD_CONTAINER],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=180,
                 check=False,
             )
@@ -227,6 +237,9 @@ class WebotsLapRunner:
         _kill_webots()
         env = os.environ.copy()
         env["RBM_MISSION_LAPS"] = "1"
+        # The controller prints arrows. A cp1252 console turns those into a crash.
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
         sink = None
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -280,10 +280,17 @@ def test_controller_camera_reset_per_world(world, tmp_path):
     import subprocess
 
     ctrl = ROOT / "webots" / "controllers" / "butlerbot_controller"
-    env = dict(os.environ, RBM_LOG_DIR=str(tmp_path), TWIN_DASHBOARD_URL="http://127.0.0.1:9")
+    env = dict(
+        os.environ,
+        RBM_LOG_DIR=str(tmp_path),
+        TWIN_DASHBOARD_URL="http://127.0.0.1:9",
+        PYTHONIOENCODING="utf-8",
+        PYTHONUTF8="1",
+    )
     out = subprocess.run([sys.executable, "-c", _CTRL_PROBE, str(ROOT / "tests" / "fake_webots"), str(ctrl),
                           str(ROOT / "webots" / "worlds" / world)],
-                         cwd=ctrl, env=env, capture_output=True, text=True, timeout=120)
+                         cwd=ctrl, env=env, capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=120)
     text = out.stdout + out.stderr
     line = next(ln for ln in text.splitlines() if ln.startswith("RESULT")).split(" ", 1)[1]
     follow, ftype, pos, ori, fov = (p.strip() for p in line.split("|"))

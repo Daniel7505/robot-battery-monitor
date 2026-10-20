@@ -17,6 +17,13 @@ DIST_DROP = 0.15
 CONFIRM_ERR_BAND = 3.0
 # A different build only has to finish and stay out of a wild miss.
 CONFIRM_ABS_CAP = 40.0
+# A lap this close to the reference did not really change. Score lands on 1.000,
+# which does not beat KEEP_MARGIN, and it is not evidence about the mechanism.
+ERR_MATCH = 0.05
+WPM_MATCH_REL = 0.005
+DIST_MATCH_M = 0.5
+TIME_MATCH_S = 1.0
+VISC_MATCH_REL = 0.01
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,42 @@ class Decision:
 
 def _blank_decision(action: str, reason: str) -> Decision:
     return Decision(action, reason, None, None, None)
+
+
+def _close(left: float | None, right: float | None, tol: float) -> bool:
+    if left is None or right is None:
+        return True
+    return abs(float(left) - float(right)) <= tol
+
+
+def lap_metrics_match(candidate: MissionSummary | None, reference: MissionSummary | None) -> bool:
+    """True when the scored lap did not move relative to the reference.
+
+    Identical err, Wh/m, distance, lap time, and viscous watt-hours produce a
+    score of 1.000. That misses the 0.98 keep line, and it usually means the
+    config edit never reached the controller.
+    """
+    if candidate is None or reference is None:
+        return False
+    if candidate.err_pct is None or reference.err_pct is None:
+        return False
+    if abs(abs(candidate.err_pct) - abs(reference.err_pct)) > ERR_MATCH:
+        return False
+    cand_wpm = candidate.wh_per_m()
+    ref_wpm = reference.wh_per_m()
+    if cand_wpm is None or ref_wpm is None:
+        return False
+    if abs(cand_wpm - ref_wpm) > max(1e-6, WPM_MATCH_REL * abs(ref_wpm)):
+        return False
+    if not _close(candidate.dist_m, reference.dist_m, DIST_MATCH_M):
+        return False
+    if not _close(candidate.duration_s, reference.duration_s, TIME_MATCH_S):
+        return False
+    if candidate.wh_model_visc is not None and reference.wh_model_visc is not None:
+        scale = max(abs(reference.wh_model_visc), 1e-6)
+        if abs(candidate.wh_model_visc - reference.wh_model_visc) > max(1e-4, VISC_MATCH_REL * scale):
+            return False
+    return True
 
 
 def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -> Decision:
@@ -95,6 +138,15 @@ def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -
         return Decision(
             "rollback",
             f"|err| rose by {err_regress:.1f} points (score {value:.3f})",
+            value,
+            abs_err,
+            wh_per_m,
+        )
+    if lap_metrics_match(candidate, reference):
+        return Decision(
+            "rollback",
+            f"score {value:.3f} did not beat {KEEP_MARGIN}; the lap metrics matched "
+            "the reference, so the change may not have taken effect",
             value,
             abs_err,
             wh_per_m,

@@ -2074,7 +2074,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     print("ButlerBot controller stopped (simulation ended)")
 
 
+def _prefer_utf8_stdio() -> None:
+    """Windows pipes default to cp1252, which cannot encode the arrows in the startup log."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def main() -> None:
+    _prefer_utf8_stdio()
     opts = parse_controller_args()
     if Supervisor is not None:
         robot = Supervisor()

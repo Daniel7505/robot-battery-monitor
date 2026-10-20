@@ -16,6 +16,45 @@ def _fmt(value) -> str:
     return str(value)
 
 
+def _trial_story(row: dict) -> list[str]:
+    """Plain-language post-mortem for one trial, placed under that trial."""
+    lines = [f"### Trial {row.get('iteration')} ({row.get('phase')})", ""]
+    if row.get("param"):
+        lines.append(
+            f"Change: `{row.get('param')}` {_fmt(row.get('old'))} → {_fmt(row.get('new'))}."
+        )
+    hypothesis = (row.get("hypothesis") or "").strip()
+    if hypothesis:
+        lines.append(hypothesis)
+    post = row.get("postmortem") if isinstance(row.get("postmortem"), dict) else None
+    if post:
+        lines.append("")
+        lines.append("Predicted versus observed:")
+        lines.append("")
+        for metric in post.get("metrics") or []:
+            label = metric.get("label") or "metric"
+            predicted = metric.get("predicted") or ""
+            observed = metric.get("observed") or ""
+            lines.append(f"- {label}: predicted {predicted}; observed {observed}.")
+        lines.append("")
+        mechanism = (post.get("mechanism") or "").strip()
+        if mechanism:
+            lines.append(mechanism)
+            lines.append("")
+        lesson = (post.get("lesson") or row.get("lesson") or "").strip()
+        if lesson:
+            lines.append(f"Lesson: {lesson}")
+        nxt = (post.get("next_hypothesis") or row.get("next_hypothesis") or "").strip()
+        if nxt:
+            lines.append(f"Next hypothesis: {nxt}")
+    else:
+        reason = (row.get("reason") or "").strip()
+        if reason:
+            lines.append(f"Result: {reason}")
+    lines.append("")
+    return lines
+
+
 def render_report(
     *,
     started: datetime,
@@ -65,13 +104,7 @@ def render_report(
                 dist=_fmt(row.get("dist_m")),
             )
         )
-        hypothesis = row.get("hypothesis") or ""
-        reason = row.get("reason") or ""
-        if hypothesis or reason:
-            narrative.append(f"Iteration {row.get('iteration')} ({row.get('phase')}): {hypothesis}")
-            if reason:
-                narrative.append(f"Result: {reason}")
-            narrative.append("")
+        narrative.extend(_trial_story(row))
     lines.append("")
     lines.extend(narrative)
     lines.append("## Where the energy went")

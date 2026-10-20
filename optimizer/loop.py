@@ -12,6 +12,7 @@ from optimizer.diagnose import Diagnosis, diagnose
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
 from optimizer.picker import Proposal, RulePicker, held_out_build
+from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
 from optimizer.score import confirmation_ok, decide
@@ -23,7 +24,15 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _learning(iteration: int, phase: str, proposal: Proposal | None, action: str, reason: str, summary) -> str:
+def _learning(
+    iteration: int,
+    phase: str,
+    proposal: Proposal | None,
+    action: str,
+    reason: str,
+    summary,
+    postmortem: dict | None = None,
+) -> str:
     stamp = _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [f"### {stamp} iteration {iteration} ({phase})"]
     if proposal is not None:
@@ -39,11 +48,85 @@ def _learning(iteration: int, phase: str, proposal: Proposal | None, action: str
             f"shaft={summary.wh_measured_drive_shaft} Wh "
             f"elec={summary.wh_measured_drive_elec} Wh dist={summary.dist_m} m"
         )
+    if postmortem:
+        lesson = str(postmortem.get("lesson") or "").strip()
+        tag = str(postmortem.get("tag") or "").strip()
+        if lesson or tag:
+            lines.append(f"- Lesson: {lesson} {tag}".rstrip())
+        nxt = str(postmortem.get("next_hypothesis") or "").strip()
+        if nxt:
+            lines.append(f"- Next hypothesis: {nxt}")
     if proposal is not None and proposal.code_suggestions:
         lines.append("- Code suggestions (not applied):")
         for item in proposal.code_suggestions:
             lines.append(f"  - {item}")
     return "\n".join(lines)
+
+
+def _knowledge_text(path: Path) -> str:
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+    return ""
+
+
+def _next_hypothesis(picker, diag, knowledge_path: Path, history: list[dict], rec: dict, store) -> str:
+    """What the picker would try next, after this trial's lesson is in the book."""
+    post = rec.get("postmortem") or {}
+    if rec.get("decision") == "keep":
+        return (
+            f"From that lesson, hold `{rec.get('param')}` at {rec.get('new')} and run the "
+            "held-out lap before trying another knob. The lesson stands only if that lap agrees."
+        )
+    extra = ""
+    tag = str(post.get("tag") or "").strip()
+    lesson = str(post.get("lesson") or "").strip()
+    if tag or lesson:
+        extra = f"\n- Lesson: {lesson} {tag}\n"
+    try:
+        proposal = picker.pick(
+            diag,
+            _knowledge_text(knowledge_path) + extra,
+            list(history) + [rec],
+            store.read(),
+        )
+    except Exception as exc:
+        return f"Could not derive the next hypothesis ({type(exc).__name__}: {exc})."
+    if proposal is None:
+        return "From that lesson, no allowlisted step is left."
+    return (
+        f"From that lesson, try `{proposal.param}` at {proposal.value} "
+        f"rather than repeating the step that just finished. {proposal.hypothesis}"
+    )
+
+
+def _attach_postmortem(
+    rec: dict,
+    *,
+    before,
+    after,
+    knowledge_path: Path,
+    history: list[dict],
+    picker,
+    store,
+    next_diag,
+) -> dict:
+    post = build_postmortem(
+        param=rec.get("param"),
+        old=rec.get("old"),
+        new=rec.get("new"),
+        action=str(rec.get("decision") or ""),
+        before=before,
+        after=after,
+    )
+    rec["postmortem"] = post
+    rec["lesson"] = post["lesson"]
+    rec["mechanism"] = post["mechanism"]
+    post["next_hypothesis"] = _next_hypothesis(picker, next_diag, knowledge_path, history, rec, store)
+    rec["next_hypothesis"] = post["next_hypothesis"]
+    return rec
 
 
 def _record(
@@ -217,11 +300,23 @@ def run_loop(
                     score=decision.score,
                     note=outcome.note,
                 )
+                _attach_postmortem(
+                    rec,
+                    before=None,
+                    after=diag,
+                    knowledge_path=knowledge_path,
+                    history=history,
+                    picker=picker,
+                    store=store,
+                    next_diag=diag,
+                )
                 records.append(book.append(rec))
                 history.append(rec)
                 append_learning(
                     knowledge_path,
-                    redact(_learning(0, "baseline", None, action, rec["reason"], diag.summary)),
+                    redact(_learning(
+                        0, "baseline", None, action, rec["reason"], diag.summary, rec["postmortem"],
+                    )),
                 )
                 remember(diag)
                 if diag.summary is None:
@@ -291,11 +386,23 @@ def run_loop(
                     score=None,
                     note=(outcome.note + " " + restart_note).strip(),
                 )
+                _attach_postmortem(
+                    rec,
+                    before=pending["prev_diag"],
+                    after=check,
+                    knowledge_path=knowledge_path,
+                    history=history,
+                    picker=picker,
+                    store=store,
+                    next_diag=diag,
+                )
                 records.append(book.append(rec))
                 history.append(rec)
                 append_learning(
                     knowledge_path,
-                    redact(_learning(iteration, "confirm", proposal, action, why, check.summary)),
+                    redact(_learning(
+                        iteration, "confirm", proposal, action, why, check.summary, rec["postmortem"],
+                    )),
                 )
                 if check.summary is not None and check.summary.build:
                     diagnoses[check.summary.build] = check
@@ -322,8 +429,24 @@ def run_loop(
                     score=None,
                     note="",
                 )
+                _attach_postmortem(
+                    rec,
+                    before=diag,
+                    after=None,
+                    knowledge_path=knowledge_path,
+                    history=history,
+                    picker=picker,
+                    store=store,
+                    next_diag=diag,
+                )
                 records.append(book.append(rec))
                 history.append(rec)
+                append_learning(
+                    knowledge_path,
+                    redact(_learning(
+                        iteration, "search", proposal, "invalid", rec["reason"], None, rec["postmortem"],
+                    )),
+                )
                 continue
             restart_note = ""
             if proposal.param == "bom_build":
@@ -341,11 +464,23 @@ def run_loop(
                         score=None,
                         note=restart_note,
                     )
+                    _attach_postmortem(
+                        rec,
+                        before=diag,
+                        after=None,
+                        knowledge_path=knowledge_path,
+                        history=history,
+                        picker=picker,
+                        store=store,
+                        next_diag=diag,
+                    )
                     records.append(book.append(rec))
                     history.append(rec)
                     append_learning(
                         knowledge_path,
-                        redact(_learning(iteration, "search", proposal, "invalid", restart_note, None)),
+                        redact(_learning(
+                            iteration, "search", proposal, "invalid", restart_note, None, rec["postmortem"],
+                        )),
                     )
                     continue
             outcome = _run_with_retry(
@@ -358,6 +493,7 @@ def run_loop(
                 build = proposal.value or None
             reference = None if not build else references.get(build)
             decision = decide(summary, reference)
+            before_diag = diag
             if decision.action == "baseline" and summary is not None and build:
                 references[build] = summary
                 diagnoses[build] = new_diag
@@ -398,11 +534,23 @@ def run_loop(
                 score=decision.score,
                 note=(outcome.note + " " + restart_note).strip(),
             )
+            _attach_postmortem(
+                rec,
+                before=before_diag,
+                after=new_diag,
+                knowledge_path=knowledge_path,
+                history=history,
+                picker=picker,
+                store=store,
+                next_diag=diag,
+            )
             records.append(book.append(rec))
             history.append(rec)
             append_learning(
                 knowledge_path,
-                redact(_learning(iteration, "search", proposal, action, reason, summary)),
+                redact(_learning(
+                    iteration, "search", proposal, action, reason, summary, rec["postmortem"],
+                )),
             )
     finally:
         if pending is not None:

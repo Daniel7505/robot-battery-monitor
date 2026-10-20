@@ -9,6 +9,7 @@ parameter is discarded.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 
@@ -115,10 +116,69 @@ def _direction_for(key: str, diagnosis) -> int:
     return _speed_direction(diagnosis)
 
 
-def _try_float(params: dict, key: str, direction: int, history: list[dict]):
+_LESSON_TAG = re.compile(r"\[(supported|refuted|inconclusive) (\S+) (up|down|switch)\]")
+
+
+def lesson_book(knowledge: str, history: list[dict]) -> dict:
+    """Directions earlier trials supported, refuted, or left untested.
+
+    A flat lap is ``inconclusive`` and is tried only after other knobs.
+    A refuted direction is not repeated.
+    """
+    blocked: set[tuple[str, str]] = set()
+    deferred: set[tuple[str, str]] = set()
+    preferred: list[tuple[str, str]] = []
+
+    def add(verdict, param, direction) -> None:
+        if not param or direction not in {"up", "down", "switch"}:
+            return
+        if verdict not in {"supported", "refuted", "inconclusive"}:
+            return
+        key = (str(param), str(direction))
+        if verdict == "refuted":
+            blocked.add(key)
+        elif verdict == "inconclusive":
+            deferred.add(key)
+        elif key not in preferred:
+            preferred.append(key)
+
+    for row in history or []:
+        post = row.get("postmortem") if isinstance(row, dict) else None
+        if isinstance(post, dict):
+            add(post.get("verdict"), post.get("param"), post.get("direction"))
+    for verdict, param, direction in _LESSON_TAG.findall(knowledge or ""):
+        add(verdict, param, direction)
+    return {"blocked": blocked, "deferred": deferred, "preferred": preferred}
+
+
+def _direction_word(sign: int) -> str:
+    return "down" if sign < 0 else "up"
+
+
+def _ordered_keys(order: tuple[str, ...], diagnosis, book: dict) -> list[str]:
+    def primary_blocked(key: str) -> bool:
+        return (key, _direction_word(_direction_for(key, diagnosis))) in book["blocked"]
+
+    def rank(key: str) -> int:
+        if any(param == key for param, _direction in book["preferred"]):
+            return 0
+        if any(param == key for param, _direction in book["deferred"]):
+            return 2
+        return 1
+
+    open_keys = [key for key in order if not primary_blocked(key)]
+    if not open_keys:
+        open_keys = list(order)
+    return sorted(open_keys, key=rank)
+
+
+def _try_float(params: dict, key: str, direction: int, history: list[dict], book: dict | None = None):
     knob = KNOBS[key]
     current = float(params[key])
-    for sign in (direction, -direction):
+    signs = [direction, -direction]
+    if book is not None:
+        signs = [sign for sign in signs if (key, _direction_word(sign)) not in book["blocked"]]
+    for sign in signs:
         nxt = round(current + sign * float(knob.step), 4)
         try:
             nxt = check_param(key, nxt)
@@ -173,8 +233,8 @@ class RulePicker:
     """One change, with a hypothesis the morning report can quote."""
 
     def pick(self, diagnosis, knowledge: str, history: list[dict], params: dict) -> Proposal | None:
-        del knowledge  # the seeded facts are written into the hypotheses below
         suggestions = _suggestions(diagnosis)
+        book = lesson_book(knowledge, history)
         if not (params.get("bom_build") or ""):
             if not _rolled_back(history, "bom_build", "light"):
                 return Proposal(
@@ -192,8 +252,8 @@ class RulePicker:
                 return self._build_proposal(params, nxt, diagnosis, suggestions)
             return None
         order = _TURN_ORDER if _turn_dominates(diagnosis) else _VISC_ORDER
-        for key in order:
-            value = _try_float(params, key, _direction_for(key, diagnosis), history)
+        for key in _ordered_keys(order, diagnosis, book):
+            value = _try_float(params, key, _direction_for(key, diagnosis), history, book)
             if value is None:
                 continue
             return self._float_proposal(params, key, value, diagnosis, suggestions)
@@ -287,6 +347,8 @@ class LlmPicker:
                 input=json.dumps(payload),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 shell=True,
                 check=False,

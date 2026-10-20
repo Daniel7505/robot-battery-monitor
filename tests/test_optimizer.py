@@ -310,6 +310,8 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
         for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert [row["decision"] for row in rows] == ["keep", "confirm-pass"]
+    assert "held-out" in rows[0]["postmortem"]["next_hypothesis"]
+    assert "Predicted versus observed" in text
     learned = knowledge.read_text(encoding="utf-8")
     assert "## Known facts" in learned
     assert "Hypothesis:" in learned
@@ -541,6 +543,132 @@ def test_ignores_a_mission_summary_json_from_before_the_lap(tmp_path, monkeypatc
     text, note = runner.read_dashboard_log(since_local=datetime.now() - timedelta(minutes=5))
     assert "MISSION_SUMMARY" not in text
     assert note == ""
+
+
+def test_identical_metrics_score_one_and_say_the_change_may_not_have_landed():
+    reference = diagnose(summary_line()).summary
+    decision = decide(reference, reference)
+    assert decision.action == "rollback"
+    assert decision.score == pytest.approx(1.0)
+    assert decision.score > 0.98
+    assert "may not have taken effect" in decision.reason
+
+
+def test_text_capturing_subprocesses_use_utf8():
+    """Windows cp1252 turns a UTF-8 arrow (byte 0x90) into UnicodeDecodeError."""
+    import ast
+
+    offenders = []
+    for root in (Path("optimizer"), Path("scripts")):
+        for path in root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not isinstance(func, ast.Attribute) or func.attr not in {"run", "Popen"}:
+                    continue
+                if not isinstance(func.value, ast.Name) or func.value.id != "subprocess":
+                    continue
+                keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+                text = keywords.get("text") or keywords.get("universal_newlines")
+                if not (isinstance(text, ast.Constant) and text.value is True):
+                    continue
+                encoding = keywords.get("encoding")
+                errors = keywords.get("errors")
+                ok_enc = isinstance(encoding, ast.Constant) and encoding.value == "utf-8"
+                ok_err = isinstance(errors, ast.Constant) and errors.value == "replace"
+                if not (ok_enc and ok_err):
+                    offenders.append(f"{path}:{node.lineno} subprocess.{func.attr}")
+    assert offenders == []
+
+
+def test_picker_does_not_repeat_a_refuted_slowdown():
+    knowledge = "Lesson: viscous loss did not move. [refuted controller.straight_m_s down]\n"
+    proposal = RulePicker().pick(diagnose(summary_line()), knowledge, [], PARAMS)
+    assert proposal is not None
+    assert proposal.param == "controller.cruise_m_s"
+    assert proposal.value == pytest.approx(0.42)
+
+
+def test_flat_lap_is_inconclusive_and_the_next_knob_is_cruise(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+    same = summary_line()
+    moved = summary_line(err_pct="-26.0", wh_measured_drive_elec="3.600", duration_s="700")
+    runner = ScriptedRunner([RunOutcome("ok", same), RunOutcome("ok", moved)])
+    report = run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=2,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=same,
+    )
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[0]["param"] == "controller.straight_m_s"
+    assert rows[0]["new"] == pytest.approx(0.48)
+    assert rows[0]["decision"] == "rollback"
+    assert rows[0]["score"] == pytest.approx(1.0)
+    assert "may not have taken effect" in rows[0]["reason"]
+    post = rows[0]["postmortem"]
+    assert post["flat"] is True
+    assert post["verdict"] == "inconclusive"
+    assert "CONTROLLER LIMITS" in post["mechanism"]
+    assert post["tag"] == "[inconclusive controller.straight_m_s down]"
+    assert "refuted" not in post["tag"]
+    assert "cruise_m_s" in post["next_hypothesis"]
+    assert rows[1]["param"] == "controller.cruise_m_s"
+    morning = report.read_text(encoding="utf-8")
+    assert "### Trial 1" in morning
+    assert "Predicted versus observed" in morning
+    assert "Lesson:" in morning
+    assert "Next hypothesis:" in morning
+    learned = knowledge.read_text(encoding="utf-8")
+    assert "[inconclusive controller.straight_m_s down]" in learned
+    assert "Next hypothesis:" in learned
+
+
+def test_a_real_miss_refutes_slowing_the_straight(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+    # err moves, lap time moves, viscous Wh stays put. Not a flat lap.
+    missed = summary_line(err_pct="-29.5", duration_s="700")
+    runner = ScriptedRunner([
+        RunOutcome("ok", missed),
+        RunOutcome("ok", summary_line(err_pct="-27.0", duration_s="640")),
+    ])
+    report = run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=2,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+    )
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    post = rows[0]["postmortem"]
+    assert rows[0]["param"] == "controller.straight_m_s"
+    assert rows[0]["decision"] == "rollback"
+    assert post["flat"] is False
+    assert post["verdict"] == "refuted"
+    assert "did not cut viscous Wh enough" in post["mechanism"]
+    assert "less speed-sensitive" in post["mechanism"]
+    assert post["tag"] == "[refuted controller.straight_m_s down]"
+    assert rows[1]["param"] == "controller.cruise_m_s"
+    assert not (rows[1]["param"] == "controller.straight_m_s")
+    morning = report.read_text(encoding="utf-8")
+    assert "Lowering straight speed did not cut viscous Wh enough" in morning
+    learned = knowledge.read_text(encoding="utf-8")
+    assert "[refuted controller.straight_m_s down]" in learned
 
 
 def test_rowfit_reset_keeps_the_track_and_the_speed_knobs():

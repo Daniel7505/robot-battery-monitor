@@ -28,6 +28,9 @@ CSV_FIELDS = (
     "duration_s",
     "score",
     "note",
+    "lesson",
+    "mechanism",
+    "next_hypothesis",
     "code_suggestions",
 )
 

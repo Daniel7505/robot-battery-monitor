@@ -9,8 +9,11 @@ The loop may change only the tuning keys in `config/config.yaml`
 `controller.k_steer`). `bom_build` stays **light** for the whole run.
 `controller.straight_m_s` is still in config for the row-fit controller,
 but the overnight loop does **not** tune it: on the warehouse track the
-lap top speed is `cruise_m_s` because the straightaway bump rarely
-qualifies. Tune cruise instead. It does not edit
+straightaway bump rarely qualifies. The picker tries **pivot** and
+**k_steer** before **cruise** because junctions cap at **0.25 m/s**
+(`V_JUNCTION_M_S`), corners use `curve_speed` below cruise, and measured
+top speed often sits at `cruise_m_s` (~0.44 m/s) without small cruise
+steps moving lap time or Wh/m much. It does not edit
 the energy model or the physics source to make `err_pct` look better.
 
 ## Known facts
@@ -37,9 +40,11 @@ the energy model or the physics source to make `err_pct` look better.
   `ω = v / 0.08`. Roll stays on the design bill `v / 0.04`. A warehouse
   lap is about 201 m.
 - Idle watt-hours scale with time. Drive viscous watt-hours scale up with
-  speed. On the warehouse loop, measured top speed tracks
-  `controller.cruise_m_s`, not `straight_m_s`. When visc dominates and the
-  model is high, step cruise first. Speeding up is not a free accuracy win.
+  speed where the robot is not junction- or curve-limited. On the warehouse
+  loop, long stretches run at `controller.cruise_m_s`, but junction
+  approach and corner states often dominate; nudging cruise by 0.02 m/s may
+  barely change lap time or Wh/m. Prefer pivot and steer knobs when turn
+  error leads. Speeding up is not a free accuracy win.
 - Code ideas (a missing straight-line contact term, a different motor
   line) are written in the morning report. They are not applied and not
   committed by this loop.

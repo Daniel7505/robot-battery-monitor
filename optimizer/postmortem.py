@@ -243,13 +243,19 @@ def _judge(
             "The lap did not finish with a mission summary, so the hypothesis was not tested.",
             f"Do not treat a lap with no summary as evidence about {param}.",
         )
-    if action == "baseline":
+    if action in {"baseline", "reference"}:
         return (
             "inconclusive",
-            "This is the first finished lap on this build, so it is the reference rather than a test of the knob.",
-            "Use this lap as the reference for this build.",
+            "This lap ran at the starting settings before any search trial, so it is the reference rather than a test of a knob.",
+            "Use this lap as the reference for every trial in this run.",
         )
     knob = param
+    if action == "keep":
+        return (
+            "tentative",
+            "The combined score beat 0.98 on this lap, but the move may still be within lap noise until the held-out repeat agrees.",
+            f"Treat {knob} {direction} as tentative until the confirm lap agrees; only then mark it supported in KNOWLEDGE.md.",
+        )
     if flat:
         return (
             "inconclusive",
@@ -273,7 +279,7 @@ def _judge(
             "The held-out lap did not back the provisional keep, so the change does not travel.",
             f"Do not keep pushing {knob} {direction}. The held-out lap disagreed.",
         )
-    kept = action in {"keep", "baseline"}
+    kept = action == "keep"
     if param == "bom_build":
         return (
             "inconclusive",
@@ -303,9 +309,9 @@ def _judge(
         )
     if param in _SPEED and direction == "down" and kept:
         return (
-            "supported",
-            "Slowing down cut the miss enough for the score to beat 0.98, which supports viscous loss growing with speed.",
-            f"Prefer slowing {knob} when the model is high and viscous watt-hours dominate.",
+            "tentative",
+            "Slowing down cut the miss enough for the score to beat 0.98 on this lap; viscous loss may track speed if the confirm lap agrees.",
+            f"Tentatively prefer slowing {knob} when viscous watt-hours dominate; wait for the held-out lap.",
         )
     if param in _SPEED and direction == "up" and not kept:
         return (
@@ -328,9 +334,9 @@ def _judge(
         )
     if param == "controller.pivot_w_max_rad_s" and direction == "down" and kept:
         return (
-            "supported",
-            "A slower pivot improved the score, which supports turn scrub following the controller yaw rate.",
-            "Prefer a slower controller.pivot_w_max_rad_s while turn segments are the miss.",
+            "tentative",
+            "A slower pivot improved the score on this lap; turn scrub may follow the yaw rate if the confirm lap agrees.",
+            "Tentatively prefer a slower controller.pivot_w_max_rad_s while turn segments are the miss.",
         )
     if param == "controller.k_steer" and not kept:
         if direction == "up" and not _straight_improved(before, after):
@@ -346,15 +352,9 @@ def _judge(
         )
     if kept and param == "controller.k_steer":
         return (
-            "supported",
-            "The steer change cleared the score, which supports the idea that calmer steering was leaving energy on the table.",
-            "Prefer controller.k_steer up while the path is weaving and the score still improves.",
-        )
-    if kept:
-        return (
-            "supported",
-            "The score beat 0.98, so this direction is doing what the hypothesis said.",
-            f"Prefer {knob} {direction} while that keeps clearing the score.",
+            "tentative",
+            "The steer change cleared the score on this lap; calmer steering may help if the confirm lap agrees.",
+            "Tentatively prefer controller.k_steer up while the path is weaving.",
         )
     return (
         "refuted",
@@ -395,10 +395,14 @@ def build_postmortem(
     else:
         predicted = _predictions(param, direction, before)
     tag = ""
-    if param and verdict in {"supported", "refuted", "inconclusive"} and direction in {"up", "down", "switch"}:
-        if param is not None and action != "baseline":
+    if param and verdict in {"supported", "refuted", "inconclusive", "tentative"} and direction in {
+        "up",
+        "down",
+        "switch",
+    }:
+        if param is not None and action not in {"baseline", "reference"}:
             tag = f"[{verdict} {param} {direction}]"
-    if action == "baseline":
+    if action in {"baseline", "reference"}:
         tag = ""
         verdict = "inconclusive"
     if verdict == "invalid":

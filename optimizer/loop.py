@@ -16,7 +16,8 @@ from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
-from optimizer.score import confirmation_ok, decide
+from optimizer.evidence import meaningful_improvement
+from optimizer.score import KEEP_MARGIN, confirmation_ok, decide
 from optimizer.trial_validity import body_matches_run, run_body_from_params, trial_invalid_reason
 
 SESSION_NAME = "session.json"
@@ -274,6 +275,64 @@ def run_loop(
         diagnoses[run_body] = diag
         references[run_body] = summary
 
+    def run_reference_lap() -> bool:
+        """One lap at starting settings; scores all later trials against it."""
+        nonlocal diag, stop_reason
+        if over_time():
+            stop_reason = "wall-clock limit before the reference lap"
+            return False
+        outcome = _run_with_retry(
+            runner, store.read(), lap_timeout_s, world, run_dir / "launch_reference.log"
+        )
+        ref_diag = diagnose(outcome.log_text)
+        intended = store.read()
+        invalid = trial_invalid_reason(ref_diag.summary, intended, run_body)
+        if invalid:
+            action = "invalid"
+            reason = invalid
+        elif ref_diag.summary is None:
+            action = "invalid"
+            reason = outcome.note or "reference lap produced no MISSION_SUMMARY"
+        else:
+            action = "reference"
+            reason = "starting settings reference lap"
+        rec = _record(
+            iteration=0,
+            phase="reference",
+            proposal=None,
+            old=None,
+            action=action,
+            reason=reason,
+            summary=ref_diag.summary,
+            score=1.0 if ref_diag.summary is not None else None,
+            note=outcome.note,
+        )
+        rec["intended_params"] = intended
+        _attach_postmortem(
+            rec,
+            before=None,
+            after=ref_diag,
+            knowledge_path=knowledge_path,
+            history=history,
+            picker=picker,
+            store=store,
+            next_diag=ref_diag if ref_diag.summary is not None else diag,
+        )
+        records.append(book.append(rec))
+        history.append(rec)
+        append_learning(
+            knowledge_path,
+            redact(_learning(
+                0, "reference", None, action, reason, ref_diag.summary, rec["postmortem"],
+            )),
+        )
+        if action == "reference":
+            remember(ref_diag)
+            diag = ref_diag
+            return True
+        stop_reason = reason
+        return False
+
     try:
         log_text = initial_log
         if log_text is None and fetch_existing is not None:
@@ -295,58 +354,12 @@ def run_loop(
                     )
                 )
         diag = diagnose(log_text or "")
-        if diag.summary is not None and body_matches_run(diag.summary, run_body):
-            remember(diag if diag.summary.build == run_body else diagnose(diag.summary.raw))
-        for build, summary in diag.per_build.items():
-            if build != run_body:
-                continue
-            sub = diagnose(summary.raw)
-            if body_matches_run(sub.summary, run_body):
-                remember(sub)
-        if diag.summary is None:
-            if over_time():
-                stop_reason = "wall-clock limit before the baseline lap"
-            else:
-                outcome = _run_with_retry(
-                    runner, store.read(), lap_timeout_s, world, run_dir / "launch_baseline.log"
-                )
-                diag = diagnose(outcome.log_text)
-                decision = decide(diag.summary, None)
-                action = "baseline" if decision.action == "baseline" else decision.action
-                rec = _record(
-                    iteration=0,
-                    phase="baseline",
-                    proposal=None,
-                    old=None,
-                    action=action,
-                    reason=decision.reason if diag.summary else outcome.note or decision.reason,
-                    summary=diag.summary,
-                    score=decision.score,
-                    note=outcome.note,
-                )
-                _attach_postmortem(
-                    rec,
-                    before=None,
-                    after=diag,
-                    knowledge_path=knowledge_path,
-                    history=history,
-                    picker=picker,
-                    store=store,
-                    next_diag=diag,
-                )
-                records.append(book.append(rec))
-                history.append(rec)
-                append_learning(
-                    knowledge_path,
-                    redact(_learning(
-                        0, "baseline", None, action, rec["reason"], diag.summary, rec["postmortem"],
-                    )),
-                )
-                remember(diag)
-                if diag.summary is None:
-                    stop_reason = "baseline lap produced no MISSION_SUMMARY"
+        # Prior dashboard laps inform the picker only; the run's reference is a fresh lap.
+        if max_iterations > 0 and run_body not in references:
+            if not run_reference_lap():
+                diag = diag if diag.summary is not None else diagnose("")
 
-        while iteration < max_iterations and diag.summary is not None:
+        while iteration < max_iterations and run_body in references:
             if over_time():
                 stop_reason = "wall-clock limit"
                 break
@@ -491,25 +504,41 @@ def run_loop(
                 decision = decide(summary, reference)
                 score = decision.score
                 reason = decision.reason
-                if decision.action == "baseline" and summary is not None:
-                    remember(new_diag)
-                    action = "baseline"
-                    diag = new_diag
-                elif decision.action == "keep" and summary is not None:
-                    action = "keep"
-                    pending = {
-                        "param": proposal.param,
-                        "old": old,
-                        "new": proposal.value,
-                        "hypothesis": proposal.hypothesis,
-                        "expected": proposal.expected_effect,
-                        "suggestions": list(proposal.code_suggestions),
-                        "provisional": summary,
-                        "search_build": run_body,
-                        "prev_diag": diag,
-                    }
-                    remember(new_diag)
-                    diag = new_diag
+                if decision.action == "keep" and summary is not None:
+                    meaningful, noise = meaningful_improvement(
+                        before_diag, new_diag, reference
+                    )
+                    if not meaningful:
+                        store.apply_one(proposal.param, old)
+                        action = "rollback"
+                        reason = (
+                            f"score {decision.score:.3f} beat {KEEP_MARGIN} but the move was "
+                            f"within lap noise ({noise})"
+                        )
+                        diag = before_diag
+                    else:
+                        action = "keep"
+                        pending = {
+                            "param": proposal.param,
+                            "old": old,
+                            "new": proposal.value,
+                            "hypothesis": proposal.hypothesis,
+                            "expected": proposal.expected_effect,
+                            "suggestions": list(proposal.code_suggestions),
+                            "provisional": summary,
+                            "search_build": run_body,
+                            "prev_diag": diag,
+                        }
+                        remember(new_diag)
+                        diag = new_diag
+                elif decision.action == "baseline":
+                    store.apply_one(proposal.param, old)
+                    action = "rollback"
+                    reason = (
+                        "no reference lap was recorded for this build; "
+                        "the trial was not scored"
+                    )
+                    diag = before_diag
                 else:
                     store.apply_one(proposal.param, old)
                     action = "rollback"

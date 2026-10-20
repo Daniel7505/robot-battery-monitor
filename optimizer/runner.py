@@ -335,10 +335,19 @@ def _summary_line(build: str, err: float, elec: float, shaft: float, params: dic
         pivot = float(params.get("controller.pivot_w_max_rad_s") or 0.9)
         k_steer = float(params.get("controller.k_steer") or 2.0)
         body = params.get("bom_build") or build or "light"
+        mass_kg = 3.2
+        try:
+            from optimizer.body_mass import expected_body_mass_kg
+
+            expected = expected_body_mass_kg(str(body))
+            if expected is not None:
+                mass_kg = expected
+        except ImportError:
+            pass
         ctrl = (
             f" ctrl_cruise_m_s={cruise:.2f} ctrl_straight_m_s={straight:.2f}"
             f" ctrl_pivot_w_max_rad_s={pivot:.2f} ctrl_k_steer={k_steer:.2f}"
-            f" ctrl_bom_build={body} body_mass_kg=3.2"
+            f" ctrl_bom_build={body} body_mass_kg={mass_kg:g}"
         )
     return (
         f"MISSION_SUMMARY build={build} duration_s=662.0 dist_m=200.91 turns=13 "

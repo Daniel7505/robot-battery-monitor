@@ -24,6 +24,10 @@ WPM_MATCH_REL = 0.005
 DIST_MATCH_M = 0.5
 TIME_MATCH_S = 1.0
 VISC_MATCH_REL = 0.01
+# Score terms treat smaller moves as noise (same bands as optimizer.evidence).
+ERR_SCORE_NOISE = 1.5
+WPM_SCORE_NOISE_REL = 0.015
+MIN_REF_ERR = 5.0
 
 
 @dataclass(frozen=True)
@@ -130,8 +134,19 @@ def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -
         )
     ref_err = abs(reference.err_pct)
     ref_wpm = reference.wh_measured_drive_elec / reference.dist_m
-    accuracy = abs_err / max(ref_err, 1.0)
-    efficiency = (wh_per_m / ref_wpm) if ref_wpm > 1e-12 else 1.0
+    err_gain = ref_err - (abs_err or 0.0)
+    if err_gain <= ERR_SCORE_NOISE:
+        accuracy = 1.0
+    else:
+        accuracy = (abs_err or 0.0) / max(ref_err, MIN_REF_ERR)
+    if ref_wpm <= 1e-12 or wh_per_m is None:
+        efficiency = 1.0
+    else:
+        wpm_gain = (ref_wpm - wh_per_m) / ref_wpm
+        if wpm_gain <= WPM_SCORE_NOISE_REL:
+            efficiency = 1.0
+        else:
+            efficiency = wh_per_m / ref_wpm
     value = 0.7 * accuracy + 0.3 * efficiency
     err_regress = (abs_err or 0.0) - ref_err
     if err_regress > ERR_REGRESS_POINTS:

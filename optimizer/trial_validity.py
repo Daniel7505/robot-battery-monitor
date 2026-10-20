@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from optimizer.body_mass import mass_matches_run
 from optimizer.diagnose import MissionSummary
 
 LIMIT_TOLERANCE = 0.015
@@ -103,4 +104,7 @@ def trial_invalid_reason(
     mismatch = limits_match_intended(summary, intended)
     if mismatch:
         return mismatch
+    ok_mass, mass_reason = mass_matches_run(summary, run_body)
+    if not ok_mass and mass_reason:
+        return mass_reason
     return None

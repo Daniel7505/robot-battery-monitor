@@ -18,14 +18,14 @@ from src.controller_limits import KNOBS, AllowlistError, check_param, check_set
 BUILDS = ("light", "heavy", "budget")
 
 _VISC_ORDER = (
-    "controller.cruise_m_s",
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
+    "controller.cruise_m_s",
 )
 _TURN_ORDER = (
     "controller.pivot_w_max_rad_s",
-    "controller.cruise_m_s",
     "controller.k_steer",
+    "controller.cruise_m_s",
 )
 
 
@@ -201,7 +201,7 @@ def _next_build(params: dict, history: list[dict]) -> str | None:
     seen = {
         row.get("build")
         for row in history
-        if row.get("decision") in {"baseline", "keep", "confirm-pass"}
+        if row.get("decision") in {"baseline", "reference", "keep", "confirm-pass"}
     }
     for name in BUILDS:
         if name != current and name not in seen and not _rolled_back(history, "bom_build", name):

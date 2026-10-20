@@ -48,6 +48,12 @@ class MissionSummary:
     wh_measured_soc: float | None
     err_pct: float | None
     eta_avg: float | None
+    ctrl_cruise_m_s: float | None = None
+    ctrl_straight_m_s: float | None = None
+    ctrl_pivot_w_max_rad_s: float | None = None
+    ctrl_k_steer: float | None = None
+    ctrl_bom_build: str | None = None
+    body_mass_kg: float | None = None
     raw: str = ""
 
     def wh_per_m(self) -> float | None:
@@ -127,6 +133,14 @@ def _summary_from(line: str) -> MissionSummary:
         wh_measured_soc=_num(kv.get("wh_measured_soc")),
         err_pct=_num(kv.get("err_pct")),
         eta_avg=_num(kv.get("eta_avg")),
+        ctrl_cruise_m_s=_num(kv.get("ctrl_cruise_m_s")),
+        ctrl_straight_m_s=_num(kv.get("ctrl_straight_m_s")),
+        ctrl_pivot_w_max_rad_s=_num(kv.get("ctrl_pivot_w_max_rad_s")),
+        ctrl_k_steer=_num(kv.get("ctrl_k_steer")),
+        ctrl_bom_build=None
+        if not kv.get("ctrl_bom_build") or kv.get("ctrl_bom_build") == "na"
+        else kv.get("ctrl_bom_build"),
+        body_mass_kg=_num(kv.get("body_mass_kg")),
         raw=line.strip(),
     )
 

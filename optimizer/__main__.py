@@ -35,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Use this text as the last mission instead of docker logs.",
     )
+    parser.add_argument(
+        "--notify-url",
+        default=None,
+        help="POST a JSON summary here when the run finishes (or set OPT_NOTIFY_URL).",
+    )
     args = parser.parse_args(argv)
     if args.max_iterations < 0 or args.max_hours <= 0 or args.lap_timeout_min <= 0:
         print("Limits must be positive.", file=sys.stderr)
@@ -59,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         runner = WebotsLapRunner(REPO_ROOT, world=args.world)
         fetch = None if initial is not None else runner.recent_log
+    notify_url = args.notify_url or os.environ.get("OPT_NOTIFY_URL")
     report = run_loop(
         config_path=args.config,
         knowledge_path=args.knowledge,
@@ -72,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         initial_log=initial,
         fetch_existing=fetch,
         dry_run=args.dry_run,
+        notify_url=notify_url,
     )
     print(f"Morning report: {report}")
     return 0

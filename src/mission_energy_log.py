@@ -313,6 +313,12 @@ class MissionEnergyLog:
         self._capacity_wh: float | None = None
         self._payload_kg = 0.0
         self._build = "default"
+        self._ctrl_cruise_m_s: float | None = None
+        self._ctrl_straight_m_s: float | None = None
+        self._ctrl_pivot_w_max_rad_s: float | None = None
+        self._ctrl_k_steer: float | None = None
+        self._ctrl_bom_build: str | None = None
+        self._body_mass_kg: float | None = None
         self._mission_dt = 0.0
         self._mission_dist = 0.0
         self._mission_wh_shaft = 0.0
@@ -791,10 +797,26 @@ class MissionEnergyLog:
             pack = (drive + idle) * wall_dt / 3600.0
         self._skipped_wh += max(0.0, float(pack))
 
+    def _note_controller_limits(self, sample: dict) -> None:
+        for key, attr in (
+            ("ctrl_cruise_m_s", "_ctrl_cruise_m_s"),
+            ("ctrl_straight_m_s", "_ctrl_straight_m_s"),
+            ("ctrl_pivot_w_max_rad_s", "_ctrl_pivot_w_max_rad_s"),
+            ("ctrl_k_steer", "_ctrl_k_steer"),
+            ("body_mass_kg", "_body_mass_kg"),
+        ):
+            value = _as_float(sample.get(key))
+            if value is not None:
+                setattr(self, attr, value)
+        build = sample.get("ctrl_bom_build")
+        if build not in (None, ""):
+            self._ctrl_bom_build = str(build).strip()
+
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
         self._last_ts = ts
         self._build = resolve_log_build(sample.get("build"))
+        self._note_controller_limits(sample)
         payload = _as_float(sample.get("payload_kg"))
         self._payload_kg = 0.0 if payload is None else payload
         cap = _as_float(sample.get("capacity_wh"))
@@ -822,6 +844,7 @@ class MissionEnergyLog:
         if cap is not None and cap > 0:
             self._capacity_wh = cap
         self._build = resolve_log_build(sample.get("build") or self._build)
+        self._note_controller_limits(sample)
         payload = _as_float(sample.get("payload_kg"))
         if payload is not None:
             self._payload_kg = payload
@@ -1039,6 +1062,19 @@ class MissionEnergyLog:
         if self._ct_max is not None:
             steer += f" ct_max_m={self._ct_max:.3f}"
         steer += self._fit_err_suffix()
+        ctrl = ""
+        if self._ctrl_cruise_m_s is not None:
+            ctrl += f" ctrl_cruise_m_s={self._ctrl_cruise_m_s:.2f}"
+        if self._ctrl_straight_m_s is not None:
+            ctrl += f" ctrl_straight_m_s={self._ctrl_straight_m_s:.2f}"
+        if self._ctrl_pivot_w_max_rad_s is not None:
+            ctrl += f" ctrl_pivot_w_max_rad_s={self._ctrl_pivot_w_max_rad_s:.2f}"
+        if self._ctrl_k_steer is not None:
+            ctrl += f" ctrl_k_steer={self._ctrl_k_steer:.2f}"
+        if self._ctrl_bom_build not in (None, ""):
+            ctrl += f" ctrl_bom_build={self._ctrl_bom_build}"
+        if self._body_mass_kg is not None:
+            ctrl += f" body_mass_kg={self._body_mass_kg:g}"
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "
@@ -1055,7 +1091,7 @@ class MissionEnergyLog:
             f"wh_measured={_na(None if measured is None else round(measured, 3), 3)} "
             f"wh_measured_soc={_fmt(None if soc_wh is None else round(soc_wh, 3), 3)} "
             f"err_pct={err}"
-            f"{steer}"
+            f"{ctrl}{steer}"
         )
 
     def _mission_energy_line(self) -> str:

@@ -4,9 +4,13 @@ Notes for the overnight loop. The seeded facts below are the standing
 picture of the energy model. The loop appends a short learning after
 each try under **Learnings**. It does not rewrite the seeded facts.
 
-The loop may change only the allowlisted keys in `config/config.yaml`
-(`bom_build`, `controller.cruise_m_s`, `controller.straight_m_s`,
-`controller.pivot_w_max_rad_s`, `controller.k_steer`). It does not edit
+The loop may change only the tuning keys in `config/config.yaml`
+(`controller.cruise_m_s`, `controller.pivot_w_max_rad_s`,
+`controller.k_steer`). `bom_build` stays **light** for the whole run.
+`controller.straight_m_s` is still in config for the row-fit controller,
+but the overnight loop does **not** tune it: on the warehouse track the
+lap top speed is `cruise_m_s` because the straightaway bump rarely
+qualifies. Tune cruise instead. It does not edit
 the energy model or the physics source to make `err_pct` look better.
 
 ## Known facts
@@ -33,8 +37,9 @@ the energy model or the physics source to make `err_pct` look better.
   `ω = v / 0.08`. Roll stays on the design bill `v / 0.04`. A warehouse
   lap is about 201 m.
 - Idle watt-hours scale with time. Drive viscous watt-hours scale up with
-  speed. Slowing the straight cap is the first knob when visc dominates
-  and the model is high. Speeding up is not a free accuracy win.
+  speed. On the warehouse loop, measured top speed tracks
+  `controller.cruise_m_s`, not `straight_m_s`. When visc dominates and the
+  model is high, step cruise first. Speeding up is not a free accuracy win.
 - Code ideas (a missing straight-line contact term, a different motor
   line) are written in the morning report. They are not applied and not
   committed by this loop.

@@ -18,14 +18,12 @@ from src.controller_limits import KNOBS, AllowlistError, check_param, check_set
 BUILDS = ("light", "heavy", "budget")
 
 _VISC_ORDER = (
-    "controller.straight_m_s",
     "controller.cruise_m_s",
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
 )
 _TURN_ORDER = (
     "controller.pivot_w_max_rad_s",
-    "controller.straight_m_s",
     "controller.cruise_m_s",
     "controller.k_steer",
 )
@@ -132,6 +130,8 @@ def lesson_book(knowledge: str, history: list[dict]) -> dict:
     def add(verdict, param, direction) -> None:
         if not param or direction not in {"up", "down", "switch"}:
             return
+        if verdict in {"invalid"}:
+            return
         if verdict not in {"supported", "refuted", "inconclusive"}:
             return
         key = (str(param), str(direction))
@@ -235,31 +235,12 @@ class RulePicker:
     def pick(self, diagnosis, knowledge: str, history: list[dict], params: dict) -> Proposal | None:
         suggestions = _suggestions(diagnosis)
         book = lesson_book(knowledge, history)
-        if not (params.get("bom_build") or ""):
-            if not _rolled_back(history, "bom_build", "light"):
-                return Proposal(
-                    "bom_build",
-                    "light",
-                    "No BoM build is selected, so body mass and the energy model "
-                    "are not on the same parts list.",
-                    "The next lap is a light baseline. The launcher applies that "
-                    "mass. The model source stays as it is.",
-                    suggestions,
-                )
-        if _consecutive_rollbacks(history) >= 2:
-            nxt = _next_build(params, history)
-            if nxt:
-                return self._build_proposal(params, nxt, diagnosis, suggestions)
-            return None
         order = _TURN_ORDER if _turn_dominates(diagnosis) else _VISC_ORDER
         for key in _ordered_keys(order, diagnosis, book):
             value = _try_float(params, key, _direction_for(key, diagnosis), history, book)
             if value is None:
                 continue
             return self._float_proposal(params, key, value, diagnosis, suggestions)
-        nxt = _next_build(params, history)
-        if nxt:
-            return self._build_proposal(params, nxt, diagnosis, suggestions)
         return None
 
     def _float_proposal(self, params, key, value, diagnosis, suggestions) -> Proposal:

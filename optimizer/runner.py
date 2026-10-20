@@ -317,17 +317,29 @@ class DryRunRunner:
         slow_steps = (0.50 - straight) / 0.02 + (0.44 - cruise) / 0.02
         err = base_err + 3.0 * slow_steps
         elec = max(0.5, base_elec * (1.0 - 0.02 * slow_steps))
-        text = _summary_line(build, err, elec, shaft=0.866)
+        text = _summary_line(build, err, elec, shaft=0.866, params=params)
         return RunOutcome("ok", text, "dry-run synthetic lap")
 
 
-def _summary_line(build: str, err: float, elec: float, shaft: float) -> str:
+def _summary_line(build: str, err: float, elec: float, shaft: float, params: dict | None = None) -> str:
     drive = elec / (1.0 + err / 100.0) if abs(err) < 500 else elec
     visc = drive * 0.85
     roll = drive * 0.10
     turn = drive * 0.04
     accel = drive * 0.01
     idle = 1.8
+    ctrl = ""
+    if params:
+        cruise = float(params.get("controller.cruise_m_s") or 0.44)
+        straight = float(params.get("controller.straight_m_s") or 0.50)
+        pivot = float(params.get("controller.pivot_w_max_rad_s") or 0.9)
+        k_steer = float(params.get("controller.k_steer") or 2.0)
+        body = params.get("bom_build") or build or "light"
+        ctrl = (
+            f" ctrl_cruise_m_s={cruise:.2f} ctrl_straight_m_s={straight:.2f}"
+            f" ctrl_pivot_w_max_rad_s={pivot:.2f} ctrl_k_steer={k_steer:.2f}"
+            f" ctrl_bom_build={body} body_mass_kg=3.2"
+        )
     return (
         f"MISSION_SUMMARY build={build} duration_s=662.0 dist_m=200.91 turns=13 "
         f"payload_kg=0 soc_start=100.00 soc_end=97.00 "
@@ -336,5 +348,5 @@ def _summary_line(build: str, err: float, elec: float, shaft: float) -> str:
         f"wh_model_accel={accel:.3f} "
         f"wh_measured_drive_shaft={shaft:.3f} wh_measured_drive_elec={elec:.3f} "
         f"eta_avg=0.230 wh_measured={elec + idle:.3f} wh_measured_soc={elec + idle:.3f} "
-        f"err_pct={err:.1f}"
+        f"err_pct={err:.1f}{ctrl}"
     )

@@ -11,11 +11,13 @@ from optimizer.config_store import ConfigStore
 from optimizer.diagnose import Diagnosis, diagnose
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
-from optimizer.picker import Proposal, RulePicker, held_out_build
+from optimizer.notify import notify_run_finished
+from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
 from optimizer.score import confirmation_ok, decide
+from optimizer.trial_validity import body_matches_run, run_body_from_params, trial_invalid_reason
 
 SESSION_NAME = "session.json"
 
@@ -120,8 +122,13 @@ def _attach_postmortem(
         action=str(rec.get("decision") or ""),
         before=before,
         after=after,
+        intended=rec.get("intended_params"),
     )
     rec["postmortem"] = post
+    if rec.get("decision") == "invalid" and rec.get("reason"):
+        post["mechanism"] = str(rec["reason"])
+        post["verdict"] = "invalid"
+        post["tag"] = ""
     rec["lesson"] = post["lesson"]
     rec["mechanism"] = post["mechanism"]
     post["next_hypothesis"] = _next_hypothesis(picker, next_diag, knowledge_path, history, rec, store)
@@ -215,6 +222,7 @@ def run_loop(
     fetch_existing=None,
     monotonic=None,
     dry_run: bool = False,
+    notify_url: str | None = None,
 ) -> Path:
     """Run until the iteration cap, the wall clock, or the picker has nothing left.
 
@@ -229,6 +237,13 @@ def run_loop(
     session_path = run_dir / SESSION_NAME
     recover_session(store, session_path)
     snapshot = store.read()
+    run_body = run_body_from_params(snapshot)
+    if (snapshot.get("bom_build") or "") != run_body:
+        store.apply_one("bom_build", run_body)
+        try:
+            runner.restart_dashboard()
+        except Exception:
+            pass
     session_path.write_text(
         json.dumps({"in_progress": True, "snapshot": snapshot}, sort_keys=True),
         encoding="utf-8",
@@ -243,15 +258,21 @@ def run_loop(
     pending: dict | None = None
     stop_reason = "iteration limit"
     iteration = 0
+    run_failed = False
 
     def over_time() -> bool:
         return (clock() - t0) >= float(max_hours) * 3600.0
 
     def remember(diag: Diagnosis) -> None:
-        if diag.summary is not None and diag.summary.build:
-            diagnoses[diag.summary.build] = diag
-            if diag.summary.build not in references and diag.summary.err_pct is not None:
-                references[diag.summary.build] = diag.summary
+        summary = diag.summary
+        if summary is None or summary.err_pct is None:
+            return
+        if not body_matches_run(summary, run_body):
+            return
+        if trial_invalid_reason(summary, store.read(), run_body):
+            return
+        diagnoses[run_body] = diag
+        references[run_body] = summary
 
     try:
         log_text = initial_log
@@ -274,11 +295,14 @@ def run_loop(
                     )
                 )
         diag = diagnose(log_text or "")
+        if diag.summary is not None and body_matches_run(diag.summary, run_body):
+            remember(diag if diag.summary.build == run_body else diagnose(diag.summary.raw))
         for build, summary in diag.per_build.items():
-            references[build] = summary
-            diagnoses[build] = diag if diag.summary and diag.summary.build == build else diagnose(
-                summary.raw
-            )
+            if build != run_body:
+                continue
+            sub = diagnose(summary.raw)
+            if body_matches_run(sub.summary, run_body):
+                remember(sub)
         if diag.summary is None:
             if over_time():
                 stop_reason = "wall-clock limit before the baseline lap"
@@ -333,15 +357,7 @@ def run_loop(
 
             if pending is not None:
                 iteration += 1
-                search_build = pending["search_build"] or ""
-                same_build = pending["param"] == "bom_build"
-                saved_build = params.get("bom_build") or ""
-                held = search_build if same_build else held_out_build(search_build)
-                if not same_build and held != saved_build:
-                    store.apply_one("bom_build", held)
-                    restart_note = runner.restart_dashboard()
-                else:
-                    restart_note = ""
+                restart_note = ""
                 outcome = _run_with_retry(
                     runner,
                     store.read(),
@@ -350,23 +366,24 @@ def run_loop(
                     run_dir / f"launch_{iteration}_confirm.log",
                 )
                 check = diagnose(outcome.log_text)
-                ok, why = confirmation_ok(pending["provisional"], check.summary, same_build=same_build)
-                if not same_build:
-                    store.apply_one("bom_build", saved_build)
-                    if held != saved_build:
-                        runner.restart_dashboard()
+                invalid = trial_invalid_reason(check.summary, store.read(), run_body)
+                if invalid:
+                    ok, why = False, invalid
+                else:
+                    ok, why = confirmation_ok(
+                        pending["provisional"], check.summary, same_build=True
+                    )
                 if ok:
                     action = "confirm-pass"
-                    if search_build and pending["provisional"] is not None:
-                        references[search_build] = pending["provisional"]
+                    if pending["provisional"] is not None:
+                        references[run_body] = pending["provisional"]
                     diag = pending["prev_diag"]
                 else:
-                    action = "confirm-fail"
+                    action = "confirm-fail" if not invalid else "invalid"
                     store.apply_one(pending["param"], pending["old"])
-                    if pending["param"] == "bom_build":
-                        runner.restart_dashboard()
                     diag = pending["prev_diag"]
-                    why = why + " The change was rolled back."
+                    if not invalid:
+                        why = why + " The change was rolled back."
                 proposal = Proposal(
                     pending["param"],
                     pending["new"],
@@ -386,6 +403,7 @@ def run_loop(
                     score=None,
                     note=(outcome.note + " " + restart_note).strip(),
                 )
+                rec["intended_params"] = store.read()
                 _attach_postmortem(
                     rec,
                     before=pending["prev_diag"],
@@ -449,80 +467,52 @@ def run_loop(
                 )
                 continue
             restart_note = ""
-            if proposal.param == "bom_build":
-                restart_note = runner.restart_dashboard()
-                if restart_note.startswith("failed"):
-                    store.apply_one(proposal.param, old)
-                    rec = _record(
-                        iteration=iteration,
-                        phase="search",
-                        proposal=proposal,
-                        old=old,
-                        action="invalid",
-                        reason=restart_note,
-                        summary=None,
-                        score=None,
-                        note=restart_note,
-                    )
-                    _attach_postmortem(
-                        rec,
-                        before=diag,
-                        after=None,
-                        knowledge_path=knowledge_path,
-                        history=history,
-                        picker=picker,
-                        store=store,
-                        next_diag=diag,
-                    )
-                    records.append(book.append(rec))
-                    history.append(rec)
-                    append_learning(
-                        knowledge_path,
-                        redact(_learning(
-                            iteration, "search", proposal, "invalid", restart_note, None, rec["postmortem"],
-                        )),
-                    )
-                    continue
             outcome = _run_with_retry(
                 runner, store.read(), lap_timeout_s, world, run_dir / f"launch_{iteration}.log"
             )
             new_diag = diagnose(outcome.log_text)
             summary = new_diag.summary
-            build = None if summary is None else summary.build
-            if not build and proposal.param == "bom_build":
-                build = proposal.value or None
-            reference = None if not build else references.get(build)
-            decision = decide(summary, reference)
+            intended_params = store.read()
+            reference = references.get(run_body)
             before_diag = diag
-            if decision.action == "baseline" and summary is not None and build:
-                references[build] = summary
-                diagnoses[build] = new_diag
-                action = "baseline"
-                diag = new_diag
-            elif decision.action == "keep" and summary is not None:
-                action = "keep"
-                pending = {
-                    "param": proposal.param,
-                    "old": old,
-                    "new": proposal.value,
-                    "hypothesis": proposal.hypothesis,
-                    "expected": proposal.expected_effect,
-                    "suggestions": list(proposal.code_suggestions),
-                    "provisional": summary,
-                    "search_build": build or (params.get("bom_build") or ""),
-                    "prev_diag": diag,
-                }
-                if build:
-                    diagnoses[build] = new_diag
-                diag = new_diag
-            else:
-                store.apply_one(proposal.param, old)
-                if proposal.param == "bom_build":
-                    runner.restart_dashboard()
-                action = "rollback"
-            reason = decision.reason
             if outcome.status != "ok":
-                reason = f"{outcome.status}: {outcome.note or decision.reason}"
+                store.apply_one(proposal.param, old)
+                action = "rollback"
+                reason = f"{outcome.status}: {outcome.note or 'lap failed'}"
+                score = None
+                diag = before_diag
+            elif (invalid := trial_invalid_reason(summary, intended_params, run_body)):
+                store.apply_one(proposal.param, old)
+                action = "invalid"
+                reason = invalid
+                score = None
+                diag = before_diag
+            else:
+                decision = decide(summary, reference)
+                score = decision.score
+                reason = decision.reason
+                if decision.action == "baseline" and summary is not None:
+                    remember(new_diag)
+                    action = "baseline"
+                    diag = new_diag
+                elif decision.action == "keep" and summary is not None:
+                    action = "keep"
+                    pending = {
+                        "param": proposal.param,
+                        "old": old,
+                        "new": proposal.value,
+                        "hypothesis": proposal.hypothesis,
+                        "expected": proposal.expected_effect,
+                        "suggestions": list(proposal.code_suggestions),
+                        "provisional": summary,
+                        "search_build": run_body,
+                        "prev_diag": diag,
+                    }
+                    remember(new_diag)
+                    diag = new_diag
+                else:
+                    store.apply_one(proposal.param, old)
+                    action = "rollback"
             rec = _record(
                 iteration=iteration,
                 phase="search",
@@ -531,9 +521,10 @@ def run_loop(
                 action=action,
                 reason=reason,
                 summary=summary,
-                score=decision.score,
+                score=score,
                 note=(outcome.note + " " + restart_note).strip(),
             )
+            rec["intended_params"] = intended_params
             _attach_postmortem(
                 rec,
                 before=before_diag,
@@ -552,12 +543,17 @@ def run_loop(
                     iteration, "search", proposal, action, reason, summary, rec["postmortem"],
                 )),
             )
+    except Exception as exc:
+        run_failed = True
+        stop_reason = f"{stop_reason}; loop error: {type(exc).__name__}: {exc}"
+        raise
     finally:
         if pending is not None:
             stop_reason = f"{stop_reason}; last keep was not confirmed before the stop"
         try:
             store.write_params(snapshot)
         except Exception as exc:
+            run_failed = True
             stop_reason = f"{stop_reason}; config restore failed: {exc}"
         session_path.write_text(
             json.dumps({"in_progress": False, "snapshot": snapshot}, sort_keys=True),
@@ -572,5 +568,19 @@ def run_loop(
             diagnoses=diagnoses,
             dry_run=dry_run,
             stop_reason=stop_reason,
+        )
+        status = "error" if run_failed or any(
+            word in stop_reason.lower() for word in ("crash", "timeout", "failed", "error")
+        ) else "ok"
+        summary = stop_reason
+        if records:
+            last = records[-1]
+            summary = f"{last.get('decision')}: {last.get('reason') or stop_reason}"
+        notify_run_finished(
+            notify_url,
+            status=status,
+            iterations=len(records),
+            report_path=report_path,
+            summary=summary,
         )
     return report_path

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from optimizer.diagnose import Diagnosis
 from optimizer.score import lap_metrics_match
+from optimizer.trial_validity import limits_match_intended
 
 _SPEED = {"controller.straight_m_s", "controller.cruise_m_s"}
 _SHARE_NAMES = ("roll", "visc", "turn", "accel")
@@ -223,6 +224,13 @@ def _judge(
     flat: bool,
 ) -> tuple[str, str, str]:
     """Return verdict, mechanism paragraph, and the plain lesson."""
+    if action == "invalid":
+        return (
+            "invalid",
+            "This lap is not valid evidence: the mission summary, body, or controller limits "
+            "did not match what the trial asked for.",
+            "Do not score or learn from this lap. Fix limits visibility or the body pin before retrying.",
+        )
     if param is None:
         return (
             "inconclusive",
@@ -275,7 +283,13 @@ def _judge(
         )
     if param in _SPEED and direction == "down" and not kept:
         if not _visc_fell(before, after):
-            which = "straight" if param == "controller.straight_m_s" else "cruise"
+            which = (
+                "straight"
+                if param == "controller.straight_m_s"
+                else "cruise"
+                if param == "controller.cruise_m_s"
+                else "speed"
+            )
             return (
                 "refuted",
                 f"Lowering {which} speed did not cut viscous Wh enough to beat the score threshold, "
@@ -357,6 +371,7 @@ def build_postmortem(
     action: str,
     before: Diagnosis | None,
     after: Diagnosis | None,
+    intended: dict | None = None,
 ) -> dict:
     """Structured post-mortem for one trial. ``next_hypothesis`` is filled by the loop."""
     direction = "switch" if param is None else step_direction(old, new)
@@ -386,6 +401,16 @@ def build_postmortem(
     if action == "baseline":
         tag = ""
         verdict = "inconclusive"
+    if verdict == "invalid":
+        tag = ""
+    limit_note = limits_match_intended(None if after is None else after.summary, intended)
+    if limit_note and action != "invalid":
+        verdict = "invalid"
+        mechanism = limit_note
+        lesson = "Do not learn from this lap until MISSION_SUMMARY carries the controller limits."
+        tag = ""
+    elif limit_note and action == "invalid":
+        mechanism = limit_note
     return {
         "verdict": verdict,
         "param": param,

@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.controller_limits import ALLOWLIST, PROTECTED_PATHS
+from src.controller_limits import OPTIMIZER_TUNING_KEYS, PROTECTED_PATHS
+from optimizer.trial_validity import RUN_BODY_DEFAULT
 
 
 def _fmt(value) -> str:
@@ -82,8 +83,9 @@ def render_report(
     lines.append("")
     lines.append("## Original config (restored)")
     lines.append("")
-    for key in ALLOWLIST:
+    for key in OPTIMIZER_TUNING_KEYS:
         lines.append(f"- `{key}`: `{_fmt(snapshot.get(key))}`")
+    lines.append(f"- `bom_build` (fixed for the run): `{_fmt(snapshot.get('bom_build') or RUN_BODY_DEFAULT)}`")
     lines.append("")
     lines.append("## Trials")
     lines.append("")
@@ -165,7 +167,11 @@ def render_report(
     lines.append("")
     lines.append("## Guardrails")
     lines.append("")
-    lines.append("Tuned keys: " + ", ".join(f"`{key}`" for key in ALLOWLIST) + ".")
+    lines.append(
+        "Tuned keys: "
+        + ", ".join(f"`{key}`" for key in OPTIMIZER_TUNING_KEYS)
+        + f". `bom_build` stays `{RUN_BODY_DEFAULT}` for the whole run."
+    )
     lines.append("Not edited: " + ", ".join(f"`{path}`" for path in PROTECTED_PATHS) + ".")
     lines.append("Credential-shaped text in the trial log is replaced with `[REDACTED]`.")
     lines.append("The loop does not commit.")

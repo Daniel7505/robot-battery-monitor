@@ -211,7 +211,7 @@ def sample_from_controller_payload(payload: dict) -> dict:
         "battery_pct": robot.get("main_battery_pct", robot.get("battery_pct")),
         "capacity_wh": robot.get("battery_capacity_wh"),
         "payload_kg": loc.get("payload_kg"),
-        "build": loc.get("bom_build") or hw.get("bom_build"),
+        "build": loc.get("bom_build") or loc.get("ctrl_bom_build") or hw.get("bom_build"),
         "speed_m_s": loc.get("speed_m_s", payload.get("speed_m_s")),
         "mission_event": sensors.get("mission_event"),
     }

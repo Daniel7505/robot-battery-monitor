@@ -70,6 +70,15 @@ MAX_STRAIGHT_GAP_M_S = 0.12
 
 ALLOWLIST = tuple(KNOBS)
 
+# The overnight loop may tune only these keys. ``bom_build`` stays fixed for
+# the run (default light). ``straight_m_s`` is still read for the controller
+# but is not tuned: warehouse laps top out at ``cruise_m_s``.
+OPTIMIZER_TUNING_KEYS = (
+    "controller.cruise_m_s",
+    "controller.pivot_w_max_rad_s",
+    "controller.k_steer",
+)
+
 
 class AllowlistError(ValueError):
     """A proposed change is outside the knobs the loop may touch."""

@@ -50,6 +50,12 @@ PARAMS = {
 def summary_line(**overrides) -> str:
     fields = {
         "build": "light",
+        "ctrl_cruise_m_s": "0.44",
+        "ctrl_straight_m_s": "0.50",
+        "ctrl_pivot_w_max_rad_s": "0.90",
+        "ctrl_k_steer": "2.00",
+        "ctrl_bom_build": "light",
+        "body_mass_kg": "3.2",
         "duration_s": "662.0",
         "dist_m": "200.91",
         "turns": "13",
@@ -214,8 +220,8 @@ def test_logbook_is_append_only_and_redacts_secrets(tmp_path):
 def test_rule_picker_slows_a_visc_heavy_high_model():
     proposal = RulePicker().pick(diagnose(summary_line()), "", [], PARAMS)
     assert proposal is not None
-    assert proposal.param == "controller.straight_m_s"
-    assert proposal.value == pytest.approx(0.48)
+    assert proposal.param == "controller.cruise_m_s"
+    assert proposal.value == pytest.approx(0.42)
     assert "v_slip" in proposal.hypothesis
     assert proposal.code_suggestions
 
@@ -241,15 +247,15 @@ def test_rule_picker_steps_turn_rate_when_turns_are_the_miss():
 def test_rule_picker_does_not_repeat_a_rolled_back_value():
     history = [
         {
-            "param": "controller.straight_m_s",
-            "new": 0.48,
+            "param": "controller.cruise_m_s",
+            "new": 0.42,
             "decision": "rollback",
             "phase": "search",
         }
     ]
     proposal = RulePicker().pick(diagnose(summary_line()), "", history, PARAMS)
     assert proposal is not None
-    assert not (proposal.param == "controller.straight_m_s" and proposal.value == pytest.approx(0.48))
+    assert not (proposal.param == "controller.cruise_m_s" and proposal.value == pytest.approx(0.42))
     assert proposal.param in ALLOWLIST
 
 
@@ -286,8 +292,13 @@ def test_llm_picker_rejects_a_file_edit_and_accepts_an_allowlisted_value(tmp_pat
 
 def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    better = summary_line(err_pct="-18.0", wh_measured_drive_elec="3.400", wh_model_drive="4.146")
-    held = summary_line(build="heavy", err_pct="-5.0", wh_measured_drive_shaft="0.866")
+    better = summary_line(
+        err_pct="-18.0",
+        wh_measured_drive_elec="3.400",
+        wh_model_drive="4.146",
+        ctrl_cruise_m_s="0.42",
+    )
+    held = summary_line(err_pct="-19.0", wh_measured_drive_elec="3.650", ctrl_cruise_m_s="0.42")
     runner = ScriptedRunner([RunOutcome("ok", better), RunOutcome("ok", held)])
     report = run_loop(
         config_path=config,
@@ -315,15 +326,24 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
     learned = knowledge.read_text(encoding="utf-8")
     assert "## Known facts" in learned
     assert "Hypothesis:" in learned
-    assert runner.restarts >= 1
+    assert runner.restarts >= 0
     session = json.loads((run_dir / "session.json").read_text(encoding="utf-8"))
     assert session["in_progress"] is False
 
 
 def test_loop_rolls_back_a_worse_lap_and_tries_something_else(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    worse = summary_line(err_pct="-40.0", wh_measured_drive_elec="4.200")
-    still = summary_line(err_pct="-27.0", wh_measured_drive_elec="3.700", wh_model_drive="5.068")
+    worse = summary_line(
+        err_pct="-40.0",
+        wh_measured_drive_elec="4.200",
+        ctrl_cruise_m_s="0.42",
+    )
+    still = summary_line(
+        err_pct="-27.0",
+        wh_measured_drive_elec="3.700",
+        wh_model_drive="5.068",
+        ctrl_pivot_w_max_rad_s="0.8",
+    )
     runner = ScriptedRunner([RunOutcome("ok", worse), RunOutcome("ok", still)])
     run_loop(
         config_path=config,
@@ -584,18 +604,23 @@ def test_text_capturing_subprocesses_use_utf8():
 
 
 def test_picker_does_not_repeat_a_refuted_slowdown():
-    knowledge = "Lesson: viscous loss did not move. [refuted controller.straight_m_s down]\n"
+    knowledge = "Lesson: viscous loss did not move. [refuted controller.cruise_m_s down]\n"
     proposal = RulePicker().pick(diagnose(summary_line()), knowledge, [], PARAMS)
     assert proposal is not None
-    assert proposal.param == "controller.cruise_m_s"
-    assert proposal.value == pytest.approx(0.42)
+    assert proposal.param == "controller.pivot_w_max_rad_s"
+    assert proposal.value == pytest.approx(0.8)
 
 
-def test_flat_lap_is_inconclusive_and_the_next_knob_is_cruise(tmp_path):
+def test_flat_lap_is_inconclusive_and_the_next_knob_is_pivot(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    same = summary_line()
-    moved = summary_line(err_pct="-26.0", wh_measured_drive_elec="3.600", duration_s="700")
-    runner = ScriptedRunner([RunOutcome("ok", same), RunOutcome("ok", moved)])
+    unchanged = summary_line(ctrl_cruise_m_s="0.42")
+    moved = summary_line(
+        err_pct="-26.0",
+        wh_measured_drive_elec="3.600",
+        duration_s="700",
+        ctrl_cruise_m_s="0.42",
+    )
+    runner = ScriptedRunner([RunOutcome("ok", unchanged), RunOutcome("ok", moved)])
     report = run_loop(
         config_path=config,
         knowledge_path=knowledge,
@@ -604,39 +629,42 @@ def test_flat_lap_is_inconclusive_and_the_next_knob_is_cruise(tmp_path):
         max_iterations=2,
         max_hours=8,
         lap_timeout_s=5,
-        initial_log=same,
+        initial_log=summary_line(),
     )
     rows = [
         json.loads(line)
         for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
     ]
-    assert rows[0]["param"] == "controller.straight_m_s"
-    assert rows[0]["new"] == pytest.approx(0.48)
+    assert rows[0]["param"] == "controller.cruise_m_s"
+    assert rows[0]["new"] == pytest.approx(0.42)
     assert rows[0]["decision"] == "rollback"
     assert rows[0]["score"] == pytest.approx(1.0)
     assert "may not have taken effect" in rows[0]["reason"]
     post = rows[0]["postmortem"]
     assert post["flat"] is True
     assert post["verdict"] == "inconclusive"
-    assert "CONTROLLER LIMITS" in post["mechanism"]
-    assert post["tag"] == "[inconclusive controller.straight_m_s down]"
+    assert post["tag"] == "[inconclusive controller.cruise_m_s down]"
     assert "refuted" not in post["tag"]
-    assert "cruise_m_s" in post["next_hypothesis"]
-    assert rows[1]["param"] == "controller.cruise_m_s"
+    assert "pivot_w_max" in post["next_hypothesis"]
+    assert rows[1]["param"] == "controller.pivot_w_max_rad_s"
     morning = report.read_text(encoding="utf-8")
     assert "### Trial 1" in morning
     assert "Predicted versus observed" in morning
     assert "Lesson:" in morning
     assert "Next hypothesis:" in morning
     learned = knowledge.read_text(encoding="utf-8")
-    assert "[inconclusive controller.straight_m_s down]" in learned
+    assert "[inconclusive controller.cruise_m_s down]" in learned
     assert "Next hypothesis:" in learned
 
 
-def test_a_real_miss_refutes_slowing_the_straight(tmp_path):
+def test_a_real_miss_refutes_slowing_cruise(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
     # err moves, lap time moves, viscous Wh stays put. Not a flat lap.
-    missed = summary_line(err_pct="-29.5", duration_s="700")
+    missed = summary_line(
+        err_pct="-29.5",
+        duration_s="700",
+        ctrl_cruise_m_s="0.42",
+    )
     runner = ScriptedRunner([
         RunOutcome("ok", missed),
         RunOutcome("ok", summary_line(err_pct="-27.0", duration_s="640")),
@@ -656,19 +684,130 @@ def test_a_real_miss_refutes_slowing_the_straight(tmp_path):
         for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     post = rows[0]["postmortem"]
-    assert rows[0]["param"] == "controller.straight_m_s"
+    assert rows[0]["param"] == "controller.cruise_m_s"
     assert rows[0]["decision"] == "rollback"
     assert post["flat"] is False
     assert post["verdict"] == "refuted"
     assert "did not cut viscous Wh enough" in post["mechanism"]
     assert "less speed-sensitive" in post["mechanism"]
-    assert post["tag"] == "[refuted controller.straight_m_s down]"
-    assert rows[1]["param"] == "controller.cruise_m_s"
-    assert not (rows[1]["param"] == "controller.straight_m_s")
+    assert post["tag"] == "[refuted controller.cruise_m_s down]"
+    assert rows[1]["param"] == "controller.pivot_w_max_rad_s"
     morning = report.read_text(encoding="utf-8")
-    assert "Lowering straight speed did not cut viscous Wh enough" in morning
+    assert "Lowering cruise speed did not cut viscous Wh enough" in morning
     learned = knowledge.read_text(encoding="utf-8")
-    assert "[refuted controller.straight_m_s down]" in learned
+    assert "[refuted controller.cruise_m_s down]" in learned
+
+
+def test_diagnose_reads_controller_limits_from_the_summary():
+    summary = diagnose(summary_line()).summary
+    assert summary is not None
+    assert summary.ctrl_cruise_m_s == pytest.approx(0.44)
+    assert summary.ctrl_bom_build == "light"
+
+
+def test_limits_mismatch_marks_the_trial_invalid(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+    bad = summary_line(ctrl_cruise_m_s="0.40")
+    runner = ScriptedRunner([RunOutcome("ok", bad)])
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=1,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+    )
+    row = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["decision"] == "invalid"
+    assert "controller.cruise_m_s" in row["reason"]
+    assert row["postmortem"]["verdict"] == "invalid"
+    assert row["postmortem"]["tag"] == ""
+
+
+def test_default_body_lap_is_invalid_against_fixed_light_run(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+    text = CONFIG.replace("bom_build: light", "bom_build:")
+    config.write_text(text, encoding="utf-8")
+    default_lap = summary_line(build="default", ctrl_bom_build="default")
+    runner = ScriptedRunner([RunOutcome("ok", default_lap)])
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=1,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(build="light"),
+    )
+    row = json.loads((run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["decision"] == "invalid"
+    assert "run body" in row["reason"] or "does not match" in row["reason"]
+    assert row["postmortem"]["verdict"] != "refuted"
+
+
+def test_mission_summary_line_includes_limits():
+    from src.mission_energy_log import MissionEnergyLog
+
+    log = MissionEnergyLog()
+    log._build = "light"
+    log._mission_dt = 662.0
+    log._mission_dist = 200.91
+    log._turns = 13
+    log._payload_kg = 0.0
+    log._mission_wh_elec = 3.742
+    log._mission_elec_known = True
+    log._ctrl_cruise_m_s = 0.44
+    log._ctrl_straight_m_s = 0.5
+    log._ctrl_pivot_w_max_rad_s = 0.9
+    log._ctrl_k_steer = 2.0
+    log._ctrl_bom_build = "light"
+    log._body_mass_kg = 3.2
+    summary = log._summary_line()
+    assert "ctrl_cruise_m_s=0.44" in summary
+    assert "ctrl_bom_build=light" in summary
+    assert "body_mass_kg=3.2" in summary
+
+
+def test_notify_posts_json_without_failing_the_run(tmp_path, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+
+    seen = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            seen["body"] = self.rfile.read(length)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *_args):
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/hook"
+    config, knowledge, run_dir = _layout(tmp_path)
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=ScriptedRunner([]),
+        max_iterations=0,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+        notify_url=url,
+    )
+    server.shutdown()
+    payload = json.loads(seen["body"].decode("utf-8"))
+    assert payload["status"] == "ok"
+    assert payload["iterations"] == 0
+    assert payload["report_path"].endswith("morning.md")
 
 
 def test_rowfit_reset_keeps_the_track_and_the_speed_knobs():

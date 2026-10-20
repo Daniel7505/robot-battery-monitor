@@ -2027,6 +2027,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     loco = {}
                     payload["locomotion"] = loco
                 loco["controller_run_id"] = controller_run_id
+                if rowfit_rt is not None:
+                    _publish_controller_limits(loco, rowfit_rt)
                 sensors_out = payload.get("sensors")
                 if isinstance(sensors_out, dict):
                     sensors_out["controller_run_id"] = controller_run_id
@@ -2072,6 +2074,27 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         if _steer_line:
             print(_steer_line)
     print("ButlerBot controller stopped (simulation ended)")
+
+
+def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
+    """Copy the effective limits into telemetry so MISSION_SUMMARY can prove them."""
+    try:
+        lim = rowfit_rt.limits
+    except AttributeError:
+        return
+    loco["ctrl_cruise_m_s"] = round(float(lim.cruise_m_s), 4)
+    loco["ctrl_straight_m_s"] = round(float(lim.straight_m_s), 4)
+    loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
+    loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
+    loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)
+    try:
+        from src.webots_body import bom_body_physics
+
+        physics = bom_body_physics(lim.bom_build)
+        if physics is not None:
+            loco["body_mass_kg"] = round(float(physics.mass_kg), 4)
+    except Exception:
+        pass
 
 
 def _prefer_utf8_stdio() -> None:

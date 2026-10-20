@@ -21,9 +21,11 @@ the energy model or the physics source to make `err_pct` look better.
   pack integral on the simulation step.
 - The last heavy lap was **−5.0%** model error, shaft **0.866 Wh**. That
   shaft matched the light lap: the Webots body had not yet taken the BoM
-  mass (see `JOURNEY.md`, 2026-10-13). This branch loads BoM mass and the
-  contact-wheel radius. A new heavy lap is a measurement. It is not a
-  reason to edit the model.
+  mass (see `JOURNEY.md`, 2026-10-13). Main applies that mass and scales
+  body inertia, and leaves the contact cylinder at 0.08 m. The catalog
+  radius is motor math only. Writing it onto the tire made shaft energy
+  scale as 1/r² and left the ~5% band. A new heavy lap is a measurement.
+  It is not a reason to edit the model.
 - `err_pct` is `(wh_measured_drive_elec − wh_model_drive) / wh_model_drive × 100`.
   It compares electrical drive only. Shaft watt-hours are a different column.
   Negative means the model is high.

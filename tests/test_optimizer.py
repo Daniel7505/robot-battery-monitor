@@ -500,3 +500,55 @@ def test_dry_runner_is_not_a_measurement():
     outcome = DryRunRunner().run_lap(params=PARAMS, timeout_s=1)
     assert "MISSION_SUMMARY" in outcome.log_text
     assert "dry-run" in outcome.note
+
+
+class _QuietDocker:
+    returncode = 0
+    stdout = "dashboard ready\n"
+    stderr = ""
+
+
+def test_reads_mission_summary_json_when_docker_is_quiet(tmp_path, monkeypatch):
+    """Main writes the lap to mission_summary_*.json; docker often never sees it."""
+    from datetime import datetime, timedelta
+
+    from optimizer import runner
+
+    monkeypatch.setenv("RBM_LOG_DIR", str(tmp_path))
+    payload = {"source": "controller", "lines": [summary_line(build="heavy", err_pct="-5.0")]}
+    (tmp_path / "mission_summary_lap.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: _QuietDocker())
+    text, note = runner.read_dashboard_log(since_local=datetime.now() - timedelta(minutes=5))
+    diag = diagnose(text)
+    assert diag.summary is not None
+    assert diag.summary.build == "heavy"
+    assert diag.summary.err_pct == pytest.approx(-5.0)
+    assert "mission_summary" in note
+
+
+def test_ignores_a_mission_summary_json_from_before_the_lap(tmp_path, monkeypatch):
+    import os
+    from datetime import datetime, timedelta
+
+    from optimizer import runner
+
+    monkeypatch.setenv("RBM_LOG_DIR", str(tmp_path))
+    path = tmp_path / "mission_summary_old.json"
+    path.write_text(json.dumps({"lines": [summary_line(build="budget")]}), encoding="utf-8")
+    old = datetime.now() - timedelta(hours=2)
+    os.utime(path, (old.timestamp(), old.timestamp()))
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: _QuietDocker())
+    text, note = runner.read_dashboard_log(since_local=datetime.now() - timedelta(minutes=5))
+    assert "MISSION_SUMMARY" not in text
+    assert note == ""
+
+
+def test_rowfit_reset_keeps_the_track_and_the_speed_knobs():
+    ctl = RowfitController(v_cruise=0.36, v_straight=0.42, pivot_w_max=0.5)
+    track = object()
+    ctl.set_track(track)
+    ctl.reset()
+    assert ctl.track is track
+    assert ctl.v_cruise == pytest.approx(0.36)
+    assert ctl.v_straight == pytest.approx(0.42)
+    assert ctl.pivot_w_max == pytest.approx(0.5)

@@ -238,8 +238,9 @@ class RulePicker:
             "bom_build",
             build,
             f"Speed steps on {current} are not improving the score. The last heavy lap "
-            f"in the notes was -5.0% with shaft 0.866 Wh, before this branch loaded BoM "
-            f"mass. Switching the body to {build} measures that build instead of fitting the model.",
+            f"in the notes was -5.0% with shaft 0.866 Wh, before BoM mass was on the body. "
+            f"The contact cylinder stays 0.08 m. Switching the body to {build} measures "
+            f"that build instead of fitting the model.",
             f"A finished {build} lap becomes that build's baseline. It is not compared "
             f"with {current} as if they were the same robot.",
             suggestions,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -84,13 +85,60 @@ def _file_log(since_local: datetime | None) -> str:
     return "\n".join(kept)
 
 
+def _mission_summary_text(since_local: datetime | None) -> str:
+    """Lines from the newest host ``mission_summary_*.json`` for this lap.
+
+    Main writes that file because the Webots console cannot be captured.
+    ``since_local`` drops a file left by an earlier lap.
+    """
+    try:
+        from src.mission_summary_file import summary_directory
+
+        folder = Path(summary_directory())
+    except Exception:
+        folder = REPO_ROOT / "logs"
+    if not folder.is_dir():
+        return ""
+    files = [path for path in folder.glob("mission_summary_*.json") if path.is_file()]
+    if not files:
+        return ""
+    path = max(files, key=lambda item: item.stat().st_mtime)
+    if since_local is not None:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime)
+        if mtime < since_local:
+            return ""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    lines = payload.get("lines") if isinstance(payload, dict) else None
+    if not isinstance(lines, list):
+        return ""
+    return "\n".join(str(line) for line in lines if line)
+
+
+def _append_mission_summary(text: str, since_local: datetime | None, note: str) -> tuple[str, str]:
+    summary_text = _mission_summary_text(since_local)
+    if not summary_text:
+        return text, note
+    combined = summary_text if not text else text.rstrip() + "\n" + summary_text
+    extra = "included logs/mission_summary_*.json"
+    note = f"{note}; {extra}" if note else extra
+    return combined, note
+
+
 def read_dashboard_log(
     *,
     since_utc: datetime | None = None,
     since_local: datetime | None = None,
     tail: int | None = None,
 ) -> tuple[str, str]:
-    """``docker logs robot-battery-dashboard``, with the day's file as a fallback."""
+    """Docker logs, the dashboard file, and main's host mission-summary JSON.
+
+    The controller prints into the Webots console, which cannot be redirected
+    on Windows. The lap lines that matter are in ``logs/mission_summary_*.json``
+    (and mirrored into ``robot_monitor_*.log``). Docker is still read first.
+    """
     cmd = ["docker", "logs", DASHBOARD_CONTAINER]
     if tail is not None:
         cmd[2:2] = ["--tail", str(tail)]
@@ -99,15 +147,19 @@ def read_dashboard_log(
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return _file_log(since_local), f"docker logs failed ({exc}); used the dashboard file log"
+        text = _file_log(since_local)
+        note = f"docker logs failed ({exc}); used the dashboard file log"
+        return _append_mission_summary(text, since_local, note)
     text = proc.stdout or ""
     if proc.stderr:
         text = text + ("\n" if text else "") + proc.stderr
+    note = ""
     if proc.returncode != 0:
         file_text = _file_log(since_local)
         if file_text:
-            return file_text, f"docker logs exit {proc.returncode}; used the dashboard file log"
-    return text, ""
+            text = file_text
+            note = f"docker logs exit {proc.returncode}; used the dashboard file log"
+    return _append_mission_summary(text, since_local, note)
 
 
 def _wait_dashboard(timeout_s: float = 90.0) -> bool:

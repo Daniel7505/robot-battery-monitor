@@ -23,11 +23,19 @@ The starting reference lap is not reused as the score denominator after a
 keep.
 
 **Held-out check:** the Webots warehouse twin is deterministic (identical
-`ctrl_*` gives identical laps). A same-build repeat lap is not used to
-confirm a keep. After a tentative keep, the loop runs one lap on the
-**heavy** BoM build with the same controller knobs, then restores
-`bom_build: light`. That checks the settings are sane on another body, not
-a duplicate light lap.
+`ctrl_*` gives identical laps). After a tentative keep, the loop runs
+**two** fresh laps on the fixed run body (`bom_build: light`): one at the
+**pre-keep** knob value and one at the **kept** value. The keep is
+confirmed only if the kept lap beats the pre-keep lap by the evidence
+threshold. Each lap must stamp `opt_run_id` / `opt_trial_id` and write a
+new `mission_summary_*.json` after launch.
+
+**Cross-build (heavy) confirm is off:** measured shaft Wh still follows the
+same 0.08 m contact cylinder as light (Oct 13 baseline: shaft ≈ 0.866 Wh
+for both builds when only the energy model changed). Body mass is patched
+today, but catalog wheel radius is not on the contact cylinder, so a heavy
+lap is not a valid held-out physics check until that sim work lands
+separately.
 
 **Evidence bands:** |err| and Wh/m thresholds are minimum effect sizes, not
 stochastic noise. Turn evidence uses a fixed **2.5 pp** floor, not the

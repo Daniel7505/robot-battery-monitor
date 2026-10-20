@@ -318,6 +318,8 @@ class MissionEnergyLog:
         self._ctrl_pivot_w_max_rad_s: float | None = None
         self._ctrl_k_steer: float | None = None
         self._ctrl_bom_build: str | None = None
+        self._opt_run_id: str | None = None
+        self._opt_trial_id: str | None = None
         self._body_mass_kg: float | None = None
         self._mission_dt = 0.0
         self._mission_dist = 0.0
@@ -811,6 +813,13 @@ class MissionEnergyLog:
         build = sample.get("ctrl_bom_build")
         if build not in (None, ""):
             self._ctrl_bom_build = str(build).strip()
+        for key, attr in (
+            ("opt_run_id", "_opt_run_id"),
+            ("opt_trial_id", "_opt_trial_id"),
+        ):
+            value = sample.get(key)
+            if value not in (None, ""):
+                setattr(self, attr, str(value).strip())
 
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
@@ -1075,6 +1084,10 @@ class MissionEnergyLog:
             ctrl += f" ctrl_bom_build={self._ctrl_bom_build}"
         if self._body_mass_kg is not None:
             ctrl += f" body_mass_kg={self._body_mass_kg:g}"
+        if self._opt_run_id:
+            ctrl += f" opt_run_id={self._opt_run_id}"
+        if self._opt_trial_id:
+            ctrl += f" opt_trial_id={self._opt_trial_id}"
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "

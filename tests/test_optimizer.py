@@ -13,7 +13,8 @@ from optimizer.diagnose import diagnose
 from optimizer.logbook import Logbook
 from optimizer.loop import recover_session, run_loop
 from optimizer.picker import LlmPicker, RulePicker
-from optimizer.runner import DryRunRunner, RunOutcome, launch_command
+from optimizer.runner import DryRunRunner, RunOutcome, launch_command, stamp_mission_log
+from optimizer.lap_launch import LapLaunch
 from optimizer.body_mass import expected_body_mass_kg
 from optimizer.evidence import meaningful_improvement
 from optimizer.score import KEEP_MARGIN, confirmation_ok, decide
@@ -113,12 +114,15 @@ class ScriptedRunner:
         self.restarts += 1
         return "restarted robot-battery-dashboard"
 
-    def run_lap(self, *, params, timeout_s, world="warehouse", log_path=None):
+    def run_lap(self, *, params, timeout_s, world="warehouse", log_path=None, launch=None):
         del params, timeout_s, world, log_path
         self.calls += 1
         item = self.outcomes.pop(0)
         if isinstance(item, Exception):
             raise item
+        if isinstance(item, RunOutcome) and launch is not None:
+            text = stamp_mission_log(item.log_text, launch)
+            return RunOutcome(item.status, text, item.note)
         return item
 
 
@@ -318,16 +322,21 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
         wh_model_drive="4.146",
         ctrl_pivot_w_max_rad_s="0.60",
     )
-    held = summary_line(
-        build="heavy",
-        ctrl_bom_build="heavy",
-        body_mass_kg="9.812",
-        err_pct="-5.0",
-        wh_measured_drive_elec="4.100",
+    pre_keep = summary_line(
+        err_pct="-28.3",
+        wh_measured_drive_elec="3.742",
+        ctrl_pivot_w_max_rad_s="0.90",
+    )
+    kept_confirm = summary_line(
+        err_pct="-18.0",
+        wh_measured_drive_elec="3.400",
+        wh_model_drive="4.146",
         ctrl_pivot_w_max_rad_s="0.60",
     )
     runner = ScriptedRunner(reference_then(
-        RunOutcome("ok", better), RunOutcome("ok", held),
+        RunOutcome("ok", better),
+        RunOutcome("ok", pre_keep),
+        RunOutcome("ok", kept_confirm),
     ))
     report = run_loop(
         config_path=config,
@@ -352,7 +361,7 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
     assert [row["phase"] for row in rows] == ["reference", "search", "confirm"]
     assert [row["decision"] for row in rows[1:]] == ["keep", "confirm-pass"]
     assert rows[1]["postmortem"]["verdict"] == "tentative"
-    assert "held-out" in rows[1]["postmortem"]["next_hypothesis"]
+    assert "confirm pair" in rows[1]["postmortem"]["next_hypothesis"]
     assert "Predicted versus observed" in text
     learned = knowledge.read_text(encoding="utf-8")
     assert "## Known facts" in learned
@@ -409,10 +418,10 @@ def test_loop_crash_is_retried_rolled_back_and_redacted(tmp_path):
             return "restarted robot-battery-dashboard"
 
         def run_lap(self, **kwargs):
-            del kwargs
+            launch = kwargs.get("launch")
             self.calls += 1
             if self.calls == 1:
-                return RunOutcome("ok", summary_line())
+                return RunOutcome("ok", stamp_mission_log(summary_line(), launch))
             raise RuntimeError("webots died token=supersecret")
 
     run_loop(
@@ -999,12 +1008,19 @@ def test_missing_summary_is_invalid_and_retries_same_step(tmp_path):
             return "ok"
 
         def run_lap(self, **kwargs):
+            launch = kwargs.get("launch")
             self.calls += 1
             if self.calls == 1:
-                return RunOutcome("ok", summary_line())
+                return RunOutcome("ok", stamp_mission_log(summary_line(), launch))
             if self.calls in (2, 3):
                 return RunOutcome("no_summary", "SEGMENT_ENERGY build=light dist_m=1.0", note="no summary")
-            return RunOutcome("ok", summary_line(ctrl_pivot_w_max_rad_s="0.60", err_pct="-27.0"))
+            return RunOutcome(
+                "ok",
+                stamp_mission_log(
+                    summary_line(ctrl_pivot_w_max_rad_s="0.60", err_pct="-27.0"),
+                    launch,
+                ),
+            )
 
     runner = NoSummary()
     run_loop(
@@ -1027,6 +1043,55 @@ def test_missing_summary_is_invalid_and_retries_same_step(tmp_path):
     assert rows[2]["param"] == rows[1]["param"]
     assert rows[2]["new"] == rows[1]["new"]
     assert runner.calls == 4
+
+
+def test_one_fresh_stamped_summary_per_trial(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    import os
+
+    from optimizer import runner
+    from optimizer.lap_launch import LapLaunch
+    from optimizer.trial_validity import summary_fresh_reason
+
+    monkeypatch.setenv("RBM_LOG_DIR", str(tmp_path))
+    launch_a = LapLaunch.new("run20261020", "search-1")
+    launch_b = LapLaunch.new("run20261020", "search-2")
+    shared = summary_line(
+        opt_run_id=launch_a.run_id,
+        opt_trial_id=launch_a.trial_id,
+    )
+    path = tmp_path / "mission_summary_shared.json"
+    path.write_text(json.dumps({"opt_run_id": launch_a.run_id, "opt_trial_id": launch_a.trial_id, "lines": [shared]}))
+    os.utime(path, (launch_a.launched_utc.timestamp(), launch_a.launched_utc.timestamp()))
+    stale = summary_fresh_reason(
+        diagnose(summary_line(opt_run_id=launch_a.run_id, opt_trial_id=launch_a.trial_id)).summary,
+        launch=launch_b,
+        file_mtime=path.stat().st_mtime,
+    )
+    assert stale is not None
+    assert "trial_id" in stale
+    text_b, _ = runner._mission_summary_pick(None, launch=launch_b)
+    assert text_b == ""
+
+
+def test_cross_build_confirm_is_documented_disabled():
+    from optimizer.held_out import CROSS_BUILD_HELD_OUT_ENABLED, cross_build_confirm_disabled_reason
+
+    assert CROSS_BUILD_HELD_OUT_ENABLED is False
+    assert "0.08 m" in cross_build_confirm_disabled_reason()
+
+
+def test_knob_confirm_pair_requires_evidence():
+    from optimizer.score import knob_confirm_comparison_ok
+
+    pre = diagnose(summary_line(err_pct="-28.3")).summary
+    kept = diagnose(summary_line(err_pct="-18.0", wh_measured_drive_elec="3.400")).summary
+    ok, _why = knob_confirm_comparison_ok(pre, kept)
+    assert ok
+    flat = diagnose(summary_line(err_pct="-28.2")).summary
+    ok2, why2 = knob_confirm_comparison_ok(pre, flat)
+    assert not ok2
+    assert "pre-keep" in why2 or "evidence" in why2
 
 
 def test_mission_summary_json_without_summary_line_is_ignored(tmp_path, monkeypatch):

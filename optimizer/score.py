@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from optimizer.diagnose import MissionSummary
+from optimizer.diagnose import Diagnosis, MissionSummary
+from optimizer.evidence import meaningful_improvement
 
 # A warehouse lap is about 201 m. Under this, the robot did not finish.
 MIN_DIST_M = 150.0
@@ -206,3 +207,32 @@ def confirmation_ok(
             f"held-out build |err| {abs(check.err_pct):.1f}% exceeds {CONFIRM_ABS_CAP:.0f}%"
         )
     return True, "held-out build finished inside the sanity cap"
+
+
+def knob_confirm_comparison_ok(
+    pre_keep: MissionSummary | None,
+    kept: MissionSummary | None,
+) -> tuple[bool, str]:
+    """Pre-keep knob value must lose to kept value on the same run body."""
+    if pre_keep is None or kept is None:
+        return False, "confirm missing MISSION_SUMMARY for pre-keep or kept lap"
+    if pre_keep.err_pct is None or kept.err_pct is None:
+        return False, "confirm lap missing err_pct"
+    for label, row in ("pre-keep", pre_keep), ("kept", kept):
+        if row.dist_m is None or row.dist_m < MIN_DIST_M:
+            return False, f"{label} confirm lap did not finish (dist_m too short)"
+        if abs(row.err_pct) > CONFIRM_ABS_CAP:
+            return False, (
+                f"{label} confirm |err| {abs(row.err_pct):.1f}% exceeds {CONFIRM_ABS_CAP:.0f}%"
+            )
+    before = Diagnosis(summary=pre_keep)
+    after = Diagnosis(summary=kept)
+    ok, detail = meaningful_improvement(
+        before,
+        after,
+        pre_keep,
+        baseline_label="pre-keep knob value",
+    )
+    if not ok:
+        return False, f"kept value did not beat pre-keep on the held-out pair: {detail}"
+    return True, "kept knob value beat pre-keep by the evidence threshold"

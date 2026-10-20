@@ -78,6 +78,12 @@ def append_mission_lines(
         "path": state["path"],
         "lines": list(state["lines"]),
     }
+    run_id = os.environ.get("RBM_OPT_RUN_ID")
+    trial_id = os.environ.get("RBM_OPT_TRIAL_ID")
+    if run_id:
+        payload["opt_run_id"] = run_id
+    if trial_id:
+        payload["opt_trial_id"] = trial_id
     with open(state["path"], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
         fh.write("\n")

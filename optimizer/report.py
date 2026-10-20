@@ -87,6 +87,8 @@ def render_report(
     diagnoses: dict,
     dry_run: bool,
     stop_reason: str,
+    held_out_note: str = "",
+    cross_build_note: str = "",
 ) -> str:
     lines = ["# Overnight optimizer", ""]
     if dry_run:
@@ -168,8 +170,8 @@ def render_report(
         lines.append("None confirmed. Unconfirmed keeps were rolled back when the check failed,")
         lines.append("or the run stopped before the check.")
     else:
-        lines.append("These passed a held-out lap (another BoM build, or a repeat lap when the")
-        lines.append("change itself was the build). They are not written back into config.")
+        lines.append("These passed the pre-keep vs kept confirm pair on the run body.")
+        lines.append("They are not written back into config.")
         lines.append("")
         for row in confirmed:
             lines.append(
@@ -190,6 +192,28 @@ def render_report(
                 lines.append(f"- {text}")
     if not seen:
         lines.append("None.")
+    lines.append("")
+    lines.append("## Held-out confirm")
+    lines.append("")
+    if held_out_note:
+        lines.append(held_out_note)
+    else:
+        lines.append("(not recorded)")
+    lines.append("")
+    if cross_build_note:
+        lines.append("Cross-build check:")
+        lines.append("")
+        lines.append(cross_build_note)
+        lines.append("")
+    lines.append("## Heavy vs light measured Wh/m")
+    lines.append("")
+    lines.append(
+        "If a heavy-build lap shows much lower drive Wh/m than light with similar "
+        "wh_measured_drive_shaft, treat it as a model/physics mismatch, not evidence "
+        "that heavy is more efficient. Measured shaft still uses the 0.08 m contact "
+        "cylinder; only the electrical model and body mass follow bom_build until "
+        "catalog wheel radius is applied in Webots (see src/webots_body.py)."
+    )
     lines.append("")
     lines.append("## Guardrails")
     lines.append("")

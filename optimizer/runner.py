@@ -11,6 +11,14 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from optimizer.diagnose import diagnose_lap
+from optimizer.lap_launch import (
+    MIN_LAUNCH_WALL_S,
+    LapLaunch,
+    merge_launch_env,
+)
+from optimizer.trial_validity import summary_fresh_reason
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_CONTAINER = "robot-battery-dashboard"
 DASHBOARD_URL = "http://127.0.0.1:5000/"
@@ -25,6 +33,21 @@ class RunOutcome:
 
 def _summary_in(text: str) -> bool:
     return "MISSION_SUMMARY" in text
+
+
+def stamp_mission_log(text: str, launch: LapLaunch | None) -> str:
+    """Attach optimizer trial stamps to MISSION_SUMMARY lines (tests and dry-run)."""
+    if launch is None or "MISSION_SUMMARY" not in text or "opt_run_id=" in text:
+        return text
+    stamped: list[str] = []
+    for line in text.splitlines():
+        if "MISSION_SUMMARY" in line:
+            line = (
+                f"{line.rstrip()} opt_run_id={launch.run_id} "
+                f"opt_trial_id={launch.trial_id}"
+            )
+        stamped.append(line)
+    return "\n".join(stamped)
 
 
 def launch_command(repo: Path, world: str) -> list[str]:
@@ -85,52 +108,82 @@ def _file_log(since_local: datetime | None) -> str:
     return "\n".join(kept)
 
 
-def _mission_summary_text(since_local: datetime | None) -> str:
-    """Lines from the newest host ``mission_summary_*.json`` for this lap.
-
-    Main writes that file because the Webots console cannot be captured.
-    ``since_local`` drops a file left by an earlier lap. Only files that
-    contain a finished ``MISSION_SUMMARY`` line are used, so an incomplete
-    lap does not reuse an earlier lap's metrics.
-    """
+def _summary_folder() -> Path:
     try:
         from src.mission_summary_file import summary_directory
 
-        folder = Path(summary_directory())
+        return Path(summary_directory())
     except Exception:
-        folder = REPO_ROOT / "logs"
+        return REPO_ROOT / "logs"
+
+
+def _mission_summary_pick(
+    since_local: datetime | None,
+    *,
+    launch: LapLaunch | None = None,
+) -> tuple[str, float | None]:
+    """Newest host ``mission_summary_*.json`` that matches this trial, if any."""
+    folder = _summary_folder()
     if not folder.is_dir():
-        return ""
+        return "", None
     files = [path for path in folder.glob("mission_summary_*.json") if path.is_file()]
     if not files:
-        return ""
-    candidates: list[tuple[float, str]] = []
+        return "", None
+    candidates: list[tuple[float, str, float]] = []
     for path in files:
         try:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        if since_local is not None:
-            if datetime.fromtimestamp(mtime) < since_local:
+        if since_local is not None and datetime.fromtimestamp(mtime) < since_local:
+            continue
+        if launch is not None:
+            launched_local = launch.launched_utc.astimezone().replace(tzinfo=None)
+            if datetime.fromtimestamp(mtime) < launched_local - timedelta(seconds=1):
                 continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if launch is not None and isinstance(payload, dict):
+            if payload.get("opt_run_id") not in (None, launch.run_id):
+                continue
+            if payload.get("opt_trial_id") not in (None, launch.trial_id):
+                continue
         lines = payload.get("lines") if isinstance(payload, dict) else None
         if not isinstance(lines, list):
             continue
         text = "\n".join(str(line) for line in lines if line)
         if "MISSION_SUMMARY" not in text:
             continue
-        candidates.append((mtime, text))
+        summary = diagnose_lap(text).summary
+        stale = summary_fresh_reason(summary, launch=launch, file_mtime=mtime)
+        if stale:
+            continue
+        candidates.append((mtime, text, mtime))
     if not candidates:
-        return ""
-    return max(candidates, key=lambda item: item[0])[1]
+        return "", None
+    _mtime, text, raw_mtime = max(candidates, key=lambda item: item[0])
+    return text, raw_mtime
 
 
-def _append_mission_summary(text: str, since_local: datetime | None, note: str) -> tuple[str, str]:
-    summary_text = _mission_summary_text(since_local)
+def _mission_summary_text(
+    since_local: datetime | None,
+    *,
+    launch: LapLaunch | None = None,
+) -> str:
+    text, _mtime = _mission_summary_pick(since_local, launch=launch)
+    return text
+
+
+def _append_mission_summary(
+    text: str,
+    since_local: datetime | None,
+    note: str,
+    *,
+    launch: LapLaunch | None = None,
+) -> tuple[str, str]:
+    summary_text, _mtime = _mission_summary_pick(since_local, launch=launch)
     if not summary_text:
         return text, note
     combined = summary_text if not text else text.rstrip() + "\n" + summary_text
@@ -144,6 +197,7 @@ def read_dashboard_log(
     since_utc: datetime | None = None,
     since_local: datetime | None = None,
     tail: int | None = None,
+    launch: LapLaunch | None = None,
 ) -> tuple[str, str]:
     """Docker logs, the dashboard file, and main's host mission-summary JSON.
 
@@ -169,7 +223,7 @@ def read_dashboard_log(
     except (OSError, subprocess.TimeoutExpired) as exc:
         text = _file_log(since_local)
         note = f"docker logs failed ({exc}); used the dashboard file log"
-        return _append_mission_summary(text, since_local, note)
+        return _append_mission_summary(text, since_local, note, launch=launch)
     text = proc.stdout or ""
     if proc.stderr:
         text = text + ("\n" if text else "") + proc.stderr
@@ -179,7 +233,45 @@ def read_dashboard_log(
         if file_text:
             text = file_text
             note = f"docker logs exit {proc.returncode}; used the dashboard file log"
-    return _append_mission_summary(text, since_local, note)
+    return _append_mission_summary(text, since_local, note, launch=launch)
+
+
+def _finish_lap_outcome(
+    *,
+    launch: LapLaunch,
+    proc: subprocess.Popen,
+    text: str,
+    note: str,
+    wall_started: float,
+    status_if_summary: str = "ok",
+) -> RunOutcome:
+    elapsed = time.monotonic() - wall_started
+    if _summary_in(text):
+        summary = diagnose_lap(text).summary
+        _text2, mtime = _mission_summary_pick(None, launch=launch)
+        stale = summary_fresh_reason(summary, launch=launch, file_mtime=mtime)
+        if stale:
+            return RunOutcome(
+                "no_summary",
+                text,
+                f"{stale}. {note}".strip(),
+            )
+        if elapsed < MIN_LAUNCH_WALL_S:
+            return RunOutcome(
+                "crash",
+                text,
+                (
+                    f"lap returned MISSION_SUMMARY after {elapsed:.1f}s "
+                    f"(<{MIN_LAUNCH_WALL_S:.0f}s); likely cached summary, "
+                    f"existing Webots, or launcher early-exit. {note}"
+                ).strip(),
+            )
+        return RunOutcome(status_if_summary, text, note)
+    return RunOutcome(
+        "crash",
+        text,
+        f"launcher exited {proc.returncode} before MISSION_SUMMARY. {note}".strip(),
+    )
 
 
 def _wait_dashboard(timeout_s: float = 90.0) -> bool:
@@ -236,6 +328,7 @@ class WebotsLapRunner:
         timeout_s: float,
         world: str = "warehouse",
         log_path: Path | None = None,
+        launch: LapLaunch | None = None,
     ) -> RunOutcome:
         del params  # the launcher reads config.yaml, which the loop already wrote
         if os.name != "nt":
@@ -243,11 +336,13 @@ class WebotsLapRunner:
                 "Webots laps run on Windows only. Start scripts\\overnight_optimize.ps1 "
                 "on the PC that has Webots, or pass --dry-run."
             )
+        launch = launch or LapLaunch.new("local", "lap")
         world_name = world or self.world
-        since_utc = datetime.now(timezone.utc) - timedelta(seconds=2)
-        since_local = datetime.now() - timedelta(seconds=2)
+        since_utc = launch.launched_utc - timedelta(seconds=2)
+        since_local = launch.launched_utc.astimezone().replace(tzinfo=None) - timedelta(seconds=2)
+        wall_started = launch.launched_monotonic
         _kill_webots()
-        env = os.environ.copy()
+        env = merge_launch_env(os.environ.copy(), launch)
         env["RBM_MISSION_LAPS"] = "1"
         # The controller prints arrows. A cp1252 console turns those into a crash.
         env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -267,18 +362,38 @@ class WebotsLapRunner:
         note = ""
         try:
             while True:
-                text, note = read_dashboard_log(since_utc=since_utc, since_local=since_local)
+                text, note = read_dashboard_log(
+                    since_utc=since_utc,
+                    since_local=since_local,
+                    launch=launch,
+                )
                 if _summary_in(text):
                     _kill_webots()
                     try:
                         proc.wait(timeout=45)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                    return RunOutcome("ok", text, note)
+                    return _finish_lap_outcome(
+                        launch=launch,
+                        proc=proc,
+                        text=text,
+                        note=note,
+                        wall_started=wall_started,
+                    )
                 if proc.poll() is not None:
-                    text, note = read_dashboard_log(since_utc=since_utc, since_local=since_local)
+                    text, note = read_dashboard_log(
+                        since_utc=since_utc,
+                        since_local=since_local,
+                        launch=launch,
+                    )
                     if _summary_in(text):
-                        return RunOutcome("ok", text, note)
+                        return _finish_lap_outcome(
+                            launch=launch,
+                            proc=proc,
+                            text=text,
+                            note=note,
+                            wall_started=wall_started,
+                        )
                     return RunOutcome(
                         "crash",
                         text,
@@ -290,9 +405,21 @@ class WebotsLapRunner:
                         proc.wait(timeout=45)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                    text, note = read_dashboard_log(since_utc=since_utc, since_local=since_local)
-                    status = "ok" if _summary_in(text) else "timeout"
-                    return RunOutcome(status, text, note)
+                    text, note = read_dashboard_log(
+                        since_utc=since_utc,
+                        since_local=since_local,
+                        launch=launch,
+                    )
+                    if _summary_in(text):
+                        return _finish_lap_outcome(
+                            launch=launch,
+                            proc=proc,
+                            text=text,
+                            note=note,
+                            wall_started=wall_started,
+                            status_if_summary="timeout",
+                        )
+                    return RunOutcome("timeout", text, note)
                 time.sleep(self.poll_s)
         finally:
             if proc.poll() is None:
@@ -319,6 +446,7 @@ class DryRunRunner:
         timeout_s: float,
         world: str = "warehouse",
         log_path: Path | None = None,
+        launch: LapLaunch | None = None,
     ) -> RunOutcome:
         del timeout_s, world, log_path
         build = params.get("bom_build") or "light"
@@ -329,11 +457,18 @@ class DryRunRunner:
         slow_steps = (0.50 - straight) / 0.02 + (0.44 - cruise) / 0.02
         err = base_err + 3.0 * slow_steps
         elec = max(0.5, base_elec * (1.0 - 0.02 * slow_steps))
-        text = _summary_line(build, err, elec, shaft=0.866, params=params)
+        text = _summary_line(build, err, elec, shaft=0.866, params=params, launch=launch)
         return RunOutcome("ok", text, "dry-run synthetic lap")
 
 
-def _summary_line(build: str, err: float, elec: float, shaft: float, params: dict | None = None) -> str:
+def _summary_line(
+    build: str,
+    err: float,
+    elec: float,
+    shaft: float,
+    params: dict | None = None,
+    launch: LapLaunch | None = None,
+) -> str:
     drive = elec / (1.0 + err / 100.0) if abs(err) < 500 else elec
     visc = drive * 0.85
     roll = drive * 0.10
@@ -361,6 +496,9 @@ def _summary_line(build: str, err: float, elec: float, shaft: float, params: dic
             f" ctrl_pivot_w_max_rad_s={pivot:.2f} ctrl_k_steer={k_steer:.2f}"
             f" ctrl_bom_build={body} body_mass_kg={mass_kg:g}"
         )
+    stamp = ""
+    if launch is not None:
+        stamp = f" opt_run_id={launch.run_id} opt_trial_id={launch.trial_id}"
     return (
         f"MISSION_SUMMARY build={build} duration_s=662.0 dist_m=200.91 turns=13 "
         f"payload_kg=0 soc_start=100.00 soc_end=97.00 "
@@ -369,5 +507,5 @@ def _summary_line(build: str, err: float, elec: float, shaft: float, params: dic
         f"wh_model_accel={accel:.3f} "
         f"wh_measured_drive_shaft={shaft:.3f} wh_measured_drive_elec={elec:.3f} "
         f"eta_avg=0.230 wh_measured={elec + idle:.3f} wh_measured_soc={elec + idle:.3f} "
-        f"err_pct={err:.1f}{ctrl}"
+        f"err_pct={err:.1f}{ctrl}{stamp}"
     )

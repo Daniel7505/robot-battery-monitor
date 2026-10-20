@@ -54,6 +54,8 @@ class MissionSummary:
     ctrl_k_steer: float | None = None
     ctrl_bom_build: str | None = None
     body_mass_kg: float | None = None
+    opt_run_id: str | None = None
+    opt_trial_id: str | None = None
     raw: str = ""
 
     def wh_per_m(self) -> float | None:
@@ -141,6 +143,12 @@ def _summary_from(line: str) -> MissionSummary:
         if not kv.get("ctrl_bom_build") or kv.get("ctrl_bom_build") == "na"
         else kv.get("ctrl_bom_build"),
         body_mass_kg=_num(kv.get("body_mass_kg")),
+        opt_run_id=None
+        if not kv.get("opt_run_id") or kv.get("opt_run_id") == "na"
+        else kv.get("opt_run_id"),
+        opt_trial_id=None
+        if not kv.get("opt_trial_id") or kv.get("opt_trial_id") == "na"
+        else kv.get("opt_trial_id"),
         raw=line.strip(),
     )
 

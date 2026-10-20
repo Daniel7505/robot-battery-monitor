@@ -2087,6 +2087,13 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
     loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
     loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
     loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)
+    for env_key, field in (
+        ("RBM_OPT_RUN_ID", "opt_run_id"),
+        ("RBM_OPT_TRIAL_ID", "opt_trial_id"),
+    ):
+        stamped = os.environ.get(env_key)
+        if stamped:
+            loco[field] = str(stamped)
     try:
         from src.webots_body import bom_body_physics
 

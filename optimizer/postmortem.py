@@ -258,7 +258,7 @@ def _judge(
         return (
             "tentative",
             "The combined score beat 0.98 on this lap, but the move may still be within lap noise until the held-out repeat agrees.",
-            f"Treat {knob} {direction} as tentative until the held-out heavy-body lap passes; only then mark it supported in KNOWLEDGE.md.",
+            f"Treat {knob} {direction} as tentative until the pre-keep vs kept confirm pair passes; only then mark it supported in KNOWLEDGE.md.",
         )
     if repeat_label:
         return (
@@ -287,15 +287,16 @@ def _judge(
     if action == "confirm-pass":
         return (
             "supported",
-            "The held-out lap on another BoM build finished with a sane |err|, so the kept "
-            "controller settings are not specific to one light-body fluke.",
-            f"The {knob} {direction} keep cleared the held-out heavy-body sanity check.",
+            "The kept knob value beat the pre-keep value on a fresh confirm pair, so the "
+            "provisional keep is not a one-lap fluke.",
+            f"The {knob} {direction} keep cleared the pre-keep vs kept confirm pair.",
         )
     if action == "confirm-fail":
         return (
             "refuted",
-            "The held-out lap did not back the provisional keep, so the change does not travel.",
-            f"Do not keep pushing {knob} {direction}. The held-out lap disagreed.",
+            "The confirm pair did not show the kept value beating pre-keep by the evidence "
+            "threshold, so the change does not travel.",
+            f"Do not keep pushing {knob} {direction}. The confirm pair disagreed.",
         )
     if action == "inconclusive" or (
         within_noise and action in {"rollback", "inconclusive"}

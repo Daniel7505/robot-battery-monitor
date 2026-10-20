@@ -17,7 +17,9 @@ from optimizer.diagnose import Diagnosis, diagnose, diagnose_lap
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
 from optimizer.notify import notify_run_finished
-from optimizer.picker import Proposal, RulePicker, held_out_build
+from optimizer.held_out import cross_build_confirm_disabled_reason, confirm_strategy_note
+from optimizer.lap_launch import LapLaunch, assert_light_search_config, trial_id_for
+from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
@@ -25,8 +27,8 @@ from optimizer.evidence import evidence_status, measure_effects, meaningful_impr
 from optimizer.score import (
     ERR_REGRESS_POINTS,
     KEEP_MARGIN,
-    confirmation_ok,
     decide,
+    knob_confirm_comparison_ok,
     lap_metrics_match,
 )
 from optimizer.trial_validity import body_matches_run, run_body_from_params, trial_invalid_reason
@@ -100,8 +102,8 @@ def _next_hypothesis(picker, diag, knowledge_path: Path, history: list[dict], re
     if rec.get("decision") == "keep":
         return (
             f"From that lesson, hold `{rec.get('param')}` at {rec.get('new')} and run the "
-            "held-out lap on another BoM build before trying another knob. "
-            "The lesson stands only if that sanity lap passes."
+            "pre-keep vs kept confirm pair on the run body before trying another knob. "
+            "The lesson stands only if that pair passes."
         )
     extra = ""
     tag = str(post.get("tag") or "").strip()
@@ -240,10 +242,24 @@ def recover_session(store: ConfigStore, session_path: Path) -> dict | None:
     return None
 
 
-def _run_with_retry(runner, params: dict, timeout_s: float, world: str, log_path: Path | None) -> RunOutcome:
+def _run_with_retry(
+    runner,
+    params: dict,
+    timeout_s: float,
+    world: str,
+    log_path: Path | None,
+    *,
+    launch: LapLaunch,
+) -> RunOutcome:
     def once() -> RunOutcome:
         try:
-            return runner.run_lap(params=params, timeout_s=timeout_s, world=world, log_path=log_path)
+            return runner.run_lap(
+                params=params,
+                timeout_s=timeout_s,
+                world=world,
+                log_path=log_path,
+                launch=launch,
+            )
         except Exception as exc:
             return RunOutcome("crash", "", note=f"{type(exc).__name__}: {exc}")
 
@@ -302,7 +318,8 @@ def run_loop(
     )
     book = Logbook(run_dir)
     started = _utc_now()
-    run_id = started.strftime("%Y%m%dT%H%M%SZ")
+    # Leading letter so MISSION_SUMMARY kv parsing does not truncate at ISO ``T``.
+    run_id = f"r{started.strftime('%Y%m%d%H%M%S')}"
     book.begin_run(run_id)
     t0 = clock()
     records: list[dict] = []
@@ -346,12 +363,23 @@ def run_loop(
         if over_time():
             stop_reason = "wall-clock limit before the reference lap"
             return False
+        ref_launch = LapLaunch.new(run_id, trial_id_for("reference", 0))
         outcome = _run_with_retry(
-            runner, store.read(), lap_timeout_s, world, run_dir / "launch_reference.log"
+            runner,
+            store.read(),
+            lap_timeout_s,
+            world,
+            run_dir / "launch_reference.log",
+            launch=ref_launch,
         )
         ref_diag = diagnose(outcome.log_text)
         intended = store.read()
-        invalid = trial_invalid_reason(ref_diag.summary, intended, run_body)
+        invalid = trial_invalid_reason(
+            ref_diag.summary,
+            intended,
+            run_body,
+            launch=ref_launch,
+        )
         if invalid:
             action = "invalid"
             reason = invalid
@@ -440,55 +468,84 @@ def run_loop(
             if knowledge_path.is_file():
                 knowledge = knowledge_path.read_text(encoding="utf-8")
             params = store.read()
+            assert_light_search_config(params, run_body)
 
             if pending is not None:
                 iteration += 1
                 restart_note = ""
-                held_build = held_out_build(run_body)
-                saved_params = store.read()
-                store.apply_one("bom_build", held_build)
-                confirm_intended = store.read()
+                light_kept = dict(pending.get("light_kept_params") or store.read())
+                param = pending["param"]
+                pre_summary = None
+                kept_summary = None
+                confirm_notes: list[str] = []
+                invalid_reason: str | None = None
+
+                def _confirm_params(knob_value) -> dict:
+                    merged = dict(light_kept)
+                    merged[param] = knob_value
+                    merged["bom_build"] = run_body
+                    return merged
+
                 try:
-                    outcome = _run_with_retry(
-                        runner,
-                        confirm_intended,
-                        lap_timeout_s,
-                        world,
-                        run_dir / f"launch_{iteration}_confirm.log",
-                    )
-                finally:
-                    store.write_params(saved_params)
-                check = diagnose_lap(outcome.log_text)
-                invalid = trial_invalid_reason(
-                    check.summary,
-                    confirm_intended,
-                    run_body,
-                    held_out_build=held_build,
-                )
-                if invalid:
-                    ok, why = False, invalid
-                else:
-                    ok, why = confirmation_ok(
-                        pending["provisional"], check.summary, same_build=False
-                    )
-                    if ok:
-                        why = (
-                            f"held-out {held_build} body finished with |err| "
-                            f"{abs(check.summary.err_pct):.1f}% inside the sanity cap"
+                    for part, knob_value in (
+                        ("pre-keep", pending["old"]),
+                        ("kept", pending["new"]),
+                    ):
+                        intended = _confirm_params(knob_value)
+                        store.write_params(intended)
+                        launch = LapLaunch.new(
+                            run_id,
+                            trial_id_for("confirm", iteration, part=part),
                         )
+                        outcome = _run_with_retry(
+                            runner,
+                            intended,
+                            lap_timeout_s,
+                            world,
+                            run_dir / f"launch_{iteration}_confirm_{part}.log",
+                            launch=launch,
+                        )
+                        confirm_notes.append(outcome.note)
+                        lap_diag = diagnose_lap(outcome.log_text)
+                        invalid_reason = trial_invalid_reason(
+                            lap_diag.summary,
+                            intended,
+                            run_body,
+                            launch=launch,
+                        )
+                        if invalid_reason:
+                            break
+                        if part == "pre-keep":
+                            pre_summary = lap_diag.summary
+                        else:
+                            kept_summary = lap_diag.summary
+                finally:
+                    store.write_params(light_kept)
+                    assert_light_search_config(store.read(), run_body)
+
+                if invalid_reason:
+                    ok, why = False, invalid_reason
+                else:
+                    ok, why = knob_confirm_comparison_ok(pre_summary, kept_summary)
+                check_summary = kept_summary or pre_summary
+                check = (
+                    diagnose_lap(kept_summary.raw)
+                    if kept_summary is not None
+                    else diagnose_lap(pre_summary.raw if pre_summary else "")
+                )
                 if ok:
                     action = "confirm-pass"
                     if pending["provisional"] is not None:
                         set_score_baseline(
                             pending["provisional"],
                             format_kept_baseline_label(
-                                saved_params,
+                                light_kept,
                                 prefix="kept baseline (confirmed)",
                             ),
                         )
                     diag = pending["prev_diag"]
                 else:
-                    action = "confirm-fail" if not invalid else "invalid"
+                    action = "confirm-fail" if not invalid_reason else "invalid"
                     store.apply_one(pending["param"], pending["old"])
                     set_score_baseline(
                         starting_references.get(run_body),
@@ -498,7 +555,7 @@ def run_loop(
                         ),
                     )
                     diag = pending["prev_diag"]
-                    if not invalid:
+                    if not invalid_reason:
                         why = why + " The change was rolled back."
                 proposal = Proposal(
                     pending["param"],
@@ -515,11 +572,19 @@ def run_loop(
                     old=pending["old"],
                     action=action,
                     reason=why,
-                    summary=check.summary,
+                    summary=check_summary,
                     score=None,
-                    note=(outcome.note + " " + restart_note).strip(),
+                    note=(" ".join(confirm_notes) + " " + restart_note).strip(),
                 )
-                rec["intended_params"] = confirm_intended
+                rec["intended_params"] = light_kept
+                rec["confirm_pre_keep_summary"] = (
+                    None
+                    if pre_summary is None
+                    else {
+                        "err_pct": pre_summary.err_pct,
+                        "wh_measured_drive_elec": pre_summary.wh_measured_drive_elec,
+                    }
+                )
                 _attach_postmortem(
                     rec,
                     before=pending["prev_diag"],
@@ -535,11 +600,9 @@ def run_loop(
                 append_learning(
                     knowledge_path,
                     redact(_learning(
-                        iteration, "confirm", proposal, action, why, check.summary, rec["postmortem"],
+                        iteration, "confirm", proposal, action, why, check_summary, rec["postmortem"],
                     )),
                 )
-                if check.summary is not None and check.summary.build:
-                    diagnoses[check.summary.build] = check
                 pending = None
                 continue
 
@@ -593,8 +656,14 @@ def run_loop(
                 )
                 continue
             restart_note = ""
+            search_launch = LapLaunch.new(run_id, trial_id_for("search", iteration))
             outcome = _run_with_retry(
-                runner, store.read(), lap_timeout_s, world, run_dir / f"launch_{iteration}.log"
+                runner,
+                store.read(),
+                lap_timeout_s,
+                world,
+                run_dir / f"launch_{iteration}.log",
+                launch=search_launch,
             )
             summary_trusted = "MISSION_SUMMARY" in (outcome.log_text or "")
             new_diag = diagnose_lap(outcome.log_text) if summary_trusted else diagnose_lap("")
@@ -633,7 +702,14 @@ def run_loop(
                 if not search_is_retry:
                     retry_search = proposal
                     retry_search_old = old
-            elif (invalid := trial_invalid_reason(summary, intended_params, run_body)):
+            elif (
+                invalid := trial_invalid_reason(
+                    summary,
+                    intended_params,
+                    run_body,
+                    launch=search_launch,
+                )
+            ):
                 store.apply_one(proposal.param, old)
                 action = "invalid"
                 reason = invalid
@@ -709,6 +785,7 @@ def run_loop(
                             "provisional": summary,
                             "search_build": run_body,
                             "prev_diag": diag,
+                            "light_kept_params": dict(intended_params),
                         }
                         set_score_baseline(
                             summary,
@@ -809,6 +886,8 @@ def run_loop(
             diagnoses=diagnoses,
             dry_run=dry_run,
             stop_reason=stop_reason,
+            held_out_note=confirm_strategy_note(),
+            cross_build_note=cross_build_confirm_disabled_reason(),
         )
         status = "error" if run_failed or any(
             word in stop_reason.lower() for word in ("crash", "timeout", "failed", "error")

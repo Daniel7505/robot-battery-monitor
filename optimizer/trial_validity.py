@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from optimizer.body_mass import mass_matches_run
 from optimizer.diagnose import MissionSummary
+from optimizer.lap_launch import MIN_MISSION_DURATION_S, LapLaunch
 
 LIMIT_TOLERANCE = 0.015
 RUN_BODY_DEFAULT = "light"
@@ -85,14 +88,56 @@ def limits_match_intended(
     return None
 
 
+def summary_fresh_reason(
+    summary: MissionSummary | None,
+    *,
+    launch: LapLaunch | None,
+    file_mtime: float | None = None,
+) -> str | None:
+    """Stale or missing stamp vs this trial launch; None when the summary belongs to this lap."""
+    if launch is None:
+        return None
+    if summary is None:
+        return "no MISSION_SUMMARY"
+    if file_mtime is not None:
+        mtime_utc = datetime.fromtimestamp(file_mtime, tz=timezone.utc)
+        if mtime_utc < launch.launched_utc - timedelta(seconds=1):
+            return (
+                "mission summary file mtime is before this trial launch "
+                "(reused stale JSON from an earlier lap)"
+            )
+    if not summary.opt_run_id or not summary.opt_trial_id:
+        return "MISSION_SUMMARY missing opt_run_id/opt_trial_id stamps for this optimizer trial"
+    if summary.opt_run_id != launch.run_id:
+        return (
+            f"summary opt_run_id={summary.opt_run_id!r} does not match trial run {launch.run_id!r}"
+        )
+    if summary.opt_trial_id != launch.trial_id:
+        return (
+            f"summary opt_trial_id={summary.opt_trial_id!r} "
+            f"does not match trial id {launch.trial_id!r}"
+        )
+    if summary.duration_s is not None and summary.duration_s < MIN_MISSION_DURATION_S:
+        return (
+            f"mission duration_s={summary.duration_s:.1f} is too short for a warehouse lap "
+            "(likely cached or instant return)"
+        )
+    return None
+
+
 def trial_invalid_reason(
     summary: MissionSummary | None,
     intended: dict | None,
     run_body: str,
     *,
     held_out_build: str | None = None,
+    launch: LapLaunch | None = None,
+    file_mtime: float | None = None,
 ) -> str | None:
     """One reason this lap must not be scored as keep/refuted, or None if it is valid."""
+    stale = summary_fresh_reason(summary, launch=launch, file_mtime=file_mtime)
+    if stale:
+        return stale
     if summary is None:
         return "no MISSION_SUMMARY"
     if summary.err_pct is None:

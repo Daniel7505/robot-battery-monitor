@@ -7,12 +7,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from optimizer.baseline import (
+    format_baseline_from_summary,
+    format_kept_baseline_label,
+    repeat_of_prior_lap,
+)
 from optimizer.config_store import ConfigStore
 from optimizer.diagnose import Diagnosis, diagnose, diagnose_lap
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
 from optimizer.notify import notify_run_finished
-from optimizer.picker import Proposal, RulePicker
+from optimizer.picker import Proposal, RulePicker, held_out_build
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
@@ -95,7 +100,8 @@ def _next_hypothesis(picker, diag, knowledge_path: Path, history: list[dict], re
     if rec.get("decision") == "keep":
         return (
             f"From that lesson, hold `{rec.get('param')}` at {rec.get('new')} and run the "
-            "held-out lap before trying another knob. The lesson stands only if that lap agrees."
+            "held-out lap on another BoM build before trying another knob. "
+            "The lesson stands only if that sanity lap passes."
         )
     extra = ""
     tag = str(post.get("tag") or "").strip()
@@ -128,6 +134,9 @@ def _apply_evidence(rec: dict, effects: dict | None, *, flat: bool = False) -> N
     rec["wpm_gain_rel"] = effects.get("wpm_gain_rel")
     rec["turn_delta_pp"] = effects.get("turn_delta_pp")
     rec["turn_noise_band_pp"] = effects.get("turn_noise_band_pp")
+    if rec.get("score_baseline_label"):
+        effects = dict(effects)
+        effects.setdefault("baseline_label", rec["score_baseline_label"])
     rec["evidence_status"] = evidence_status(
         action=str(rec.get("decision") or ""),
         post_verdict=verdict,
@@ -150,6 +159,7 @@ def _attach_postmortem(
     noise_detail: str = "",
     summary_trusted: bool = True,
     effects: dict | None = None,
+    repeat_label: str | None = None,
 ) -> dict:
     post = build_postmortem(
         param=rec.get("param"),
@@ -163,6 +173,7 @@ def _attach_postmortem(
         noise_detail=noise_detail,
         summary_trusted=summary_trusted,
         evidence=effects,
+        repeat_label=repeat_label,
     )
     rec["postmortem"] = post
     if rec.get("decision") == "invalid" and rec.get("reason"):
@@ -291,11 +302,16 @@ def run_loop(
     )
     book = Logbook(run_dir)
     started = _utc_now()
+    run_id = started.strftime("%Y%m%dT%H%M%SZ")
+    book.begin_run(run_id)
     t0 = clock()
     records: list[dict] = []
     history: list[dict] = []
     diagnoses: dict = {}
-    references: dict = {}
+    starting_references: dict = {}
+    score_baselines: dict = {}
+    baseline_labels: dict = {}
+    prior_laps: list[tuple[str, object]] = []
     pending: dict | None = None
     retry_search: Proposal | None = None
     retry_search_old = None
@@ -306,7 +322,7 @@ def run_loop(
     def over_time() -> bool:
         return (clock() - t0) >= float(max_hours) * 3600.0
 
-    def remember(diag: Diagnosis) -> None:
+    def remember_diag(diag: Diagnosis) -> None:
         summary = diag.summary
         if summary is None or summary.err_pct is None:
             return
@@ -315,7 +331,14 @@ def run_loop(
         if trial_invalid_reason(summary, store.read(), run_body):
             return
         diagnoses[run_body] = diag
-        references[run_body] = summary
+
+    def set_score_baseline(summary, label: str) -> None:
+        score_baselines[run_body] = summary
+        baseline_labels[run_body] = label
+
+    def catalog_lap(label: str, summary) -> None:
+        if summary is not None:
+            prior_laps.append((label, summary))
 
     def run_reference_lap() -> bool:
         """One lap at starting settings; scores all later trials against it."""
@@ -350,6 +373,8 @@ def run_loop(
             note=outcome.note,
         )
         rec["intended_params"] = intended
+        rec["run_id"] = run_id
+        rec["score_baseline_label"] = baseline_labels.get(run_body, "starting settings")
         _attach_postmortem(
             rec,
             before=None,
@@ -369,7 +394,13 @@ def run_loop(
             )),
         )
         if action == "reference":
-            remember(ref_diag)
+            remember_diag(ref_diag)
+            starting_references[run_body] = ref_diag.summary
+            set_score_baseline(
+                ref_diag.summary,
+                format_baseline_from_summary(ref_diag.summary, prefix="starting settings"),
+            )
+            catalog_lap("reference lap", ref_diag.summary)
             diag = ref_diag
             return True
         stop_reason = reason
@@ -397,11 +428,11 @@ def run_loop(
                 )
         diag = diagnose(log_text or "")
         # Prior dashboard laps inform the picker only; the run's reference is a fresh lap.
-        if max_iterations > 0 and run_body not in references:
+        if max_iterations > 0 and run_body not in score_baselines:
             if not run_reference_lap():
                 diag = diag if diag.summary is not None else diagnose("")
 
-        while iteration < max_iterations and run_body in references:
+        while iteration < max_iterations and run_body in score_baselines:
             if over_time():
                 stop_reason = "wall-clock limit"
                 break
@@ -413,29 +444,59 @@ def run_loop(
             if pending is not None:
                 iteration += 1
                 restart_note = ""
-                outcome = _run_with_retry(
-                    runner,
-                    store.read(),
-                    lap_timeout_s,
-                    world,
-                    run_dir / f"launch_{iteration}_confirm.log",
+                held_build = held_out_build(run_body)
+                saved_params = store.read()
+                store.apply_one("bom_build", held_build)
+                confirm_intended = store.read()
+                try:
+                    outcome = _run_with_retry(
+                        runner,
+                        confirm_intended,
+                        lap_timeout_s,
+                        world,
+                        run_dir / f"launch_{iteration}_confirm.log",
+                    )
+                finally:
+                    store.write_params(saved_params)
+                check = diagnose_lap(outcome.log_text)
+                invalid = trial_invalid_reason(
+                    check.summary,
+                    confirm_intended,
+                    run_body,
+                    held_out_build=held_build,
                 )
-                check = diagnose(outcome.log_text)
-                invalid = trial_invalid_reason(check.summary, store.read(), run_body)
                 if invalid:
                     ok, why = False, invalid
                 else:
                     ok, why = confirmation_ok(
-                        pending["provisional"], check.summary, same_build=True
+                        pending["provisional"], check.summary, same_build=False
                     )
+                    if ok:
+                        why = (
+                            f"held-out {held_build} body finished with |err| "
+                            f"{abs(check.summary.err_pct):.1f}% inside the sanity cap"
+                        )
                 if ok:
                     action = "confirm-pass"
                     if pending["provisional"] is not None:
-                        references[run_body] = pending["provisional"]
+                        set_score_baseline(
+                            pending["provisional"],
+                            format_kept_baseline_label(
+                                saved_params,
+                                prefix="kept baseline (confirmed)",
+                            ),
+                        )
                     diag = pending["prev_diag"]
                 else:
                     action = "confirm-fail" if not invalid else "invalid"
                     store.apply_one(pending["param"], pending["old"])
+                    set_score_baseline(
+                        starting_references.get(run_body),
+                        format_baseline_from_summary(
+                            starting_references.get(run_body),
+                            prefix="starting settings",
+                        ),
+                    )
                     diag = pending["prev_diag"]
                     if not invalid:
                         why = why + " The change was rolled back."
@@ -458,7 +519,7 @@ def run_loop(
                     score=None,
                     note=(outcome.note + " " + restart_note).strip(),
                 )
-                rec["intended_params"] = store.read()
+                rec["intended_params"] = confirm_intended
                 _attach_postmortem(
                     rec,
                     before=pending["prev_diag"],
@@ -539,11 +600,14 @@ def run_loop(
             new_diag = diagnose_lap(outcome.log_text) if summary_trusted else diagnose_lap("")
             summary = new_diag.summary
             intended_params = store.read()
-            reference = references.get(run_body)
+            baseline = score_baselines.get(run_body)
+            baseline_label = baseline_labels.get(run_body, "kept baseline")
             before_diag = diag
             effects: dict | None = None
             within_noise = False
             noise_detail = ""
+            repeat_label: str | None = None
+            decision = None
             if outcome.status == "no_summary" or (
                 outcome.status == "ok" and not summary_trusted
             ):
@@ -579,22 +643,52 @@ def run_loop(
                     retry_search = proposal
                     retry_search_old = old
             else:
-                effects = measure_effects(before_diag, new_diag, reference)
-                within_noise = not effects.get("meaningful")
-                noise_detail = str(effects.get("detail") or "")
-                clearly_worse = False
-                if (
-                    summary is not None
-                    and reference is not None
-                    and summary.err_pct is not None
-                    and reference.err_pct is not None
-                ):
-                    err_regress = abs(summary.err_pct) - abs(reference.err_pct)
-                    clearly_worse = err_regress > ERR_REGRESS_POINTS
-                decision = decide(summary, reference)
-                score = decision.score
-                reason = decision.reason
-                if decision.action == "keep" and summary is not None:
+                repeat_label = repeat_of_prior_lap(
+                    summary,
+                    starting_reference=starting_references.get(run_body),
+                    prior_laps=prior_laps,
+                )
+                if repeat_label:
+                    store.apply_one(proposal.param, old)
+                    action = "inconclusive"
+                    reason = (
+                        f"lap repeats {repeat_label} with identical metrics; "
+                        "not scored as improvement vs the kept baseline"
+                    )
+                    score = None
+                    effects = measure_effects(
+                        before_diag,
+                        new_diag,
+                        baseline,
+                        baseline_label=baseline_label,
+                    )
+                    within_noise = True
+                    noise_detail = reason
+                    diag = before_diag
+                if repeat_label is None:
+                    effects = measure_effects(
+                        before_diag,
+                        new_diag,
+                        baseline,
+                        baseline_label=baseline_label,
+                    )
+                    within_noise = not effects.get("meaningful")
+                    noise_detail = str(effects.get("detail") or "")
+                    clearly_worse = False
+                    if (
+                        summary is not None
+                        and baseline is not None
+                        and summary.err_pct is not None
+                        and baseline.err_pct is not None
+                    ):
+                        err_regress = abs(summary.err_pct) - abs(baseline.err_pct)
+                        clearly_worse = err_regress > ERR_REGRESS_POINTS
+                    decision = decide(
+                        summary, baseline, baseline_label=baseline_label
+                    )
+                    score = decision.score
+                    reason = decision.reason
+                if repeat_label is None and decision.action == "keep" and summary is not None:
                     if within_noise:
                         store.apply_one(proposal.param, old)
                         action = "inconclusive"
@@ -616,27 +710,39 @@ def run_loop(
                             "search_build": run_body,
                             "prev_diag": diag,
                         }
-                        remember(new_diag)
+                        set_score_baseline(
+                            summary,
+                            format_kept_baseline_label(
+                                intended_params,
+                                prefix="kept baseline (provisional)",
+                            ),
+                        )
+                        remember_diag(new_diag)
                         diag = new_diag
-                elif decision.action == "baseline":
+                elif repeat_label is None and decision.action == "baseline":
                     store.apply_one(proposal.param, old)
                     action = "inconclusive"
                     reason = (
-                        "no reference lap was recorded for this build; "
+                        "no kept baseline was recorded for this build; "
                         "the trial was not scored"
                     )
                     diag = before_diag
-                elif lap_metrics_match(summary, reference) if reference else False:
+                elif (
+                    repeat_label is None
+                    and lap_metrics_match(summary, baseline)
+                    if baseline
+                    else False
+                ):
                     store.apply_one(proposal.param, old)
                     action = "inconclusive"
                     reason = decision.reason
                     diag = before_diag
-                elif within_noise and not clearly_worse:
+                elif repeat_label is None and within_noise and not clearly_worse:
                     store.apply_one(proposal.param, old)
                     action = "inconclusive"
                     reason = f"{decision.reason}; {noise_detail}".strip("; ")
                     diag = before_diag
-                else:
+                elif repeat_label is None:
                     store.apply_one(proposal.param, old)
                     action = "rollback"
             rec = _record(
@@ -651,6 +757,10 @@ def run_loop(
                 note=(outcome.note + " " + restart_note).strip(),
             )
             rec["intended_params"] = intended_params
+            rec["run_id"] = run_id
+            rec["score_baseline_label"] = baseline_label
+            if summary is not None and action not in {"invalid"}:
+                catalog_lap(f"search {iteration}", summary)
             _attach_postmortem(
                 rec,
                 before=before_diag,
@@ -664,6 +774,7 @@ def run_loop(
                 noise_detail=noise_detail,
                 summary_trusted=summary_trusted,
                 effects=effects,
+                repeat_label=repeat_label,
             )
             records.append(book.append(rec))
             history.append(rec)

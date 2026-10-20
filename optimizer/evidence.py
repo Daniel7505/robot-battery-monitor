@@ -8,30 +8,25 @@ from optimizer.diagnose import Diagnosis, MissionSummary
 ERR_IMPROVE_MIN = 1.5
 # Electrical Wh/m must fall by more than this fraction vs reference to count alone.
 WPM_IMPROVE_MIN_REL = 0.015
-# Turn-segment aggregate error must beat this, or segment spread if larger.
+# Minimum turn-segment |err| move to count as evidence (percent points).
 TURN_ERR_IMPROVE_MIN = 2.5
+# Warehouse Webots twin is deterministic: identical ctrl_* gives identical laps.
+# Segment spread is geometry along the route, not lap-to-lap stochastic noise.
+DETERMINISTIC_TWIN = True
 
 
 def turn_segment_noise(diag: Diagnosis | None) -> float:
-    """Typical lap-to-lap swing on turn segments (percent points on |err|)."""
-    if diag is None:
-        return TURN_ERR_IMPROVE_MIN
-    values = [
-        float(seg.err_pct)
-        for seg in diag.segments
-        if seg.is_turn and seg.err_pct is not None
-    ]
-    if len(values) < 2:
-        return TURN_ERR_IMPROVE_MIN
-    mean = sum(values) / len(values)
-    variance = sum((value - mean) ** 2 for value in values) / len(values)
-    return max(TURN_ERR_IMPROVE_MIN, variance**0.5 * 1.5)
+    """Minimum effect size for turn aggregate error (not segment stdev)."""
+    del diag
+    return TURN_ERR_IMPROVE_MIN
 
 
 def measure_effects(
     before: Diagnosis | None,
     after: Diagnosis | None,
     reference: MissionSummary | None,
+    *,
+    baseline_label: str = "kept baseline",
 ) -> dict:
     """Numeric deltas vs the reference and turn-segment noise band."""
     out = {
@@ -72,9 +67,10 @@ def measure_effects(
         out["detail"] = ""
     else:
         out["detail"] = (
-            f"|err| improved {err_gain:.2f} points (need >{ERR_IMPROVE_MIN}), "
+            f"vs {baseline_label}: |err| improved {err_gain:.2f} points (need >{ERR_IMPROVE_MIN}), "
             f"Wh/m improved {wpm_gain:.1%} (need >{WPM_IMPROVE_MIN_REL:.1%}), "
-            f"turn error did not beat the segment noise band ({band:.1f} points)"
+            f"turn error did not beat the minimum band ({band:.1f} points; "
+            f"{'fixed effect size' if DETERMINISTIC_TWIN else 'segment spread'})"
         )
     return out
 
@@ -83,9 +79,11 @@ def meaningful_improvement(
     before: Diagnosis | None,
     after: Diagnosis | None,
     reference: MissionSummary | None,
+    *,
+    baseline_label: str = "kept baseline",
 ) -> tuple[bool, str]:
     """True when err, Wh/m, or turn error moved beyond lap noise."""
-    effects = measure_effects(before, after, reference)
+    effects = measure_effects(before, after, reference, baseline_label=baseline_label)
     return bool(effects["meaningful"]), str(effects["detail"])
 
 

@@ -77,7 +77,12 @@ def lap_metrics_match(candidate: MissionSummary | None, reference: MissionSummar
     return True
 
 
-def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -> Decision:
+def decide(
+    candidate: MissionSummary | None,
+    reference: MissionSummary | None,
+    *,
+    baseline_label: str = "kept baseline",
+) -> Decision:
     """Score ``candidate`` against the last kept lap on the same build.
 
     The first valid lap on a build is a baseline, not a win. A later lap
@@ -150,8 +155,8 @@ def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -
     if lap_metrics_match(candidate, reference):
         return Decision(
             "rollback",
-            f"score {value:.3f} did not beat {KEEP_MARGIN}; the lap metrics matched "
-            "the reference, so the change may not have taken effect",
+            f"score {value:.3f} did not beat {KEEP_MARGIN} vs {baseline_label}; "
+            "the lap metrics matched the kept baseline",
             value,
             abs_err,
             wh_per_m,
@@ -159,14 +164,14 @@ def decide(candidate: MissionSummary | None, reference: MissionSummary | None) -
     if value < KEEP_MARGIN:
         return Decision(
             "keep",
-            f"score {value:.3f} beat {KEEP_MARGIN} (lower is better)",
+            f"score {value:.3f} beat {KEEP_MARGIN} vs {baseline_label} (lower is better)",
             value,
             abs_err,
             wh_per_m,
         )
     return Decision(
         "rollback",
-        f"score {value:.3f} did not beat {KEEP_MARGIN}",
+        f"score {value:.3f} did not beat {KEEP_MARGIN} vs {baseline_label}",
         value,
         abs_err,
         wh_per_m,

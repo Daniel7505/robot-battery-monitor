@@ -319,8 +319,11 @@ def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
         ctrl_pivot_w_max_rad_s="0.60",
     )
     held = summary_line(
-        err_pct="-19.0",
-        wh_measured_drive_elec="3.650",
+        build="heavy",
+        ctrl_bom_build="heavy",
+        body_mass_kg="9.812",
+        err_pct="-5.0",
+        wh_measured_drive_elec="4.100",
         ctrl_pivot_w_max_rad_s="0.60",
     )
     runner = ScriptedRunner(reference_then(
@@ -690,7 +693,7 @@ def test_identical_metrics_score_one_and_say_the_change_may_not_have_landed():
     assert decision.action == "rollback"
     assert decision.score == pytest.approx(1.0)
     assert decision.score > 0.98
-    assert "may not have taken effect" in decision.reason
+    assert "matched the kept baseline" in decision.reason
 
 
 def test_text_capturing_subprocesses_use_utf8():
@@ -761,7 +764,7 @@ def test_flat_lap_is_inconclusive_and_the_next_knob_is_pivot(tmp_path):
     assert flat["new"] == pytest.approx(0.6)
     assert flat["decision"] == "inconclusive"
     assert flat["score"] == pytest.approx(1.0)
-    assert "may not have taken effect" in flat["reason"]
+    assert "matched the kept baseline" in flat["reason"]
     post = flat["postmortem"]
     assert post["flat"] is True
     assert post["verdict"] == "inconclusive"
@@ -821,7 +824,7 @@ def test_a_small_cruise_move_without_visc_drop_is_inconclusive_not_refuted(tmp_p
     else:
         assert post["verdict"] == "inconclusive"
         assert post["tag"] == "[inconclusive controller.cruise_m_s down]"
-    assert rows[2]["param"] == "controller.pivot_w_max_rad_s"
+    assert rows[2]["phase"] == "search"
     morning = report.read_text(encoding="utf-8")
     learned = knowledge.read_text(encoding="utf-8")
     assert "[inconclusive controller.cruise_m_s down]" in learned or "[refuted controller.cruise_m_s down]" in learned

@@ -52,10 +52,12 @@ def _trial_story(row: dict) -> list[str]:
             lines.append("Evidence:")
             if status:
                 lines.append(f"- Status: {status}")
+            bl = row.get("score_baseline_label") or "kept baseline"
+            lines.append(f"- Scored vs: {bl}")
             if row.get("err_gain_pp") is not None:
-                lines.append(f"- |err| gain vs reference: {row.get('err_gain_pp'):.2f} pp")
+                lines.append(f"- |err| gain vs {bl}: {row.get('err_gain_pp'):.2f} pp")
             if row.get("wpm_gain_rel") is not None:
-                lines.append(f"- Wh/m gain vs reference: {float(row.get('wpm_gain_rel')):.1%}")
+                lines.append(f"- Wh/m gain vs {bl}: {float(row.get('wpm_gain_rel')):.1%}")
             if row.get("turn_delta_pp") is not None:
                 lines.append(
                     f"- Turn |err| delta: {row.get('turn_delta_pp'):.2f} pp "

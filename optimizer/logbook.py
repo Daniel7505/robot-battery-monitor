@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 CSV_FIELDS = (
+    "run_id",
     "iteration",
     "utc",
     "phase",
@@ -27,6 +28,7 @@ CSV_FIELDS = (
     "dist_m",
     "duration_s",
     "score",
+    "score_baseline_label",
     "evidence_status",
     "err_gain_pp",
     "wpm_gain_rel",
@@ -65,8 +67,18 @@ class Logbook:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.jsonl_path = self.run_dir / "results.jsonl"
         self.csv_path = self.run_dir / "results.csv"
+        self.run_id: str | None = None
+
+    def begin_run(self, run_id: str) -> None:
+        """Start a fresh run log so morning.md and jsonl are not mixed with prior runs."""
+        self.run_id = run_id
+        for path in (self.jsonl_path, self.csv_path):
+            if path.exists():
+                path.unlink()
 
     def append(self, record: dict) -> dict:
+        if self.run_id:
+            record.setdefault("run_id", self.run_id)
         clean = _clean(record)
         with self.jsonl_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(clean, sort_keys=True, default=str) + "\n")

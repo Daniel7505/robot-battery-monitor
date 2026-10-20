@@ -89,13 +89,22 @@ def trial_invalid_reason(
     summary: MissionSummary | None,
     intended: dict | None,
     run_body: str,
+    *,
+    held_out_build: str | None = None,
 ) -> str | None:
     """One reason this lap must not be scored as keep/refuted, or None if it is valid."""
     if summary is None:
         return "no MISSION_SUMMARY"
     if summary.err_pct is None:
         return "err_pct is na"
-    if not body_matches_run(summary, run_body):
+    expect_body = held_out_build or run_body
+    if held_out_build:
+        name = lap_body_name(summary) or summary.build or "unknown"
+        if name != held_out_build:
+            return (
+                f"held-out lap build {name} does not match expected {held_out_build}"
+            )
+    elif not body_matches_run(summary, run_body):
         name = lap_body_name(summary) or summary.build or "unknown"
         return (
             f"lap build {name} does not match the fixed run body {run_body}; "
@@ -104,7 +113,8 @@ def trial_invalid_reason(
     mismatch = limits_match_intended(summary, intended)
     if mismatch:
         return mismatch
-    ok_mass, mass_reason = mass_matches_run(summary, run_body)
+    mass_body = held_out_build if held_out_build else run_body
+    ok_mass, mass_reason = mass_matches_run(summary, mass_body)
     if not ok_mass and mass_reason:
         return mass_reason
     return None

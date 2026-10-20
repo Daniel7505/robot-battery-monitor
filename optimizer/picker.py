@@ -48,6 +48,32 @@ def _same(left, right) -> bool:
         return str(left) == str(right)
 
 
+def _kept_knob_state(history: list[dict]) -> dict | None:
+    """Most recent provisional or confirmed keep (param, new, old)."""
+    for row in reversed(history or []):
+        if row.get("phase") == "confirm" and row.get("decision") == "confirm-pass":
+            return {
+                "param": row.get("param"),
+                "new": row.get("new"),
+                "old": row.get("old"),
+            }
+        if row.get("decision") == "keep":
+            return {
+                "param": row.get("param"),
+                "new": row.get("new"),
+                "old": row.get("old"),
+            }
+    return None
+
+
+def _undoes_keep(proposal: Proposal, kept: dict | None) -> bool:
+    if kept is None or kept.get("param") is None:
+        return False
+    if proposal.param != kept.get("param"):
+        return False
+    return _same(proposal.value, kept.get("old"))
+
+
 def _rolled_back(history: list[dict], param: str, value) -> bool:
     for row in history:
         if row.get("param") != param:
@@ -236,11 +262,15 @@ class RulePicker:
         suggestions = _suggestions(diagnosis)
         book = lesson_book(knowledge, history)
         order = _TURN_ORDER if _turn_dominates(diagnosis) else _VISC_ORDER
+        kept = _kept_knob_state(history)
         for key in _ordered_keys(order, diagnosis, book):
             value = _try_float(params, key, _direction_for(key, diagnosis), history, book)
             if value is None:
                 continue
-            return self._float_proposal(params, key, value, diagnosis, suggestions)
+            proposal = self._float_proposal(params, key, value, diagnosis, suggestions)
+            if _undoes_keep(proposal, kept):
+                continue
+            return proposal
         return None
 
     def _float_proposal(self, params, key, value, diagnosis, suggestions) -> Proposal:

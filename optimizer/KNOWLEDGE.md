@@ -16,6 +16,22 @@ noise band (~2.5 pp). The allowlisted steps are therefore coarse:
 Smaller grid steps were scoring as 1.000 and could not clear the band.
 Repeating the same knob is reserved for invalid laps (one retry), not for
 noise-band inconclusive trials.
+
+**Scoring baseline:** each search trial is scored against the **kept
+baseline** (starting settings until a keep, then the provisional kept lap).
+The starting reference lap is not reused as the score denominator after a
+keep.
+
+**Held-out check:** the Webots warehouse twin is deterministic (identical
+`ctrl_*` gives identical laps). A same-build repeat lap is not used to
+confirm a keep. After a tentative keep, the loop runs one lap on the
+**heavy** BoM build with the same controller knobs, then restores
+`bom_build: light`. That checks the settings are sane on another body, not
+a duplicate light lap.
+
+**Evidence bands:** |err| and Wh/m thresholds are minimum effect sizes, not
+stochastic noise. Turn evidence uses a fixed **2.5 pp** floor, not the
+spread of turn-segment errors around the lap (that spread is route geometry).
 `controller.straight_m_s` is still in config for the row-fit controller,
 but the overnight loop does **not** tune it: on the warehouse track the
 straightaway bump rarely qualifies. The picker tries **pivot** and

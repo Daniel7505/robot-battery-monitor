@@ -224,6 +224,8 @@ def _judge(
     flat: bool,
     within_noise: bool = False,
     noise_detail: str = "",
+    repeat_label: str | None = None,
+    limits_trusted: bool = True,
 ) -> tuple[str, str, str]:
     """Return verdict, mechanism paragraph, and the plain lesson."""
     if action == "invalid":
@@ -256,24 +258,38 @@ def _judge(
         return (
             "tentative",
             "The combined score beat 0.98 on this lap, but the move may still be within lap noise until the held-out repeat agrees.",
-            f"Treat {knob} {direction} as tentative until the confirm lap agrees; only then mark it supported in KNOWLEDGE.md.",
+            f"Treat {knob} {direction} as tentative until the held-out heavy-body lap passes; only then mark it supported in KNOWLEDGE.md.",
+        )
+    if repeat_label:
+        return (
+            "inconclusive",
+            f"This lap repeats {repeat_label} with identical mission metrics and the same "
+            "effective controller limits on MISSION_SUMMARY. The Webots twin is deterministic, "
+            "so this is not new evidence about the knob.",
+            f"Do not score a repeat of {repeat_label} as an improvement vs the kept baseline.",
         )
     if flat:
+        if limits_trusted:
+            return (
+                "inconclusive",
+                "Mission metrics matched the kept baseline and the controller limits on "
+                "MISSION_SUMMARY match the config that was written, so this lap did not test "
+                "a new setting.",
+                f"A flat lap after moving {knob} {direction} is not evidence when ctrl_* agrees.",
+            )
         return (
             "inconclusive",
             "err_pct, Wh/m, the energy shares, straight and turn error, and lap time matched the "
-            "previous lap. A real change of this knob should have moved at least the lap time. "
-            "The new value may not have reached the controller (check the CONTROLLER LIMITS line). "
-            "The score stays at 1.000, which does not beat 0.98, so the step is not kept. "
-            "This does not support or refute the mechanism.",
-            f"A flat lap after moving {knob} {direction} is not evidence. "
-            "Check CONTROLLER LIMITS before repeating that step.",
+            "kept baseline, but the controller limits on the summary do not match the config. "
+            "Check the CONTROLLER LIMITS line before repeating that step.",
+            f"A flat lap after moving {knob} {direction} is not evidence until limits match.",
         )
     if action == "confirm-pass":
         return (
             "supported",
-            "The held-out lap agreed with the provisional keep, so the change is not a one-lap fluke.",
-            f"The held-out lap agreed with {knob} {direction}. Prefer that direction while it keeps clearing the score.",
+            "The held-out lap on another BoM build finished with a sane |err|, so the kept "
+            "controller settings are not specific to one light-body fluke.",
+            f"The {knob} {direction} keep cleared the held-out heavy-body sanity check.",
         )
     if action == "confirm-fail":
         return (
@@ -400,10 +416,15 @@ def build_postmortem(
     noise_detail: str = "",
     summary_trusted: bool = True,
     evidence: dict | None = None,
+    repeat_label: str | None = None,
 ) -> dict:
     """Structured post-mortem for one trial. ``next_hypothesis`` is filled by the loop."""
     direction = "switch" if param is None else step_direction(old, new)
     flat = bool(param) and lap_was_flat(before, after)
+    limits_ok = True
+    if summary_trusted:
+        mismatch = limits_match_intended(None if after is None else after.summary, intended)
+        limits_ok = mismatch is None
     verdict, mechanism, lesson = _judge(
         param=param,
         direction=direction,
@@ -413,6 +434,8 @@ def build_postmortem(
         flat=flat,
         within_noise=within_noise,
         noise_detail=noise_detail,
+        repeat_label=repeat_label,
+        limits_trusted=limits_ok,
     )
     if action in {"confirm-pass", "confirm-fail"}:
         predicted = {

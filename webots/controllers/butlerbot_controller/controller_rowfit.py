@@ -287,17 +287,23 @@ class RowfitRuntime:
 
             with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as fh:
                 cfg_data = yaml.safe_load(fh) or {}
+            from src.physics_speed_limit import coast_into_turn_params_for_robot
+
             turn_brake = turn_brake_params_for_robot(
                 cfg_data, bom_build=self.limits.bom_build
             )
+            coast_into_turn = coast_into_turn_params_for_robot(
+                cfg_data, bom_build=self.limits.bom_build
+            )
         except Exception:
-            pass
+            coast_into_turn = None
         self.ctl = RowfitController(
             k_steer=self.limits.k_steer,
             v_cruise=eff_cruise,
             v_straight=eff_straight,
             pivot_w_max=self.limits.pivot_w_max_rad_s,
             turn_brake=turn_brake,
+            coast_into_turn=coast_into_turn,
         )
         self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
         self.last_cmd: dict = {}
@@ -313,6 +319,7 @@ class RowfitRuntime:
         self.configure_route()
         self.obstacles = None  # controller_obstacles.ObstacleRuntime when RBM_OBSTACLES is on
         self.inventory = None  # controller_inventory.InventoryRuntime (trolley + pretend pick)
+        self.gyro_found = False
 
     def configure_route(self) -> None:
         """RBM_ROUTE (junction choices, e.g. S,L,R), RBM_MAX_BLIND_M (default 4.0),

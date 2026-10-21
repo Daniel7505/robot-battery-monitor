@@ -531,6 +531,15 @@ def build_postmortem(
         }
     else:
         predicted = _predictions(param, direction, compare)
+        try:
+            from optimizer.physics_predict import numeric_predictions
+
+            numeric = numeric_predictions(param, direction, compare)
+            if numeric:
+                for key, text in numeric.items():
+                    predicted[key] = text
+        except Exception:
+            pass
     tag = ""
     if param and verdict in {"supported", "refuted", "inconclusive", "tentative"} and direction in {
         "up",

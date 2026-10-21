@@ -165,14 +165,16 @@ def decide(
     if value < KEEP_MARGIN:
         return Decision(
             "keep",
-            f"score {value:.3f} beat {KEEP_MARGIN} vs {baseline_label} (lower is better)",
+            f"combined score {value:.3f} is below keep threshold {KEEP_MARGIN} vs "
+            f"{baseline_label} (lower scores are better)",
             value,
             abs_err,
             wh_per_m,
         )
     return Decision(
         "rollback",
-        f"score {value:.3f} did not beat {KEEP_MARGIN} vs {baseline_label}",
+        f"combined score {value:.3f} did not clear keep threshold {KEEP_MARGIN} vs "
+        f"{baseline_label} (lower scores are better)",
         value,
         abs_err,
         wh_per_m,

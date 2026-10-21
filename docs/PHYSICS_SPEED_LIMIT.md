@@ -41,6 +41,15 @@ v_cmd = min(effective_cruise, v_allowed, …)
 
 Config: `controller.speed_limit.approach_target_m_s` (default **0.04 m/s**, `V_CREEP_M_S`).
 
+**Coast into turns** (`controller.coast_enabled`, default **true**): before the pivot, cut drive and decelerate on rolling resistance so the robot arrives near `approach_target_m_s` with less commanded braking.
+
+```text
+a_coast = C_rr · g   (+ linear drag if configured)
+d_coast = (v_cruise² − v_pivot²) / (2 · a_coast) + coast_margin_m
+```
+
+Coast arms only when `v_cruise > v_pivot` and `d_coast ≤ min(remaining_m, ld_max)`; otherwise the approach falls back to the braking profile above. `controller.pivot_w_max_rad_s` does not enter this distance (it caps in-place yaw rate).
+
 ### (b) Obstacles (stereo + radar, when `RBM_OBSTACLES=1`)
 
 | Source | Parameter | Value |

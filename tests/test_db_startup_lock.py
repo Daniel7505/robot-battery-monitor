@@ -154,6 +154,16 @@ def test_retention_session_is_bounded_and_tagged():
     assert "SET client_connection_check_interval = %s" not in [s for s, _ in old.statements]
 
 
+def test_retention_session_uses_zero_client_check_on_windows(monkeypatch):
+    monkeypatch.setattr(database.sys, "platform", "win32")
+    conn = _BatchConn([], server_version=140000)
+    database._configure_retention_session(conn)
+    sql, params = next(
+        (s, p) for s, p in conn.statements if "client_connection_check_interval" in s
+    )
+    assert params == ("0",)
+
+
 # ---------------------------------------------------------------------------
 # DB level (real Postgres from CI service / TEST_DATABASE_URL)
 # ---------------------------------------------------------------------------

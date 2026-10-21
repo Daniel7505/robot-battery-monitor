@@ -166,6 +166,117 @@ class TurnBrakeParams:
     approach_target_m_s: float  # m/s — speed at pivot entry (often V_CREEP)
 
 
+@dataclass(frozen=True)
+class CoastIntoTurnParams:
+    """Cut drive before a pivot and decelerate on rolling resistance (+ optional drag)."""
+
+    enabled: bool
+    margin_m: float
+    crr: float
+    drag_linear_n_s_per_m: float  # F_drag = coeff * v (N); 0 when not modeled
+    total_mass_kg: float
+    v_pivot_m_s: float
+    a_brake_m_s2: float  # for Wh-saved estimate vs active braking
+
+
+def _coast_crr_from_profile(profile: dict) -> float:
+    assumptions = profile.get("assumptions") or {}
+    try:
+        return float(assumptions.get("crr") or 0.015)
+    except (TypeError, ValueError):
+        return 0.015
+
+
+def coast_decel_m_s2(
+    *,
+    crr: float,
+    mass_kg: float,
+    v_m_s: float = 0.0,
+    drag_linear_n_s_per_m: float = 0.0,
+) -> float:
+    """Deceleration magnitude with drive cut (m/s²): C_rr·g plus optional linear drag."""
+    a_roll = max(0.0, float(crr)) * GRAVITY_M_S2
+    mass = max(1e-9, float(mass_kg))
+    v = max(0.0, float(v_m_s))
+    coeff = max(0.0, float(drag_linear_n_s_per_m))
+    return a_roll + coeff * v / mass
+
+
+def coast_distance_m(
+    v_m_s: float,
+    *,
+    v_target_m_s: float,
+    a_coast_m_s2: float,
+    margin_m: float = 0.0,
+) -> float:
+    """Path length to slow from ``v_m_s`` to ``v_target_m_s`` at constant ``a_coast`` (m).
+
+    ``d = (v² − v_target²) / (2a) + margin``.
+    """
+    v = max(0.0, float(v_m_s))
+    vt = max(0.0, float(v_target_m_s))
+    if v <= vt + 1e-9:
+        return 0.0
+    a = max(1e-6, float(a_coast_m_s2))
+    d = (v * v - vt * vt) / (2.0 * a)
+    return max(0.0, d) + max(0.0, float(margin_m))
+
+
+def coast_into_turn_params_for_robot(
+    config_data: dict | None = None,
+    *,
+    bom_build: str | None = None,
+) -> CoastIntoTurnParams | None:
+    """Resolve coast-into-turn settings from config + BoM (None = feature off)."""
+    from src.bom_profile import rolling_mass_kg
+    from src.hardware_profile import build_profile_from_bom, get_active_profile
+
+    data = config_data if isinstance(config_data, dict) else {}
+    sl = _speed_limit_config(data)
+    ctrl = data.get("controller")
+    if not isinstance(ctrl, dict):
+        ctrl = {}
+    enabled_raw = sl.get("coast_enabled", ctrl.get("coast_enabled"))
+    if enabled_raw is None:
+        enabled = True
+    elif isinstance(enabled_raw, str):
+        enabled = enabled_raw.strip().lower() not in {"", "0", "false", "no", "off"}
+    else:
+        enabled = bool(enabled_raw)
+    margin = sl.get("coast_margin_m", ctrl.get("coast_margin_m"))
+    margin_m = 0.0 if margin is None else float(margin)
+    drag_raw = sl.get("coast_drag_linear_n_s_per_m")
+    drag = 0.0 if drag_raw is None else float(drag_raw)
+    if bom_build:
+        profile = build_profile_from_bom(str(bom_build).strip())
+    else:
+        profile = get_active_profile()
+    mass = rolling_mass_kg(profile)
+    crr = _coast_crr_from_profile(profile)
+    physics = physics_speed_limit_for_active_robot(config_data, bom_build=bom_build)
+    target = sl.get("approach_target_m_s")
+    v_pivot = DEFAULT_APPROACH_TARGET_M_S if target is None else float(target)
+    if not enabled:
+        return CoastIntoTurnParams(
+            enabled=False,
+            margin_m=margin_m,
+            crr=crr,
+            drag_linear_n_s_per_m=drag,
+            total_mass_kg=mass,
+            v_pivot_m_s=v_pivot,
+            a_brake_m_s2=float(physics.a_brake_m_s2),
+        )
+    return CoastIntoTurnParams(
+        enabled=True,
+        margin_m=margin_m,
+        crr=crr,
+        drag_linear_n_s_per_m=drag,
+        total_mass_kg=mass,
+        v_pivot_m_s=v_pivot,
+        a_brake_m_s2=float(physics.a_brake_m_s2),
+    )
+
+
 DEFAULT_APPROACH_TARGET_M_S = 0.04  # matches rowfit V_CREEP_M_S
 
 # Turn/pivot perception (nadir lane cameras — see docs/PHYSICS_SPEED_LIMIT.md).

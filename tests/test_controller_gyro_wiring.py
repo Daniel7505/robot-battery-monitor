@@ -58,4 +58,4 @@ def test_controller_smoke_enables_gyro_without_step_errors(tmp_path):
     assert "ButlerBot controller stopped" in text, text
     assert "Controller step error" not in text, text
     assert "name 'gyro' is not defined" not in text, text
-    assert "Gyro device enabled" in text, text
+    assert "Gyro: device found and enabled" in text, text

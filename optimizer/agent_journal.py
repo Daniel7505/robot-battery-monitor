@@ -29,12 +29,17 @@ def _finish_sentence(text: str, *, max_len: int = 500) -> str:
     if not cleaned:
         return ""
     cleaned = cleaned.rstrip(".")
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", ".")
     if len(cleaned) <= max_len:
         return cleaned + "."
     chunk = cleaned[:max_len]
     if " " in chunk:
         chunk = chunk.rsplit(" ", 1)[0]
-    return chunk.rstrip(".,;:") + "."
+    chunk = chunk.rstrip(".,;:")
+    while chunk.endswith(".."):
+        chunk = chunk[:-1]
+    return chunk + "."
 
 
 def _sanitize_next_hypothesis(text: str, records: list[dict]) -> str:

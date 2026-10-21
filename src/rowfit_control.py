@@ -247,6 +247,7 @@ class RowfitController:
         v_straight: float | None = None,
         pivot_w_max: float | None = None,
         turn_brake=None,
+        coast_into_turn=None,
     ) -> None:
         self.k_steer = float(k_steer)
         self.ld_min = float(ld_min)
@@ -324,6 +325,10 @@ class RowfitController:
         self.obstacle_v_cap: float | None = None
         # Turn-approach braking (``src.physics_speed_limit.TurnBrakeParams``).
         self.turn_brake = turn_brake
+        self.coast_into_turn = coast_into_turn
+        self._coast_active = False
+        self._coast_wh_saved = 0.0
+        self._coast_starts = 0
         self.pivot_integrated_rad = 0.0
         self.pivot_yaw_rate_rad_s = 0.0
         self.pivot_heading_err_rad = 0.0
@@ -333,6 +338,7 @@ class RowfitController:
         track = self.track
         vc, vs, pw = self.v_cruise, self.v_straight, self.pivot_w_max
         tb = self.turn_brake
+        coast = self.coast_into_turn
         self.__init__(
             k_steer=self.k_steer,
             ld_min=self.ld_min,
@@ -341,6 +347,7 @@ class RowfitController:
             v_straight=vs,
             pivot_w_max=pw,
             turn_brake=tb,
+            coast_into_turn=coast,
         )
         self.tracker = tracker
         self.track = track
@@ -727,6 +734,15 @@ class RowfitController:
             "yaw_rate_rad_s": round(self.pivot_yaw_rate_rad_s, 4),
             "pivot_heading_err_rad": round(self.pivot_heading_err_rad, 4),
             "pivot_integrated_deg": round(math.degrees(self.pivot_integrated_rad), 2),
+            "coast_active": bool(self._coast_active),
+            "coast_wh_saved": round(self._coast_wh_saved, 6),
+            "coast_starts": int(self._coast_starts),
+        }
+
+    def coast_summary_fields(self) -> dict:
+        return {
+            "coast_wh_saved": round(self._coast_wh_saved, 6),
+            "coast_starts": int(self._coast_starts),
         }
 
     def _start_pivot(self, yaw: float) -> None:
@@ -993,20 +1009,93 @@ class RowfitController:
         target = max(V_CREEP_M_S, target)
         if self.obstacle_v_cap is not None:
             target = min(target, max(0.0, float(self.obstacle_v_cap)))
-        self.target_speed = target
-        # this profile can need more than the governor's slow-in decel: follow it directly
-        if self.gov.v > target:
-            self.gov.v = max(target, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+        coast_cfg = self.coast_into_turn
+        v_now = float(self.gov.v)
+        coasting = False
+        if coast_cfg is not None and coast_cfg.enabled:
+            from src.physics_speed_limit import coast_decel_m_s2, coast_distance_m, effective_turn_distance_m
+
+            v_pivot = float(coast_cfg.v_pivot_m_s)
+            if v_now <= v_pivot + 1e-3 or self.v_cruise <= v_pivot + 1e-3:
+                if self._coast_active:
+                    self._event(
+                        f"COAST stop (v_cruise {self.v_cruise:.2f} m/s <= pivot entry {v_pivot:.2f} m/s — no-op)"
+                    )
+                    self._coast_active = False
+            else:
+                a_coast = coast_decel_m_s2(
+                    crr=coast_cfg.crr,
+                    mass_kg=coast_cfg.total_mass_kg,
+                    v_m_s=v_now,
+                    drag_linear_n_s_per_m=coast_cfg.drag_linear_n_s_per_m,
+                )
+                d_coast = coast_distance_m(
+                    v_now,
+                    v_target_m_s=v_pivot,
+                    a_coast_m_s2=a_coast,
+                    margin_m=coast_cfg.margin_m,
+                )
+                d_avail = effective_turn_distance_m(rem_brake, perception_horizon_m=self.ld_max)
+                if d_coast > d_avail + 1e-3:
+                    if self._coast_active:
+                        self._event(
+                            f"COAST stop — need {d_coast:.2f} m but only {d_avail:.2f} m look-ahead; braking"
+                        )
+                        self._coast_active = False
+                elif rem_brake <= d_coast + 1e-3:
+                    if not self._coast_active:
+                        self._coast_starts += 1
+                        self._event(
+                            f"COAST start {v_now:.2f} m/s -> {v_pivot:.2f} m/s over ~{d_coast:.2f} m "
+                            f"(a_coast={a_coast:.3f} m/s²)"
+                        )
+                        self._coast_active = True
+                    coasting = True
+                else:
+                    self._coast_active = False
+        elif self._coast_active:
+            self._event("COAST stop — coasting disabled")
+            self._coast_active = False
+        if coasting:
+            target = max(v_pivot, v_now)
+            self.target_speed = target
+            a_coast = coast_decel_m_s2(
+                crr=coast_cfg.crr,
+                mass_kg=coast_cfg.total_mass_kg,
+                v_m_s=v_now,
+                drag_linear_n_s_per_m=coast_cfg.drag_linear_n_s_per_m,
+            )
+            self.gov.v = max(v_pivot, v_now - a_coast * max(0.0, float(dt)))
+            v = self.gov.v
+            if coast_cfg.a_brake_m_s2 > a_coast + 1e-6:
+                p_saved = (
+                    coast_cfg.total_mass_kg
+                    * v
+                    * (coast_cfg.a_brake_m_s2 - a_coast)
+                    * max(0.0, float(dt))
+                )
+                self._coast_wh_saved += max(0.0, p_saved) / 3600.0
         else:
-            self.gov.step(target, dt)
-        v = self.gov.v
+            self.target_speed = target
+            # this profile can need more than the governor's slow-in decel: follow it directly
+            if self.gov.v > target:
+                self.gov.v = max(target, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+            else:
+                self.gov.step(target, dt)
+            v = self.gov.v
         if mapped is None:
             self.remaining_m = rem - v * dt
         raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
         raw = max(-STEER_CAP, min(STEER_CAP, raw))
         steer = self.filter.step(raw, dt)
-        left, right = wheels_from_steer(steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0)
-        return self._cmd(left, right, steer=steer, reason=f"corner approach {rem:.2f} m to pivot",
+        hub = 0.0 if coasting else v / WHEEL_RADIUS_M
+        left, right = wheels_from_steer(steer, cruise=hub, k_steer=self.k_steer, turn_slow=0.0)
+        reason = (
+            f"corner coast {rem:.2f} m to pivot"
+            if coasting
+            else f"corner approach {rem:.2f} m to pivot"
+        )
+        return self._cmd(left, right, steer=steer, reason=reason,
                          phase="rowfit_approach", v=v, new_frame=new_frame)
 
     def _enter_recover(self) -> None:

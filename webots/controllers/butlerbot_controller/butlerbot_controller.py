@@ -567,17 +567,17 @@ def _init_devices(
             gyro.enable(timestep)
         except Exception:
             gyro = None
-    if gyro is not None:
-        print("Gyro device enabled (pivot rate + integrated heading)")
+    gyro_found = gyro is not None
+    if gyro_found:
+        print("Gyro: device found and enabled (pivot rate + integrated heading)")
     elif Gyro is not None:
         print(
-            "WARNING: Gyro device 'gyro' not found — pivot falls back to IMU yaw "
+            "Gyro: device not found — pivot falls back to IMU yaw "
             "(open-loop rate tracking; no gyro feedback)"
         )
     else:
         print(
-            "WARNING: Gyro API unavailable in this Webots build — pivot open-loop "
-            "(IMU yaw only)"
+            "Gyro: API unavailable in this Webots build — pivot open-loop (IMU yaw only)"
         )
 
     keyboard: Keyboard | None = None
@@ -795,6 +795,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     if _LANE_MODE == "rowfit":
         try:
             rowfit_rt = RowfitRuntime()
+            rowfit_rt.gyro_found = gyro is not None
             lane_vision_log = LaneVisionLog()
             _lane_csv = os.path.abspath(lane_vision_log.path)
             print(
@@ -2133,6 +2134,9 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
     loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
     loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
     loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)
+    loco["gyro_found"] = bool(getattr(rowfit_rt, "gyro_found", False))
+    if cmd.get("coast_wh_saved") is not None:
+        loco["coast_wh_saved"] = round(float(cmd["coast_wh_saved"]), 6)
     for env_key, field in (
         ("RBM_OPT_RUN_ID", "opt_run_id"),
         ("RBM_OPT_TRIAL_ID", "opt_trial_id"),

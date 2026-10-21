@@ -84,6 +84,13 @@ def append_mission_lines(
         payload["opt_run_id"] = run_id
     if trial_id:
         payload["opt_trial_id"] = trial_id
+    summary_line = next((line for line in state["lines"] if "MISSION_SUMMARY" in line), None)
+    if summary_line:
+        fields = _kv_tokens(summary_line)
+        if "gyro_found" in fields:
+            payload["gyro_found"] = fields["gyro_found"] in {"1", "true", "True"}
+        if "coast_wh_saved" in fields:
+            payload["coast_wh_saved"] = _proof_number(fields.get("coast_wh_saved"))
     with open(state["path"], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
         fh.write("\n")

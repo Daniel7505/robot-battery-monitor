@@ -7,6 +7,7 @@ from pathlib import Path
 
 from src.controller_limits import (
     KNOBS,
+    MAX_STRAIGHT_GAP_M_S,
     AllowlistError,
     check_param,
     check_set,
@@ -17,6 +18,10 @@ from src.controller_limits import (
 def _format(key: str, value) -> str:
     if key == "bom_build":
         return "" if value in (None, "") else str(value)
+    if key == "controller.coast_enabled":
+        if value in (None, "", True, "true", "1", 1):
+            return "true"
+        return "false"
     number = float(value)
     if key == "controller.pivot_w_max_rad_s" or key == "controller.k_steer":
         return f"{number:.1f}"
@@ -63,6 +68,14 @@ class ConfigStore:
             value = check_param(key, params[key])
             normalised[key] = value
             merged[key] = "" if value is None else value
+        cruise = merged.get("controller.cruise_m_s")
+        straight = merged.get("controller.straight_m_s")
+        if cruise is not None and straight is not None:
+            c_f = float(cruise)
+            s_f = float(straight)
+            if s_f + 1e-9 < c_f:
+                hi = float(KNOBS["controller.straight_m_s"].hi or c_f)
+                merged["controller.straight_m_s"] = min(c_f + MAX_STRAIGHT_GAP_M_S, hi)
         check_set(merged)
         text = self.path.read_text(encoding="utf-8")
         for key, value in normalised.items():

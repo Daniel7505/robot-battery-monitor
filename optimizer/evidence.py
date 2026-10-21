@@ -14,6 +14,12 @@ TURN_ERR_IMPROVE_MIN = 2.5
 # Segment spread is geometry along the route, not lap-to-lap stochastic noise.
 DETERMINISTIC_TWIN = True
 
+# Tie-break when a lap both clears the 0.98 score line and sits inside the noise band:
+# * |err| or turn |err| worsening past TURN_ERR_IMPROVE_MIN → refuted (wins over keep).
+# * Otherwise → inconclusive (neither keep nor refuted).
+# Documented so morning reports do not read a noise-band lap as refuted.
+KEEP_VS_REFUTED_TIEBREAK = "worsening_beyond_band_refutes_else_inconclusive"
+
 
 def turn_segment_noise(diag: Diagnosis | None) -> float:
     """Minimum effect size for turn aggregate error (not segment stdev)."""

@@ -292,6 +292,9 @@ LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "center_err_m",
     "lane_frame_n",
     "energy_elec_gaps",
+    "gyro_found",
+    "coast_wh_saved",
+    "coast_starts",
 )
 
 

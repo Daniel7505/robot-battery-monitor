@@ -322,6 +322,9 @@ class MissionEnergyLog:
         self._ctrl_pivot_w_max_rad_s: float | None = None
         self._ctrl_k_steer: float | None = None
         self._ctrl_bom_build: str | None = None
+        self._gyro_found: bool | None = None
+        self._coast_wh_saved: float | None = None
+        self._coast_starts: int | None = None
         self._opt_run_id: str | None = None
         self._opt_trial_id: str | None = None
         self._body_mass_kg: float | None = None
@@ -828,6 +831,22 @@ class MissionEnergyLog:
             value = sample.get(key)
             if value not in (None, ""):
                 setattr(self, attr, str(value).strip())
+        gyro = sample.get("gyro_found")
+        if gyro is not None:
+            self._gyro_found = bool(gyro) if not isinstance(gyro, str) else gyro.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+        coast_wh = _as_float(sample.get("coast_wh_saved"))
+        if coast_wh is not None:
+            self._coast_wh_saved = coast_wh
+        coast_n = sample.get("coast_starts")
+        if coast_n is not None:
+            try:
+                self._coast_starts = int(coast_n)
+            except (TypeError, ValueError):
+                pass
 
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
@@ -1104,6 +1123,12 @@ class MissionEnergyLog:
             ctrl += f" opt_run_id={self._opt_run_id}"
         if self._opt_trial_id:
             ctrl += f" opt_trial_id={self._opt_trial_id}"
+        if self._gyro_found is not None:
+            ctrl += f" gyro_found={1 if self._gyro_found else 0}"
+        if self._coast_wh_saved is not None:
+            ctrl += f" coast_wh_saved={self._coast_wh_saved:.6f}"
+        if self._coast_starts is not None:
+            ctrl += f" coast_starts={self._coast_starts}"
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "

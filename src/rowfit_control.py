@@ -763,6 +763,13 @@ class RowfitController:
         self.pivot_settle = 0
         self.pivot_integrated_rad = 0.0
         self._pivot_lateral_max_m = 0.0
+        pose = self.pose
+        pos_txt = (
+            f"({pose[0]:.3f},{pose[1]:.3f})"
+            if pose is not None
+            else "unknown"
+        )
+        self._pivot_start_pos = pos_txt
         self._pivot_entry_v_m_s = float(entry_v_m_s if entry_v_m_s is not None else self.gov.v)
         coast_was = self._coast_active
         if self._coast_active:
@@ -775,12 +782,6 @@ class RowfitController:
         self.gov.v = 0.0
         self.filter = SteerFilter()
         self._map_dist_logged = False
-        pose = self.pose
-        pos_txt = (
-            f"({pose[0]:.3f},{pose[1]:.3f})"
-            if pose is not None
-            else "unknown"
-        )
         self._event(
             f"PIVOT start {'left' if self.corner_dir > 0 else 'right'} yaw {math.degrees(yaw):+.1f}deg -> "
             f"target {math.degrees(self.yaw_target):+.1f}deg (lane {math.degrees(base):+.1f}deg, "
@@ -815,6 +816,13 @@ class RowfitController:
             "pos_end": pos_txt,
         }
         self.pivots += 1
+        start_pos = getattr(self, "_pivot_start_pos", pos_txt)
+        print(
+            f"PIVOT_RECORD turn={self.pivots} dir={'left' if self.corner_dir > 0 else 'right'} "
+            f"heading_change_deg={heading_change:+.1f} entry_v_m_s={self._pivot_entry_v_m_s:.3f} "
+            f"ct_max_m={self._pivot_lateral_max_m:.3f} start_pos={start_pos}",
+            flush=True,
+        )
         self._event(
             f"PIVOT done yaw {math.degrees(yaw):+.1f}deg (target {math.degrees(self.yaw_target):+.1f}, "
             f"err {math.degrees(err):+.1f}deg, heading_change {heading_change:+.1f}deg, "

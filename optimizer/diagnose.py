@@ -10,7 +10,13 @@ from dataclasses import dataclass, field
 # the straight side and warehouse pivots on the turn side.
 TURN_HEADING_DEG = 20.0
 
-_KV = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(-?(?:\d+(?:\.\d*)?|\.\d+)|na|[^\s]+)")
+_KV = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)="
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+    r"|-?(?:\d+(?:\.\d*)?|\.\d+)"
+    r"|na"
+    r"|[^\s]+)"
+)
 
 
 def _num(text: str | None) -> float | None:
@@ -56,6 +62,7 @@ class MissionSummary:
     body_mass_kg: float | None = None
     opt_run_id: str | None = None
     opt_trial_id: str | None = None
+    lap_start_wallclock: str | None = None
     raw: str = ""
 
     def wh_per_m(self) -> float | None:
@@ -149,6 +156,9 @@ def _summary_from(line: str) -> MissionSummary:
         opt_trial_id=None
         if not kv.get("opt_trial_id") or kv.get("opt_trial_id") == "na"
         else kv.get("opt_trial_id"),
+        lap_start_wallclock=None
+        if not kv.get("lap_start_wallclock") or kv.get("lap_start_wallclock") == "na"
+        else kv.get("lap_start_wallclock"),
         raw=line.strip(),
     )
 

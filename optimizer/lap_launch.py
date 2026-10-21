@@ -16,6 +16,7 @@ BETWEEN_LAP_SETTLE_S = 12.0
 
 ENV_RUN_ID = "RBM_OPT_RUN_ID"
 ENV_TRIAL_ID = "RBM_OPT_TRIAL_ID"
+ENV_LAP_START_WALLCLOCK = "RBM_LAP_START_WALLCLOCK"
 
 
 @dataclass(frozen=True)
@@ -24,14 +25,17 @@ class LapLaunch:
     trial_id: str
     launched_utc: datetime
     launched_monotonic: float
+    lap_start_wallclock: str = ""
 
     @classmethod
     def new(cls, run_id: str, trial_id: str) -> LapLaunch:
+        launched = datetime.now(timezone.utc)
         return cls(
             run_id=run_id,
             trial_id=trial_id,
-            launched_utc=datetime.now(timezone.utc),
+            launched_utc=launched,
             launched_monotonic=time.monotonic(),
+            lap_start_wallclock=launched.strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
 
@@ -41,7 +45,10 @@ def trial_id_for(phase: str, iteration: int, *, part: str | None = None) -> str:
 
 
 def launch_env(launch: LapLaunch) -> dict[str, str]:
-    return {ENV_RUN_ID: launch.run_id, ENV_TRIAL_ID: launch.trial_id}
+    env = {ENV_RUN_ID: launch.run_id, ENV_TRIAL_ID: launch.trial_id}
+    if launch.lap_start_wallclock:
+        env[ENV_LAP_START_WALLCLOCK] = launch.lap_start_wallclock
+    return env
 
 
 def merge_launch_env(base: dict[str, str], launch: LapLaunch | None) -> dict[str, str]:

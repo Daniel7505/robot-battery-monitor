@@ -39,19 +39,23 @@ controller:
 
     with patch.object(runner, "cleanup", return_value=""):
         with patch("optimizer.runner.webots_lap_host", return_value=True):
-            with patch("optimizer.lap_config.apply_trial_params", side_effect=fake_apply):
-                with patch("optimizer.runner.subprocess.Popen") as popen:
-                    proc = MagicMock()
-                    proc.poll.return_value = 0
-                    popen.return_value = proc
-                    with patch("optimizer.runner.read_dashboard_log", return_value=("", "")):
-                        with patch("optimizer.runner.classify_summary", return_value=("absent", "")):
-                            outcome = runner.run_lap(
-                                params={"controller.cruise_m_s": 0.50},
-                                timeout_s=1.0,
-                                log_path=log_path,
-                                launch=launch,
-                            )
+            with patch("optimizer.runner._wait_for_webots", return_value=True):
+                with patch("optimizer.lap_config.apply_trial_params", side_effect=fake_apply):
+                    with patch("optimizer.runner.subprocess.Popen") as popen:
+                        proc = MagicMock()
+                        proc.poll.return_value = 0
+                        popen.return_value = proc
+                        with patch("optimizer.runner.read_dashboard_log", return_value=("", "")):
+                            with patch(
+                                "optimizer.runner.classify_summary",
+                                return_value=("absent", ""),
+                            ):
+                                outcome = runner.run_lap(
+                                    params={"controller.cruise_m_s": 0.50},
+                                    timeout_s=1.0,
+                                    log_path=log_path,
+                                    launch=launch,
+                                )
     assert applied == ["0.5"]
     assert log_path.is_file()
     body = log_path.read_bytes().decode("utf-8", errors="replace")

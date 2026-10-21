@@ -2140,6 +2140,7 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
     for env_key, field in (
         ("RBM_OPT_RUN_ID", "opt_run_id"),
         ("RBM_OPT_TRIAL_ID", "opt_trial_id"),
+        ("RBM_LAP_START_WALLCLOCK", "lap_start_wallclock"),
     ):
         stamped = os.environ.get(env_key)
         if stamped:

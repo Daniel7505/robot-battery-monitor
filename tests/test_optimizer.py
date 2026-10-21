@@ -1427,7 +1427,15 @@ def test_prose_and_unstamped_summaries_do_not_finish_a_lap():
     kind, detail = classify_summary(unstamped, launch)
     assert kind == "reject"
     assert "opt_run_id" in detail
-    stamped = summary_line(opt_run_id=launch.run_id, opt_trial_id=launch.trial_id)
+    partial = summary_line(opt_run_id=launch.run_id, opt_trial_id=launch.trial_id)
+    kind_p, detail_p = classify_summary(partial, launch)
+    assert kind_p == "reject"
+    assert "lap_start_wallclock" in detail_p
+    stamped = summary_line(
+        opt_run_id=launch.run_id,
+        opt_trial_id=launch.trial_id,
+        lap_start_wallclock=launch.lap_start_wallclock,
+    )
     assert classify_summary(stamped, launch) == ("fresh", "")
     other = summary_line(opt_run_id=launch.run_id, opt_trial_id="search-1")
     kind2, detail2 = classify_summary(f"{stamped}\n{other}", launch)

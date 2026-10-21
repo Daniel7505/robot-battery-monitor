@@ -24,6 +24,8 @@ from optimizer.trial_validity import summary_fresh_reason
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_CONTAINER = "robot-battery-dashboard"
 DASHBOARD_URL = "http://127.0.0.1:5000/"
+WEBOTS_START_TIMEOUT_S = 45.0
+WEBOTS_START_POLL_S = 2.0
 
 
 def webots_lap_host() -> bool:
@@ -92,15 +94,18 @@ def _launch_log_excerpt(path: Path | None, limit: int = 500) -> str:
 
 def stamp_mission_log(text: str, launch: LapLaunch | None) -> str:
     """Attach optimizer trial stamps to MISSION_SUMMARY lines (tests and dry-run)."""
-    if launch is None or "MISSION_SUMMARY" not in text or "opt_run_id=" in text:
+    if launch is None or "MISSION_SUMMARY" not in text:
         return text
     stamped: list[str] = []
     for line in text.splitlines():
         if "MISSION_SUMMARY" in line:
-            line = (
-                f"{line.rstrip()} opt_run_id={launch.run_id} "
-                f"opt_trial_id={launch.trial_id}"
-            )
+            if "opt_run_id=" not in line:
+                line = (
+                    f"{line.rstrip()} opt_run_id={launch.run_id} "
+                    f"opt_trial_id={launch.trial_id}"
+                )
+            if launch.lap_start_wallclock and "lap_start_wallclock=" not in line:
+                line = f"{line.rstrip()} lap_start_wallclock={launch.lap_start_wallclock}"
         stamped.append(line)
     return "\n".join(stamped)
 
@@ -118,6 +123,44 @@ def launch_command(repo: Path, world: str) -> list[str]:
         "-World",
         world,
     ]
+
+
+def _webots_running() -> bool:
+    """True when a Webots GUI process is alive (optimizer laps require a visible sim)."""
+    if not webots_lap_host():
+        return False
+    try:
+        proc = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(Get-Process -Name webots,webots-bin,webotsw -ErrorAction SilentlyContinue).Count",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    try:
+        return int((proc.stdout or "0").strip()) > 0
+    except ValueError:
+        return False
+
+
+def _wait_for_webots(proc: subprocess.Popen, *, timeout_s: float) -> bool:
+    deadline = time.time() + float(timeout_s)
+    while time.time() < deadline:
+        if _webots_running():
+            return True
+        if proc.poll() is not None:
+            return False
+        time.sleep(WEBOTS_START_POLL_S)
+    return _webots_running()
 
 
 def _kill_webots() -> None:
@@ -162,8 +205,8 @@ def _line_time(line: str) -> datetime | None:
         return None
 
 
-def _file_log(since_local: datetime | None) -> str:
-    folder = REPO_ROOT / "logs"
+def _file_log(since_local: datetime | None, *, lap_dir: Path | None = None) -> str:
+    folder = Path(lap_dir) if lap_dir is not None else REPO_ROOT / "logs"
     files = sorted(folder.glob("robot_monitor_*.log"))
     if not files:
         return ""
@@ -194,12 +237,18 @@ def _mission_summary_pick(
     since_local: datetime | None,
     *,
     launch: LapLaunch | None = None,
+    lap_dir: Path | None = None,
 ) -> tuple[str, float | None]:
-    """Newest host ``mission_summary_*.json`` that matches this trial, if any."""
-    folder = _summary_folder()
+    """Newest mission summary JSON in this lap folder (or legacy ``logs/`` when unset)."""
+    folder = Path(lap_dir) if lap_dir is not None else _summary_folder()
     if not folder.is_dir():
         return "", None
-    files = [path for path in folder.glob("mission_summary_*.json") if path.is_file()]
+    files: list[Path] = []
+    if lap_dir is not None:
+        direct = folder / "summary.json"
+        if direct.is_file():
+            files.append(direct)
+    files.extend(path for path in folder.glob("mission_summary_*.json") if path.is_file())
     if not files:
         return "", None
     candidates: list[tuple[float, str, float]] = []
@@ -219,9 +268,11 @@ def _mission_summary_pick(
         except (OSError, json.JSONDecodeError):
             continue
         if launch is not None and isinstance(payload, dict):
-            if payload.get("opt_run_id") not in (None, launch.run_id):
+            if payload.get("opt_run_id") != launch.run_id:
                 continue
-            if payload.get("opt_trial_id") not in (None, launch.trial_id):
+            if payload.get("opt_trial_id") != launch.trial_id:
+                continue
+            if launch.lap_start_wallclock and payload.get("lap_start_wallclock") != launch.lap_start_wallclock:
                 continue
         lines = payload.get("lines") if isinstance(payload, dict) else None
         if not isinstance(lines, list):
@@ -244,8 +295,9 @@ def _mission_summary_text(
     since_local: datetime | None,
     *,
     launch: LapLaunch | None = None,
+    lap_dir: Path | None = None,
 ) -> str:
-    text, _mtime = _mission_summary_pick(since_local, launch=launch)
+    text, _mtime = _mission_summary_pick(since_local, launch=launch, lap_dir=lap_dir)
     return text
 
 
@@ -255,11 +307,21 @@ def _append_mission_summary(
     note: str,
     *,
     launch: LapLaunch | None = None,
+    lap_dir: Path | None = None,
 ) -> tuple[str, str]:
-    summary_text, _mtime = _mission_summary_pick(since_local, launch=launch)
+    summary_text, _mtime = _mission_summary_pick(
+        since_local, launch=launch, lap_dir=lap_dir
+    )
     if not summary_text:
         return text, note
-    combined = summary_text if not text else text.rstrip() + "\n" + summary_text
+    if text and launch:
+        existing = diagnose_lap(text).summary
+        if existing and summary_fresh_reason(existing, launch=launch) is None:
+            return text, note
+    if summary_text and text and summary_text.strip() in text:
+        combined = text
+    else:
+        combined = summary_text if not text else text.rstrip() + "\n" + summary_text
     extra = "included logs/mission_summary_*.json"
     note = f"{note}; {extra}" if note else extra
     return combined, note
@@ -271,6 +333,7 @@ def read_dashboard_log(
     since_local: datetime | None = None,
     tail: int | None = None,
     launch: LapLaunch | None = None,
+    lap_dir: Path | None = None,
 ) -> tuple[str, str]:
     """Docker logs, the dashboard file, and main's host mission-summary JSON.
 
@@ -294,18 +357,29 @@ def read_dashboard_log(
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        text = _file_log(since_local)
+        text = _file_log(since_local, lap_dir=lap_dir)
         note = f"docker logs failed ({exc}); used the dashboard file log"
-        return _append_mission_summary(text, since_local, note, launch=launch)
+        return _append_mission_summary(
+            text, since_local, note, launch=launch, lap_dir=lap_dir
+        )
     text = proc.stdout or ""
     if proc.stderr:
         text = text + ("\n" if text else "") + proc.stderr
     note = ""
     if proc.returncode != 0:
-        file_text = _file_log(since_local)
+        file_text = _file_log(since_local, lap_dir=lap_dir)
         if file_text:
             text = file_text
             note = f"docker logs exit {proc.returncode}; used the dashboard file log"
+    if lap_dir is not None:
+        kept = []
+        for line in text.splitlines():
+            if real_summary_line(line):
+                continue
+            kept.append(line)
+        text = "\n".join(kept)
+        # During a lap, only trust summaries written into this trial's folder.
+        return _append_mission_summary(text, since_local, note, launch=launch, lap_dir=lap_dir)
     return _append_mission_summary(text, since_local, note, launch=launch)
 
 
@@ -333,6 +407,7 @@ def _finalize_lap_artifacts(
         log_path=log_path,
         outcome_status=outcome.status,
         outcome_note=outcome.note,
+        repo=repo,
     )
     maybe_copy_summary_to_legacy_logs(repo, lap_dir)
 
@@ -497,9 +572,15 @@ class WebotsLapRunner:
             config_note = apply_trial_params(self.repo, params)
         except Exception as exc:
             config_note = f"optimizer: config apply failed ({type(exc).__name__}: {exc})"
-        from optimizer.lap_folder import create_lap_folder, lap_env, write_legacy_log_pointer
+        from optimizer.lap_folder import (
+            create_lap_folder,
+            lap_env,
+            write_lap_meta,
+            write_legacy_log_pointer,
+        )
 
         lap_dir = create_lap_folder(self.repo, launch.trial_id)
+        write_lap_meta(lap_dir, launch)
         env = merge_launch_env(os.environ.copy(), launch)
         env.update(lap_env(lap_dir))
         env["RBM_MISSION_LAPS"] = "1"
@@ -529,6 +610,36 @@ class WebotsLapRunner:
             stdout=sink or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
         )
+        if not _wait_for_webots(proc, timeout_s=WEBOTS_START_TIMEOUT_S):
+            self.cleanup()
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            excerpt = _launch_log_excerpt(log_path)
+            why = (
+                "Webots did not start: no webots/webots-bin/webotsw process within "
+                f"{WEBOTS_START_TIMEOUT_S:.0f}s. A visible Webots window is required for "
+                "optimizer laps."
+            )
+            if excerpt:
+                why = f"{why} launch log: {excerpt}"
+            if sink is not None:
+                sink.write(f"optimizer: ERROR {why}\n".encode())
+                sink.flush()
+                sink.close()
+                sink = None
+            outcome = RunOutcome("crash", "", why)
+            _finalize_lap_artifacts(
+                self.repo,
+                lap_dir,
+                launch=launch,
+                log_path=log_path,
+                dashboard_text="",
+                outcome=outcome,
+            )
+            outcome.lap_dir = str(lap_dir)
+            return outcome
         deadline = time.time() + float(timeout_s)
         note = ""
         ignored = ""
@@ -539,6 +650,7 @@ class WebotsLapRunner:
                 since_utc=since_utc,
                 since_local=since_local,
                 launch=launch,
+                lap_dir=lap_dir,
             )
             return text
 
@@ -722,6 +834,8 @@ def _summary_line(
     stamp = ""
     if launch is not None:
         stamp = f" opt_run_id={launch.run_id} opt_trial_id={launch.trial_id}"
+        if launch.lap_start_wallclock:
+            stamp += f" lap_start_wallclock={launch.lap_start_wallclock}"
     return (
         f"MISSION_SUMMARY build={build} duration_s=662.0 dist_m=200.91 turns=13 "
         f"payload_kg=0 soc_start=100.00 soc_end=97.00 "

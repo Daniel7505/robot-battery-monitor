@@ -88,6 +88,9 @@ def append_mission_lines(
         payload["opt_run_id"] = run_id
     if trial_id:
         payload["opt_trial_id"] = trial_id
+    lap_start = os.environ.get("RBM_LAP_START_WALLCLOCK")
+    if lap_start:
+        payload["lap_start_wallclock"] = lap_start
     summary_line = next((line for line in state["lines"] if "MISSION_SUMMARY" in line), None)
     if summary_line:
         fields = _kv_tokens(summary_line)

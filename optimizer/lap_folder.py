@@ -14,8 +14,11 @@ from src.mission_summary_file import _kv_tokens
 
 _LAP_ROOT = "logs/laps"
 _SUMMARY_NAME = "summary.json"
+_META_NAME = "lap_meta.json"
 _CONSOLE_NAME = "console.log"
 _REPORT_NAME = "report.md"
+
+_STAMP_KEYS = frozenset({"opt_run_id", "opt_trial_id", "lap_start_wallclock"})
 
 _PIVOT_START = re.compile(
     r"PIVOT start (?P<dir>left|right) yaw .*?"
@@ -26,6 +29,14 @@ _PIVOT_START = re.compile(
 _PIVOT_DONE = re.compile(
     r"PIVOT done yaw .*?heading_change (?P<hchange>[-+0-9.]+)deg, "
     r"entry_v=(?P<entry>[-+0-9.]+) m/s ct_max=(?P<ct>[-+0-9.]+) m",
+    re.IGNORECASE,
+)
+_PIVOT_RECORD = re.compile(
+    r"PIVOT_RECORD turn=(?P<turn>\d+).*?"
+    r"heading_change_deg=(?P<hchange>[-+0-9.]+).*?"
+    r"entry_v_m_s=(?P<entry>[-+0-9.]+).*?"
+    r"ct_max_m=(?P<ct>[-+0-9.]+).*?"
+    r"start_pos=(?P<pos>\([^)]+\)|unknown)",
     re.IGNORECASE,
 )
 _LIMITS = re.compile(
@@ -49,8 +60,20 @@ def _host_path(text: str) -> Path:
 
 
 def path_abspath(path: os.PathLike[str] | str) -> str:
-    """Absolute path for comparisons without ``Path.resolve()`` (safe when ``os.name`` is patched)."""
-    return os.path.normcase(os.path.abspath(os.fspath(path)))
+    """Absolute path without ``Path.resolve()`` (preserves drive-letter case on Windows)."""
+    return os.path.abspath(os.fspath(path))
+
+
+def paths_equal(left: os.PathLike[str] | str, right: os.PathLike[str] | str) -> bool:
+    """Compare absolute paths (case-insensitive on Windows)."""
+    a = path_abspath(left)
+    b = path_abspath(right)
+    if sys.platform == "win32":
+        # ``normcase`` is a no-op on Unix; ``casefold`` matches Windows drive letters in CI.
+        if os.name == "nt":
+            return os.path.normcase(a) == os.path.normcase(b)
+        return a.casefold() == b.casefold()
+    return a == b
 
 
 def laps_root(repo: Path) -> Path:
@@ -67,6 +90,58 @@ def create_lap_folder(repo: Path, label: str, *, when: datetime | None = None) -
     folder = laps_root(repo) / f"{ts}_{sanitize_label(label)}"
     folder.mkdir(parents=True, exist_ok=False)
     return folder
+
+
+def write_lap_meta(lap_dir: Path, launch: object) -> Path:
+    """Persist lap identity beside ``summary.json`` (optimizer + report card)."""
+    meta = {
+        "opt_run_id": getattr(launch, "run_id", None),
+        "opt_trial_id": getattr(launch, "trial_id", None),
+        "lap_start_wallclock": getattr(launch, "lap_start_wallclock", None) or "",
+    }
+    path = lap_dir / _META_NAME
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(meta, fh, indent=2)
+        fh.write("\n")
+    return path
+
+
+def load_lap_meta(lap_dir: Path) -> dict | None:
+    path = lap_dir / _META_NAME
+    if not path.is_file():
+        return None
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def mission_summary_fingerprint(fields: dict[str, str]) -> str:
+    """Stable key for duplicate lap detection (ignores per-trial stamps)."""
+    items = sorted((k, v) for k, v in fields.items() if k not in _STAMP_KEYS)
+    return json.dumps(items, separators=(",", ":"))
+
+
+def find_duplicate_summary_lap(repo: Path, lap_dir: Path, fields: dict[str, str]) -> str | None:
+    """Return another lap folder name with the same mission summary payload, if any."""
+    key = mission_summary_fingerprint(fields)
+    if not key or key == "[]":
+        return None
+    root = laps_root(repo)
+    if not root.is_dir():
+        return None
+    for other in sorted(root.iterdir()):
+        if not other.is_dir() or paths_equal(other, lap_dir):
+            continue
+        payload = load_summary_payload(other)
+        other_fields = mission_summary_fields(summary_lines(payload))
+        if not other_fields:
+            continue
+        if mission_summary_fingerprint(other_fields) == key:
+            return other.name
+    return None
 
 
 def lap_env(folder: Path) -> dict[str, str]:
@@ -135,9 +210,24 @@ def mission_summary_fields(lines: list[str]) -> dict[str, str]:
     return _kv_tokens(summary) if summary else {}
 
 
-def parse_pivot_turns(console_text: str) -> list[dict]:
-    starts = list(_PIVOT_START.finditer(console_text))
-    dones = list(_PIVOT_DONE.finditer(console_text))
+def parse_pivot_turns(console_text: str, *, summary_lines: list[str] | None = None) -> list[dict]:
+    blob = console_text
+    if summary_lines:
+        blob = blob + "\n" + "\n".join(summary_lines)
+    records = list(_PIVOT_RECORD.finditer(blob))
+    if records:
+        return [
+            {
+                "turn": int(match.group("turn")),
+                "heading_change_deg": float(match.group("hchange")),
+                "entry_v_m_s": float(match.group("entry")),
+                "max_lateral_m": float(match.group("ct")),
+                "pivot_start": match.group("pos"),
+            }
+            for match in records
+        ]
+    starts = list(_PIVOT_START.finditer(blob))
+    dones = list(_PIVOT_DONE.finditer(blob))
     rows: list[dict] = []
     for idx, done in enumerate(dones):
         start = starts[idx] if idx < len(starts) else None
@@ -304,15 +394,21 @@ def build_report_md(
     payload: dict | None,
     outcome_status: str = "",
     outcome_note: str = "",
+    duplicate_of: str | None = None,
 ) -> str:
     lines = summary_lines(payload)
-    turns = parse_pivot_turns(console_text)
+    turns = parse_pivot_turns(console_text, summary_lines=lines)
     coast = parse_coast_enabled(console_text, fields)
     top_v = parse_top_speed_m_s(console_text)
     limiter = classify_speed_limiter(top_v, limits, fields)
     gyro = gyro_status(console_text, fields, payload)
     gap = parse_telemetry_gap_s(lines, console_text)
     flags = build_flags(fields=fields, turns=turns, telemetry_gap_s=gap, gyro=gyro)
+    if duplicate_of:
+        flags.insert(
+            0,
+            f"FLAG: MISSION_SUMMARY duplicates lap `{duplicate_of}` (stale copy; Webots may not have run)",
+        )
 
     def fnum(key: str, fmt: str = ".2f") -> str:
         raw = fields.get(key)
@@ -323,6 +419,18 @@ def build_report_md(
         except ValueError:
             return str(raw)
 
+    def setting(key: str, limits_key: str, fmt: str = ".2f") -> str:
+        got = fnum(key, fmt)
+        if got != "—":
+            return got
+        lim = limits.get(limits_key)
+        if lim is None:
+            return "—"
+        try:
+            return format(float(lim), fmt)
+        except (TypeError, ValueError):
+            return str(lim)
+
     duration = fnum("duration_s", ".1f")
     dist = fnum("dist_m", ".2f")
     err = fnum("err_pct", ".1f")
@@ -331,18 +439,25 @@ def build_report_md(
         elec = float(fields["wh_measured_drive_elec"])
         dist_m = float(fields["dist_m"])
         if dist_m > 0:
-            wh_m = f"{elec / dist_m * 1000:.2f}"
+            wh_m = f"{elec / dist_m:.5f}"
     except (KeyError, ValueError, ZeroDivisionError):
         pass
 
     coast_margin = fields.get("coast_margin_m", limits.get("coast_margin_m", "—"))
     coast_txt = "—" if coast is None else ("on" if coast else "off")
 
+    lap_start = (
+        fields.get("lap_start_wallclock")
+        or (payload or {}).get("lap_start_wallclock")
+        or (load_lap_meta(lap_dir) or {}).get("lap_start_wallclock")
+        or "—"
+    )
     md = [
         f"# Lap report — `{lap_dir.name}`",
         "",
         f"- **Label:** {label}",
         f"- **Folder:** `{lap_dir}`",
+        f"- **lap_start_wallclock:** {lap_start}",
     ]
     if outcome_status:
         md.append(f"- **Optimizer outcome:** {outcome_status}")
@@ -355,13 +470,13 @@ def build_report_md(
             "",
             "| Setting | Value |",
             "| --- | --- |",
-            f"| cruise_m_s | {fnum('ctrl_cruise_m_s') or limits.get('cruise_m_s', '—')} |",
-            f"| straight_m_s | {fnum('ctrl_straight_m_s') or limits.get('straight_m_s', '—')} |",
-            f"| pivot_w_max_rad_s | {fnum('ctrl_pivot_w_max_rad_s') or limits.get('pivot_w_max_rad_s', '—')} |",
-            f"| k_steer | {fnum('ctrl_k_steer', '.2f') or limits.get('k_steer', '—')} |",
+            f"| cruise_m_s | {setting('ctrl_cruise_m_s', 'cruise_m_s')} |",
+            f"| straight_m_s | {setting('ctrl_straight_m_s', 'straight_m_s')} |",
+            f"| pivot_w_max_rad_s | {setting('ctrl_pivot_w_max_rad_s', 'pivot_w_max_rad_s')} |",
+            f"| k_steer | {setting('ctrl_k_steer', 'k_steer', '.2f')} |",
             f"| coast | {coast_txt} (margin_m={coast_margin}) |",
-            f"| effective_cruise_m_s | {fnum('ctrl_effective_cruise_m_s') or limits.get('effective_cruise_m_s', '—')} |",
-            f"| v_max_m_s | {fnum('ctrl_v_max_m_s') or limits.get('v_max_m_s', '—')} |",
+            f"| effective_cruise_m_s | {setting('ctrl_effective_cruise_m_s', 'effective_cruise_m_s')} |",
+            f"| v_max_m_s | {setting('ctrl_v_max_m_s', 'v_max_m_s')} |",
             "",
             "## Gyro",
             "",
@@ -369,7 +484,8 @@ def build_report_md(
             "",
             "## Top speed",
             "",
-            f"- **Peak v_body (SPEED_TRACE):** {top_v if top_v is not None else '—'} m/s",
+            f"- **Peak v_body (SPEED_TRACE):** "
+            f"{top_v if top_v is not None else (payload or {}).get('top_speed_m_s', '—')} m/s",
             f"- **Limiter (heuristic):** {limiter}",
             "",
             "## Per-turn pivots",
@@ -419,6 +535,7 @@ def finalize_lap_folder(
     outcome_status: str = "",
     outcome_note: str = "",
     extra_console: str = "",
+    repo: Path | None = None,
 ) -> Path:
     """Write ``report.md`` and refresh legacy pointers."""
     copy_legacy_controller_log(log_path, lap_dir)
@@ -436,6 +553,9 @@ def finalize_lap_folder(
             if "MISSION_SUMMARY" in line:
                 fields = _kv_tokens(line)
     limits = parse_limits_line(console_text)
+    duplicate_of = None
+    if repo is not None and fields:
+        duplicate_of = find_duplicate_summary_lap(repo, lap_dir, fields)
     report = build_report_md(
         lap_dir=lap_dir,
         label=label,
@@ -445,14 +565,22 @@ def finalize_lap_folder(
         payload=payload,
         outcome_status=outcome_status,
         outcome_note=outcome_note,
+        duplicate_of=duplicate_of,
     )
     (lap_dir / _REPORT_NAME).write_text(report, encoding="utf-8")
-    turns = parse_pivot_turns(console_text)
+    turns = parse_pivot_turns(console_text, summary_lines=lines)
     top_v = parse_top_speed_m_s(console_text)
     limiter = classify_speed_limiter(top_v, limits, fields)
     gyro = gyro_status(console_text, fields, payload)
     gap = parse_telemetry_gap_s(lines, console_text)
     flags = build_flags(fields=fields, turns=turns, telemetry_gap_s=gap, gyro=gyro)
+    if duplicate_of:
+        dup_flag = (
+            f"FLAG: MISSION_SUMMARY duplicates lap `{duplicate_of}` "
+            "(stale copy; Webots may not have run)"
+        )
+        if dup_flag not in flags:
+            flags.insert(0, dup_flag)
     try:
         from optimizer.lap_agent import persist_lap_analysis_meta
 
@@ -514,6 +642,9 @@ def write_summary_from_dashboard_text(
         payload["opt_run_id"] = run_id
     if trial_id:
         payload["opt_trial_id"] = trial_id
+    wall = getattr(launch, "lap_start_wallclock", None) if launch is not None else None
+    if wall:
+        payload["lap_start_wallclock"] = wall
     fields = mission_summary_fields(kept)
     if fields.get("gyro_found") in {"1", "true", "True"}:
         payload["gyro_found"] = True
@@ -533,7 +664,7 @@ def maybe_copy_summary_to_legacy_logs(repo: Path, lap_dir: Path) -> None:
     from src.mission_summary_file import summary_directory
 
     legacy = _host_path(path_abspath(summary_directory()))
-    if path_abspath(legacy) == path_abspath(lap_dir):
+    if paths_equal(legacy, lap_dir):
         return
     legacy.mkdir(parents=True, exist_ok=True)
     stamp = lap_dir.name.split("_", 1)[0]

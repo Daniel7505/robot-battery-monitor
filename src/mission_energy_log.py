@@ -327,6 +327,7 @@ class MissionEnergyLog:
         self._coast_starts: int | None = None
         self._opt_run_id: str | None = None
         self._opt_trial_id: str | None = None
+        self._lap_start_wallclock: str | None = None
         self._body_mass_kg: float | None = None
         self._mission_dt = 0.0
         self._mission_dist = 0.0
@@ -827,6 +828,7 @@ class MissionEnergyLog:
         for key, attr in (
             ("opt_run_id", "_opt_run_id"),
             ("opt_trial_id", "_opt_trial_id"),
+            ("lap_start_wallclock", "_lap_start_wallclock"),
         ):
             value = sample.get(key)
             if value not in (None, ""):
@@ -853,6 +855,12 @@ class MissionEnergyLog:
         self._last_ts = ts
         self._build = resolve_log_build(sample.get("build"))
         self._note_controller_limits(sample)
+        import os
+
+        if not self._lap_start_wallclock:
+            wall = os.environ.get("RBM_LAP_START_WALLCLOCK")
+            if wall:
+                self._lap_start_wallclock = str(wall).strip()
         payload = _as_float(sample.get("payload_kg"))
         self._payload_kg = 0.0 if payload is None else payload
         cap = _as_float(sample.get("capacity_wh"))
@@ -1123,6 +1131,8 @@ class MissionEnergyLog:
             ctrl += f" opt_run_id={self._opt_run_id}"
         if self._opt_trial_id:
             ctrl += f" opt_trial_id={self._opt_trial_id}"
+        if self._lap_start_wallclock:
+            ctrl += f" lap_start_wallclock={self._lap_start_wallclock}"
         if self._gyro_found is not None:
             ctrl += f" gyro_found={1 if self._gyro_found else 0}"
         if self._coast_wh_saved is not None:

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from optimizer.diagnose import diagnose_lap
 from optimizer.lap_launch import (
+    BETWEEN_LAP_SETTLE_S,
     MIN_LAUNCH_WALL_S,
     LapLaunch,
     merge_launch_env,
@@ -75,6 +76,24 @@ def _kill_webots() -> None:
             "Stop-Process -Force",
         ],
         timeout=60,
+        check=False,
+    )
+
+
+def _kill_stray_controller_python() -> None:
+    """Best-effort cleanup of a stuck butlerbot controller after a short Webots exit."""
+    if os.name != "nt":
+        return
+    subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process -Filter \"name='python.exe'\" -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.CommandLine -match 'butlerbot_controller' } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        ],
+        timeout=45,
         check=False,
     )
 
@@ -301,6 +320,13 @@ class WebotsLapRunner:
         text, _note = read_dashboard_log(tail=4000)
         return text
 
+    def settle_between_laps(self) -> str:
+        """Gap before back-to-back launches (confirm pair, retries)."""
+        _kill_webots()
+        _kill_stray_controller_python()
+        time.sleep(float(BETWEEN_LAP_SETTLE_S))
+        return f"settled {BETWEEN_LAP_SETTLE_S:.0f}s between laps"
+
     def restart_dashboard(self) -> str:
         try:
             proc = subprocess.run(
@@ -438,6 +464,9 @@ class DryRunRunner:
 
     def restart_dashboard(self) -> str:
         return "dry-run: dashboard restart skipped"
+
+    def settle_between_laps(self) -> str:
+        return "dry-run: settle skipped"
 
     def run_lap(
         self,

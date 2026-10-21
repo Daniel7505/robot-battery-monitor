@@ -45,6 +45,9 @@ def _trial_story(row: dict) -> list[str]:
         lesson = (post.get("lesson") or row.get("lesson") or "").strip()
         if lesson:
             lines.append(f"Lesson: {lesson}")
+        miss = (post.get("prediction_miss") or "").strip()
+        if miss:
+            lines.append(f"Prediction miss: {miss}")
         evidence = post.get("evidence") if isinstance(post.get("evidence"), dict) else None
         status = row.get("evidence_status") or (evidence and evidence.get("evidence_status"))
         if status or evidence or row.get("turn_noise_band_pp") is not None:

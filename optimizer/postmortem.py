@@ -214,6 +214,61 @@ def _straight_improved(before: Diagnosis | None, after: Diagnosis | None) -> boo
     return abs(after.straight_err) + 0.5 < abs(before.straight_err)
 
 
+def invalid_lesson(reason: str) -> str:
+    """Plain lesson when there is no scored lap."""
+    text = (reason or "").strip()
+    lower = text.lower()
+    if not text:
+        return "No lap to score. Retry after a fresh Webots launch."
+    if "45s" in lower or "instant" in lower or "cached summary" in lower:
+        return f"No lap to score: {text}. The launch returned too quickly; settle and retry once."
+    if "launcher exited" in lower or "crash" in lower or "timeout" in lower:
+        return f"No lap to score: {text}. Check Webots/controller cleanup and retry once."
+    if "stale" in lower or "opt_run" in lower or "opt_trial" in lower:
+        return f"No lap to score: {text}. Retry after a fresh stamped mission summary."
+    if "turn_err" in lower or "segment_energy" in lower or "turn segment" in lower:
+        return f"No lap to score: {text}. Retry confirm when dashboard logs include SEGMENT_ENERGY."
+    if "config" in lower and "before launch" in lower:
+        return f"No lap to score: {text}. Fix the config write race and retry."
+    return f"No lap to score: {text}"
+
+
+def prediction_miss_note(
+    param: str | None,
+    direction: str,
+    before: Diagnosis | None,
+    after: Diagnosis | None,
+) -> str | None:
+    """Call out when observed err moved opposite to the hypothesis."""
+    if before is None or after is None or before.summary is None or after.summary is None:
+        return None
+    be = before.summary.err_pct
+    ae = after.summary.err_pct
+    if be is None or ae is None:
+        return None
+    abs_before = abs(float(be))
+    abs_after = abs(float(ae))
+    delta_pp = abs_after - abs_before
+    if param in _SPEED and direction == "down":
+        if delta_pp > 1.0:
+            return (
+                f"Predicted a smaller |err| miss; |err| worsened by {delta_pp:.1f} pp instead."
+            )
+    if param in _SPEED and direction == "up":
+        if delta_pp < -1.0:
+            return (
+                f"Predicted a larger |err| miss; |err| improved by {abs(delta_pp):.1f} pp instead."
+            )
+    if param == "controller.pivot_w_max_rad_s" and direction == "down":
+        if before.turn_err is not None and after.turn_err is not None:
+            if abs(after.turn_err) > abs(before.turn_err) + 1.5:
+                return (
+                    "Predicted turn segments would move toward the model; turn-segment |err| "
+                    f"worsened by {abs(after.turn_err) - abs(before.turn_err):.1f} pp."
+                )
+    return None
+
+
 def _judge(
     *,
     param: str | None,
@@ -231,9 +286,8 @@ def _judge(
     if action == "invalid":
         return (
             "invalid",
-            "This lap is not valid evidence: the mission summary, body, or controller limits "
-            "did not match what the trial asked for.",
-            "Do not score or learn from this lap. Fix limits visibility or the body pin before retrying.",
+            "This trial did not produce a fresh stamped lap to score.",
+            invalid_lesson(""),
         )
     if param is None:
         return (
@@ -471,6 +525,9 @@ def build_postmortem(
         tag = ""
     elif limit_note and action == "invalid":
         mechanism = limit_note
+    prediction_miss = prediction_miss_note(param, direction, before, after)
+    if prediction_miss:
+        mechanism = f"{mechanism} {prediction_miss}".strip()
     payload = {
         "verdict": verdict,
         "param": param,
@@ -481,6 +538,7 @@ def build_postmortem(
         "tag": tag,
         "next_hypothesis": "",
         "metrics": _metric_rows(before, after, predicted),
+        "prediction_miss": prediction_miss,
     }
     if evidence:
         payload["evidence"] = evidence

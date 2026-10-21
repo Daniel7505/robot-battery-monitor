@@ -114,6 +114,9 @@ class ScriptedRunner:
         self.restarts += 1
         return "restarted robot-battery-dashboard"
 
+    def settle_between_laps(self) -> str:
+        return "test settle skipped"
+
     def run_lap(self, *, params, timeout_s, world="warehouse", log_path=None, launch=None):
         del params, timeout_s, world, log_path
         self.calls += 1
@@ -314,24 +317,34 @@ def test_llm_picker_rejects_a_file_edit_and_accepts_an_allowlisted_value(tmp_pat
     assert accepted.note == "picked by OPTIMIZER_LLM_CMD"
 
 
+def lap_log(**summary_kw):
+    turn_errs = summary_kw.pop("turn_errs", [-40.0, -36.0, -38.0])
+    lines = [segment(90, err, 0.35) for err in turn_errs]
+    lines.append(summary_line(**summary_kw))
+    return "\n".join(lines)
+
+
 def test_loop_keeps_then_confirms_and_restores_config(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    better = summary_line(
+    better = lap_log(
         err_pct="-18.0",
         wh_measured_drive_elec="3.400",
         wh_model_drive="4.146",
         ctrl_pivot_w_max_rad_s="0.60",
+        turn_errs=[-32.0, -30.0, -28.0],
     )
-    pre_keep = summary_line(
+    pre_keep = lap_log(
         err_pct="-28.3",
         wh_measured_drive_elec="3.742",
         ctrl_pivot_w_max_rad_s="0.90",
+        turn_errs=[-40.0, -40.0, -40.0],
     )
-    kept_confirm = summary_line(
+    kept_confirm = lap_log(
         err_pct="-18.0",
         wh_measured_drive_elec="3.400",
         wh_model_drive="4.146",
         ctrl_pivot_w_max_rad_s="0.60",
+        turn_errs=[-32.0, -30.0, -28.0],
     )
     runner = ScriptedRunner(reference_then(
         RunOutcome("ok", better),
@@ -674,7 +687,11 @@ def test_meaningful_improvement_rejects_noisy_pivot_with_tiny_err_move():
 
 def test_reference_lap_runs_before_first_search_trial(tmp_path):
     config, knowledge, run_dir = _layout(tmp_path)
-    runner = ScriptedRunner(reference_then(RunOutcome("ok", summary_line(err_pct="-27.0"))))
+    runner = ScriptedRunner(
+        reference_then(
+            RunOutcome("ok", summary_line(err_pct="-27.0", ctrl_pivot_w_max_rad_s="0.60"))
+        )
+    )
     run_loop(
         config_path=config,
         knowledge_path=knowledge,
@@ -1084,14 +1101,76 @@ def test_cross_build_confirm_is_documented_disabled():
 def test_knob_confirm_pair_requires_evidence():
     from optimizer.score import knob_confirm_comparison_ok
 
-    pre = diagnose(summary_line(err_pct="-28.3")).summary
-    kept = diagnose(summary_line(err_pct="-18.0", wh_measured_drive_elec="3.400")).summary
-    ok, _why = knob_confirm_comparison_ok(pre, kept)
-    assert ok
-    flat = diagnose(summary_line(err_pct="-28.2")).summary
-    ok2, why2 = knob_confirm_comparison_ok(pre, flat)
-    assert not ok2
+    pre = diagnose(lap_log(err_pct="-28.3", turn_errs=[-40.0, -40.0, -40.0]))
+    kept = diagnose(
+        lap_log(err_pct="-18.0", wh_measured_drive_elec="3.400", turn_errs=[-32.0, -30.0, -28.0])
+    )
+    verdict, _why = knob_confirm_comparison_ok(pre, kept)
+    assert verdict == "pass"
+    flat = diagnose(lap_log(err_pct="-28.2", turn_errs=[-40.0, -40.0, -40.0]))
+    verdict2, why2 = knob_confirm_comparison_ok(pre, flat)
+    assert verdict2 == "fail"
     assert "pre-keep" in why2 or "evidence" in why2
+    no_turn = diagnose(summary_line(err_pct="-28.3"))
+    verdict3, why3 = knob_confirm_comparison_ok(no_turn, kept)
+    assert verdict3 == "missing_turn"
+    assert "turn_err" in why3
+
+
+def test_invalid_trial_row_has_no_lap_metrics(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+
+    class Crash:
+        def restart_dashboard(self):
+            return "ok"
+
+        def settle_between_laps(self):
+            return "ok"
+
+        def run_lap(self, **kwargs):
+            launch = kwargs.get("launch")
+            if launch and launch.trial_id.startswith("reference"):
+                return RunOutcome("ok", stamp_mission_log(summary_line(), launch))
+            return RunOutcome("crash", "", note="launcher exited 1 before MISSION_SUMMARY")
+
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=Crash(),
+        max_iterations=1,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+    )
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    search = [r for r in rows if r.get("phase") == "search"][0]
+    assert search["decision"] == "invalid"
+    assert search["err_pct"] is None
+    assert search["build"] is None
+    assert "No lap to score" in search["postmortem"]["lesson"]
+
+
+def test_invalid_lesson_names_short_launch():
+    from optimizer.postmortem import invalid_lesson
+
+    lesson = invalid_lesson("lap returned MISSION_SUMMARY after 2.0s (<45s)")
+    assert "No lap to score" in lesson
+    assert "45" in lesson or "quickly" in lesson
+    assert "body pin" not in lesson
+
+
+def test_prediction_miss_when_err_worsens_on_slowdown():
+    from optimizer.postmortem import prediction_miss_note
+
+    before = diagnose(summary_line(err_pct="-27.0"))
+    after = diagnose(summary_line(err_pct="-28.9"))
+    note = prediction_miss_note("controller.cruise_m_s", "down", before, after)
+    assert note is not None
+    assert "1.9" in note or "worsened" in note
 
 
 def test_mission_summary_json_without_summary_line_is_ignored(tmp_path, monkeypatch):

@@ -17,8 +17,9 @@ from optimizer.diagnose import Diagnosis, diagnose, diagnose_lap
 from optimizer.knowledge import append_learning
 from optimizer.logbook import Logbook, redact
 from optimizer.notify import notify_run_finished
+from optimizer.confirm import MAX_CONFIRM_PAIR_RETRIES, confirm_invalid_retryable
 from optimizer.held_out import cross_build_confirm_disabled_reason, confirm_strategy_note
-from optimizer.lap_launch import LapLaunch, assert_light_search_config, trial_id_for
+from optimizer.lap_launch import LapLaunch, assert_light_search_config, trial_id_for, wait_config
 from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.report import write_report
@@ -179,7 +180,10 @@ def _attach_postmortem(
     )
     rec["postmortem"] = post
     if rec.get("decision") == "invalid" and rec.get("reason"):
+        from optimizer.postmortem import invalid_lesson
+
         post["mechanism"] = str(rec["reason"])
+        post["lesson"] = invalid_lesson(str(rec["reason"]))
         post["verdict"] = "invalid"
         post["tag"] = ""
     rec["lesson"] = post["lesson"]
@@ -475,10 +479,17 @@ def run_loop(
                 restart_note = ""
                 light_kept = dict(pending.get("light_kept_params") or store.read())
                 param = pending["param"]
-                pre_summary = None
-                kept_summary = None
+                pending_old = pending["old"]
+                pending_new = pending["new"]
+                pending_hypothesis = pending["hypothesis"]
+                pending_expected = pending["expected"]
+                pending_suggestions = list(pending["suggestions"])
+                pending_prev_diag = pending["prev_diag"]
+                pre_diag: Diagnosis | None = None
+                kept_diag: Diagnosis | None = None
                 confirm_notes: list[str] = []
                 invalid_reason: str | None = None
+                verdict = "missing"
 
                 def _confirm_params(knob_value) -> dict:
                     merged = dict(light_kept)
@@ -487,12 +498,23 @@ def run_loop(
                     return merged
 
                 try:
-                    for part, knob_value in (
-                        ("pre-keep", pending["old"]),
-                        ("kept", pending["new"]),
+                    settle_note = getattr(runner, "settle_between_laps", None)
+                    if int(pending.get("confirm_retries") or 0) > 0 and settle_note is not None:
+                        confirm_notes.append(settle_note())
+                    for idx, (part, knob_value) in enumerate(
+                        (
+                            ("pre-keep", pending["old"]),
+                            ("kept", pending["new"]),
+                        )
                     ):
+                        if idx > 0 and settle_note is not None:
+                            confirm_notes.append(settle_note())
                         intended = _confirm_params(knob_value)
                         store.write_params(intended)
+                        cfg_wait = wait_config(store, intended)
+                        if cfg_wait:
+                            invalid_reason = cfg_wait
+                            break
                         launch = LapLaunch.new(
                             run_id,
                             trial_id_for("confirm", iteration, part=part),
@@ -506,7 +528,12 @@ def run_loop(
                             launch=launch,
                         )
                         confirm_notes.append(outcome.note)
-                        lap_diag = diagnose_lap(outcome.log_text)
+                        if outcome.status != "ok" or "MISSION_SUMMARY" not in (outcome.log_text or ""):
+                            invalid_reason = (
+                                f"{outcome.status}: {outcome.note or 'confirm lap did not finish'}"
+                            )
+                            break
+                        lap_diag = diagnose(outcome.log_text)
                         invalid_reason = trial_invalid_reason(
                             lap_diag.summary,
                             intended,
@@ -516,24 +543,22 @@ def run_loop(
                         if invalid_reason:
                             break
                         if part == "pre-keep":
-                            pre_summary = lap_diag.summary
+                            pre_diag = lap_diag
                         else:
-                            kept_summary = lap_diag.summary
+                            kept_diag = lap_diag
                 finally:
                     store.write_params(light_kept)
                     assert_light_search_config(store.read(), run_body)
 
+                why = ""
                 if invalid_reason:
-                    ok, why = False, invalid_reason
+                    verdict = "missing"
+                    why = invalid_reason
                 else:
-                    ok, why = knob_confirm_comparison_ok(pre_summary, kept_summary)
-                check_summary = kept_summary or pre_summary
-                check = (
-                    diagnose_lap(kept_summary.raw)
-                    if kept_summary is not None
-                    else diagnose_lap(pre_summary.raw if pre_summary else "")
-                )
-                if ok:
+                    verdict, why = knob_confirm_comparison_ok(pre_diag, kept_diag)
+                check_diag = kept_diag or pre_diag
+                check_summary = None if check_diag is None else check_diag.summary
+                if verdict == "pass":
                     action = "confirm-pass"
                     if pending["provisional"] is not None:
                         set_score_baseline(
@@ -544,8 +569,27 @@ def run_loop(
                             ),
                         )
                     diag = pending["prev_diag"]
+                    pending = None
+                elif verdict in {"missing", "missing_turn"} or invalid_reason:
+                    action = "invalid"
+                    retries = int(pending.get("confirm_retries") or 0)
+                    if confirm_invalid_retryable(why) and retries < MAX_CONFIRM_PAIR_RETRIES:
+                        pending["confirm_retries"] = retries + 1
+                        diag = pending["prev_diag"]
+                    else:
+                        store.apply_one(pending["param"], pending["old"])
+                        set_score_baseline(
+                            starting_references.get(run_body),
+                            format_baseline_from_summary(
+                                starting_references.get(run_body),
+                                prefix="starting settings",
+                            ),
+                        )
+                        diag = pending["prev_diag"]
+                        why = why + " Confirm retries exhausted; the provisional keep was rolled back."
+                        pending = None
                 else:
-                    action = "confirm-fail" if not invalid_reason else "invalid"
+                    action = "confirm-fail"
                     store.apply_one(pending["param"], pending["old"])
                     set_score_baseline(
                         starting_references.get(run_body),
@@ -555,21 +599,24 @@ def run_loop(
                         ),
                     )
                     diag = pending["prev_diag"]
-                    if not invalid_reason:
-                        why = why + " The change was rolled back."
+                    why = why + " The change was rolled back."
+                    pending = None
+                if action == "invalid":
+                    check_summary = None
+                    check_diag = None
                 proposal = Proposal(
-                    pending["param"],
-                    pending["new"],
-                    pending["hypothesis"],
-                    pending["expected"],
-                    list(pending["suggestions"]),
+                    param,
+                    pending_new,
+                    pending_hypothesis,
+                    pending_expected,
+                    pending_suggestions,
                     note=restart_note,
                 )
                 rec = _record(
                     iteration=iteration,
                     phase="confirm",
                     proposal=proposal,
-                    old=pending["old"],
+                    old=pending_old,
                     action=action,
                     reason=why,
                     summary=check_summary,
@@ -577,23 +624,22 @@ def run_loop(
                     note=(" ".join(confirm_notes) + " " + restart_note).strip(),
                 )
                 rec["intended_params"] = light_kept
-                rec["confirm_pre_keep_summary"] = (
-                    None
-                    if pre_summary is None
-                    else {
-                        "err_pct": pre_summary.err_pct,
-                        "wh_measured_drive_elec": pre_summary.wh_measured_drive_elec,
+                if pre_diag is not None and pre_diag.summary is not None:
+                    rec["confirm_pre_keep_summary"] = {
+                        "err_pct": pre_diag.summary.err_pct,
+                        "wh_measured_drive_elec": pre_diag.summary.wh_measured_drive_elec,
+                        "turn_err": pre_diag.turn_err,
                     }
-                )
                 _attach_postmortem(
                     rec,
-                    before=pending["prev_diag"],
-                    after=check,
+                    before=pending_prev_diag,
+                    after=check_diag,
                     knowledge_path=knowledge_path,
                     history=history,
                     picker=picker,
                     store=store,
                     next_diag=diag,
+                    summary_trusted=check_summary is not None,
                 )
                 records.append(book.append(rec))
                 history.append(rec)
@@ -603,7 +649,6 @@ def run_loop(
                         iteration, "confirm", proposal, action, why, check_summary, rec["postmortem"],
                     )),
                 )
-                pending = None
                 continue
 
             search_is_retry = False
@@ -698,6 +743,8 @@ def run_loop(
                 action = "invalid"
                 reason = f"{outcome.status}: {outcome.note or 'lap failed'}"
                 score = None
+                summary = None
+                new_diag = diagnose_lap("")
                 diag = before_diag
                 if not search_is_retry:
                     retry_search = proposal
@@ -714,6 +761,8 @@ def run_loop(
                 action = "invalid"
                 reason = invalid
                 score = None
+                summary = None
+                new_diag = diagnose_lap("")
                 diag = before_diag
                 if not search_is_retry:
                     retry_search = proposal

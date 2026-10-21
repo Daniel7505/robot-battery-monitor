@@ -209,30 +209,44 @@ def confirmation_ok(
     return True, "held-out build finished inside the sanity cap"
 
 
+ConfirmVerdict = str  # pass | fail | missing | missing_turn
+
+
 def knob_confirm_comparison_ok(
-    pre_keep: MissionSummary | None,
-    kept: MissionSummary | None,
-) -> tuple[bool, str]:
+    pre_diag: Diagnosis | None,
+    kept_diag: Diagnosis | None,
+) -> tuple[ConfirmVerdict, str]:
     """Pre-keep knob value must lose to kept value on the same run body."""
-    if pre_keep is None or kept is None:
-        return False, "confirm missing MISSION_SUMMARY for pre-keep or kept lap"
+    if (
+        pre_diag is None
+        or kept_diag is None
+        or pre_diag.summary is None
+        or kept_diag.summary is None
+    ):
+        return "missing", "confirm missing MISSION_SUMMARY for pre-keep or kept lap"
+    pre_keep = pre_diag.summary
+    kept = kept_diag.summary
     if pre_keep.err_pct is None or kept.err_pct is None:
-        return False, "confirm lap missing err_pct"
+        return "missing", "confirm lap missing err_pct"
     for label, row in ("pre-keep", pre_keep), ("kept", kept):
         if row.dist_m is None or row.dist_m < MIN_DIST_M:
-            return False, f"{label} confirm lap did not finish (dist_m too short)"
+            return "missing", f"{label} confirm lap did not finish (dist_m too short)"
         if abs(row.err_pct) > CONFIRM_ABS_CAP:
-            return False, (
+            return "missing", (
                 f"{label} confirm |err| {abs(row.err_pct):.1f}% exceeds {CONFIRM_ABS_CAP:.0f}%"
             )
-    before = Diagnosis(summary=pre_keep)
-    after = Diagnosis(summary=kept)
+    if pre_diag.turn_err is None or kept_diag.turn_err is None:
+        return (
+            "missing_turn",
+            "confirm lap log missing SEGMENT_ENERGY turn segments (turn_err n/a); "
+            "cannot score the confirm pair yet",
+        )
     ok, detail = meaningful_improvement(
-        before,
-        after,
+        pre_diag,
+        kept_diag,
         pre_keep,
         baseline_label="pre-keep knob value",
     )
     if not ok:
-        return False, f"kept value did not beat pre-keep on the held-out pair: {detail}"
-    return True, "kept knob value beat pre-keep by the evidence threshold"
+        return "fail", f"kept value did not beat pre-keep on the held-out pair: {detail}"
+    return "pass", "kept knob value beat pre-keep by the evidence threshold"

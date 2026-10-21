@@ -10,6 +10,8 @@ effective_cruise_m_s = min(controller.cruise_m_s, v_max_m_s)
 
 **Webots contact radius:** the shipped worlds keep a **0.08 m** contact cylinder (`src.webots_body.DRAWN_WHEEL_RADIUS_M`). Braking torque and friction use the **BoM catalog radius** (`geometry.wheel_radius_m`, **0.04 m** for 80 mm tires). Odometry and hinge energy still use 0.08 m in sim.
 
+**Hardware validation:** default **`brake_mu = 0.8`** (longitudinal peak on dry sealed concrete) and using Pololu **recommended continuous** torque (**0.981 N·m**) as the braking torque limit are **planning assumptions**. They are not measured on this robot yet. Validate both with coast-down / brake tests on your floor and driver before trusting the cap for safety-critical deployments.
+
 ## Braking deceleration
 
 Total mass:
@@ -66,35 +68,46 @@ v_max_m_s = safety_margin · v
 
 Logging: `CONTROLLER LIMITS … v_max=… effective_cruise=… limit=physics|cruise_pref`, plus `ctrl_v_max_m_s` and `ctrl_effective_cruise_m_s` on `MISSION_SUMMARY`.
 
-## Worked examples (repo defaults: d = 1.0 m, t = 0.32 s, margin = 0.8, μ = 0.8, τ = 0.981 N·m, r = 0.04 m)
+## Worked examples (t = 0.32 s, margin = 0.8, μ = 0.8, τ = 0.981 N·m, r = 0.04 m, n = 2)
 
-### Light body, no payload (m = 6.142 kg)
+Use the same formula the code implements (`src/physics_speed_limit.py`).
 
-| Quantity | Value |
-|----------|------:|
-| a_friction | 0.8 × 9.81 = **7.85 m/s²** |
-| F_brake | 2 × 0.981 / 0.04 = **49.1 N** |
-| a_motor | 49.1 / 6.142 = **7.99 m/s²** |
-| a_brake | min(7.85, 7.99) = **7.85 m/s²** (friction-limited) |
-| v before margin | −7.85×0.32 + √(7.85²×0.32² + 2×7.85×1.0) ≈ **2.18 m/s** |
-| **v_max** | 2.18 × 0.8 ≈ **1.74 m/s** |
-| effective_cruise (cruise pref 0.44) | min(0.44, 1.74) = **0.44 m/s** (cruise preference active) |
-
-### Heavy payload (m = 6.142 + 50 = **56.142 kg**)
+### Light body, no payload (m = 6.142 kg), d = 1.0 m
 
 | Quantity | Value |
 |----------|------:|
-| a_friction | **7.85 m/s²** (unchanged) |
-| a_motor | 49.1 / 56.142 = **0.87 m/s²** (torque-limited) |
-| a_brake | **0.87 m/s²** |
-| v before margin | −0.28 + √(0.08 + 1.74) ≈ **1.04 m/s** |
-| **v_max** | 1.04 × 0.8 ≈ **0.83 m/s** |
-| effective_cruise | min(0.44, 0.83) = **0.44 m/s** (still cruise pref at d = 1 m) |
+| a_friction | 0.8 × 9.81 = **7.848 m/s²** |
+| F_brake | 2 × 0.981 / 0.04 = **49.05 N** |
+| a_motor | 49.05 / 6.142 = **7.986 m/s²** |
+| a_brake | min(7.848, 7.986) = **7.848 m/s²** (friction-limited) |
+| v before margin | −7.848×0.32 + √(7.848²×0.32² + 2×7.848×1.0) = **2.177 m/s** |
+| **v_max** | 0.8 × 2.177 = **1.742 m/s** |
+| effective_cruise (cruise pref 0.44) | min(0.44, 1.742) = **0.44 m/s** (cruise preference active) |
 
-With a **shorter** aisle budget **d = 0.35 m** (same heavy payload):
+### Heavy payload (m = 6.142 + 50 = **56.142 kg**), torque-limited
 
-| v before margin | ≈ **0.52 m/s** |
-| **v_max** | 0.52 × 0.8 ≈ **0.42 m/s** |
-| effective_cruise | min(0.44, 0.42) = **0.42 m/s** (**physics limit active**) |
+| Quantity | Value |
+|----------|------:|
+| a_friction | **7.848 m/s²** (unchanged) |
+| a_motor | 49.05 / 56.142 = **0.874 m/s²** |
+| a_brake | **0.874 m/s²** |
+
+**d = 1.0 m** (default stop budget — physics does *not* bind cruise 0.44):
+
+| v before margin | −0.874×0.32 + √(0.874²×0.32² + 2×0.874×1.0) = **1.072 m/s** |
+| **v_max** | 0.8 × 1.072 = **0.857 m/s** |
+| effective_cruise | min(0.44, 0.857) = **0.44 m/s** (cruise preference active) |
+
+**d = 0.35 m** (shorter aisle — still barely above cruise pref):
+
+| v before margin | **0.551 m/s** |
+| **v_max** | 0.8 × 0.551 = **0.441 m/s** |
+| effective_cruise | min(0.44, 0.441) = **0.44 m/s** (cruise preference still active; v_max ≈ cruise) |
+
+**d = 0.33 m** (heavy case with a **clearly active** physics cap vs cruise 0.44):
+
+| v before margin | −0.874×0.32 + √(0.874²×0.32² + 2×0.874×0.33) = **0.530 m/s** |
+| **v_max** | 0.8 × 0.530 = **0.424 m/s** |
+| effective_cruise | min(0.44, 0.424) = **0.424 m/s** (**physics limit active**) |
 
 Implementation: `src/physics_speed_limit.py`, wired in `src/controller_limits.py` and `webots/controllers/butlerbot_controller/controller_rowfit.py`.

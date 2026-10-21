@@ -175,7 +175,8 @@ controller:
     stop_available_m: 1.0          # m — react + brake distance budget (tune per aisle / sensor range)
     reaction_latency_s: 0.32        # s — one lane camera frame (matches obstacle gate default)
     safety_margin: 0.8              # unitless — applied to computed v_max
-    brake_mu: 0.8                   # ASSUMPTION: dry rubber on sealed concrete (longitudinal μ). Not Webots ODE coulombFriction=8 in butlerbot_warehouse.wbt.
+    brake_mu: 0.8                   # ASSUMPTION: dry rubber on sealed concrete (longitudinal μ). Not Webots ODE coulombFriction=8. Validate on hardware.
+    # Continuous motor torque as τ_brake is also an ASSUMPTION (see docs/PHYSICS_SPEED_LIMIT.md).
     driven_weight_fraction: 1.0     # bom.json assumptions.turning_scrub: both drive wheels carry weight
     # brake_torque_nm_per_motor: optional override; default BoM rec_continuous_torque_nm (10 kg·cm)
 

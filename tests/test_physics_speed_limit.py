@@ -126,6 +126,45 @@ def test_limits_from_mapping_effective_cruise():
     assert lim.effective_straight_m_s <= lim.straight_m_s + 1e-9
 
 
+HEAVY_MASS_KG = 56.142
+HEAVY_A_BRAKE = 2.0 * 0.981 / 0.04 / HEAVY_MASS_KG  # 0.873677… m/s² (torque-limited)
+HEAVY_T_S = 0.32
+HEAVY_MARGIN = 0.8
+
+
+def _v_before_margin(a: float, t: float, d: float) -> float:
+    return -a * t + math.sqrt(a * a * t * t + 2.0 * a * d)
+
+
+def test_hand_worked_heavy_payload_exact():
+    """Hand-checked values in docs/PHYSICS_SPEED_LIMIT.md (m=56.142 kg)."""
+    assert HEAVY_A_BRAKE == pytest.approx(0.874, rel=1e-3)
+    for d, v_max_expect in (
+        (1.0, 0.857),
+        (0.35, 0.441),
+        (0.33, 0.424),
+    ):
+        v_raw = _v_before_margin(HEAVY_A_BRAKE, HEAVY_T_S, d)
+        v_max = HEAVY_MARGIN * v_raw
+        r = compute_physics_speed_limit(
+            total_mass_kg=HEAVY_MASS_KG,
+            wheel_radius_m=0.04,
+            brake_torque_nm_per_motor=0.981,
+            brake_mu=0.8,
+            d_available_m=d,
+            reaction_latency_s=HEAVY_T_S,
+            safety_margin=HEAVY_MARGIN,
+        )
+        assert r.a_brake_m_s2 == pytest.approx(HEAVY_A_BRAKE, rel=1e-6)
+        assert v_max == pytest.approx(v_max_expect, abs=0.002)
+        assert r.v_max_m_s == pytest.approx(v_max, rel=1e-9)
+    assert effective_cruise_m_s(0.44, HEAVY_MARGIN * _v_before_margin(HEAVY_A_BRAKE, HEAVY_T_S, 1.0)) == pytest.approx(0.44)
+    assert effective_cruise_m_s(0.44, HEAVY_MARGIN * _v_before_margin(HEAVY_A_BRAKE, HEAVY_T_S, 0.35)) == pytest.approx(0.44)
+    capped = effective_cruise_m_s(0.44, HEAVY_MARGIN * _v_before_margin(HEAVY_A_BRAKE, HEAVY_T_S, 0.33))
+    assert capped < 0.44 - 1e-3
+    assert capped == pytest.approx(0.424, abs=0.002)
+
+
 def test_hand_worked_light_body_v_max():
     """Numbers in docs/PHYSICS_SPEED_LIMIT.md (light, d=1 m, margin 0.8)."""
     r = compute_physics_speed_limit(
@@ -144,7 +183,7 @@ def test_hand_worked_light_body_v_max():
         r.a_brake_m_s2 ** 2 * 0.32 ** 2 + 2 * r.a_brake_m_s2 * 1.0
     )
     assert r.v_max_m_s == pytest.approx(0.8 * v_raw, rel=1e-3)
-    assert r.v_max_m_s == pytest.approx(1.74, abs=0.05)
+    assert r.v_max_m_s == pytest.approx(1.742, abs=0.005)
 
 
 def test_units_sanity_si():

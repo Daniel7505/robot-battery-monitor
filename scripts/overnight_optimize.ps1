@@ -42,12 +42,14 @@ if (-not $DryRun) {
     }
 }
 
+$AgentJournal = Join-Path $Root "docs\AGENT_JOURNAL.md"
 $pyArgs = @(
     "-m", "optimizer",
     "--max-iterations", "$MaxIterations",
     "--max-hours", "$MaxHours",
     "--lap-timeout-min", "$LapTimeoutMin",
-    "--picker", $Picker
+    "--picker", $Picker,
+    "--agent-journal", $AgentJournal
 )
 if ($DryRun) { $pyArgs += "--dry-run" }
 

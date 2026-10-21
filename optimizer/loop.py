@@ -24,7 +24,6 @@ from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
 from optimizer.agent_journal import append_agent_journal
 from optimizer.report import write_report
-from optimizer.runner import REPO_ROOT
 from optimizer.runner import RunOutcome
 from optimizer.evidence import evidence_status, measure_effects, meaningful_improvement
 from optimizer.score import (
@@ -961,17 +960,18 @@ def run_loop(
             held_out_note=confirm_strategy_note(),
             cross_build_note=cross_build_confirm_disabled_reason(),
         )
-        try:
-            append_agent_journal(
-                agent_journal_path or (REPO_ROOT / "docs" / "AGENT_JOURNAL.md"),
-                run_id=run_id,
-                started=started,
-                finished=finished,
-                records=records,
-                stop_reason=stop_reason,
-            )
-        except OSError:
-            pass
+        if agent_journal_path is not None:
+            try:
+                append_agent_journal(
+                    agent_journal_path,
+                    run_id=run_id,
+                    started=started,
+                    finished=finished,
+                    records=records,
+                    stop_reason=stop_reason,
+                )
+            except OSError:
+                pass
         status = "error" if run_failed or any(
             word in stop_reason.lower() for word in ("crash", "timeout", "failed", "error")
         ) else "ok"

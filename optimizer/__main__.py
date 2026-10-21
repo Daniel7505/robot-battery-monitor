@@ -40,6 +40,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="POST a JSON summary here when the run finishes (or set OPT_NOTIFY_URL).",
     )
+    parser.add_argument(
+        "--agent-journal",
+        type=Path,
+        default=None,
+        help="Append a plain-language run note to this file (or set RBM_AGENT_JOURNAL).",
+    )
     args = parser.parse_args(argv)
     if args.max_iterations < 0 or args.max_hours <= 0 or args.lap_timeout_min <= 0:
         print("Limits must be positive.", file=sys.stderr)
@@ -65,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         runner = WebotsLapRunner(REPO_ROOT, world=args.world)
         fetch = None if initial is not None else runner.recent_log
     notify_url = args.notify_url or os.environ.get("OPT_NOTIFY_URL")
+    agent_journal_path = args.agent_journal
+    if agent_journal_path is None:
+        env_journal = os.environ.get("RBM_AGENT_JOURNAL")
+        if env_journal:
+            agent_journal_path = Path(env_journal)
     report = run_loop(
         config_path=args.config,
         knowledge_path=args.knowledge,
@@ -79,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         fetch_existing=fetch,
         dry_run=args.dry_run,
         notify_url=notify_url,
+        agent_journal_path=agent_journal_path,
     )
     print(f"Morning report: {report}")
     return 0

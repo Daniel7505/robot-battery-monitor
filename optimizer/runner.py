@@ -437,6 +437,13 @@ class WebotsLapRunner:
         since_local = launch.launched_utc.astimezone().replace(tzinfo=None) - timedelta(seconds=2)
         wall_started = launch.launched_monotonic
         self.cleanup()
+        config_note = ""
+        try:
+            from optimizer.lap_config import apply_trial_params
+
+            config_note = apply_trial_params(self.repo, params)
+        except Exception as exc:
+            config_note = f"optimizer: config apply failed ({type(exc).__name__}: {exc})"
         env = merge_launch_env(os.environ.copy(), launch)
         env["RBM_MISSION_LAPS"] = "1"
         build = str((params or {}).get("bom_build") or "").strip()
@@ -450,9 +457,14 @@ class WebotsLapRunner:
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             sink = open(log_path, "ab")
+            ctrl_log = log_path.with_name(f"{log_path.stem}_controller{log_path.suffix}")
+            env["RBM_CONTROLLER_LOG"] = str(ctrl_log)
             sink.write(
-                f"optimizer: launching trial={launch.trial_id} world={world_name} "
-                f"bom_build={build or 'unset'}\n".encode()
+                (
+                    f"optimizer: launching trial={launch.trial_id} world={world_name} "
+                    f"bom_build={build or 'unset'}\n{config_note}\n"
+                    f"optimizer: controller console -> {ctrl_log}\n"
+                ).encode()
             )
             sink.flush()
         proc = subprocess.Popen(

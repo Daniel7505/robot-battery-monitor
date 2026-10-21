@@ -329,6 +329,8 @@ class RowfitController:
         self._coast_active = False
         self._coast_wh_saved = 0.0
         self._coast_starts = 0
+        self._pivot_lateral_max_m = 0.0
+        self._pivot_entry_v_m_s = 0.0
         self.pivot_integrated_rad = 0.0
         self.pivot_yaw_rate_rad_s = 0.0
         self.pivot_heading_err_rad = 0.0
@@ -745,7 +747,14 @@ class RowfitController:
             "coast_starts": int(self._coast_starts),
         }
 
-    def _start_pivot(self, yaw: float) -> None:
+    def _pivot_entry_speed_cap_m_s(self) -> float:
+        coast_cfg = self.coast_into_turn
+        v_pivot = V_CREEP_M_S
+        if coast_cfg is not None:
+            v_pivot = max(V_CREEP_M_S, float(coast_cfg.v_pivot_m_s))
+        return v_pivot + 0.03
+
+    def _start_pivot(self, yaw: float, *, entry_v_m_s: float | None = None) -> None:
         base = self.lane_yaw if self.lane_yaw is not None else float(yaw)
         self.yaw_target = base + self.corner_dir * PIVOT_ANGLE_RAD
         self.pivot_start_yaw = float(yaw)
@@ -753,27 +762,64 @@ class RowfitController:
         self.pivot_t = 0.0
         self.pivot_settle = 0
         self.pivot_integrated_rad = 0.0
+        self._pivot_lateral_max_m = 0.0
+        self._pivot_entry_v_m_s = float(entry_v_m_s if entry_v_m_s is not None else self.gov.v)
+        coast_was = self._coast_active
+        if self._coast_active:
+            self._event(
+                f"COAST stop — pivot gate entry_v={self._pivot_entry_v_m_s:.3f} m/s "
+                f"rem={float(self.remaining_m or 0.0):.3f} m"
+            )
+            self._coast_active = False
         self.state = STATE_PIVOT
         self.gov.v = 0.0
         self.filter = SteerFilter()
         self._map_dist_logged = False
+        pose = self.pose
+        pos_txt = (
+            f"({pose[0]:.3f},{pose[1]:.3f})"
+            if pose is not None
+            else "unknown"
+        )
         self._event(
             f"PIVOT start {'left' if self.corner_dir > 0 else 'right'} yaw {math.degrees(yaw):+.1f}deg -> "
             f"target {math.degrees(self.yaw_target):+.1f}deg (lane {math.degrees(base):+.1f}deg, "
-            f"remaining {self.remaining_m:+.3f} m)"
+            f"remaining {self.remaining_m:+.3f} m) entry_v={self._pivot_entry_v_m_s:.3f} m/s "
+            f"pos={pos_txt} coast_into_turn={coast_was}"
         )
 
     def _end_pivot(self, yaw: float, how: str) -> None:
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
+        if self.pivot_start_yaw is not None:
+            heading_change = math.degrees(
+                math.atan2(
+                    math.sin(float(yaw) - float(self.pivot_start_yaw)),
+                    math.cos(float(yaw) - float(self.pivot_start_yaw)),
+                )
+            )
+        else:
+            heading_change = 0.0
+        pose = self.pose
+        pos_txt = (
+            f"({pose[0]:.3f},{pose[1]:.3f})"
+            if pose is not None
+            else "unknown"
+        )
         self.last_pivot = {
             "dir": self.corner_dir, "target_deg": round(math.degrees(self.yaw_target), 2),
             "yaw_deg": round(math.degrees(yaw), 2), "err_deg": round(math.degrees(err), 2),
             "time_s": round(self.pivot_t, 2), "exit": how,
+            "entry_v_m_s": round(self._pivot_entry_v_m_s, 3),
+            "heading_change_deg": round(heading_change, 1),
+            "max_lateral_m": round(self._pivot_lateral_max_m, 3),
+            "pos_end": pos_txt,
         }
         self.pivots += 1
         self._event(
             f"PIVOT done yaw {math.degrees(yaw):+.1f}deg (target {math.degrees(self.yaw_target):+.1f}, "
-            f"err {math.degrees(err):+.1f}deg, {self.pivot_t:.1f} s, {how}) — REACQUIRE"
+            f"err {math.degrees(err):+.1f}deg, heading_change {heading_change:+.1f}deg, "
+            f"entry_v={self._pivot_entry_v_m_s:.3f} m/s ct_max={self._pivot_lateral_max_m:.3f} m, "
+            f"{self.pivot_t:.1f} s, {how}) — REACQUIRE"
         )
         self.state = STATE_REACQUIRE
         self.pivot_w = 0.0
@@ -800,6 +846,10 @@ class RowfitController:
         self.pivot_t += dt
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
         self.pivot_heading_err_rad = float(err)
+        if est is not None and getattr(est, "valid", False):
+            off = abs(float(getattr(est, "offset_m", 0.0) or 0.0))
+            if off > self._pivot_lateral_max_m:
+                self._pivot_lateral_max_m = off
         rate = 0.0 if yaw_rate_rad_s is None else float(yaw_rate_rad_s)
         self.pivot_yaw_rate_rad_s = rate
         from src.gyro_pivot import integrate_heading_rad, pivot_turn_progress_rad, rate_tracking_adjustment
@@ -994,7 +1044,28 @@ class RowfitController:
                 self._event("CORNER reached but no IMU yaw — braking at the corner (no pivot)")
                 return self._cmd(0.0, 0.0, reason="corner without IMU", phase="rowfit_stop", brake=True,
                                  new_frame=new_frame)
-            self._start_pivot(float(yaw))
+            v_entry = float(self.gov.v)
+            v_cap = self._pivot_entry_speed_cap_m_s()
+            if v_entry > v_cap + 1e-3:
+                self._coast_active = False
+                self.target_speed = V_CREEP_M_S
+                if self.gov.v > V_CREEP_M_S:
+                    self.gov.v = max(V_CREEP_M_S, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+                v = self.gov.v
+                if mapped is None:
+                    self.remaining_m = rem - v * dt
+                raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
+                raw = max(-STEER_CAP, min(STEER_CAP, raw))
+                steer = self.filter.step(raw, dt)
+                left, right = wheels_from_steer(
+                    steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0
+                )
+                return self._cmd(
+                    left, right, steer=steer,
+                    reason=f"corner brake-to-pivot {rem:.2f} m v={v:.3f}>{v_cap:.3f}",
+                    phase="rowfit_approach", v=v, new_frame=new_frame,
+                )
+            self._start_pivot(float(yaw), entry_v_m_s=v_entry)
             return self._pivot_tick(est, False, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s)
         rem_brake = max(0.0, rem - PIVOT_ARRIVE_M)
         v_turn = self._turn_v_allowed(rem_brake)

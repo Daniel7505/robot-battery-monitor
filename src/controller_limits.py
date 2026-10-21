@@ -143,6 +143,8 @@ def check_param(key: str, value) -> float | str | None:
         )
     knob = KNOBS[key]
     if knob.kind == "choice":
+        if isinstance(value, bool):
+            value = "true" if value else "false"
         text = "" if _blank(value) else str(value).strip()
         if text not in knob.choices:
             raise AllowlistError(

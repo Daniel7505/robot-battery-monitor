@@ -2154,6 +2154,38 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
         pass
 
 
+class _TeeStream:
+    """Mirror controller stdout/stderr to a host log file (optimizer laps)."""
+
+    def __init__(self, stream, file_obj):
+        self._stream = stream
+        self._file = file_obj
+
+    def write(self, data):
+        self._stream.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._file.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _install_controller_log_tee() -> None:
+    path = (os.environ.get("RBM_CONTROLLER_LOG") or "").strip()
+    if not path:
+        return
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    handle = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _TeeStream(sys.stdout, handle)
+    sys.stderr = _TeeStream(sys.stderr, handle)
+    print(f"Controller console tee -> {path}")
+
+
 def _prefer_utf8_stdio() -> None:
     """Windows pipes default to cp1252, which cannot encode the arrows in the startup log."""
     for stream in (sys.stdout, sys.stderr):
@@ -2168,6 +2200,7 @@ def _prefer_utf8_stdio() -> None:
 
 def main() -> None:
     _prefer_utf8_stdio()
+    _install_controller_log_tee()
     opts = parse_controller_args()
     if Supervisor is not None:
         robot = Supervisor()

@@ -28,6 +28,8 @@ OVERRIDE_PATH = _REPO / "data" / "twin_energy.json"
 TEN_FT_M = 3.048
 GRAVITY_M_S2 = 9.81
 DEFAULT_CRR = 0.015
+# Copper I²R above the rolling-only current at this speed (mission model).
+MOTOR_COPPER_REF_SPEED_M_S = 0.44
 DEFAULT_DRIVER_EFF = 0.92
 # Drawn mesh and contact cylinder in every shipped butlerbot*.wbt, and the
 # radius the controller's v = ω·r uses. A selected bom_build changes body
@@ -217,6 +219,32 @@ def brushed_drive_point(
         eta_driver=float(eta_driver),
     )
     drive_w = float(motors) * drive_one
+    if (
+        speed > MOTOR_COPPER_REF_SPEED_M_S + 1e-6
+        and float(stall_current_a) > 1e-6
+        and float(voltage_v) > 0.0
+    ):
+        ref_omega = MOTOR_COPPER_REF_SPEED_M_S / radius
+        ref_tau = min(
+            (float(crr) * float(mass_kg) * GRAVITY_M_S2 + max(0.0, float(extra_force_n)))
+            * radius
+            / float(motors)
+            + added,
+            tau_stall,
+        )
+        _, i_ref, _ = _pack_watts_from_shaft(
+            ref_tau,
+            ref_omega,
+            voltage_v=float(voltage_v),
+            no_load_rpm=float(no_load_rpm),
+            no_load_current_a=float(no_load_current_a),
+            stall_current_a=float(stall_current_a),
+            stall_torque_nm=tau_stall,
+            eta_driver=float(eta_driver),
+        )
+        r_arm = float(voltage_v) / float(stall_current_a)
+        copper = r_arm * max(0.0, float(current) ** 2 - float(i_ref) ** 2)
+        drive_w += float(motors) * copper
     seconds = TEN_FT_M / speed
     drive_wh = drive_w * seconds / 3600.0
 

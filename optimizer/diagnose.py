@@ -190,18 +190,31 @@ def _corr(xs: list[float], ys: list[float]) -> float | None:
     return num / (dx * dy)
 
 
+def real_summary_line(line: str) -> bool:
+    """A scored summary, not a prose mention of the token.
+
+    Controller logs include ``dashboard will log MISSION_SUMMARY`` and
+    ``MISSION_SUMMARY written → path`` before any lap exists. Those lines
+    have no ``duration_s`` / ``dist_m`` and must not end a trial.
+    """
+    if "MISSION_SUMMARY" not in (line or ""):
+        return False
+    return "duration_s=" in line or "dist_m=" in line
+
+
 def _lap_body(text: str) -> str:
-    """Text of the mission that ends at the last MISSION_SUMMARY."""
-    if "MISSION_SUMMARY" not in text:
-        return text
-    chunks = text.split("MISSION_SUMMARY")
-    # One summary → chunks[0] is that lap. Two summaries → chunks[-2] is the later lap.
-    return chunks[-2] if len(chunks) >= 2 else text
+    """Text of the mission that ends at the last real MISSION_SUMMARY."""
+    lines = (text or "").splitlines()
+    idxs = [i for i, line in enumerate(lines) if real_summary_line(line)]
+    if not idxs:
+        return text or ""
+    start = idxs[-2] + 1 if len(idxs) >= 2 else 0
+    return "\n".join(lines[start : idxs[-1] + 1])
 
 
 def diagnose_lap(text: str) -> Diagnosis:
-    """Diagnose only when this capture includes a ``MISSION_SUMMARY`` line."""
-    if "MISSION_SUMMARY" not in (text or ""):
+    """Diagnose only when this capture includes a real ``MISSION_SUMMARY`` line."""
+    if not any(real_summary_line(line) for line in (text or "").splitlines()):
         empty = Diagnosis(
             summary=None,
             segments=[],
@@ -219,7 +232,7 @@ def diagnose(text: str) -> Diagnosis:
     summaries: list[MissionSummary] = []
     power: dict[str, float | None] = {}
     for line in text.splitlines():
-        if "MISSION_SUMMARY" in line:
+        if real_summary_line(line):
             summaries.append(_summary_from(line))
         elif "POWER_BREAKDOWN" in line:
             raw = _kv(line)

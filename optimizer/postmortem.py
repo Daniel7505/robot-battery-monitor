@@ -370,11 +370,11 @@ def _judge(
             "threshold, so the change does not travel.",
             f"Do not keep pushing {knob} {direction}. The confirm pair disagreed.",
         )
-    if action == "inconclusive" or (
-        within_noise and action in {"rollback", "inconclusive"}
+    if action in {"inconclusive", "refuted"} or (
+        within_noise and action in {"rollback", "inconclusive", "refuted"}
     ):
         beyond, why = worsened_beyond_band(evidence)
-        if beyond and action in {"rollback", "inconclusive"}:
+        if beyond and action in {"rollback", "inconclusive", "refuted"}:
             return (
                 "refuted",
                 f"The lap moved opposite the hypothesis and {why}, so this direction is refuted.",

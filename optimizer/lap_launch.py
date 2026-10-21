@@ -74,17 +74,24 @@ def params_match_intended(got: dict, intended: dict) -> str | None:
 
 
 def wait_config(store, intended: dict, *, settle_s: float = CONFIG_SETTLE_S) -> str | None:
-    """Sleep briefly and verify allowlisted keys on disk match ``intended``."""
+    """Verify allowlisted keys on disk match ``intended`` before Webots starts.
+
+    A matching file returns immediately. A mid-write read is retried until
+    ``settle_s`` plus a few seconds, then the mismatch is returned so the
+    lap is not launched against a blank ``bom_build``.
+    """
     deadline = time.monotonic() + float(settle_s) + 4.0
-    while time.monotonic() < deadline:
-        time.sleep(min(0.4, max(0.0, deadline - time.monotonic())))
+    mismatch = "config did not match intended values before launch"
+    while True:
         try:
             mismatch = params_match_intended(store.read(), intended)
         except Exception as exc:
             mismatch = f"config read failed after write: {exc}"
         if mismatch is None:
             return None
-    return mismatch or "config did not match intended values before launch"
+        if time.monotonic() >= deadline:
+            return mismatch or "config did not match intended values before launch"
+        time.sleep(min(0.4, max(0.0, deadline - time.monotonic())))
 
 
 def assert_light_search_config(params: dict, run_body: str) -> None:

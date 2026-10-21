@@ -118,7 +118,7 @@ def _rolled_back(history: list[dict], param: str, value) -> bool:
     for row in history:
         if row.get("param") != param:
             continue
-        if row.get("decision") not in {"rollback", "invalid", "confirm-fail"}:
+        if row.get("decision") not in {"rollback", "invalid", "confirm-fail", "refuted"}:
             continue
         if _same(row.get("new"), value):
             return True
@@ -178,7 +178,7 @@ def _consecutive_rollbacks(history: list[dict]) -> int:
     for row in reversed(history):
         if row.get("phase") == "confirm":
             continue
-        if row.get("decision") in {"rollback", "invalid"}:
+        if row.get("decision") in {"rollback", "invalid", "refuted"}:
             count += 1
             continue
         break

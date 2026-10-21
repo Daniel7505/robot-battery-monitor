@@ -62,11 +62,12 @@ def obstacles_mode(robot=None, env=None) -> tuple[bool, str]:
 
 
 class ObstacleRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, v_cruise_m_s: float | None = None) -> None:
         from src.obstacle_gate import ObstacleFusion, ObstacleGate
         from src.rowfit_control import DECEL_M_S2, V_MAX_M_S
 
-        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_MAX_M_S)
+        top = float(v_cruise_m_s) if v_cruise_m_s is not None else V_MAX_M_S
+        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=top)
         self.fusion = ObstacleFusion()
         self.sensor = None
         self.radar = None

@@ -277,10 +277,12 @@ class RowfitRuntime:
         self.pose_source: dict[str, str] = {n: "constants" for n in self.cams_model}
         self.tracker = LaneTracker(self.cams_model)
         self.limits = load_controller_limits()
+        eff_cruise = self.limits.effective_cruise_m_s or self.limits.cruise_m_s
+        eff_straight = self.limits.effective_straight_m_s or self.limits.straight_m_s
         self.ctl = RowfitController(
             k_steer=self.limits.k_steer,
-            v_cruise=self.limits.cruise_m_s,
-            v_straight=self.limits.straight_m_s,
+            v_cruise=eff_cruise,
+            v_straight=eff_straight,
             pivot_w_max=self.limits.pivot_w_max_rad_s,
         )
         self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
@@ -324,11 +326,19 @@ class RowfitRuntime:
         warn = ""
         if lim.warnings:
             warn = " warnings: " + "; ".join(lim.warnings)
+        physics = ""
+        if lim.v_max_m_s is not None:
+            eff_c = lim.effective_cruise_m_s if lim.effective_cruise_m_s is not None else lim.cruise_m_s
+            tag = "physics" if lim.speed_limit_active else "cruise_pref"
+            physics = (
+                f" v_max={lim.v_max_m_s:.2f} m/s effective_cruise={eff_c:.2f} m/s"
+                f" limit={tag}"
+            )
         return (
             "CONTROLLER LIMITS "
             f"cruise={lim.cruise_m_s:.2f} m/s straight={lim.straight_m_s:.2f} m/s "
             f"pivot_w_max={lim.pivot_w_max_rad_s:.2f} rad/s k_steer={lim.k_steer:.2f}"
-            f"{warn}"
+            f"{physics}{warn}"
         )
 
     def route_line(self) -> str:

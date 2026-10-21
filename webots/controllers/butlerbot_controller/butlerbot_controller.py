@@ -856,7 +856,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         print(f"OBSTACLES {'on' if _obs_on else 'off'} ({_obs_why})")
         if _obs_on:
             try:
-                _ort = ObstacleRuntime()
+                _top = rowfit_rt.limits.gate_top_speed_m_s
+                _ort = ObstacleRuntime(v_cruise_m_s=_top)
                 _msgs = _ort.enable_devices(robot, cam_period)
                 _msgs += _ort.bind(robot, rowfit_rt.cams_model)
                 for msg in _msgs:
@@ -2084,6 +2085,11 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
         return
     loco["ctrl_cruise_m_s"] = round(float(lim.cruise_m_s), 4)
     loco["ctrl_straight_m_s"] = round(float(lim.straight_m_s), 4)
+    if lim.v_max_m_s is not None:
+        loco["ctrl_v_max_m_s"] = round(float(lim.v_max_m_s), 4)
+    eff_c = lim.effective_cruise_m_s if lim.effective_cruise_m_s is not None else lim.cruise_m_s
+    loco["ctrl_effective_cruise_m_s"] = round(float(eff_c), 4)
+    loco["ctrl_speed_limit_active"] = bool(lim.speed_limit_active)
     loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
     loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
     loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)

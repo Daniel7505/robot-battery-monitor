@@ -74,6 +74,46 @@ def _undoes_keep(proposal: Proposal, kept: dict | None) -> bool:
     return _same(proposal.value, kept.get("old"))
 
 
+def _confirmed_keeps(history: list[dict]) -> list[dict]:
+    """Latest confirmed value per param (confirm-pass wins over older confirms)."""
+    out: dict[str, dict] = {}
+    for row in history or []:
+        if row.get("phase") != "confirm" or row.get("decision") != "confirm-pass":
+            continue
+        param = row.get("param")
+        if param:
+            out[str(param)] = {
+                "param": param,
+                "new": row.get("new"),
+                "old": row.get("old"),
+            }
+    return list(out.values())
+
+
+def _toward_pre_keep(proposal: Proposal, keep: dict) -> bool:
+    """True when the proposal moves a confirmed knob back toward its pre-keep value."""
+    if proposal.param != keep.get("param"):
+        return False
+    try:
+        kept = float(keep["new"])
+        pre = float(keep["old"])
+        val = float(proposal.value)
+    except (TypeError, ValueError, KeyError):
+        return _same(proposal.value, keep.get("old"))
+    if kept < pre - 1e-9:
+        return val > kept + 1e-6
+    if kept > pre + 1e-9:
+        return val < kept - 1e-6
+    return _same(val, pre)
+
+
+def _reverts_confirmed_keep(proposal: Proposal, history: list[dict]) -> bool:
+    for keep in _confirmed_keeps(history):
+        if _toward_pre_keep(proposal, keep):
+            return True
+    return False
+
+
 def _rolled_back(history: list[dict], param: str, value) -> bool:
     for row in history:
         if row.get("param") != param:
@@ -269,6 +309,8 @@ class RulePicker:
                 continue
             proposal = self._float_proposal(params, key, value, diagnosis, suggestions)
             if _undoes_keep(proposal, kept):
+                continue
+            if _reverts_confirmed_keep(proposal, history):
                 continue
             return proposal
         return None

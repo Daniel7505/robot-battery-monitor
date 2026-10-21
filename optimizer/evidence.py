@@ -22,18 +22,20 @@ def turn_segment_noise(diag: Diagnosis | None) -> float:
 
 
 def measure_effects(
-    before: Diagnosis | None,
     after: Diagnosis | None,
     reference: MissionSummary | None,
     *,
+    before: Diagnosis | None = None,
+    baseline_diag: Diagnosis | None = None,
     baseline_label: str = "kept baseline",
 ) -> dict:
-    """Numeric deltas vs the reference and turn-segment noise band."""
+    """Numeric deltas vs the scoring baseline summary and its diagnosis."""
+    turn_ref = baseline_diag if baseline_diag is not None else before
     out = {
         "err_gain_pp": None,
         "wpm_gain_rel": None,
         "turn_delta_pp": None,
-        "turn_noise_band_pp": turn_segment_noise(before),
+        "turn_noise_band_pp": turn_segment_noise(turn_ref),
         "meaningful": False,
         "detail": "",
     }
@@ -55,8 +57,8 @@ def measure_effects(
         wpm_gain = (ref_wpm - cand_wpm) / ref_wpm
     out["wpm_gain_rel"] = wpm_gain
     turn_delta = None
-    if before is not None and before.turn_err is not None and after.turn_err is not None:
-        turn_delta = abs(before.turn_err) - abs(after.turn_err)
+    if turn_ref is not None and turn_ref.turn_err is not None and after.turn_err is not None:
+        turn_delta = abs(turn_ref.turn_err) - abs(after.turn_err)
         out["turn_delta_pp"] = turn_delta
     band = float(out["turn_noise_band_pp"])
     err_ok = err_gain > ERR_IMPROVE_MIN
@@ -83,7 +85,12 @@ def meaningful_improvement(
     baseline_label: str = "kept baseline",
 ) -> tuple[bool, str]:
     """True when err, Wh/m, or turn error moved beyond lap noise."""
-    effects = measure_effects(before, after, reference, baseline_label=baseline_label)
+    effects = measure_effects(
+        after,
+        reference,
+        before=before,
+        baseline_label=baseline_label,
+    )
     return bool(effects["meaningful"]), str(effects["detail"])
 
 

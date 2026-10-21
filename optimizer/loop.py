@@ -22,7 +22,9 @@ from optimizer.held_out import cross_build_confirm_disabled_reason, confirm_stra
 from optimizer.lap_launch import LapLaunch, assert_light_search_config, trial_id_for, wait_config
 from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
+from optimizer.agent_journal import append_agent_journal
 from optimizer.report import write_report
+from optimizer.runner import REPO_ROOT
 from optimizer.runner import RunOutcome
 from optimizer.evidence import evidence_status, measure_effects, meaningful_improvement
 from optimizer.score import (
@@ -163,6 +165,8 @@ def _attach_postmortem(
     summary_trusted: bool = True,
     effects: dict | None = None,
     repeat_label: str | None = None,
+    baseline_diag: Diagnosis | None = None,
+    baseline_label: str = "kept baseline",
 ) -> dict:
     post = build_postmortem(
         param=rec.get("param"),
@@ -177,6 +181,8 @@ def _attach_postmortem(
         summary_trusted=summary_trusted,
         evidence=effects,
         repeat_label=repeat_label,
+        baseline_diag=baseline_diag,
+        baseline_label=baseline_label,
     )
     rec["postmortem"] = post
     if rec.get("decision") == "invalid" and rec.get("reason"):
@@ -295,6 +301,7 @@ def run_loop(
     monotonic=None,
     dry_run: bool = False,
     notify_url: str | None = None,
+    agent_journal_path: Path | None = None,
 ) -> Path:
     """Run until the iteration cap, the wall clock, or the picker has nothing left.
 
@@ -332,6 +339,8 @@ def run_loop(
     starting_references: dict = {}
     score_baselines: dict = {}
     baseline_labels: dict = {}
+    score_baseline_diags: dict = {}
+    starting_reference_diags: dict = {}
     prior_laps: list[tuple[str, object]] = []
     pending: dict | None = None
     retry_search: Proposal | None = None
@@ -353,9 +362,13 @@ def run_loop(
             return
         diagnoses[run_body] = diag
 
-    def set_score_baseline(summary, label: str) -> None:
+    def set_score_baseline(summary, label: str, diag: Diagnosis | None = None) -> None:
         score_baselines[run_body] = summary
         baseline_labels[run_body] = label
+        if diag is not None:
+            score_baseline_diags[run_body] = diag
+        elif summary is not None:
+            score_baseline_diags[run_body] = Diagnosis(summary=summary)
 
     def catalog_lap(label: str, summary) -> None:
         if summary is not None:
@@ -428,9 +441,11 @@ def run_loop(
         if action == "reference":
             remember_diag(ref_diag)
             starting_references[run_body] = ref_diag.summary
+            starting_reference_diags[run_body] = ref_diag
             set_score_baseline(
                 ref_diag.summary,
                 format_baseline_from_summary(ref_diag.summary, prefix="starting settings"),
+                ref_diag,
             )
             catalog_lap("reference lap", ref_diag.summary)
             diag = ref_diag
@@ -567,6 +582,7 @@ def run_loop(
                                 light_kept,
                                 prefix="kept baseline (confirmed)",
                             ),
+                            pending.get("provisional_diag"),
                         )
                     diag = pending["prev_diag"]
                     pending = None
@@ -584,6 +600,7 @@ def run_loop(
                                 starting_references.get(run_body),
                                 prefix="starting settings",
                             ),
+                            starting_reference_diags.get(run_body),
                         )
                         diag = pending["prev_diag"]
                         why = why + " Confirm retries exhausted; the provisional keep was rolled back."
@@ -597,6 +614,7 @@ def run_loop(
                             starting_references.get(run_body),
                             prefix="starting settings",
                         ),
+                        starting_reference_diags.get(run_body),
                     )
                     diag = pending["prev_diag"]
                     why = why + " The change was rolled back."
@@ -782,9 +800,9 @@ def run_loop(
                     )
                     score = None
                     effects = measure_effects(
-                        before_diag,
                         new_diag,
                         baseline,
+                        baseline_diag=score_baseline_diags.get(run_body),
                         baseline_label=baseline_label,
                     )
                     within_noise = True
@@ -792,9 +810,9 @@ def run_loop(
                     diag = before_diag
                 if repeat_label is None:
                     effects = measure_effects(
-                        before_diag,
                         new_diag,
                         baseline,
+                        baseline_diag=score_baseline_diags.get(run_body),
                         baseline_label=baseline_label,
                     )
                     within_noise = not effects.get("meaningful")
@@ -832,6 +850,7 @@ def run_loop(
                             "expected": proposal.expected_effect,
                             "suggestions": list(proposal.code_suggestions),
                             "provisional": summary,
+                            "provisional_diag": new_diag,
                             "search_build": run_body,
                             "prev_diag": diag,
                             "light_kept_params": dict(intended_params),
@@ -842,6 +861,7 @@ def run_loop(
                                 intended_params,
                                 prefix="kept baseline (provisional)",
                             ),
+                            new_diag,
                         )
                         remember_diag(new_diag)
                         diag = new_diag
@@ -901,6 +921,8 @@ def run_loop(
                 summary_trusted=summary_trusted,
                 effects=effects,
                 repeat_label=repeat_label,
+                baseline_diag=score_baseline_diags.get(run_body),
+                baseline_label=baseline_label,
             )
             records.append(book.append(rec))
             history.append(rec)
@@ -926,10 +948,11 @@ def run_loop(
             json.dumps({"in_progress": False, "snapshot": snapshot}, sort_keys=True),
             encoding="utf-8",
         )
+        finished = _utc_now()
         report_path = write_report(
             run_dir / "morning.md",
             started=started,
-            finished=_utc_now(),
+            finished=finished,
             records=records,
             snapshot=snapshot,
             diagnoses=diagnoses,
@@ -938,6 +961,17 @@ def run_loop(
             held_out_note=confirm_strategy_note(),
             cross_build_note=cross_build_confirm_disabled_reason(),
         )
+        try:
+            append_agent_journal(
+                agent_journal_path or (REPO_ROOT / "docs" / "AGENT_JOURNAL.md"),
+                run_id=run_id,
+                started=started,
+                finished=finished,
+                records=records,
+                stop_reason=stop_reason,
+            )
+        except OSError:
+            pass
         status = "error" if run_failed or any(
             word in stop_reason.lower() for word in ("crash", "timeout", "failed", "error")
         ) else "ok"

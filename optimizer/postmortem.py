@@ -236,35 +236,51 @@ def invalid_lesson(reason: str) -> str:
 def prediction_miss_note(
     param: str | None,
     direction: str,
-    before: Diagnosis | None,
     after: Diagnosis | None,
+    *,
+    baseline: Diagnosis | None = None,
+    trial_before: Diagnosis | None = None,
+    baseline_label: str = "kept baseline",
 ) -> str | None:
-    """Call out when observed err moved opposite to the hypothesis."""
-    if before is None or after is None or before.summary is None or after.summary is None:
+    """Call out when observed err moved opposite to the hypothesis vs the scoring baseline."""
+    if after is None or after.summary is None:
         return None
-    be = before.summary.err_pct
+    ref = baseline if baseline is not None and baseline.summary is not None else trial_before
+    if ref is None or ref.summary is None:
+        return None
+    be = ref.summary.err_pct
     ae = after.summary.err_pct
     if be is None or ae is None:
         return None
     abs_before = abs(float(be))
     abs_after = abs(float(ae))
     delta_pp = abs_after - abs_before
+    bl = baseline_label or "kept baseline"
     if param in _SPEED and direction == "down":
         if delta_pp > 1.0:
             return (
-                f"Predicted a smaller |err| miss; |err| worsened by {delta_pp:.1f} pp instead."
+                f"Predicted a smaller |err| miss vs {bl}; |err| worsened by {delta_pp:.1f} pp instead."
             )
     if param in _SPEED and direction == "up":
         if delta_pp < -1.0:
             return (
-                f"Predicted a larger |err| miss; |err| improved by {abs(delta_pp):.1f} pp instead."
+                f"Predicted a larger |err| miss vs {bl}; |err| improved by {abs(delta_pp):.1f} pp instead."
             )
     if param == "controller.pivot_w_max_rad_s" and direction == "down":
-        if before.turn_err is not None and after.turn_err is not None:
-            if abs(after.turn_err) > abs(before.turn_err) + 1.5:
+        if ref.turn_err is not None and after.turn_err is not None:
+            turn_worse = abs(after.turn_err) - abs(ref.turn_err)
+            if turn_worse > 1.5:
                 return (
-                    "Predicted turn segments would move toward the model; turn-segment |err| "
-                    f"worsened by {abs(after.turn_err) - abs(before.turn_err):.1f} pp."
+                    f"Predicted turn segments would move toward the model vs {bl}; "
+                    f"turn-segment |err| worsened by {turn_worse:.1f} pp."
+                )
+    if param == "controller.k_steer" and direction == "up":
+        if ref.turn_err is not None and after.turn_err is not None:
+            turn_worse = abs(after.turn_err) - abs(ref.turn_err)
+            if turn_worse > 1.5:
+                return (
+                    f"Predicted calmer steering would help vs {bl}; turn-segment |err| "
+                    f"worsened by {turn_worse:.1f} pp."
                 )
     return None
 
@@ -472,6 +488,8 @@ def build_postmortem(
     summary_trusted: bool = True,
     evidence: dict | None = None,
     repeat_label: str | None = None,
+    baseline_diag: Diagnosis | None = None,
+    baseline_label: str = "kept baseline",
 ) -> dict:
     """Structured post-mortem for one trial. ``next_hypothesis`` is filled by the loop."""
     direction = "switch" if param is None else step_direction(old, new)
@@ -525,7 +543,14 @@ def build_postmortem(
         tag = ""
     elif limit_note and action == "invalid":
         mechanism = limit_note
-    prediction_miss = prediction_miss_note(param, direction, before, after)
+    prediction_miss = prediction_miss_note(
+        param,
+        direction,
+        after,
+        baseline=baseline_diag,
+        trial_before=before,
+        baseline_label=baseline_label,
+    )
     if prediction_miss:
         mechanism = f"{mechanism} {prediction_miss}".strip()
     payload = {

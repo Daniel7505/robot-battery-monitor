@@ -1166,11 +1166,57 @@ def test_invalid_lesson_names_short_launch():
 def test_prediction_miss_when_err_worsens_on_slowdown():
     from optimizer.postmortem import prediction_miss_note
 
-    before = diagnose(summary_line(err_pct="-27.0"))
+    baseline = diagnose(summary_line(err_pct="-27.0"))
     after = diagnose(summary_line(err_pct="-28.9"))
-    note = prediction_miss_note("controller.cruise_m_s", "down", before, after)
+    note = prediction_miss_note(
+        "controller.cruise_m_s",
+        "down",
+        after,
+        baseline=baseline,
+        baseline_label="kept baseline (cruise=0.38)",
+    )
     assert note is not None
     assert "1.9" in note or "worsened" in note
+    assert "kept baseline" in note
+
+
+def test_agent_journal_appends_on_run(tmp_path):
+    from optimizer.agent_journal import render_journal_entry
+    from datetime import datetime, timezone
+
+    journal = tmp_path / "AGENT_JOURNAL.md"
+    started = datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc)
+    records = [
+        {
+            "decision": "confirm-pass",
+            "param": "controller.pivot_w_max_rad_s",
+            "old": 0.9,
+            "new": 0.6,
+            "err_gain_pp": 2.0,
+            "run_id": "r20261021010000",
+        }
+    ]
+    text = render_journal_entry(
+        run_id="r20261021010000",
+        started=started,
+        finished=started,
+        records=records,
+        stop_reason="iteration limit",
+    )
+    assert "run_id=r20261021010000" in text
+    assert "Confirm" in text or "pivot" in text
+    journal.write_text("", encoding="utf-8")
+    from optimizer.agent_journal import append_agent_journal
+
+    append_agent_journal(
+        journal,
+        run_id="r20261021010000",
+        started=started,
+        finished=started,
+        records=records,
+        stop_reason="iteration limit",
+    )
+    assert "2026-10-21" in journal.read_text(encoding="utf-8")
 
 
 def test_mission_summary_json_without_summary_line_is_ignored(tmp_path, monkeypatch):

@@ -60,6 +60,9 @@ controller:
         encoding="utf-8",
     )
     repo = tmp_path
+    lap_dir = tmp_path / "lap"
+    lap_dir.mkdir()
+    shipped = (cfg_dir / "config.yaml").read_text(encoding="utf-8")
     line = apply_trial_params(
         repo,
         {
@@ -71,7 +74,9 @@ controller:
             "controller.coast_enabled": True,
             "controller.coast_margin_m": 0.0,
         },
+        lap_dir=lap_dir,
     )
     assert "cruise=0.50" in line
-    text = (cfg_dir / "config.yaml").read_text(encoding="utf-8")
+    assert (cfg_dir / "config.yaml").read_text(encoding="utf-8") == shipped
+    text = (lap_dir / "config.yaml").read_text(encoding="utf-8")
     assert "cruise_m_s: 0.50" in text

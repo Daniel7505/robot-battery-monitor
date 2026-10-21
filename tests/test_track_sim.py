@@ -30,8 +30,9 @@ def test_sharp_corner_pivot_and_finish(track, turn):
     assert abs(p["lateral_m"]) < 0.06  # pivoted on the corner's centre line
     assert abs(r["end_yaw_deg"] - turn) < 3.0
     ev = r["events"]
-    assert [e.split()[0] for e in ev][:5] == [
+    assert [e.split()[0] for e in ev][:6] == [
         "CORNER",
+        "TURN_RECORD",
         "PIVOT",
         "PIVOT_RECORD",
         "PIVOT",

@@ -7,6 +7,17 @@ import math
 from src.rowfit_control import RowfitController, STATE_PIVOT
 
 
+def test_turn_record_emitted_at_pivot_start():
+    ctl = RowfitController()
+    ctl.pivots = 0
+    ctl.corner_dir = 1
+    ctl.remaining_m = 0.5
+    ctl.turn_src = "corner"
+    ctl.gov.v = 0.2
+    ctl._start_pivot(0.0, entry_v_m_s=0.2)
+    assert any(m.startswith("TURN_RECORD turn=1 kind=pivot") for m in ctl.events)
+
+
 def test_pivot_record_emitted_on_every_end_pivot():
     ctl = RowfitController()
     ctl.pivots = 0

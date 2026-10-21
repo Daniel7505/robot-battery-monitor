@@ -94,7 +94,7 @@ V_APPROACH_M_S = 0.25  # cap while closing on the pivot point
 A_APPROACH_M_S2 = 0.30  # stopping profile v = sqrt(2 a remaining)
 V_CREEP_M_S = 0.04  # last centimetres (no zero-speed stall short of the point)
 PIVOT_ARRIVE_M = 0.015  # remaining distance that starts the pivot
-PIVOT_BRAKE_ZONE_M = 0.45  # slow to pivot entry speed before the pivot gate (back-wall turns)
+PIVOT_BRAKE_ZONE_M = 0.32  # creep cap before pivot gate (trade vs ~616 s reference lap)
 # One fresh fit may pull the pivot closer by this much. A short view
 # (lookahead under the lane gate) may not move it at all.
 VISION_SHRINK_MAX_M = 0.20
@@ -772,6 +772,12 @@ class RowfitController:
         )
         self._pivot_start_pos = pos_txt
         self._pivot_entry_v_m_s = float(entry_v_m_s if entry_v_m_s is not None else self.gov.v)
+        self._event(
+            f"TURN_RECORD turn={self.pivots + 1} kind=pivot "
+            f"dir={'left' if self.corner_dir > 0 else 'right'} "
+            f"entry_v_m_s={self._pivot_entry_v_m_s:.3f} rem_m="
+            f"{float(self.remaining_m or 0.0):.3f} src={self.turn_src}"
+        )
         coast_was = self._coast_active
         if self._coast_active:
             self._event(
@@ -1094,12 +1100,6 @@ class RowfitController:
                 )
             self._start_pivot(float(yaw), entry_v_m_s=v_entry)
             return self._pivot_tick(est, False, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s)
-        if rem <= PIVOT_BRAKE_ZONE_M:
-            v_cap = self._pivot_entry_speed_cap_m_s()
-            if float(self.gov.v) > v_cap + 1e-3:
-                return self._brake_to_pivot_cap(
-                    est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
-                )
         rem_brake = max(0.0, rem - PIVOT_ARRIVE_M)
         v_turn = self._turn_v_allowed(rem_brake)
         target = min(
@@ -1147,7 +1147,7 @@ class RowfitController:
                     margin_m=coast_cfg.margin_m,
                 )
                 d_avail = effective_turn_distance_m(rem_brake, perception_horizon_m=self.ld_max)
-                d_zone = min(d_coast, max(0.0, d_avail))
+                d_zone = max(min(d_coast, max(0.0, d_avail)), PIVOT_BRAKE_ZONE_M)
                 if rem_brake <= d_zone + 1e-3:
                     if not self._coast_active:
                         self._coast_starts += 1
@@ -1168,6 +1168,7 @@ class RowfitController:
         elif self._coast_active:
             self._event("COAST stop — coasting disabled")
             self._coast_active = False
+        v_cap = self._pivot_entry_speed_cap_m_s()
         if coasting:
             target = v_pivot
             self.target_speed = target
@@ -1187,6 +1188,10 @@ class RowfitController:
                     * max(0.0, float(dt))
                 )
                 self._coast_wh_saved += max(0.0, p_saved) / 3600.0
+        elif rem <= PIVOT_BRAKE_ZONE_M and float(self.gov.v) > v_cap + 1e-3:
+            return self._brake_to_pivot_cap(
+                est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
+            )
         else:
             self.target_speed = target
             # this profile can need more than the governor's slow-in decel: follow it directly

@@ -565,13 +565,6 @@ class WebotsLapRunner:
         since_local = launch.launched_utc.astimezone().replace(tzinfo=None) - timedelta(seconds=2)
         wall_started = launch.launched_monotonic
         self.cleanup()
-        config_note = ""
-        try:
-            from optimizer.lap_config import apply_trial_params
-
-            config_note = apply_trial_params(self.repo, params)
-        except Exception as exc:
-            config_note = f"optimizer: config apply failed ({type(exc).__name__}: {exc})"
         from optimizer.lap_folder import (
             create_lap_folder,
             lap_env,
@@ -580,12 +573,20 @@ class WebotsLapRunner:
         )
 
         lap_dir = create_lap_folder(self.repo, launch.trial_id)
+        config_note = ""
+        try:
+            from optimizer.lap_config import apply_trial_params
+
+            config_note = apply_trial_params(self.repo, params, lap_dir=lap_dir)
+        except Exception as exc:
+            config_note = f"optimizer: config apply failed ({type(exc).__name__}: {exc})"
         build = str((params or {}).get("bom_build") or "").strip()
         if not build:
             try:
                 from optimizer.config_store import ConfigStore
+                from optimizer.lap_config import lap_config_path
 
-                cfg = ConfigStore(self.repo / "config" / "config.yaml").read()
+                cfg = ConfigStore(lap_config_path(lap_dir)).read()
                 build = str(cfg.get("bom_build") or "").strip()
             except Exception:
                 build = ""

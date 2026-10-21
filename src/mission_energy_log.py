@@ -322,6 +322,7 @@ class MissionEnergyLog:
         self._ctrl_pivot_w_max_rad_s: float | None = None
         self._ctrl_k_steer: float | None = None
         self._ctrl_bom_build: str | None = None
+        self._ctrl_pivot_count: int | None = None
         self._gyro_found: bool | None = None
         self._coast_wh_saved: float | None = None
         self._coast_starts: int | None = None
@@ -831,6 +832,12 @@ class MissionEnergyLog:
         build = sample.get("ctrl_bom_build")
         if build not in (None, ""):
             self._ctrl_bom_build = str(build).strip()
+        pivot_n = sample.get("ctrl_pivot_count")
+        if pivot_n is not None:
+            try:
+                self._ctrl_pivot_count = int(pivot_n)
+            except (TypeError, ValueError):
+                pass
         for key, attr in (
             ("opt_run_id", "_opt_run_id"),
             ("opt_trial_id", "_opt_trial_id"),
@@ -1147,10 +1154,13 @@ class MissionEnergyLog:
             ctrl += f" coast_wh_saved={self._coast_wh_saved:.6f}"
         if self._coast_starts is not None:
             ctrl += f" coast_starts={self._coast_starts}"
+        if self._ctrl_pivot_count is not None:
+            ctrl += f" ctrl_pivot_count={self._ctrl_pivot_count}"
+        turns_n = self._ctrl_pivot_count if self._ctrl_pivot_count is not None else self._turns
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "
-            f"turns={self._turns} payload_kg={self._payload_kg:g} "
+            f"turns={turns_n} payload_kg={self._payload_kg:g} "
             f"soc_start={_fmt(self._soc_start, 2)} soc_end={_fmt(self._soc_end, 2)} "
             f"wh_model={_fmt(wh_model, 3)} wh_model_idle={_fmt(idle, 3)} "
             f"wh_model_drive={_fmt(drive, 3)} "

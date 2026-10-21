@@ -805,6 +805,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
             print(rowfit_rt.limits_line())
+            print(rowfit_rt.coast_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
         except Exception as exc:
@@ -2137,6 +2138,12 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
     loco["gyro_found"] = bool(getattr(rowfit_rt, "gyro_found", False))
     if cmd.get("coast_wh_saved") is not None:
         loco["coast_wh_saved"] = round(float(cmd["coast_wh_saved"]), 6)
+    if cmd.get("coast_starts") is not None:
+        loco["coast_starts"] = int(cmd["coast_starts"])
+    coast_cfg = getattr(getattr(rowfit_rt, "ctl", None), "coast_into_turn", None)
+    if coast_cfg is not None:
+        loco["ctrl_coast_enabled"] = 1 if coast_cfg.enabled else 0
+    loco["ctrl_pivot_count"] = int(getattr(getattr(rowfit_rt, "ctl", None), "pivots", 0))
     for env_key, field in (
         ("RBM_OPT_RUN_ID", "opt_run_id"),
         ("RBM_OPT_TRIAL_ID", "opt_trial_id"),

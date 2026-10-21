@@ -33,8 +33,9 @@ controller:
     log_path = tmp_path / "launch_1.log"
     applied: list[str] = []
 
-    def fake_apply(repo, params):
+    def fake_apply(repo, params, *, lap_dir=None):
         applied.append(str(params.get("controller.cruise_m_s")))
+        assert lap_dir is not None
         return "optimizer: applied trial config — cruise=0.50 m/s"
 
     with patch.object(runner, "cleanup", return_value=""):

@@ -50,6 +50,16 @@ _GYRO_MISSING = re.compile(r"Gyro: (?:not found|unavailable)", re.IGNORECASE)
 _SPEED_TRACE = re.compile(r"SPEED_TRACE .* v_body=(?P<v>[-+0-9.]+)")
 _TELEM_GAPS = re.compile(r"TELEMETRY_GAPS .* max_s=(?P<max>[-+0-9.]+)")
 _COAST_LINE = re.compile(r"coast_enabled[=:]\s*(?P<on>true|false|1|0)", re.IGNORECASE)
+_COAST_CONFIG = re.compile(
+    r"COAST CONFIG enabled=(?P<on>true|false).*?v_pivot_m_s=(?P<vp>[-+0-9.]+)",
+    re.IGNORECASE,
+)
+_TURN_RECORD = re.compile(
+    r"TURN_RECORD turn=(?P<turn>\d+) kind=(?P<kind>\w+).*?entry_v_m_s=(?P<entry>[-+0-9.]+)",
+    re.IGNORECASE,
+)
+_WAREHOUSE_COURSE_TURNS = 12
+_REFERENCE_WAREHOUSE_LAP_S = 616.0
 
 
 def _host_path(text: str) -> Path:
@@ -148,12 +158,14 @@ def find_duplicate_summary_lap(repo: Path, lap_dir: Path, fields: dict[str, str]
 def lap_env(folder: Path) -> dict[str, str]:
     """Environment variables for one lap's controller + mission summary."""
     resolved = path_abspath(folder)
+    lap_cfg = path_abspath(folder / "config.yaml")
     return {
         "RBM_LAP_DIR": resolved,
         "RBM_MISSION_SUMMARY_DIR": resolved,
         "RBM_MISSION_SUMMARY_BASENAME": _SUMMARY_NAME,
         "RBM_CONTROLLER_LOG": str(folder / _CONSOLE_NAME),
         "RBM_LOG_DIR": resolved,
+        "RBM_CONFIG_YAML": lap_cfg,
         "RBM_SPEED_TRACE": "1",
         "RBM_SPEED_TRACE_CONSOLE": "1",
     }
@@ -272,10 +284,29 @@ def parse_coast_enabled(console_text: str, fields: dict[str, str]) -> bool | Non
         if key in fields:
             return fields[key].lower() in {"1", "true", "yes"}
     for line in console_text.splitlines():
+        match = _COAST_CONFIG.search(line)
+        if match:
+            return match.group("on").lower() in {"1", "true"}
         match = _COAST_LINE.search(line)
         if match:
             return match.group("on").lower() in {"1", "true"}
     return None
+
+
+def parse_turn_records(console_text: str, *, summary_lines: list[str] | None = None) -> list[dict]:
+    blob = console_text
+    if summary_lines:
+        blob = blob + "\n" + "\n".join(summary_lines)
+    rows: list[dict] = []
+    for match in _TURN_RECORD.finditer(blob):
+        rows.append(
+            {
+                "turn": int(match.group("turn")),
+                "kind": match.group("kind"),
+                "entry_v_m_s": float(match.group("entry")),
+            }
+        )
+    return rows
 
 
 def parse_top_speed_m_s(console_text: str) -> float | None:
@@ -359,6 +390,7 @@ def build_flags(
     turns: list[dict],
     telemetry_gap_s: float | None,
     gyro: str,
+    turn_records: list[dict] | None = None,
 ) -> list[str]:
     flags: list[str] = []
     err = fields.get("err_pct")
@@ -377,11 +409,38 @@ def build_flags(
         flags.append(f"telemetry gap max {telemetry_gap_s:.2f} s (> 1 s)")
     if gyro == "missing":
         flags.append("gyro missing on mission summary")
-    turns_n = fields.get("turns")
-    if turns and turns_n is not None:
+    turns_n = fields.get("turns") or fields.get("ctrl_pivot_count")
+    pivot_rows = [row for row in (turns or []) if row.get("heading_change_deg") is not None]
+    if turn_records:
+        pivot_kinds = [r for r in turn_records if r.get("kind") == "pivot"]
+        if turns_n is not None:
+            try:
+                n = int(turns_n)
+                if len(pivot_kinds) != n:
+                    flags.append(
+                        f"turn count mismatch: summary/controller turns={n}, "
+                        f"TURN_RECORD pivots={len(pivot_kinds)}"
+                    )
+                if pivot_rows and len(pivot_rows) != n:
+                    flags.append(
+                        f"PIVOT_RECORD count={len(pivot_rows)} does not match summary turns={n}"
+                    )
+                try:
+                    dist_m = float(fields.get("dist_m") or 0.0)
+                except (TypeError, ValueError):
+                    dist_m = 0.0
+                if dist_m > 150.0 and n != _WAREHOUSE_COURSE_TURNS:
+                    flags.append(
+                        f"warehouse course expects {_WAREHOUSE_COURSE_TURNS} corners; summary turns={n}"
+                    )
+            except ValueError:
+                pass
+    elif turns_n is not None and pivot_rows:
         try:
-            if int(turns_n) != len(turns):
-                flags.append(f"turn count mismatch: summary turns={turns_n}, pivots logged={len(turns)}")
+            if int(turns_n) != len(pivot_rows):
+                flags.append(
+                    f"turn count mismatch: summary turns={turns_n}, PIVOT_RECORD={len(pivot_rows)}"
+                )
         except ValueError:
             pass
     return flags
@@ -401,12 +460,29 @@ def build_report_md(
 ) -> str:
     lines = summary_lines(payload)
     turns = parse_pivot_turns(console_text, summary_lines=lines)
+    turn_records = parse_turn_records(console_text, summary_lines=lines)
     coast = parse_coast_enabled(console_text, fields)
     top_v = parse_top_speed_m_s(console_text)
     limiter = classify_speed_limiter(top_v, limits, fields)
     gyro = gyro_status(console_text, fields, payload)
     gap = parse_telemetry_gap_s(lines, console_text)
-    flags = build_flags(fields=fields, turns=turns, telemetry_gap_s=gap, gyro=gyro)
+    flags = build_flags(
+        fields=fields,
+        turns=turns,
+        telemetry_gap_s=gap,
+        gyro=gyro,
+        turn_records=turn_records,
+    )
+    try:
+        duration = float(fields.get("duration_s") or 0.0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    if duration > _REFERENCE_WAREHOUSE_LAP_S + 30.0:
+        extra = duration - _REFERENCE_WAREHOUSE_LAP_S
+        flags.append(
+            f"lap time {duration:.0f} s is +{extra:.0f} s vs {_REFERENCE_WAREHOUSE_LAP_S:.0f} s reference "
+            f"(PIVOT_BRAKE_ZONE_M and brake-to-pivot creep add ~5–10 s per corner when ct is tight)"
+        )
     if duplicate_of:
         flags.insert(
             0,
@@ -580,11 +656,18 @@ def finalize_lap_folder(
     )
     (lap_dir / _REPORT_NAME).write_text(report, encoding="utf-8")
     turns = parse_pivot_turns(console_text, summary_lines=lines)
+    turn_records = parse_turn_records(console_text, summary_lines=lines)
     top_v = parse_top_speed_m_s(console_text)
     limiter = classify_speed_limiter(top_v, limits, fields)
     gyro = gyro_status(console_text, fields, payload)
     gap = parse_telemetry_gap_s(lines, console_text)
-    flags = build_flags(fields=fields, turns=turns, telemetry_gap_s=gap, gyro=gyro)
+    flags = build_flags(
+        fields=fields,
+        turns=turns,
+        telemetry_gap_s=gap,
+        gyro=gyro,
+        turn_records=turn_records,
+    )
     if duplicate_of:
         dup_flag = (
             f"FLAG: MISSION_SUMMARY duplicates lap `{duplicate_of}` "

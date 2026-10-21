@@ -10,6 +10,7 @@ A missing section leaves the robot on those constants.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -265,9 +266,17 @@ def _apply_physics_speed_limit(limits: ControllerLimits, data: dict | None) -> C
         )
 
 
+def resolve_config_yaml_path() -> Path:
+    """Lap trials may point at a per-lap copy via ``RBM_CONFIG_YAML``."""
+    override = (os.environ.get("RBM_CONFIG_YAML") or "").strip()
+    if override:
+        return Path(override)
+    return DEFAULT_CONFIG_PATH
+
+
 def load_controller_limits(path: Path | str | None = None) -> ControllerLimits:
     """Read ``config.yaml`` from disk (not the process-wide singleton)."""
-    config_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    config_path = Path(path) if path else resolve_config_yaml_path()
     if not config_path.is_file():
         return limits_from_mapping({})
     try:

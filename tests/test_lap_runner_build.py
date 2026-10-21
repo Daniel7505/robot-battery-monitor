@@ -28,10 +28,10 @@ def test_run_lap_uses_config_bom_build_when_params_omit_it(tmp_path):
     with patch.object(runner, "cleanup", return_value=""):
         with patch("optimizer.runner.webots_lap_host", return_value=True):
             with patch("optimizer.runner._wait_for_webots", return_value=False):
-                with patch("optimizer.lap_config.apply_trial_params", return_value="ok"):
-                    with patch("optimizer.runner.subprocess.Popen", side_effect=capture_popen):
-                        runner.run_lap(params={"controller.cruise_m_s": 0.44}, timeout_s=1.0, launch=launch)
+                with patch("optimizer.runner.subprocess.Popen", side_effect=capture_popen):
+                    runner.run_lap(params={"controller.cruise_m_s": 0.44}, timeout_s=1.0, launch=launch)
     assert env_captured.get("RBM_OPT_BOM_BUILD") == "heavy"
+    assert "config.yaml" in (env_captured.get("RBM_CONFIG_YAML") or "")
     laps = list((tmp_path / "logs" / "laps").glob("*"))
     assert len(laps) == 1
     import json

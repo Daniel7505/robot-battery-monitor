@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -23,6 +24,11 @@ from optimizer.trial_validity import summary_fresh_reason
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_CONTAINER = "robot-battery-dashboard"
 DASHBOARD_URL = "http://127.0.0.1:5000/"
+
+
+def webots_lap_host() -> bool:
+    """True on Windows hosts where the Webots launcher runs (not ``os.name`` alone)."""
+    return sys.platform == "win32"
 
 
 @dataclass
@@ -130,7 +136,7 @@ def _kill_webots() -> None:
 
 def _kill_stray_controller_python() -> None:
     """Best-effort cleanup of a stuck butlerbot controller after a short Webots exit."""
-    if os.name != "nt":
+    if not webots_lap_host():
         return
     subprocess.run(
         [
@@ -473,7 +479,7 @@ class WebotsLapRunner:
         log_path: Path | None = None,
         launch: LapLaunch | None = None,
     ) -> RunOutcome:
-        if os.name != "nt":
+        if not webots_lap_host():
             raise RuntimeError(
                 "Webots laps run on Windows only. Start scripts\\overnight_optimize.ps1 "
                 "on the PC that has Webots, or pass --dry-run."

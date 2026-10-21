@@ -48,6 +48,11 @@ def _host_path(text: str) -> Path:
     return PosixPath(text.replace("\\", "/"))
 
 
+def path_abspath(path: os.PathLike[str] | str) -> str:
+    """Absolute path for comparisons without ``Path.resolve()`` (safe when ``os.name`` is patched)."""
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
 def laps_root(repo: Path) -> Path:
     return _host_path(os.path.abspath(os.fspath(repo))) / _LAP_ROOT
 
@@ -66,7 +71,7 @@ def create_lap_folder(repo: Path, label: str, *, when: datetime | None = None) -
 
 def lap_env(folder: Path) -> dict[str, str]:
     """Environment variables for one lap's controller + mission summary."""
-    resolved = str(folder.resolve())
+    resolved = path_abspath(folder)
     return {
         "RBM_LAP_DIR": resolved,
         "RBM_MISSION_SUMMARY_DIR": resolved,
@@ -78,7 +83,7 @@ def lap_env(folder: Path) -> dict[str, str]:
 
 def write_legacy_log_pointer(log_path: Path, lap_dir: Path) -> None:
     """Keep optimizer ``launch_*.log`` paths useful."""
-    lap_dir = lap_dir.resolve()
+    lap_dir = _host_path(path_abspath(lap_dir))
     text = (
         f"optimizer: lap artifacts -> {lap_dir}\n"
         f"optimizer: controller console -> {lap_dir / _CONSOLE_NAME}\n"
@@ -527,8 +532,8 @@ def maybe_copy_summary_to_legacy_logs(repo: Path, lap_dir: Path) -> None:
         return
     from src.mission_summary_file import summary_directory
 
-    legacy = Path(summary_directory())
-    if legacy.resolve() == lap_dir.resolve():
+    legacy = _host_path(path_abspath(summary_directory()))
+    if path_abspath(legacy) == path_abspath(lap_dir):
         return
     legacy.mkdir(parents=True, exist_ok=True)
     stamp = lap_dir.name.split("_", 1)[0]

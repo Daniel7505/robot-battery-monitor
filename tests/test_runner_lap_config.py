@@ -38,7 +38,7 @@ controller:
         return "optimizer: applied trial config — cruise=0.50 m/s"
 
     with patch.object(runner, "cleanup", return_value=""):
-        with patch("optimizer.runner.os.name", "nt"):
+        with patch("optimizer.runner.webots_lap_host", return_value=True):
             with patch("optimizer.lap_config.apply_trial_params", side_effect=fake_apply):
                 with patch("optimizer.runner.subprocess.Popen") as popen:
                     proc = MagicMock()

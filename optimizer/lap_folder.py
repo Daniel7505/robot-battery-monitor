@@ -92,12 +92,13 @@ def create_lap_folder(repo: Path, label: str, *, when: datetime | None = None) -
     return folder
 
 
-def write_lap_meta(lap_dir: Path, launch: object) -> Path:
+def write_lap_meta(lap_dir: Path, launch: object, *, bom_build: str = "") -> Path:
     """Persist lap identity beside ``summary.json`` (optimizer + report card)."""
     meta = {
         "opt_run_id": getattr(launch, "run_id", None),
         "opt_trial_id": getattr(launch, "trial_id", None),
         "lap_start_wallclock": getattr(launch, "lap_start_wallclock", None) or "",
+        "bom_build": str(bom_build or "").strip(),
     }
     path = lap_dir / _META_NAME
     with path.open("w", encoding="utf-8") as fh:
@@ -153,6 +154,8 @@ def lap_env(folder: Path) -> dict[str, str]:
         "RBM_MISSION_SUMMARY_BASENAME": _SUMMARY_NAME,
         "RBM_CONTROLLER_LOG": str(folder / _CONSOLE_NAME),
         "RBM_LOG_DIR": resolved,
+        "RBM_SPEED_TRACE": "1",
+        "RBM_SPEED_TRACE_CONSOLE": "1",
     }
 
 
@@ -452,12 +455,20 @@ def build_report_md(
         or (load_lap_meta(lap_dir) or {}).get("lap_start_wallclock")
         or "—"
     )
+    bom_build = (
+        fields.get("ctrl_bom_build")
+        or fields.get("build")
+        or (payload or {}).get("bom_build")
+        or (load_lap_meta(lap_dir) or {}).get("bom_build")
+        or "—"
+    )
     md = [
         f"# Lap report — `{lap_dir.name}`",
         "",
         f"- **Label:** {label}",
         f"- **Folder:** `{lap_dir}`",
         f"- **lap_start_wallclock:** {lap_start}",
+        f"- **bom_build:** {bom_build}",
     ]
     if outcome_status:
         md.append(f"- **Optimizer outcome:** {outcome_status}")

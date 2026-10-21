@@ -23,6 +23,8 @@ def test_lap_env_points_at_folder(tmp_path):
     env = lap_env(folder)
     assert env["RBM_CONTROLLER_LOG"] == str(folder / "console.log")
     assert env["RBM_MISSION_SUMMARY_BASENAME"] == "summary.json"
+    assert env["RBM_SPEED_TRACE"] == "1"
+    assert env["RBM_SPEED_TRACE_CONSOLE"] == "1"
     from optimizer.lap_folder import path_abspath
 
     assert env["RBM_MISSION_SUMMARY_DIR"] == path_abspath(folder)

@@ -580,14 +580,26 @@ class WebotsLapRunner:
         )
 
         lap_dir = create_lap_folder(self.repo, launch.trial_id)
-        write_lap_meta(lap_dir, launch)
+        build = str((params or {}).get("bom_build") or "").strip()
+        if not build:
+            try:
+                from optimizer.config_store import ConfigStore
+
+                cfg = ConfigStore(self.repo / "config" / "config.yaml").read()
+                build = str(cfg.get("bom_build") or "").strip()
+            except Exception:
+                build = ""
+        if build.lower() in {"", "default", "yaml", "none"}:
+            build = "light"
+            config_note = (
+                f"{config_note}; optimizer: bom_build unset on trial — using light for Webots"
+            ).strip("; ").strip()
+        write_lap_meta(lap_dir, launch, bom_build=build)
         env = merge_launch_env(os.environ.copy(), launch)
         env.update(lap_env(lap_dir))
         env["RBM_MISSION_LAPS"] = "1"
-        build = str((params or {}).get("bom_build") or "").strip()
-        if build:
-            # launch_webots_twin.ps1 refuses the shipped world when this is set.
-            env["RBM_OPT_BOM_BUILD"] = build
+        # launch_webots_twin.ps1 refuses the shipped world when this is set.
+        env["RBM_OPT_BOM_BUILD"] = build
         # The controller prints arrows. A cp1252 console turns those into a crash.
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")

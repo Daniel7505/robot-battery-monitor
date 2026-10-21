@@ -45,6 +45,38 @@ def test_coast_no_op_when_cruise_below_pivot_entry():
     assert params.enabled is False
 
 
+def test_approach_coast_arms_at_cruise_above_pivot_entry():
+    """Cruise 0.44 m/s and pivot entry 0.04 m/s must arm coast before the pivot gate."""
+    from src.physics_speed_limit import CoastIntoTurnParams, TurnBrakeParams
+
+    tb = TurnBrakeParams(
+        a_brake_m_s2=7.848,
+        reaction_latency_s=0.32,
+        safety_margin=0.8,
+        approach_target_m_s=0.04,
+    )
+    coast = CoastIntoTurnParams(
+        enabled=True,
+        margin_m=0.0,
+        crr=LIGHT_CRR,
+        drag_linear_n_s_per_m=0.0,
+        total_mass_kg=LIGHT_MASS,
+        v_pivot_m_s=V_PIVOT,
+        a_brake_m_s2=7.848,
+    )
+    ctl = RowfitController(
+        v_cruise=V_CRUISE,
+        turn_brake=tb,
+        coast_into_turn=coast,
+        ld_max=LD_MAX,
+    )
+    ctl.state = STATE_APPROACH
+    ctl.remaining_m = 0.50
+    ctl.gov.v = V_CRUISE
+    ctl._approach_tick(None, False, 0.008, 0.32, 0.0)
+    assert ctl._coast_active is True
+
+
 def test_approach_coast_no_op_when_cruise_leq_pivot_speed_cap():
     """When effective cruise is not above pivot entry, coast never arms."""
     from src.physics_speed_limit import TurnBrakeParams

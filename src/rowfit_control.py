@@ -94,6 +94,7 @@ V_APPROACH_M_S = 0.25  # cap while closing on the pivot point
 A_APPROACH_M_S2 = 0.30  # stopping profile v = sqrt(2 a remaining)
 V_CREEP_M_S = 0.04  # last centimetres (no zero-speed stall short of the point)
 PIVOT_ARRIVE_M = 0.015  # remaining distance that starts the pivot
+PIVOT_BRAKE_ZONE_M = 0.45  # slow to pivot entry speed before the pivot gate (back-wall turns)
 # One fresh fit may pull the pivot closer by this much. A short view
 # (lookahead under the lane gate) may not move it at all.
 VISION_SHRINK_MAX_M = 0.20
@@ -752,7 +753,7 @@ class RowfitController:
         v_pivot = V_CREEP_M_S
         if coast_cfg is not None:
             v_pivot = max(V_CREEP_M_S, float(coast_cfg.v_pivot_m_s))
-        return v_pivot + 0.03
+        return v_pivot + 0.01
 
     def _start_pivot(self, yaw: float, *, entry_v_m_s: float | None = None) -> None:
         base = self.lane_yaw if self.lane_yaw is not None else float(yaw)
@@ -789,6 +790,40 @@ class RowfitController:
             f"pos={pos_txt} coast_into_turn={coast_was}"
         )
 
+    def _brake_to_pivot_cap(
+        self,
+        est,
+        new_frame: bool,
+        dt: float,
+        rem: float,
+        mapped: float | None,
+        v_cap: float,
+        *,
+        yaw_rate_rad_s: float | None = None,
+    ) -> dict:
+        self._coast_active = False
+        self.target_speed = V_CREEP_M_S
+        if self.gov.v > V_CREEP_M_S:
+            self.gov.v = max(V_CREEP_M_S, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+        v = self.gov.v
+        if mapped is None:
+            self.remaining_m = rem - v * dt
+        raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
+        raw = max(-STEER_CAP, min(STEER_CAP, raw))
+        steer = self.filter.step(raw, dt)
+        left, right = wheels_from_steer(
+            steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0
+        )
+        return self._cmd(
+            left,
+            right,
+            steer=steer,
+            reason=f"corner brake-to-pivot {rem:.2f} m v={v:.3f}>{v_cap:.3f}",
+            phase="rowfit_approach",
+            v=v,
+            new_frame=new_frame,
+        )
+
     def _end_pivot(self, yaw: float, how: str) -> None:
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
         if self.pivot_start_yaw is not None:
@@ -817,11 +852,10 @@ class RowfitController:
         }
         self.pivots += 1
         start_pos = getattr(self, "_pivot_start_pos", pos_txt)
-        print(
+        self._event(
             f"PIVOT_RECORD turn={self.pivots} dir={'left' if self.corner_dir > 0 else 'right'} "
             f"heading_change_deg={heading_change:+.1f} entry_v_m_s={self._pivot_entry_v_m_s:.3f} "
-            f"ct_max_m={self._pivot_lateral_max_m:.3f} start_pos={start_pos}",
-            flush=True,
+            f"ct_max_m={self._pivot_lateral_max_m:.3f} start_pos={start_pos}"
         )
         self._event(
             f"PIVOT done yaw {math.degrees(yaw):+.1f}deg (target {math.degrees(self.yaw_target):+.1f}, "
@@ -1055,26 +1089,17 @@ class RowfitController:
             v_entry = float(self.gov.v)
             v_cap = self._pivot_entry_speed_cap_m_s()
             if v_entry > v_cap + 1e-3:
-                self._coast_active = False
-                self.target_speed = V_CREEP_M_S
-                if self.gov.v > V_CREEP_M_S:
-                    self.gov.v = max(V_CREEP_M_S, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
-                v = self.gov.v
-                if mapped is None:
-                    self.remaining_m = rem - v * dt
-                raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
-                raw = max(-STEER_CAP, min(STEER_CAP, raw))
-                steer = self.filter.step(raw, dt)
-                left, right = wheels_from_steer(
-                    steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0
-                )
-                return self._cmd(
-                    left, right, steer=steer,
-                    reason=f"corner brake-to-pivot {rem:.2f} m v={v:.3f}>{v_cap:.3f}",
-                    phase="rowfit_approach", v=v, new_frame=new_frame,
+                return self._brake_to_pivot_cap(
+                    est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
                 )
             self._start_pivot(float(yaw), entry_v_m_s=v_entry)
             return self._pivot_tick(est, False, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s)
+        if rem <= PIVOT_BRAKE_ZONE_M:
+            v_cap = self._pivot_entry_speed_cap_m_s()
+            if float(self.gov.v) > v_cap + 1e-3:
+                return self._brake_to_pivot_cap(
+                    est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
+                )
         rem_brake = max(0.0, rem - PIVOT_ARRIVE_M)
         v_turn = self._turn_v_allowed(rem_brake)
         target = min(
@@ -1095,10 +1120,17 @@ class RowfitController:
             from src.physics_speed_limit import coast_decel_m_s2, coast_distance_m, effective_turn_distance_m
 
             v_pivot = float(coast_cfg.v_pivot_m_s)
-            if v_now <= v_pivot + 1e-3 or self.v_cruise <= v_pivot + 1e-3:
+            if self.v_cruise <= v_pivot + 1e-3:
                 if self._coast_active:
                     self._event(
-                        f"COAST stop (v_cruise {self.v_cruise:.2f} m/s <= pivot entry {v_pivot:.2f} m/s — no-op)"
+                        f"COAST stop — cruise {self.v_cruise:.2f} m/s is not above "
+                        f"pivot entry {v_pivot:.2f} m/s"
+                    )
+                    self._coast_active = False
+            elif v_now <= v_pivot + 1e-3:
+                if self._coast_active:
+                    self._event(
+                        f"COAST stop — at pivot entry speed (v={v_now:.2f} m/s, target {v_pivot:.2f} m/s)"
                     )
                     self._coast_active = False
             else:
@@ -1115,28 +1147,29 @@ class RowfitController:
                     margin_m=coast_cfg.margin_m,
                 )
                 d_avail = effective_turn_distance_m(rem_brake, perception_horizon_m=self.ld_max)
-                if d_coast > d_avail + 1e-3:
-                    if self._coast_active:
-                        self._event(
-                            f"COAST stop — need {d_coast:.2f} m but only {d_avail:.2f} m look-ahead; braking"
-                        )
-                        self._coast_active = False
-                elif rem_brake <= d_coast + 1e-3:
+                d_zone = min(d_coast, max(0.0, d_avail))
+                if rem_brake <= d_zone + 1e-3:
                     if not self._coast_active:
                         self._coast_starts += 1
-                        self._event(
+                        note = (
                             f"COAST start {v_now:.2f} m/s -> {v_pivot:.2f} m/s over ~{d_coast:.2f} m "
                             f"(a_coast={a_coast:.3f} m/s²)"
                         )
+                        if d_coast > d_avail + 1e-3:
+                            note += f" [look-ahead {d_avail:.2f} m < coast {d_coast:.2f} m]"
+                        self._event(note)
                         self._coast_active = True
                     coasting = True
-                else:
+                elif self._coast_active:
+                    self._event(
+                        f"COAST stop — left coast zone (rem_brake={rem_brake:.2f} m, zone={d_zone:.2f} m)"
+                    )
                     self._coast_active = False
         elif self._coast_active:
             self._event("COAST stop — coasting disabled")
             self._coast_active = False
         if coasting:
-            target = max(v_pivot, v_now)
+            target = v_pivot
             self.target_speed = target
             a_coast = coast_decel_m_s2(
                 crr=coast_cfg.crr,

@@ -2109,6 +2109,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         _steer_line = speed_trace.finish()
         if _steer_line:
             print(_steer_line)
+    if rowfit_rt is not None:
+        print(rowfit_rt.ctl.turn_log_line())
     print("ButlerBot controller stopped (simulation ended)")
 
 

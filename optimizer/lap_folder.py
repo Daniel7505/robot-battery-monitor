@@ -409,6 +409,16 @@ def build_flags(
         flags.append(f"telemetry gap max {telemetry_gap_s:.2f} s (> 1 s)")
     if gyro == "missing":
         flags.append("gyro missing on mission summary")
+    heading_turns = fields.get("heading_turns")
+    if heading_turns is not None and fields.get("turns") is not None:
+        try:
+            if int(heading_turns) != int(fields["turns"]):
+                flags.append(
+                    f"heading_turns={heading_turns} (yaw/90°) differs from pivot turns={fields['turns']}; "
+                    "see CURVE_RECORD for non-pivot bends"
+                )
+        except ValueError:
+            pass
     turns_n = fields.get("turns") or fields.get("ctrl_pivot_count")
     pivot_rows = [row for row in (turns or []) if row.get("heading_change_deg") is not None]
     if turn_records:
@@ -481,7 +491,7 @@ def build_report_md(
         extra = duration - _REFERENCE_WAREHOUSE_LAP_S
         flags.append(
             f"lap time {duration:.0f} s is +{extra:.0f} s vs {_REFERENCE_WAREHOUSE_LAP_S:.0f} s reference "
-            f"(PIVOT_BRAKE_ZONE_M and brake-to-pivot creep add ~5–10 s per corner when ct is tight)"
+            f"(pre-pivot creep; PIVOT_BRAKE_ZONE_M is 0.12 m so the axle still reaches the vertex)"
         )
     if duplicate_of:
         flags.insert(

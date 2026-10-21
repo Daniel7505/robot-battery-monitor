@@ -339,6 +339,7 @@ class MissionEnergyLog:
         self._mission_wh_idle = 0.0
         self._mission_wh_accel = 0.0
         self._mission_wh_turn = 0.0
+        self._mission_wh_hold = 0.0
         self._clear_segment()
         self._clear_power()
         self._run_id = ""
@@ -507,6 +508,7 @@ class MissionEnergyLog:
         self._mission_wh_idle += wh_idle
         self._mission_wh_accel += wh_accel_step
         self._mission_wh_turn += wh_turn_step
+        self._mission_wh_hold += _stall_hold_step_wh(sample, dt, speed, energy_build)
         self._note_steer_motion(sample, step_m if trusted else 0.0, dt)
         self._note_soc(sample)
         if trusted:
@@ -1093,11 +1095,12 @@ class MissionEnergyLog:
         accel_wh = None if model is None else model.get("wh_model_accel")
         # Sample integral, not yaw averaged over the whole lap.
         turn = round(self._mission_wh_turn, 3)
+        hold = round(self._mission_wh_hold, 3)
         drive = None
         wh_model = None
         if model is not None:
             drive = round(
-                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0),
+                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0) + hold,
                 3,
             )
             wh_model = round(float(idle or 0.0) + drive, 3)
@@ -1156,6 +1159,8 @@ class MissionEnergyLog:
             ctrl += f" coast_starts={self._coast_starts}"
         if self._ctrl_pivot_count is not None:
             ctrl += f" ctrl_pivot_count={self._ctrl_pivot_count}"
+            if int(self._turns) != int(self._ctrl_pivot_count):
+                ctrl += f" heading_turns={self._turns}"
         turns_n = self._ctrl_pivot_count if self._ctrl_pivot_count is not None else self._turns
         return (
             f"MISSION_SUMMARY build={self._build} "
@@ -1167,6 +1172,7 @@ class MissionEnergyLog:
             f"wh_model_roll={_fmt(roll, 3)} wh_model_visc={_fmt(visc, 3)} "
             f"wh_model_turn={_fmt(turn, 3)} "
             f"wh_model_accel={_fmt(accel_wh, 3)} "
+            f"wh_model_hold={_fmt(hold, 3)} "
             f"wh_measured_drive_shaft={_na(None if shaft is None else round(shaft, 3), 3)} "
             f"wh_measured_drive_elec={_na(None if elec is None else round(elec, 3), 3)} "
             f"eta_avg={eta} "
@@ -1327,6 +1333,30 @@ def _profile_for_energy(bom_build: str | None):
     if bom_build:
         return build_profile_from_bom(bom_build)
     return get_active_profile()
+
+
+def _stall_hold_step_wh(sample: dict, dt: float, speed: float, bom_build: str | None) -> float:
+    """Bill published stall power while both hinges are held near 0 rad/s.
+
+    Samples without wheel rates contribute nothing, so older logs stay put.
+    A creep at 0.04 m/s is about 0.5 rad/s on the 0.08 m hinge and is not a hold.
+    """
+    if not bom_build or dt <= 0.0:
+        return 0.0
+    from src.twin_energy import STALL_HOLD_BODY_M_S, STALL_HOLD_WHEEL_RAD_S, stall_hold_electrical_wh
+
+    if abs(float(speed)) >= STALL_HOLD_BODY_M_S:
+        return 0.0
+    left = _as_float(sample.get("left_wheel_rad_s"))
+    right = _as_float(sample.get("right_wheel_rad_s"))
+    if left is None or right is None:
+        return 0.0
+    if abs(left) >= STALL_HOLD_WHEEL_RAD_S or abs(right) >= STALL_HOLD_WHEEL_RAD_S:
+        return 0.0
+    try:
+        return stall_hold_electrical_wh(dt, _profile_for_energy(bom_build))
+    except Exception:
+        return 0.0
 
 
 def _turn_step_wh(

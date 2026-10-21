@@ -7,6 +7,7 @@ treated as evidence about the mechanism.
 from __future__ import annotations
 
 from optimizer.diagnose import Diagnosis
+from optimizer.evidence import worsened_beyond_band
 from optimizer.score import lap_metrics_match
 from optimizer.trial_validity import limits_match_intended
 
@@ -297,6 +298,7 @@ def _judge(
     noise_detail: str = "",
     repeat_label: str | None = None,
     limits_trusted: bool = True,
+    evidence: dict | None = None,
 ) -> tuple[str, str, str]:
     """Return verdict, mechanism paragraph, and the plain lesson."""
     if action == "invalid":
@@ -371,6 +373,13 @@ def _judge(
     if action == "inconclusive" or (
         within_noise and action in {"rollback", "inconclusive"}
     ):
+        beyond, why = worsened_beyond_band(evidence)
+        if beyond and action in {"rollback", "inconclusive"}:
+            return (
+                "refuted",
+                f"The lap moved opposite the hypothesis and {why}, so this direction is refuted.",
+                f"Do not repeat {knob} {direction}. {why}.",
+            )
         if (
             param == "controller.pivot_w_max_rad_s"
             and direction == "down"
@@ -498,17 +507,19 @@ def build_postmortem(
     if summary_trusted:
         mismatch = limits_match_intended(None if after is None else after.summary, intended)
         limits_ok = mismatch is None
+    compare = baseline_diag if baseline_diag is not None else before
     verdict, mechanism, lesson = _judge(
         param=param,
         direction=direction,
         action=action,
-        before=before,
+        before=compare,
         after=after,
         flat=flat,
         within_noise=within_noise,
         noise_detail=noise_detail,
         repeat_label=repeat_label,
         limits_trusted=limits_ok,
+        evidence=evidence,
     )
     if action in {"confirm-pass", "confirm-fail"}:
         predicted = {
@@ -519,7 +530,7 @@ def build_postmortem(
             )
         }
     else:
-        predicted = _predictions(param, direction, before)
+        predicted = _predictions(param, direction, compare)
     tag = ""
     if param and verdict in {"supported", "refuted", "inconclusive", "tentative"} and direction in {
         "up",
@@ -562,7 +573,7 @@ def build_postmortem(
         "lesson": lesson,
         "tag": tag,
         "next_hypothesis": "",
-        "metrics": _metric_rows(before, after, predicted),
+        "metrics": _metric_rows(compare, after, predicted),
         "prediction_miss": prediction_miss,
     }
     if evidence:

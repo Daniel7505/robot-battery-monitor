@@ -16,6 +16,8 @@ def test_config_loads_yaml():
     cfg = Config()
     assert cfg.get("robot", "name") is not None
     assert cfg.get("dashboard", "port") is not None
+    assert cfg.get("controller", "cruise_m_s") == pytest.approx(0.44)
+    assert cfg.get("controller", "pivot_w_max_rad_s") == pytest.approx(0.6)
 
 
 def test_config_get_whole_section():

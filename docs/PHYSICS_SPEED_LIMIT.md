@@ -12,6 +12,10 @@ effective_cruise_m_s = min(controller.cruise_m_s, v_max_m_s)
 
 **Hardware validation:** default **`brake_mu = 0.8`** and using Pololu **recommended continuous** torque as the braking torque limit are **planning assumptions** — validate with coast-down / brake tests on your floor and driver.
 
+## Operating assumption
+
+The sim models a **dark factory with no humans present**. Forward speed is capped only by **physics and automation constraints**: stopping distance (friction and motor braking), perception range (nadir look-ahead, stereo/radar when obstacles are on), and robot/shelf avoidance via the obstacle gate — **not** by a separate human-safety speed limit. If people may enter the workspace, add a **configurable hard cap** (for example **~1.5 m/s**) on top of the computed `v_max`; that cap is **not** implemented in this repo today.
+
 ## What the robot can see ahead
 
 ### (a) Upcoming turn / pivot (nadir lane cameras)
@@ -57,7 +61,7 @@ d_available = min(ld_max ≈ 1.60 m, obstacle detection range 4.0 m when obstacl
 
 Optional **`controller.speed_limit.stop_available_m`** overrides that computed distance. Turn approach still uses **`ld_max`** via path `remaining_m`.
 
-Hand-check at **t = 0.32 s**, light **`a = 7.848`**, heavy **`a = 0.874`**: stop / slow clearance (m) at **v = 0.44 / 1.13 / 2.48** — light **0.503 / 1.793 / 2.535** slow; heavy **0.602 / 2.442 / 5.662** slow. At heavy **v_max ≈ 1.13** the slow zone **≈ 2.44 m** stays inside **4.0 m** stereo range; light **v_max ≈ 2.48** → slow **≈ 2.54 m** likewise.
+Hand-check at **t = 0.32 s**, light **`a = 7.848`**, heavy **`a = 0.874`**: slow-zone clearance (m) at **v = 0.44 / 1.13 / 2.48** — light **1.503 / 1.793 / 2.535**; heavy **1.602 / 2.442 / 5.663**. At heavy **v_max ≈ 1.13** the slow zone **≈ 2.44 m** stays inside **4.0 m** stereo range; light **v_max ≈ 2.48** → slow **≈ 2.54 m** likewise.
 
 ## Braking deceleration
 

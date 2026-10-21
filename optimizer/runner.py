@@ -302,6 +302,34 @@ def read_dashboard_log(
     return _append_mission_summary(text, since_local, note, launch=launch)
 
 
+def _finalize_lap_artifacts(
+    repo: Path,
+    lap_dir: Path | None,
+    *,
+    launch: LapLaunch | None,
+    log_path: Path | None,
+    dashboard_text: str,
+    outcome: RunOutcome,
+) -> None:
+    if lap_dir is None:
+        return
+    from optimizer.lap_folder import (
+        finalize_lap_folder,
+        maybe_copy_summary_to_legacy_logs,
+        write_summary_from_dashboard_text,
+    )
+
+    write_summary_from_dashboard_text(lap_dir, dashboard_text, launch=launch)
+    finalize_lap_folder(
+        lap_dir,
+        label=launch.trial_id if launch is not None else "lap",
+        log_path=log_path,
+        outcome_status=outcome.status,
+        outcome_note=outcome.note,
+    )
+    maybe_copy_summary_to_legacy_logs(repo, lap_dir)
+
+
 def _finish_lap_outcome(
     *,
     launch: LapLaunch,
@@ -312,6 +340,8 @@ def _finish_lap_outcome(
     status_if_summary: str = "ok",
     ignored: str = "",
     log_path: Path | None = None,
+    lap_dir: Path | None = None,
+    repo: Path | None = None,
 ) -> RunOutcome:
     """Build the outcome after the launcher has stopped or a fresh summary arrived.
 
@@ -322,7 +352,7 @@ def _finish_lap_outcome(
     kind, detail = classify_summary(text, launch)
     if kind == "fresh":
         if elapsed < MIN_LAUNCH_WALL_S:
-            return RunOutcome(
+            outcome = RunOutcome(
                 "crash",
                 text,
                 (
@@ -331,13 +361,19 @@ def _finish_lap_outcome(
                     f"existing Webots, or launcher early-exit. {note}"
                 ).strip(),
             )
-        return RunOutcome(status_if_summary, text, note)
+        else:
+            outcome = RunOutcome(status_if_summary, text, note)
+        if repo is not None:
+            _finalize_lap_artifacts(
+                repo, lap_dir, launch=launch, log_path=log_path, dashboard_text=text, outcome=outcome
+            )
+        return outcome
     extra = detail or ignored
     excerpt = _launch_log_excerpt(log_path)
     if excerpt:
         extra = f"{extra} launch log: {excerpt}".strip()
     if proc.poll() is not None and kind != "fresh":
-        return RunOutcome(
+        outcome = RunOutcome(
             "crash",
             text,
             (
@@ -345,17 +381,23 @@ def _finish_lap_outcome(
                 f"for this trial. {extra} {note}"
             ).strip(),
         )
-    if extra:
-        return RunOutcome(
+    elif extra:
+        outcome = RunOutcome(
             "no_summary",
             text,
             f"{extra}. {note}".strip(),
         )
-    return RunOutcome(
-        "crash",
-        text,
-        f"launcher exited {proc.returncode} before a fresh MISSION_SUMMARY. {note}".strip(),
-    )
+    else:
+        outcome = RunOutcome(
+            "crash",
+            text,
+            f"launcher exited {proc.returncode} before a fresh MISSION_SUMMARY. {note}".strip(),
+        )
+    if repo is not None:
+        _finalize_lap_artifacts(
+            repo, lap_dir, launch=launch, log_path=log_path, dashboard_text=text, outcome=outcome
+        )
+    return outcome
 
 
 def _wait_dashboard(timeout_s: float = 90.0) -> bool:
@@ -444,7 +486,11 @@ class WebotsLapRunner:
             config_note = apply_trial_params(self.repo, params)
         except Exception as exc:
             config_note = f"optimizer: config apply failed ({type(exc).__name__}: {exc})"
+        from optimizer.lap_folder import create_lap_folder, lap_env, write_legacy_log_pointer
+
+        lap_dir = create_lap_folder(self.repo, launch.trial_id)
         env = merge_launch_env(os.environ.copy(), launch)
+        env.update(lap_env(lap_dir))
         env["RBM_MISSION_LAPS"] = "1"
         build = str((params or {}).get("bom_build") or "").strip()
         if build:
@@ -456,14 +502,12 @@ class WebotsLapRunner:
         sink = None
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
+            write_legacy_log_pointer(log_path, lap_dir)
             sink = open(log_path, "ab")
-            ctrl_log = log_path.with_name(f"{log_path.stem}_controller{log_path.suffix}")
-            env["RBM_CONTROLLER_LOG"] = str(ctrl_log)
             sink.write(
                 (
                     f"optimizer: launching trial={launch.trial_id} world={world_name} "
                     f"bom_build={build or 'unset'}\n{config_note}\n"
-                    f"optimizer: controller console -> {ctrl_log}\n"
                 ).encode()
             )
             sink.flush()
@@ -510,6 +554,8 @@ class WebotsLapRunner:
                         wall_started=wall_started,
                         ignored=ignored,
                         log_path=log_path,
+                        lap_dir=lap_dir,
+                        repo=self.repo,
                     )
                 if proc.poll() is not None:
                     text = _read()
@@ -528,6 +574,8 @@ class WebotsLapRunner:
                             wall_started=wall_started,
                             ignored=ignored,
                             log_path=log_path,
+                            lap_dir=lap_dir,
+                            repo=self.repo,
                         )
                     return _finish_lap_outcome(
                         launch=launch,
@@ -537,6 +585,8 @@ class WebotsLapRunner:
                         wall_started=wall_started,
                         ignored=ignored or detail,
                         log_path=log_path,
+                        lap_dir=lap_dir,
+                        repo=self.repo,
                     )
                 if time.time() >= deadline:
                     self.cleanup()
@@ -556,12 +606,23 @@ class WebotsLapRunner:
                             status_if_summary="timeout",
                             ignored=ignored,
                             log_path=log_path,
+                            lap_dir=lap_dir,
+                            repo=self.repo,
                         )
                     why = ignored or detail or "no fresh MISSION_SUMMARY for this trial"
                     excerpt = _launch_log_excerpt(log_path)
                     if excerpt:
                         why = f"{why} launch log: {excerpt}"
-                    return RunOutcome("timeout", text, f"{why}. {note}".strip())
+                    outcome = RunOutcome("timeout", text, f"{why}. {note}".strip())
+                    _finalize_lap_artifacts(
+                        self.repo,
+                        lap_dir,
+                        launch=launch,
+                        log_path=log_path,
+                        dashboard_text=text,
+                        outcome=outcome,
+                    )
+                    return outcome
                 time.sleep(self.poll_s)
         finally:
             if proc.poll() is None:

@@ -56,5 +56,10 @@ controller:
     assert log_path.is_file()
     body = log_path.read_bytes().decode("utf-8", errors="replace")
     assert "applied trial config" in body
-    assert "controller console" in body
+    assert "lap artifacts" in body
+    laps = list((tmp_path / "logs" / "laps").glob("*"))
+    assert len(laps) == 1
+    assert (laps[0] / "report.md").is_file()
+    env = popen.call_args.kwargs.get("env") or popen.call_args[1].get("env")
+    assert env["RBM_CONTROLLER_LOG"].endswith("console.log")
     assert outcome.status in {"crash", "no_summary", "timeout"}

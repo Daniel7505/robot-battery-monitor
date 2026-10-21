@@ -66,10 +66,14 @@ def append_mission_lines(
     state = _STATE.get(key)
     if state is None:
         os.makedirs(folder, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(folder, f"mission_summary_{stamp}.json")
-        if os.path.exists(path):
-            path = os.path.join(folder, f"mission_summary_{stamp}_{os.getpid()}.json")
+        basename = (os.environ.get("RBM_MISSION_SUMMARY_BASENAME") or "").strip()
+        if basename:
+            path = os.path.join(folder, basename)
+        else:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            path = os.path.join(folder, f"mission_summary_{stamp}.json")
+            if os.path.exists(path):
+                path = os.path.join(folder, f"mission_summary_{stamp}_{os.getpid()}.json")
         state = {"path": path, "lines": [], "source": source}
         _STATE[key] = state
     state["lines"].extend(kept)

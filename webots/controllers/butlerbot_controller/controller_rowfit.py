@@ -279,11 +279,25 @@ class RowfitRuntime:
         self.limits = load_controller_limits()
         eff_cruise = self.limits.effective_cruise_m_s or self.limits.cruise_m_s
         eff_straight = self.limits.effective_straight_m_s or self.limits.straight_m_s
+        turn_brake = None
+        try:
+            import yaml
+            from src.controller_limits import DEFAULT_CONFIG_PATH
+            from src.physics_speed_limit import turn_brake_params_for_robot
+
+            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as fh:
+                cfg_data = yaml.safe_load(fh) or {}
+            turn_brake = turn_brake_params_for_robot(
+                cfg_data, bom_build=self.limits.bom_build
+            )
+        except Exception:
+            pass
         self.ctl = RowfitController(
             k_steer=self.limits.k_steer,
             v_cruise=eff_cruise,
             v_straight=eff_straight,
             pivot_w_max=self.limits.pivot_w_max_rad_s,
+            turn_brake=turn_brake,
         )
         self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
         self.last_cmd: dict = {}
@@ -457,7 +471,15 @@ class RowfitRuntime:
         self.frames += 1
         return est
 
-    def command(self, dt: float, yaw: float | None = None, *, pose=None, log=print) -> dict:
+    def command(
+        self,
+        dt: float,
+        yaw: float | None = None,
+        *,
+        pose=None,
+        yaw_rate_rad_s: float | None = None,
+        log=print,
+    ) -> dict:
         """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
         sharp-corner pivot (without it a corner ends in the lost-lane brake).
         ``pose`` is ``(x, y)`` metres; with a track loaded it sets pivot
@@ -467,7 +489,13 @@ class RowfitRuntime:
         self._has_pending = False
         self._pending = None
         cmd = self.ctl.step(
-            est, new_frame=new, dt=dt, frame_dt=self.frame_dt, yaw=yaw, pose=pose
+            est,
+            new_frame=new,
+            dt=dt,
+            frame_dt=self.frame_dt,
+            yaw=yaw,
+            pose=pose,
+            yaw_rate_rad_s=yaw_rate_rad_s,
         )
         if self.obstacles is not None:
             gate = self.obstacles.gate

@@ -316,6 +316,8 @@ class MissionEnergyLog:
         self._ctrl_cruise_m_s: float | None = None
         self._ctrl_v_max_m_s: float | None = None
         self._ctrl_effective_cruise_m_s: float | None = None
+        self._ctrl_yaw_rate_rad_s: float | None = None
+        self._ctrl_pivot_heading_err_rad: float | None = None
         self._ctrl_straight_m_s: float | None = None
         self._ctrl_pivot_w_max_rad_s: float | None = None
         self._ctrl_k_steer: float | None = None
@@ -806,6 +808,8 @@ class MissionEnergyLog:
             ("ctrl_cruise_m_s", "_ctrl_cruise_m_s"),
             ("ctrl_v_max_m_s", "_ctrl_v_max_m_s"),
             ("ctrl_effective_cruise_m_s", "_ctrl_effective_cruise_m_s"),
+            ("ctrl_yaw_rate_rad_s", "_ctrl_yaw_rate_rad_s"),
+            ("ctrl_pivot_heading_err_rad", "_ctrl_pivot_heading_err_rad"),
             ("ctrl_straight_m_s", "_ctrl_straight_m_s"),
             ("ctrl_pivot_w_max_rad_s", "_ctrl_pivot_w_max_rad_s"),
             ("ctrl_k_steer", "_ctrl_k_steer"),
@@ -1082,6 +1086,10 @@ class MissionEnergyLog:
             ctrl += f" ctrl_v_max_m_s={self._ctrl_v_max_m_s:.2f}"
         if self._ctrl_effective_cruise_m_s is not None:
             ctrl += f" ctrl_effective_cruise_m_s={self._ctrl_effective_cruise_m_s:.2f}"
+        if self._ctrl_yaw_rate_rad_s is not None:
+            ctrl += f" ctrl_yaw_rate_rad_s={self._ctrl_yaw_rate_rad_s:.3f}"
+        if self._ctrl_pivot_heading_err_rad is not None:
+            ctrl += f" ctrl_pivot_heading_err_rad={self._ctrl_pivot_heading_err_rad:.3f}"
         if self._ctrl_straight_m_s is not None:
             ctrl += f" ctrl_straight_m_s={self._ctrl_straight_m_s:.2f}"
         if self._ctrl_pivot_w_max_rad_s is not None:

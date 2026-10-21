@@ -10,7 +10,46 @@ effective_cruise_m_s = min(controller.cruise_m_s, v_max_m_s)
 
 **Webots contact radius:** the shipped worlds keep a **0.08 m** contact cylinder (`src.webots_body.DRAWN_WHEEL_RADIUS_M`). Braking torque and friction use the **BoM catalog radius** (`geometry.wheel_radius_m`, **0.04 m** for 80 mm tires). Odometry and hinge energy still use 0.08 m in sim.
 
-**Hardware validation:** default **`brake_mu = 0.8`** (longitudinal peak on dry sealed concrete) and using Pololu **recommended continuous** torque (**0.981 N·m**) as the braking torque limit are **planning assumptions**. They are not measured on this robot yet. Validate both with coast-down / brake tests on your floor and driver before trusting the cap for safety-critical deployments.
+**Hardware validation:** default **`brake_mu = 0.8`** and using Pololu **recommended continuous** torque as the braking torque limit are **planning assumptions** — validate with coast-down / brake tests on your floor and driver.
+
+## What the robot can see ahead
+
+### (a) Upcoming turn / pivot (nadir lane cameras)
+
+| Source | Parameter | Value |
+|--------|-----------|------:|
+| `webots/worlds/butlerbot*.wbt` `NADIR_CAM_L/R` | resolution | **128 × 128** px |
+| same | `fieldOfView` | **1.2 rad** |
+| same | `near` | **0.03 m** |
+| `src/lane_vision.py` | `MAX_RANGE_M` (floor projection discard) | **3.5 m** |
+| `src/lane_vision.py` `camera_coverage()` on repo poses | `top_row_x_m` (centre column) | **≈ 1.96 m** ahead of axle |
+| `src/rowfit_control.py` `lookahead_bounds_from_coverage()` | `ld_max` = min(top row) − **`LD_FAR_MARGIN_M` 0.36 m** | **≈ 1.60 m** |
+| `src/rowfit_control.py` | pure-pursuit clamp | **`ld_min` … `ld_max`** (typ. **0.55–1.60 m**) |
+| `src/lane_vision.py` corner cues | pivot distance when outer line “widens then disappears” | vision-limited (often **~1–2 m** before the crossbar; see `tests/test_corner.py`) |
+
+**Turn-approach braking** uses path distance `remaining_m` from rowfit (vision corner / junction centre, optionally GPS track), capped by **`ld_max`** (what nadir geometry is trusted for):
+
+```text
+d_eff = min(remaining_m, ld_max)
+v_allowed = max_speed_for_distance(d_eff, …, v_target = approach_target_m_s)
+v_cmd = min(effective_cruise, v_allowed, …)
+```
+
+Config: `controller.speed_limit.approach_target_m_s` (default **0.04 m/s**, `V_CREEP_M_S`).
+
+### (b) Obstacles (stereo + radar, when `RBM_OBSTACLES=1`)
+
+| Source | Parameter | Value |
+|--------|-----------|------:|
+| `webots/worlds/butlerbot*.wbt` `STEREO_CAM_*` | size / FOV | **320×240**, **1.4 rad** |
+| `webots/worlds/butlerbot*.wbt` `RADAR_FWD` | range / HFOV | **0.15–8 m**, **1.0 rad** |
+| `src/stereo_depth.py` `CorridorParams` | corridor depth | **4.0 m** (`max_range_m`) |
+| `docs/OBSTACLES.md` | floor seen from axle | **≈ 0.75 m** |
+| `src/obstacle_gate.py` | `STANDOFF_M` | **0.35 m** |
+| same | stop distance at 0.44 m/s, decel 0.8 m/s² | **≈ 0.61 m** clearance |
+| same | slow zone = d_stop(cruise) + **`SLOW_EXTRA_M` 1.0 m** | **≈ 1.61 m** |
+
+The fixed **`stop_available_m = 1.0 m`** cruise cap is separate from obstacle gate distances; turn approach uses **`ld_max`**, not the 1.0 m budget.
 
 ## Braking deceleration
 
@@ -26,9 +65,9 @@ Friction-limited deceleration (driven wheels):
 a_friction = μ · f_w · g     (m/s²)
 ```
 
-- `μ` → `controller.speed_limit.brake_mu` (default **0.8**, ASSUMPTION dry rubber on sealed concrete; **not** Webots `coulombFriction` **8** in `butlerbot_warehouse.wbt`)
-- `f_w` → `controller.speed_limit.driven_weight_fraction` (default **1.0**, from `bom.json` `assumptions.notes.turning_scrub`: both drive wheels carry weight)
-- `g` = **9.81 m/s²** (`src.twin_energy.GRAVITY_M_S2`)
+- `μ` → `controller.speed_limit.brake_mu` (default **0.8**)
+- `f_w` → `controller.speed_limit.driven_weight_fraction` (default **1.0**)
+- `g` = **9.81 m/s²**
 
 Motor/torque-limited deceleration:
 
@@ -37,77 +76,50 @@ F_brake = n_motors · τ_brake / r_wheel     (N)
 a_motor = F_brake / m                      (m/s²)
 ```
 
-- `r_wheel` → BoM `geometry.wheel_radius_m` (**0.04 m** for light/budget 80 mm wheels)
-- `τ_brake` → Pololu **recommended continuous** **0.981 N·m** (10 kg·cm) from `bom.json` / `torque_headroom.limit_nm_per_motor`, unless `controller.speed_limit.brake_torque_nm_per_motor` is set
-- `n_motors` = **2**
+- `r_wheel` = BoM **0.04 m**; `τ_brake` = **0.981 N·m** continuous unless overridden; `n_motors` = **2**
+- `a_brake = min(a_friction, a_motor)`
 
-Combined:
+## Stopping / approach speed formulas
 
-```text
-a_brake = min(a_friction, a_motor)     (m/s²)
-```
-
-## Stopping distance and v_max
-
-Available path length `d` (`controller.speed_limit.stop_available_m`, default **1.0 m**) must cover reaction travel plus braking:
+With reaction time `t` and safety margin `m`:
 
 ```text
-d = v · t_latency + v² / (2 · a_brake)
+d = v·t + (v² − v_target²) / (2·a)
+v = −a·t + sqrt(a²·t² + 2·a·d + v_target²)
+v_cmd = m · v
 ```
 
-with `t_latency` = `controller.speed_limit.reaction_latency_s` (default **0.32 s**, one lane camera frame).
+Braking must begin by ( **`v_target = 0`**, from **`v = 0.44 m/s`**):
 
-**Consistent closed form** (positive root):
+| case | a (m/s²) | d_start = v·t + v²/(2a) |
+|------|---------:|------------------------:|
+| light | **7.848** | **≈ 0.153 m** |
+| heavy (+50 kg) | **0.874** | **≈ 0.252 m** |
 
-```text
-v = −a·t + sqrt(a²·t² + 2·a·d)
-v_max_m_s = safety_margin · v
-```
+**`v_max_cruise`** if the only horizon is nadir look-ahead **`d_lookahead ≈ 1.60 m`** (`t = 0.32 s`, `m = 0.8`, `v_target = 0`):
 
-`safety_margin` = `controller.speed_limit.safety_margin` (default **0.8**).
+| case | a (m/s²) | v_max_cruise (m/s) |
+|------|---------:|-------------------:|
+| light | **7.848** | **≈ 2.48** |
+| heavy | **0.874** | **≈ 1.13** |
 
-Logging: `CONTROLLER LIMITS … v_max=… effective_cruise=… limit=physics|cruise_pref`, plus `ctrl_v_max_m_s` and `ctrl_effective_cruise_m_s` on `MISSION_SUMMARY`.
+(Cruise pref **0.44 m/s** still binds unless payload + short `d_eff` cap lower.)
 
-## Worked examples (t = 0.32 s, margin = 0.8, μ = 0.8, τ = 0.981 N·m, r = 0.04 m, n = 2)
+## Gyro-assisted pivot
 
-Use the same formula the code implements (`src/physics_speed_limit.py`).
+Worlds add **`Gyro { name "gyro" }`** beside `InertialUnit`. Controller reads **`gyro.getValues()[2]`** (rad/s, + = left). Pivot rate tracks `pivot_w_max_rad_s` with gyro feedback; completion can use **integrated heading** when gyro is live. Telemetry: `ctrl_yaw_rate_rad_s`, `ctrl_pivot_heading_err_rad`, `ctrl_pivot_integrated_deg`.
 
-### Light body, no payload (m = 6.142 kg), d = 1.0 m
+## Worked examples (t = 0.32 s, margin = 0.8, μ = 0.8, τ = 0.981 N·m, r = 0.04 m)
 
-| Quantity | Value |
-|----------|------:|
-| a_friction | 0.8 × 9.81 = **7.848 m/s²** |
-| F_brake | 2 × 0.981 / 0.04 = **49.05 N** |
-| a_motor | 49.05 / 6.142 = **7.986 m/s²** |
-| a_brake | min(7.848, 7.986) = **7.848 m/s²** (friction-limited) |
-| v before margin | −7.848×0.32 + √(7.848²×0.32² + 2×7.848×1.0) = **2.177 m/s** |
-| **v_max** | 0.8 × 2.177 = **1.742 m/s** |
-| effective_cruise (cruise pref 0.44) | min(0.44, 1.742) = **0.44 m/s** (cruise preference active) |
+### Light body (m = 6.142 kg), d = 1.0 m
 
-### Heavy payload (m = 6.142 + 50 = **56.142 kg**), torque-limited
+| a_brake | **7.848 m/s²** (friction-limited) |
+| v_max | **≈ 1.742 m/s** → cruise pref **0.44 m/s** active |
 
-| Quantity | Value |
-|----------|------:|
-| a_friction | **7.848 m/s²** (unchanged) |
-| a_motor | 49.05 / 56.142 = **0.874 m/s²** |
-| a_brake | **0.874 m/s²** |
+### Heavy payload (m = 56.142 kg)
 
-**d = 1.0 m** (default stop budget — physics does *not* bind cruise 0.44):
+| a_brake | **0.874 m/s²** (torque-limited) |
+| d = 1.0 m | v_max **≈ 0.857 m/s** → cruise pref active |
+| d = 0.33 m | v_max **≈ 0.424 m/s** → **physics cap active** |
 
-| v before margin | −0.874×0.32 + √(0.874²×0.32² + 2×0.874×1.0) = **1.072 m/s** |
-| **v_max** | 0.8 × 1.072 = **0.857 m/s** |
-| effective_cruise | min(0.44, 0.857) = **0.44 m/s** (cruise preference active) |
-
-**d = 0.35 m** (shorter aisle — still barely above cruise pref):
-
-| v before margin | **0.551 m/s** |
-| **v_max** | 0.8 × 0.551 = **0.441 m/s** |
-| effective_cruise | min(0.44, 0.441) = **0.44 m/s** (cruise preference still active; v_max ≈ cruise) |
-
-**d = 0.33 m** (heavy case with a **clearly active** physics cap vs cruise 0.44):
-
-| v before margin | −0.874×0.32 + √(0.874²×0.32² + 2×0.874×0.33) = **0.530 m/s** |
-| **v_max** | 0.8 × 0.530 = **0.424 m/s** |
-| effective_cruise | min(0.44, 0.424) = **0.424 m/s** (**physics limit active**) |
-
-Implementation: `src/physics_speed_limit.py`, wired in `src/controller_limits.py` and `webots/controllers/butlerbot_controller/controller_rowfit.py`.
+Implementation: `src/physics_speed_limit.py`, `src/rowfit_control.py` (`_approach_tick`, pivot + gyro), `webots/controllers/butlerbot_controller/`.

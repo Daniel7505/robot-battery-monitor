@@ -246,6 +246,7 @@ class RowfitController:
         v_cruise: float | None = None,
         v_straight: float | None = None,
         pivot_w_max: float | None = None,
+        turn_brake=None,
     ) -> None:
         self.k_steer = float(k_steer)
         self.ld_min = float(ld_min)
@@ -321,11 +322,17 @@ class RowfitController:
         # obstacles (src.obstacle_gate): an external forward-speed cap, None = no cap. It only
         # caps speed; the lane / junction state machine underneath keeps its progress.
         self.obstacle_v_cap: float | None = None
+        # Turn-approach braking (``src.physics_speed_limit.TurnBrakeParams``).
+        self.turn_brake = turn_brake
+        self.pivot_integrated_rad = 0.0
+        self.pivot_yaw_rate_rad_s = 0.0
+        self.pivot_heading_err_rad = 0.0
 
     def reset(self) -> None:
         tracker, route, mb, la = self.tracker, self.policy.route, self.max_blind_m, self.look_around
         track = self.track
         vc, vs, pw = self.v_cruise, self.v_straight, self.pivot_w_max
+        tb = self.turn_brake
         self.__init__(
             k_steer=self.k_steer,
             ld_min=self.ld_min,
@@ -333,6 +340,7 @@ class RowfitController:
             v_cruise=vc,
             v_straight=vs,
             pivot_w_max=pw,
+            turn_brake=tb,
         )
         self.tracker = tracker
         self.track = track
@@ -684,6 +692,25 @@ class RowfitController:
             **self.corner_fields(),
         })
 
+    def _turn_v_allowed(self, d_remaining_m: float) -> float | None:
+        """Physics cap from distance to the pivot (m/s), or None if disabled."""
+        tb = self.turn_brake
+        if tb is None:
+            return None
+        from src.physics_speed_limit import effective_turn_distance_m, max_speed_for_distance_m
+
+        d = effective_turn_distance_m(
+            d_remaining_m,
+            perception_horizon_m=self.ld_max,
+        )
+        return max_speed_for_distance_m(
+            d,
+            a_brake_m_s2=tb.a_brake_m_s2,
+            reaction_latency_s=tb.reaction_latency_s,
+            safety_margin=tb.safety_margin,
+            v_target_m_s=tb.approach_target_m_s,
+        )
+
     def corner_fields(self) -> dict:
         return {
             "state": self.state,
@@ -697,6 +724,9 @@ class RowfitController:
             "openings": self.junction.openings().replace(" ", "") if self.junction is not None else "",
             "route_choice": self.route_choice,
             "blind_m": round(self.blind_m, 3) if self.state in (STATE_GAP, STATE_LOOK) else None,
+            "yaw_rate_rad_s": round(self.pivot_yaw_rate_rad_s, 4),
+            "pivot_heading_err_rad": round(self.pivot_heading_err_rad, 4),
+            "pivot_integrated_deg": round(math.degrees(self.pivot_integrated_rad), 2),
         }
 
     def _start_pivot(self, yaw: float) -> None:
@@ -706,6 +736,7 @@ class RowfitController:
         self.pivot_w = 0.0
         self.pivot_t = 0.0
         self.pivot_settle = 0
+        self.pivot_integrated_rad = 0.0
         self.state = STATE_PIVOT
         self.gov.v = 0.0
         self.filter = SteerFilter()
@@ -741,9 +772,25 @@ class RowfitController:
         if self.tracker is not None and hasattr(self.tracker, "begin_reacquire"):
             self.tracker.begin_reacquire(REACQUIRE_RELAX_FRAMES)
 
-    def _pivot_tick(self, est, new_frame: bool, dt: float, yaw: float) -> dict:
+    def _pivot_tick(
+        self,
+        est,
+        new_frame: bool,
+        dt: float,
+        yaw: float,
+        *,
+        yaw_rate_rad_s: float | None = None,
+    ) -> dict:
         self.pivot_t += dt
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
+        self.pivot_heading_err_rad = float(err)
+        rate = 0.0 if yaw_rate_rad_s is None else float(yaw_rate_rad_s)
+        self.pivot_yaw_rate_rad_s = rate
+        from src.gyro_pivot import integrate_heading_rad, pivot_turn_progress_rad, rate_tracking_adjustment
+
+        if yaw_rate_rad_s is not None:
+            self.pivot_integrated_rad = integrate_heading_rad(self.pivot_integrated_rad, rate, dt)
+        turn_prog = pivot_turn_progress_rad(self.pivot_integrated_rad, self.corner_dir)
         if new_frame and est is not None and est.valid and abs(err) < PIVOT_LANE_EXIT_RAD:
             if (est.n_left >= 4 and est.n_right >= 4 and abs(est.heading_rad) < PIVOT_LANE_ALIGNED_RAD
                     and est.confidence >= 0.4):
@@ -758,6 +805,15 @@ class RowfitController:
             self._end_pivot(yaw, "yaw on target")
             return self._cmd(0.0, 0.0, reason="pivot done (yaw)", phase="rowfit_" + self.state.lower(),
                              new_frame=new_frame)
+        if (
+            yaw_rate_rad_s is not None
+            and turn_prog >= PIVOT_ANGLE_RAD - PIVOT_TOL_RAD
+            and abs(rate) <= PIVOT_W_SETTLED
+            and abs(err) <= PIVOT_LANE_ALIGNED_RAD
+        ):
+            self._end_pivot(yaw, "integrated heading")
+            return self._cmd(0.0, 0.0, reason="pivot done (gyro heading)", phase="rowfit_" + self.state.lower(),
+                             new_frame=new_frame)
         if self.pivot_t > PIVOT_TIMEOUT_S:
             self.state = STATE_LANE
             self._event(f"PIVOT timeout after {self.pivot_t:.1f} s, yaw err {math.degrees(err):+.1f}deg — braking")
@@ -765,6 +821,9 @@ class RowfitController:
                              new_frame=new_frame)
         want = PIVOT_K_YAW * err
         want = max(-self.pivot_w_max, min(self.pivot_w_max, want))
+        if yaw_rate_rad_s is not None:
+            want += rate_tracking_adjustment(want, rate)
+            want = max(-self.pivot_w_max, min(self.pivot_w_max, want))
         if abs(err) > PIVOT_TOL_RAD and abs(want) < PIVOT_W_MIN:
             want = math.copysign(PIVOT_W_MIN, err)
         # never ask for more than we can stop from before the target
@@ -776,8 +835,17 @@ class RowfitController:
         return self._cmd(left, right, reason=f"pivot err {math.degrees(err):+.1f}deg",
                          phase="rowfit_pivot", new_frame=new_frame)
 
-    def step(self, est=None, *, new_frame: bool = False, dt: float = 0.008, frame_dt: float = 0.32,
-             yaw: float | None = None, pose=None) -> dict:
+    def step(
+        self,
+        est=None,
+        *,
+        new_frame: bool = False,
+        dt: float = 0.008,
+        frame_dt: float = 0.32,
+        yaw: float | None = None,
+        pose=None,
+        yaw_rate_rad_s: float | None = None,
+    ) -> dict:
         """One physics tick. ``yaw``: IMU yaw (rad, + = left/CCW). Without it a
         corner is still approached, but the robot brakes at the pivot point.
 
@@ -798,9 +866,13 @@ class RowfitController:
                 self.state = STATE_LANE
                 self.frames_lost = LOST_FRAMES_STOP
             else:
-                return self._pivot_tick(est, new_frame, dt, float(yaw))
+                return self._pivot_tick(
+                    est, new_frame, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s
+                )
         if self.state == STATE_APPROACH:
-            return self._approach_tick(est, new_frame, dt, frame_dt, yaw)
+            return self._approach_tick(
+                est, new_frame, dt, frame_dt, yaw, yaw_rate_rad_s=yaw_rate_rad_s
+            )
         if self.state == STATE_JUNCTION:
             return self._junction_tick(est, new_frame, dt, yaw)
         if self.state == STATE_GAP:
@@ -863,7 +935,16 @@ class RowfitController:
             phase = "rowfit" if self.frames_lost == 0 else "rowfit_hold"
         return self._cmd(left, right, steer=steer, reason="rowfit keep", phase=phase, v=v, new_frame=new_frame)
 
-    def _approach_tick(self, est, new_frame: bool, dt: float, frame_dt: float, yaw) -> dict:
+    def _approach_tick(
+        self,
+        est,
+        new_frame: bool,
+        dt: float,
+        frame_dt: float,
+        yaw,
+        *,
+        yaw_rate_rad_s: float | None = None,
+    ) -> dict:
         if new_frame:
             # steer on the (clipped) lane fit; missing / held frames do not count
             # toward the lost-lane brake here: the lane is SUPPOSED to end ahead.
@@ -898,8 +979,17 @@ class RowfitController:
                 return self._cmd(0.0, 0.0, reason="corner without IMU", phase="rowfit_stop", brake=True,
                                  new_frame=new_frame)
             self._start_pivot(float(yaw))
-            return self._pivot_tick(est, False, dt, float(yaw))
-        target = min(V_APPROACH_M_S, math.sqrt(2.0 * A_APPROACH_M_S2 * max(0.0, rem - PIVOT_ARRIVE_M)))
+            return self._pivot_tick(est, False, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s)
+        rem_brake = max(0.0, rem - PIVOT_ARRIVE_M)
+        v_turn = self._turn_v_allowed(rem_brake)
+        target = min(
+            V_APPROACH_M_S,
+            math.sqrt(2.0 * A_APPROACH_M_S2 * rem_brake),
+        )
+        if v_turn is not None:
+            target = min(target, v_turn, self.v_cruise)
+        else:
+            target = min(target, self.v_cruise)
         target = max(V_CREEP_M_S, target)
         if self.obstacle_v_cap is not None:
             target = min(target, max(0.0, float(self.obstacle_v_cap)))

@@ -79,6 +79,54 @@ def combine_brake_decel_m_s2(a_friction: float, a_motor: float) -> float:
     return min(max(0.0, float(a_friction)), max(0.0, float(a_motor)))
 
 
+def braking_distance_m(
+    v_m_s: float,
+    *,
+    a_brake_m_s2: float,
+    reaction_latency_s: float,
+    v_target_m_s: float = 0.0,
+) -> float:
+    """Path length to decelerate from ``v_m_s`` to ``v_target_m_s`` with latency (m).
+
+    ``d = v·t + (v² − v_target²) / (2·a)`` (constant ``a_brake`` after reaction time).
+    """
+    v = max(0.0, float(v_m_s))
+    vt = max(0.0, float(v_target_m_s))
+    a = max(1e-6, float(a_brake_m_s2))
+    t = max(0.0, float(reaction_latency_s))
+    if v <= vt + 1e-9:
+        return 0.0
+    return v * t + (v * v - vt * vt) / (2.0 * a)
+
+
+def max_speed_for_distance_m(
+    d_available_m: float,
+    *,
+    a_brake_m_s2: float,
+    reaction_latency_s: float,
+    safety_margin: float = 1.0,
+    v_target_m_s: float = 0.0,
+) -> float:
+    """Largest entry speed allowed ``d_available_m`` before the pivot (m/s).
+
+    From ``d = v·t + (v² − v_target²) / (2·a)``:
+
+    ``v = −a·t + sqrt(a²·t² + 2·a·d + v_target²)``, then × ``safety_margin``.
+    """
+    d = max(0.0, float(d_available_m))
+    a = max(1e-6, float(a_brake_m_s2))
+    t = max(0.0, float(reaction_latency_s))
+    vt = max(0.0, float(v_target_m_s))
+    margin = max(0.0, float(safety_margin))
+    if d <= 0.0:
+        return vt * margin
+    under = a * a * t * t + 2.0 * a * d + vt * vt
+    if under <= 0.0:
+        return vt * margin
+    v = -a * t + math.sqrt(under)
+    return max(vt, v * margin)
+
+
 def max_speed_from_stop_distance_m(
     *,
     d_available_m: float,
@@ -98,17 +146,91 @@ def max_speed_from_stop_distance_m(
 
     Then multiply by ``safety_margin`` (0–1 typical).
     """
-    d = max(0.0, float(d_available_m))
-    a = max(1e-6, float(a_brake_m_s2))
-    t = max(0.0, float(reaction_latency_s))
-    margin = max(0.0, float(safety_margin))
-    if d <= 0.0:
-        return 0.0
-    under = a * a * t * t + 2.0 * a * d
-    if under <= 0.0:
-        return 0.0
-    v = -a * t + math.sqrt(under)
-    return max(0.0, v * margin)
+    return max_speed_for_distance_m(
+        d_available_m,
+        a_brake_m_s2=a_brake_m_s2,
+        reaction_latency_s=reaction_latency_s,
+        safety_margin=safety_margin,
+        v_target_m_s=0.0,
+    )
+
+
+@dataclass(frozen=True)
+class TurnBrakeParams:
+    """Mass/payload-aware turn-approach braking (shared with cruise cap)."""
+
+    a_brake_m_s2: float
+    reaction_latency_s: float
+    safety_margin: float
+    approach_target_m_s: float  # m/s — speed at pivot entry (often V_CREEP)
+
+
+DEFAULT_APPROACH_TARGET_M_S = 0.04  # matches rowfit V_CREEP_M_S
+
+# Turn/pivot perception (nadir lane cameras — see docs/PHYSICS_SPEED_LIMIT.md).
+# ``lane_vision.MAX_RANGE_M``: floor projection discard beyond 3.5 m.
+# ``rowfit_control.lookahead_bounds_from_coverage``: ld_max = min(top_row_x_m) − 0.36 m.
+NADIR_FLOOR_PROJECTION_MAX_M = 3.5
+NADIR_LD_FAR_MARGIN_M = 0.36  # rowfit_control.LD_FAR_MARGIN_M
+
+
+def nadir_lookahead_max_m(coverage_top_row_x_m: float) -> float:
+    """Row-fit pursuit / turn planning horizon from nadir top-row reach (m)."""
+    return max(0.0, float(coverage_top_row_x_m) - NADIR_LD_FAR_MARGIN_M)
+
+
+def effective_turn_distance_m(
+    path_remaining_m: float,
+    *,
+    perception_horizon_m: float,
+) -> float:
+    """Distance used for turn-approach braking: min(path, what nadir can see ahead)."""
+    path = max(0.0, float(path_remaining_m))
+    horizon = max(0.0, float(perception_horizon_m))
+    return min(path, horizon)
+
+
+def v_max_cruise_from_lookahead_m(
+    d_lookahead_m: float,
+    *,
+    a_brake_m_s2: float,
+    reaction_latency_s: float = DEFAULT_REACTION_LATENCY_S,
+    safety_margin: float = DEFAULT_SAFETY_MARGIN,
+    v_target_m_s: float = 0.0,
+) -> float:
+    """Max cruise speed if the only stop budget is look-ahead distance ``d`` (m/s)."""
+    return max_speed_for_distance_m(
+        d_lookahead_m,
+        a_brake_m_s2=a_brake_m_s2,
+        reaction_latency_s=reaction_latency_s,
+        safety_margin=safety_margin,
+        v_target_m_s=v_target_m_s,
+    )
+
+
+def turn_brake_params_from_physics(
+    physics: PhysicsSpeedLimitResult,
+    *,
+    approach_target_m_s: float = DEFAULT_APPROACH_TARGET_M_S,
+) -> TurnBrakeParams:
+    return TurnBrakeParams(
+        a_brake_m_s2=float(physics.a_brake_m_s2),
+        reaction_latency_s=float(physics.reaction_latency_s),
+        safety_margin=float(physics.safety_margin),
+        approach_target_m_s=max(0.0, float(approach_target_m_s)),
+    )
+
+
+def turn_brake_params_for_robot(
+    config_data: dict | None = None,
+    *,
+    bom_build: str | None = None,
+) -> TurnBrakeParams:
+    sl = _speed_limit_config(config_data)
+    target = sl.get("approach_target_m_s")
+    approach = DEFAULT_APPROACH_TARGET_M_S if target is None else float(target)
+    physics = physics_speed_limit_for_active_robot(config_data, bom_build=bom_build)
+    return turn_brake_params_from_physics(physics, approach_target_m_s=approach)
 
 
 def compute_physics_speed_limit(

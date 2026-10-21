@@ -869,7 +869,10 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         if _obs_on:
             try:
                 _top = rowfit_rt.limits.gate_top_speed_m_s
-                _ort = ObstacleRuntime(v_cruise_m_s=_top)
+                _ort = ObstacleRuntime(
+                    v_cruise_m_s=_top,
+                    bom_build=rowfit_rt.limits.bom_build,
+                )
                 _msgs = _ort.enable_devices(robot, cam_period)
                 _msgs += _ort.bind(robot, rowfit_rt.cams_model)
                 for msg in _msgs:

@@ -62,12 +62,36 @@ def obstacles_mode(robot=None, env=None) -> tuple[bool, str]:
 
 
 class ObstacleRuntime:
-    def __init__(self, *, v_cruise_m_s: float | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        v_cruise_m_s: float | None = None,
+        a_brake_m_s2: float | None = None,
+        bom_build: str | None = None,
+    ) -> None:
+        from src.controller_limits import DEFAULT_CONFIG_PATH, load_controller_limits
         from src.obstacle_gate import ObstacleFusion, ObstacleGate
-        from src.rowfit_control import DECEL_M_S2, V_MAX_M_S
+        from src.physics_speed_limit import physics_speed_limit_for_active_robot
+        from src.rowfit_control import V_MAX_M_S
 
+        import yaml
+
+        limits = load_controller_limits()
+        build = bom_build if bom_build is not None else limits.bom_build
+        cfg: dict = {}
+        try:
+            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh) or {}
+        except OSError:
+            cfg = {}
+        physics = physics_speed_limit_for_active_robot(cfg, bom_build=build)
         top = float(v_cruise_m_s) if v_cruise_m_s is not None else V_MAX_M_S
-        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=top)
+        a_brake = float(a_brake_m_s2) if a_brake_m_s2 is not None else float(physics.a_brake_m_s2)
+        self.gate = ObstacleGate(
+            decel_m_s2=a_brake,
+            v_cruise_m_s=top,
+            latency_s=float(physics.reaction_latency_s),
+        )
         self.fusion = ObstacleFusion()
         self.sensor = None
         self.radar = None
@@ -177,7 +201,8 @@ class ObstacleRuntime:
             + f", {self.sensor.num_disp} disparities; corridor +-{prm.half_width_m:.2f} m (robot half width "
             f"{body_half:.3f} + {CORRIDOR_MARGIN_M:.2f}), x {prm.x_front_m:.2f}..{prm.max_range_m:.1f} m, headroom "
             f"{prm.clearance_h_m:.2f} m; stop = {g.standoff_m:.2f} m + v*latency + v^2/(2*{g.decel:.2f}) "
-            f"({g.stop_distance(g.v_cruise):.2f} m at {g.v_cruise:.2f} m/s), slow zone {g.slow_distance:.2f} m"
+            f"({g.stop_distance(g.v_cruise):.2f} m at {g.v_cruise:.2f} m/s), "
+            f"slow zone {g.slow_distance(g.v_cruise):.2f} m at cruise"
             + (f"; radar {RADAR_NAME} ON (moving → WAITING_FOR_MOVING)" if self.radar else "; radar OFF"))
         return msgs
 

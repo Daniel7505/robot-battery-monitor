@@ -11,11 +11,13 @@ from src.physics_speed_limit import (
     DEFAULT_BRAKE_MU,
     combine_brake_decel_m_s2,
     compute_physics_speed_limit,
+    default_nadir_ld_max_m,
     effective_cruise_m_s,
     friction_limited_decel_m_s2,
     max_speed_from_stop_distance_m,
     motor_limited_decel_m_s2,
     physics_speed_limit_for_active_robot,
+    resolve_d_available_m,
 )
 from src.twin_energy import GRAVITY_M_S2
 
@@ -165,6 +167,32 @@ def test_hand_worked_heavy_payload_exact():
     assert capped == pytest.approx(0.424, abs=0.002)
 
 
+LD_MAX = 1.600257176976473
+
+
+def test_default_d_available_is_nadir_ld_max():
+    d = resolve_d_available_m({}, obstacles_enabled=True)
+    assert d == pytest.approx(default_nadir_ld_max_m({}), rel=1e-9)
+    assert d == pytest.approx(LD_MAX, abs=0.002)
+
+
+def test_hand_worked_v_max_at_default_d_available():
+    """Docs: light ~2.48 m/s, heavy ~1.13 m/s at d ≈ 1.60 m (t=0.32, margin=0.8)."""
+    common = dict(
+        wheel_radius_m=0.04,
+        brake_torque_nm_per_motor=0.981,
+        d_available_m=LD_MAX,
+        reaction_latency_s=0.32,
+        safety_margin=0.8,
+        brake_mu=0.8,
+        driven_weight_fraction=1.0,
+    )
+    light = compute_physics_speed_limit(total_mass_kg=6.142, **common)
+    heavy = compute_physics_speed_limit(total_mass_kg=56.142, **common)
+    assert light.v_max_m_s == pytest.approx(2.48, abs=0.01)
+    assert heavy.v_max_m_s == pytest.approx(1.13, abs=0.01)
+
+
 def test_hand_worked_light_body_v_max():
     """Numbers in docs/PHYSICS_SPEED_LIMIT.md (light, d=1 m, margin 0.8)."""
     r = compute_physics_speed_limit(
@@ -201,15 +229,13 @@ def test_units_sanity_si():
 
 def test_physics_for_bom_light_build():
     r = physics_speed_limit_for_active_robot(
-        {
-            "controller": {
-                "speed_limit": {"stop_available_m": 1.0, "safety_margin": 0.8}
-            }
-        },
+        {"controller": {"speed_limit": {"safety_margin": 0.8}}},
         bom_build="light",
     )
     assert r.total_mass_kg == pytest.approx(6.142, rel=1e-3)
     assert r.wheel_radius_m == pytest.approx(0.04)
+    assert r.d_available_m == pytest.approx(LD_MAX, abs=0.002)
+    assert r.v_max_m_s == pytest.approx(2.48, abs=0.01)
 
 
 def test_repo_config_loads_speed_limit():

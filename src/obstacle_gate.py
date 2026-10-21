@@ -202,9 +202,10 @@ class ObstacleGate:
 
     Call :meth:`on_frame` once per sensor frame (with the distance driven
     since the previous frame), read :attr:`v_cap` (``None`` = no cap) every
-    tick. ``decel_m_s2``: the governor's slow-in limit
-    (``rowfit_control.DECEL_M_S2``); ``v_cruise``: its cruise speed (sizes
-    the slow zone). ``latency_s`` is updated from the live frame period.
+    tick.     ``decel_m_s2``: mass-aware peak braking ``a_brake`` (same as the physics
+    cruise cap). ``v_cruise_m_s``: top forward speed for sizing the slow zone
+    when no live speed is passed. ``latency_s`` is updated from the live
+    frame period.
     """
 
     def __init__(self, *, decel_m_s2: float, v_cruise_m_s: float, latency_s: float = 0.32,
@@ -231,9 +232,10 @@ class ObstacleGate:
     def stop_distance(self, v: float) -> float:
         return stop_distance_m(v, self.decel, self.latency_s, self.standoff_m)
 
-    @property
-    def slow_distance(self) -> float:
-        return self.stop_distance(self.v_cruise) + self.slow_extra_m
+    def slow_distance(self, v: float | None = None) -> float:
+        """Slow zone clearance for speed ``v`` (default ``v_cruise``)."""
+        speed = self.v_cruise if v is None else float(v)
+        return self.stop_distance(speed) + self.slow_extra_m
 
     # ---- per frame --------------------------------------------------------
     def on_frame(self, rep: ObstacleReport | None, *, v_m_s: float, dx_m: float = 0.0,
@@ -284,6 +286,7 @@ class ObstacleGate:
         prev = self.state
         self.emergency = False
         d_stop = self.stop_distance(v)
+        d_slow = self.slow_distance(v)
         if not confirmed:
             if self.state != STATE_CLEAR and tr is None:
                 why = "corridor clear"
@@ -298,7 +301,7 @@ class ObstacleGate:
                 # Just went still — drop into the usual slow/stop path below.
                 if clear_m <= d_stop + 0.02 or clear_m <= self.standoff_m + 0.02:
                     self._set(STATE_STOPPED, f"stop: moving object now still at {clear_m:.2f} m")
-                elif clear_m <= self.slow_distance:
+                elif clear_m <= d_slow:
                     self._set(STATE_SLOW, f"slow: moving object now still at {clear_m:.2f} m")
                 else:
                     self._set(STATE_CLEAR, f"moving object now still and beyond slow zone ({clear_m:.2f} m)")
@@ -310,9 +313,9 @@ class ObstacleGate:
                                          f"(v {v:.2f} m/s)")
                 if clear_m < v * v / (2.0 * self.decel) + 0.05:
                     self.emergency = True
-            elif self.state == STATE_CLEAR and clear_m <= self.slow_distance:
-                self._set(STATE_SLOW, f"slow: clearance {clear_m:.2f} m <= slow zone {self.slow_distance:.2f} m")
-            elif self.state == STATE_SLOW and clear_m > self.slow_distance + RESUME_HYST_M:
+            elif self.state == STATE_CLEAR and clear_m <= d_slow:
+                self._set(STATE_SLOW, f"slow: clearance {clear_m:.2f} m <= slow zone {d_slow:.2f} m")
+            elif self.state == STATE_SLOW and clear_m > d_slow + RESUME_HYST_M:
                 self._set(STATE_CLEAR, f"obstacle beyond the slow zone ({clear_m:.2f} m)")
         # speed cap
         if self.state in (STATE_STOPPED, STATE_WAITING):

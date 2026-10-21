@@ -178,7 +178,7 @@ def test_wheels_stay_in_limits_at_straight_speed():
 
 def test_obstacle_slow_zone_sized_for_top_speed():
     g = ObstacleGate(decel_m_s2=rc.DECEL_M_S2, v_cruise_m_s=rc.V_MAX_M_S, latency_s=0.32)
-    assert g.slow_distance >= g.stop_distance(rc.V_STRAIGHT_M_S) + 1.0 - 1e-9
+    assert g.slow_distance(rc.V_MAX_M_S) >= g.stop_distance(rc.V_STRAIGHT_M_S) + 1.0 - 1e-9
     for p in ("webots/controllers/butlerbot_controller/controller_obstacles.py", "scripts/rowfit_sim.py"):
         src = (ROOT / p).read_text(encoding="utf-8")
-        assert "v_cruise_m_s=V_MAX_M_S" in src, p
+        assert "physics_speed_limit" in src or "a_brake_m_s2" in src, p

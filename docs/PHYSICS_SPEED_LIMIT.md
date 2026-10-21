@@ -46,10 +46,18 @@ Config: `controller.speed_limit.approach_target_m_s` (default **0.04 m/s**, `V_C
 | `src/stereo_depth.py` `CorridorParams` | corridor depth | **4.0 m** (`max_range_m`) |
 | `docs/OBSTACLES.md` | floor seen from axle | **≈ 0.75 m** |
 | `src/obstacle_gate.py` | `STANDOFF_M` | **0.35 m** |
-| same | stop distance at 0.44 m/s, decel 0.8 m/s² | **≈ 0.61 m** clearance |
-| same | slow zone = d_stop(cruise) + **`SLOW_EXTRA_M` 1.0 m** | **≈ 1.61 m** |
+| same | stop distance at speed **v**, decel **`a_brake`** | **`STANDOFF_M + v·t + v²/(2a)`** |
+| same | slow zone at **v** | **`d_stop(v) + SLOW_EXTRA_M` 1.0 m** |
 
-The fixed **`stop_available_m = 1.0 m`** cruise cap is separate from obstacle gate distances; turn approach uses **`ld_max`**, not the 1.0 m budget.
+**Global cruise cap** stop budget (default, no YAML override):
+
+```text
+d_available = min(ld_max ≈ 1.60 m, obstacle detection range 4.0 m when obstacles_in_d_available)
+```
+
+Optional **`controller.speed_limit.stop_available_m`** overrides that computed distance. Turn approach still uses **`ld_max`** via path `remaining_m`.
+
+Hand-check at **t = 0.32 s**, light **`a = 7.848`**, heavy **`a = 0.874`**: stop / slow clearance (m) at **v = 0.44 / 1.13 / 2.48** — light **0.503 / 1.793 / 2.535** slow; heavy **0.602 / 2.442 / 5.662** slow. At heavy **v_max ≈ 1.13** the slow zone **≈ 2.44 m** stays inside **4.0 m** stereo range; light **v_max ≈ 2.48** → slow **≈ 2.54 m** likewise.
 
 ## Braking deceleration
 
@@ -111,10 +119,12 @@ Worlds add **`Gyro { name "gyro" }`** beside `InertialUnit`. Controller reads **
 
 ## Worked examples (t = 0.32 s, margin = 0.8, μ = 0.8, τ = 0.981 N·m, r = 0.04 m)
 
-### Light body (m = 6.142 kg), d = 1.0 m
+### Light body (m = 6.142 kg), d = 1.60 m (default `d_available`)
 
 | a_brake | **7.848 m/s²** (friction-limited) |
-| v_max | **≈ 1.742 m/s** → cruise pref **0.44 m/s** active |
+| v_max | **≈ 2.48 m/s** → cruise pref **0.44 m/s** still active |
+
+At **d = 1.0 m**: v_max **≈ 1.742 m/s** (same physics, shorter budget).
 
 ### Heavy payload (m = 56.142 kg)
 

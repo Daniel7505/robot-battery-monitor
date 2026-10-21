@@ -20,9 +20,10 @@ from src.twin_energy import GRAVITY_M_S2
 DEFAULT_BRAKE_MU = 0.8
 # bom.json assumptions.turning_scrub: both drive wheels carry the weight.
 DEFAULT_DRIVEN_WEIGHT_FRACTION = 1.0
-DEFAULT_STOP_AVAILABLE_M = 1.0  # m — path length budget for react + brake (tune per aisle)
 DEFAULT_REACTION_LATENCY_S = 0.32  # s — one camera frame; matches obstacle gate default
 DEFAULT_SAFETY_MARGIN = 0.8  # unitless factor on computed v_max
+# Nadir top-row reach on repo poses (``lane_vision`` / ``aim_camera.py``).
+DEFAULT_NADIR_TOP_ROW_X_M = 1.96
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,86 @@ def nadir_lookahead_max_m(coverage_top_row_x_m: float) -> float:
     return max(0.0, float(coverage_top_row_x_m) - NADIR_LD_FAR_MARGIN_M)
 
 
+def default_nadir_ld_max_m(config_data: dict | None = None) -> float:
+    """``ld_max`` from config override or repo nadir coverage (~1.60 m)."""
+    sl = _speed_limit_config(config_data)
+    top = sl.get("nadir_top_row_x_m")
+    top_x = DEFAULT_NADIR_TOP_ROW_X_M if top is None else float(top)
+    return nadir_lookahead_max_m(top_x)
+
+
+def obstacle_gate_detection_range_m(config_data: dict | None = None) -> float:
+    """Stereo corridor depth and radar range used by the obstacle stack (m)."""
+    sl = _speed_limit_config(config_data)
+    raw = sl.get("obstacle_detection_range_m")
+    if raw is not None:
+        return max(0.0, float(raw))
+    from src.radar_sense import DEFAULT_MAX_RANGE_M
+    from src.stereo_depth import CorridorParams
+
+    return min(float(CorridorParams().max_range_m), float(DEFAULT_MAX_RANGE_M))
+
+
+def resolve_d_available_m(
+    config_data: dict | None = None,
+    *,
+    obstacles_enabled: bool = True,
+) -> float:
+    """Stop budget for the global cruise cap: nadir look-ahead, optionally capped by obstacle range."""
+    ld = default_nadir_ld_max_m(config_data)
+    if not obstacles_enabled:
+        return ld
+    return min(ld, obstacle_gate_detection_range_m(config_data))
+
+
+def _config_override_m(sl: dict, key: str) -> float | None:
+    raw = sl.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip().lower() in {"", "null", "none", "~"}:
+        return None
+    return float(raw)
+
+
+def max_speed_for_obstacle_slow_zone_m(
+    detection_range_m: float,
+    *,
+    a_brake_m_s2: float,
+    reaction_latency_s: float,
+    safety_margin: float = 1.0,
+    standoff_m: float = 0.35,
+    slow_extra_m: float = 1.0,
+) -> float:
+    """Largest speed whose slow zone (d_stop + slow_extra) fits in ``detection_range_m``."""
+    from src.obstacle_gate import SLOW_EXTRA_M, STANDOFF_M, stop_distance_m
+
+    det = max(0.0, float(detection_range_m))
+    standoff = float(standoff_m if standoff_m is not None else STANDOFF_M)
+    slow_extra = float(slow_extra_m if slow_extra_m is not None else SLOW_EXTRA_M)
+    if det <= standoff + slow_extra + 1e-6:
+        return 0.0
+    margin = max(0.0, float(safety_margin))
+    a = max(1e-6, float(a_brake_m_s2))
+    t = max(0.0, float(reaction_latency_s))
+    budget = det - slow_extra
+
+    def slow_clearance(v: float) -> float:
+        return stop_distance_m(v, a, t, standoff) + slow_extra
+
+    if slow_clearance(0.0) > det + 1e-9:
+        return 0.0
+    lo, hi = 0.0, 20.0
+    while slow_clearance(hi) <= det + 1e-9 and hi < 200.0:
+        hi *= 2.0
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        if slow_clearance(mid) <= det + 1e-9:
+            lo = mid
+        else:
+            hi = mid
+    return lo * margin
+
+
 def effective_turn_distance_m(
     path_remaining_m: float,
     *,
@@ -241,9 +322,11 @@ def compute_physics_speed_limit(
     motor_qty: float = 2.0,
     brake_mu: float = DEFAULT_BRAKE_MU,
     driven_weight_fraction: float = DEFAULT_DRIVEN_WEIGHT_FRACTION,
-    d_available_m: float = DEFAULT_STOP_AVAILABLE_M,
+    d_available_m: float,
     reaction_latency_s: float = DEFAULT_REACTION_LATENCY_S,
     safety_margin: float = DEFAULT_SAFETY_MARGIN,
+    clamp_v_max_for_obstacle_perception: bool = False,
+    obstacle_detection_range_m: float | None = None,
 ) -> PhysicsSpeedLimitResult:
     """Return v_max from braking physics (before comparing to config cruise)."""
     a_f = friction_limited_decel_m_s2(
@@ -262,6 +345,14 @@ def compute_physics_speed_limit(
         reaction_latency_s=reaction_latency_s,
         safety_margin=safety_margin,
     )
+    if clamp_v_max_for_obstacle_perception and obstacle_detection_range_m is not None:
+        v_obs = max_speed_for_obstacle_slow_zone_m(
+            obstacle_detection_range_m,
+            a_brake_m_s2=a_b,
+            reaction_latency_s=reaction_latency_s,
+            safety_margin=safety_margin,
+        )
+        v_max = min(v_max, v_obs)
     return PhysicsSpeedLimitResult(
         v_max_m_s=v_max,
         a_brake_m_s2=a_b,
@@ -356,6 +447,17 @@ def physics_speed_limit_for_active_robot(
             return default
         return float(raw)
 
+    d_override = _config_override_m(sl, "stop_available_m")
+    obs_raw = sl.get("obstacles_in_d_available")
+    obstacles_in = True if obs_raw is None else bool(obs_raw)
+    if d_override is not None:
+        d_available = d_override
+        obstacles_in = False  # explicit distance budget wins
+    else:
+        d_available = resolve_d_available_m(config_data, obstacles_enabled=obstacles_in)
+
+    det_range = obstacle_gate_detection_range_m(config_data) if obstacles_in else None
+
     return compute_physics_speed_limit(
         total_mass_kg=mass,
         wheel_radius_m=radius,
@@ -363,9 +465,11 @@ def physics_speed_limit_for_active_robot(
         motor_qty=motor_qty,
         brake_mu=_f("brake_mu", DEFAULT_BRAKE_MU),
         driven_weight_fraction=_f("driven_weight_fraction", DEFAULT_DRIVEN_WEIGHT_FRACTION),
-        d_available_m=_f("stop_available_m", DEFAULT_STOP_AVAILABLE_M),
+        d_available_m=d_available,
         reaction_latency_s=_f("reaction_latency_s", DEFAULT_REACTION_LATENCY_S),
         safety_margin=_f("safety_margin", DEFAULT_SAFETY_MARGIN),
+        clamp_v_max_for_obstacle_perception=obstacles_in,
+        obstacle_detection_range_m=det_range,
     )
 
 

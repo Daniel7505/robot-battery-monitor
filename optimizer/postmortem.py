@@ -499,6 +499,8 @@ def build_postmortem(
     repeat_label: str | None = None,
     baseline_diag: Diagnosis | None = None,
     baseline_label: str = "kept baseline",
+    lap_artifacts: dict | None = None,
+    flag_keep_explanation: str = "",
 ) -> dict:
     """Structured post-mortem for one trial. ``next_hypothesis`` is filled by the loop."""
     direction = "switch" if param is None else step_direction(old, new)
@@ -587,4 +589,15 @@ def build_postmortem(
     }
     if evidence:
         payload["evidence"] = evidence
+    try:
+        from optimizer.lap_agent import merge_lap_flags_into_postmortem
+
+        merge_lap_flags_into_postmortem(
+            payload,
+            lap_artifacts,
+            action=action,
+            keep_explanation=flag_keep_explanation,
+        )
+    except Exception:
+        pass
     return payload

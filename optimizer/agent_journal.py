@@ -128,6 +128,13 @@ def render_journal_entry(
             bits.append(f"Wh/m {wpm:+.1%}")
         if turn is not None:
             bits.append(f"turn |err| {turn:+.2f} pp vs baseline")
+        flags = row.get("lap_flags")
+        if isinstance(flags, list) and flags:
+            bits.append("FLAGS: " + "; ".join(str(f) for f in flags[:2]))
+        post = row.get("postmortem") or {}
+        limiter = (row.get("lap_artifacts") or {}).get("speed_limiter") or post.get("speed_limiter")
+        if limiter:
+            bits.append(f"speed limiter: {limiter}")
         if bits:
             figured.append(f"{param} → {row.get('new')}: {', '.join(bits)}")
     if confirms:
@@ -141,6 +148,10 @@ def render_journal_entry(
         miss = (row.get("postmortem") or {}).get("prediction_miss") or ""
         if miss:
             wrong.append(_redact(miss))
+    for row in records:
+        flags = row.get("lap_flags")
+        if isinstance(flags, list) and flags and row.get("decision") in {"rollback", "refuted", "inconclusive"}:
+            wrong.append("Lap FLAGS: " + _redact("; ".join(str(f) for f in flags[:2])))
     for row in invalid:
         reason = _redact(str(row.get("reason") or ""))
         if reason and reason not in wrong:

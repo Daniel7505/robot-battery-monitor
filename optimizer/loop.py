@@ -19,6 +19,11 @@ from optimizer.logbook import Logbook, redact
 from optimizer.notify import notify_run_finished
 from optimizer.confirm import MAX_CONFIRM_PAIR_RETRIES, confirm_invalid_retryable
 from optimizer.held_out import cross_build_confirm_disabled_reason, confirm_strategy_note
+from optimizer.lap_agent import (
+    compose_keep_flag_explanation,
+    keep_blocked_without_flag_explanation,
+    read_lap_artifacts,
+)
 from optimizer.lap_launch import LapLaunch, assert_light_search_config, trial_id_for, wait_config
 from optimizer.picker import Proposal, RulePicker
 from optimizer.postmortem import build_postmortem
@@ -76,6 +81,13 @@ def _learning(
         tag = str(postmortem.get("tag") or "").strip()
         if lesson or tag:
             lines.append(f"- Lesson: {lesson} {tag}".rstrip())
+        flags = postmortem.get("lap_flags")
+        if isinstance(flags, list) and flags:
+            report = postmortem.get("lap_report") or "report.md"
+            lines.append(f"- Lap FLAGS ({report}): " + "; ".join(str(f) for f in flags))
+        keep_note = str(postmortem.get("flag_keep_explanation") or "").strip()
+        if keep_note:
+            lines.append(f"- Keep vs FLAGS: {keep_note}")
         nxt = str(postmortem.get("next_hypothesis") or "").strip()
         if nxt:
             lines.append(f"- Next hypothesis: {nxt}")
@@ -171,6 +183,7 @@ def _attach_postmortem(
     repeat_label: str | None = None,
     baseline_diag: Diagnosis | None = None,
     baseline_label: str = "kept baseline",
+    lap_artifacts: dict | None = None,
 ) -> dict:
     post = build_postmortem(
         param=rec.get("param"),
@@ -187,6 +200,8 @@ def _attach_postmortem(
         repeat_label=repeat_label,
         baseline_diag=baseline_diag,
         baseline_label=baseline_label,
+        lap_artifacts=lap_artifacts or rec.get("lap_artifacts"),
+        flag_keep_explanation=str(rec.get("lap_flag_explanation") or ""),
     )
     rec["postmortem"] = post
     if rec.get("decision") == "invalid" and rec.get("reason"):
@@ -473,6 +488,7 @@ def run_loop(
             )
         if settle_note:
             outcome.note = f"{settle_note} {outcome.note}".strip()
+        ref_lap_artifacts = read_lap_artifacts(getattr(outcome, "lap_dir", "") or "")
         ref_diag = diagnose(outcome.log_text)
         intended = store.read()
         invalid = trial_invalid_reason(
@@ -504,6 +520,8 @@ def run_loop(
         rec["intended_params"] = intended
         rec["run_id"] = run_id
         rec["score_baseline_label"] = baseline_labels.get(run_body, "starting settings")
+        rec["lap_artifacts"] = ref_lap_artifacts
+        rec["lap_flags"] = ref_lap_artifacts.get("flags") or []
         _attach_postmortem(
             rec,
             before=None,
@@ -513,6 +531,7 @@ def run_loop(
             picker=picker,
             store=store,
             next_diag=ref_diag if ref_diag.summary is not None else diag,
+            lap_artifacts=ref_lap_artifacts,
         )
         records.append(book.append(rec))
         history.append(rec)
@@ -645,10 +664,14 @@ def run_loop(
                             pre_diag = lap_diag
                         else:
                             kept_diag = lap_diag
+                            confirm_lap_artifacts = read_lap_artifacts(
+                                getattr(outcome, "lap_dir", "") or ""
+                            )
                 finally:
                     store.write_params(light_kept)
                     assert_light_search_config(store.read(), run_body)
 
+                confirm_lap_artifacts: dict = {}
                 why = ""
                 if invalid_reason:
                     verdict = "missing"
@@ -726,6 +749,8 @@ def run_loop(
                     note=(" ".join(confirm_notes) + " " + restart_note).strip(),
                 )
                 rec["intended_params"] = light_kept
+                rec["lap_artifacts"] = confirm_lap_artifacts
+                rec["lap_flags"] = confirm_lap_artifacts.get("flags") or []
                 if pre_diag is not None and pre_diag.summary is not None:
                     rec["confirm_pre_keep_summary"] = {
                         "err_pct": pre_diag.summary.err_pct,
@@ -742,6 +767,7 @@ def run_loop(
                     store=store,
                     next_diag=diag,
                     summary_trusted=check_summary is not None,
+                    lap_artifacts=confirm_lap_artifacts,
                 )
                 records.append(book.append(rec))
                 history.append(rec)
@@ -825,6 +851,8 @@ def run_loop(
             if settle_note:
                 outcome.note = f"{settle_note} {outcome.note}".strip()
                 restart_note = settle_note
+            lap_artifacts = read_lap_artifacts(getattr(outcome, "lap_dir", "") or "")
+            lap_flag_explanation = ""
             summary_trusted = _invalid_lap_reason(outcome) is None
             new_diag = diagnose_lap(outcome.log_text) if summary_trusted else diagnose_lap("")
             summary = new_diag.summary
@@ -934,30 +962,47 @@ def run_loop(
                         )
                         diag = before_diag
                     else:
-                        action = "keep"
-                        pending = {
-                            "param": proposal.param,
-                            "old": old,
-                            "new": proposal.value,
-                            "hypothesis": proposal.hypothesis,
-                            "expected": proposal.expected_effect,
-                            "suggestions": list(proposal.code_suggestions),
-                            "provisional": summary,
-                            "provisional_diag": new_diag,
-                            "search_build": run_body,
-                            "prev_diag": diag,
-                            "light_kept_params": dict(intended_params),
-                        }
-                        set_score_baseline(
-                            summary,
-                            format_kept_baseline_label(
-                                intended_params,
-                                prefix="kept baseline (provisional)",
-                            ),
-                            new_diag,
+                        lap_flag_explanation = compose_keep_flag_explanation(
+                            lap_artifacts,
+                            score_reason=decision.reason,
+                            param=proposal.param,
+                            new=proposal.value,
+                            effects=effects,
                         )
-                        remember_diag(new_diag)
-                        diag = new_diag
+                        block = keep_blocked_without_flag_explanation(
+                            lap_artifacts,
+                            lap_flag_explanation,
+                        )
+                        if block:
+                            store.apply_one(proposal.param, old)
+                            action = "rollback"
+                            reason = block
+                            diag = before_diag
+                        else:
+                            action = "keep"
+                            pending = {
+                                "param": proposal.param,
+                                "old": old,
+                                "new": proposal.value,
+                                "hypothesis": proposal.hypothesis,
+                                "expected": proposal.expected_effect,
+                                "suggestions": list(proposal.code_suggestions),
+                                "provisional": summary,
+                                "provisional_diag": new_diag,
+                                "search_build": run_body,
+                                "prev_diag": diag,
+                                "light_kept_params": dict(intended_params),
+                            }
+                            set_score_baseline(
+                                summary,
+                                format_kept_baseline_label(
+                                    intended_params,
+                                    prefix="kept baseline (provisional)",
+                                ),
+                                new_diag,
+                            )
+                            remember_diag(new_diag)
+                            diag = new_diag
                 elif repeat_label is None and decision.action == "baseline":
                     store.apply_one(proposal.param, old)
                     action = "inconclusive"
@@ -998,6 +1043,10 @@ def run_loop(
             rec["intended_params"] = intended_params
             rec["run_id"] = run_id
             rec["score_baseline_label"] = baseline_label
+            rec["lap_artifacts"] = lap_artifacts
+            rec["lap_flags"] = lap_artifacts.get("flags") or []
+            if lap_flag_explanation:
+                rec["lap_flag_explanation"] = lap_flag_explanation
             if summary is not None and action not in {"invalid"}:
                 catalog_lap(f"search {iteration}", summary)
             _attach_postmortem(
@@ -1016,6 +1065,7 @@ def run_loop(
                 repeat_label=repeat_label,
                 baseline_diag=score_baseline_diags.get(run_body),
                 baseline_label=baseline_label,
+                lap_artifacts=lap_artifacts,
             )
             records.append(book.append(rec))
             history.append(rec)

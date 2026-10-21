@@ -30,6 +30,7 @@ class RunOutcome:
     status: str  # ok, timeout, crash, no_summary
     log_text: str
     note: str = ""
+    lap_dir: str = ""
 
 
 def _summary_in(text: str) -> bool:
@@ -367,6 +368,8 @@ def _finish_lap_outcome(
             _finalize_lap_artifacts(
                 repo, lap_dir, launch=launch, log_path=log_path, dashboard_text=text, outcome=outcome
             )
+        if lap_dir is not None:
+            outcome.lap_dir = str(lap_dir)
         return outcome
     extra = detail or ignored
     excerpt = _launch_log_excerpt(log_path)
@@ -397,6 +400,8 @@ def _finish_lap_outcome(
         _finalize_lap_artifacts(
             repo, lap_dir, launch=launch, log_path=log_path, dashboard_text=text, outcome=outcome
         )
+    if lap_dir is not None:
+        outcome.lap_dir = str(lap_dir)
     return outcome
 
 
@@ -622,6 +627,7 @@ class WebotsLapRunner:
                         dashboard_text=text,
                         outcome=outcome,
                     )
+                    outcome.lap_dir = str(lap_dir)
                     return outcome
                 time.sleep(self.poll_s)
         finally:

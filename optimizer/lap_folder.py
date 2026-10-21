@@ -442,6 +442,26 @@ def finalize_lap_folder(
         outcome_note=outcome_note,
     )
     (lap_dir / _REPORT_NAME).write_text(report, encoding="utf-8")
+    turns = parse_pivot_turns(console_text)
+    top_v = parse_top_speed_m_s(console_text)
+    limiter = classify_speed_limiter(top_v, limits, fields)
+    gyro = gyro_status(console_text, fields, payload)
+    gap = parse_telemetry_gap_s(lines, console_text)
+    flags = build_flags(fields=fields, turns=turns, telemetry_gap_s=gap, gyro=gyro)
+    try:
+        from optimizer.lap_agent import persist_lap_analysis_meta
+
+        persist_lap_analysis_meta(
+            lap_dir,
+            {
+                "flags": flags,
+                "top_speed_m_s": top_v,
+                "speed_limiter": limiter,
+                "gyro_status": gyro,
+            },
+        )
+    except Exception:
+        pass
     if log_path is not None:
         write_legacy_log_pointer(log_path, lap_dir)
     return lap_dir / _REPORT_NAME

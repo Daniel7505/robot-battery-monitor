@@ -78,6 +78,12 @@ def append_mission_lines(
         "path": state["path"],
         "lines": list(state["lines"]),
     }
+    run_id = os.environ.get("RBM_OPT_RUN_ID")
+    trial_id = os.environ.get("RBM_OPT_TRIAL_ID")
+    if run_id:
+        payload["opt_run_id"] = run_id
+    if trial_id:
+        payload["opt_trial_id"] = trial_id
     with open(state["path"], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
         fh.write("\n")
@@ -211,7 +217,7 @@ def sample_from_controller_payload(payload: dict) -> dict:
         "battery_pct": robot.get("main_battery_pct", robot.get("battery_pct")),
         "capacity_wh": robot.get("battery_capacity_wh"),
         "payload_kg": loc.get("payload_kg"),
-        "build": loc.get("bom_build") or hw.get("bom_build"),
+        "build": loc.get("bom_build") or loc.get("ctrl_bom_build") or hw.get("bom_build"),
         "speed_m_s": loc.get("speed_m_s", payload.get("speed_m_s")),
         "mission_event": sensors.get("mission_event"),
     }

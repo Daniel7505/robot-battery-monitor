@@ -779,6 +779,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             )
             _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
+            print(rowfit_rt.limits_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
         except Exception as exc:
@@ -2026,6 +2027,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     loco = {}
                     payload["locomotion"] = loco
                 loco["controller_run_id"] = controller_run_id
+                if rowfit_rt is not None:
+                    _publish_controller_limits(loco, rowfit_rt)
                 sensors_out = payload.get("sensors")
                 if isinstance(sensors_out, dict):
                     sensors_out["controller_run_id"] = controller_run_id
@@ -2073,7 +2076,48 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     print("ButlerBot controller stopped (simulation ended)")
 
 
+def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
+    """Copy the effective limits into telemetry so MISSION_SUMMARY can prove them."""
+    try:
+        lim = rowfit_rt.limits
+    except AttributeError:
+        return
+    loco["ctrl_cruise_m_s"] = round(float(lim.cruise_m_s), 4)
+    loco["ctrl_straight_m_s"] = round(float(lim.straight_m_s), 4)
+    loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
+    loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
+    loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)
+    for env_key, field in (
+        ("RBM_OPT_RUN_ID", "opt_run_id"),
+        ("RBM_OPT_TRIAL_ID", "opt_trial_id"),
+    ):
+        stamped = os.environ.get(env_key)
+        if stamped:
+            loco[field] = str(stamped)
+    try:
+        from src.webots_body import bom_body_physics
+
+        physics = bom_body_physics(lim.bom_build)
+        if physics is not None:
+            loco["body_mass_kg"] = round(float(physics.mass_kg), 4)
+    except Exception:
+        pass
+
+
+def _prefer_utf8_stdio() -> None:
+    """Windows pipes default to cp1252, which cannot encode the arrows in the startup log."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
 def main() -> None:
+    _prefer_utf8_stdio()
     opts = parse_controller_args()
     if Supervisor is not None:
         robot = Supervisor()

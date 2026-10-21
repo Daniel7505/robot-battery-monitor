@@ -270,6 +270,14 @@ ENERGY_COUNTER_KEYS = (
 # Copied through the Webots adapter even though restamp rebuilds locomotion.
 LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "controller_run_id",
+    "opt_run_id",
+    "opt_trial_id",
+    "ctrl_cruise_m_s",
+    "ctrl_straight_m_s",
+    "ctrl_pivot_w_max_rad_s",
+    "ctrl_k_steer",
+    "ctrl_bom_build",
+    "body_mass_kg",
     "steer_split",
     "steer_source",
     "steer_lateral",

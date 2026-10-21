@@ -35,10 +35,12 @@ def _run(tmp_path, mode, world=None, extra=None):
         RBM_LOG_DIR=str(tmp_path),
         TWIN_DASHBOARD_URL="http://127.0.0.1:9",
         FAKE_WEBOTS_STEPS="200",
+        PYTHONIOENCODING="utf-8",
+        PYTHONUTF8="1",
     )
     out = subprocess.run(
         [sys.executable, "butlerbot_controller.py"], cwd=CTRL, env=env,
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
     return out.stdout + out.stderr
 
@@ -61,7 +63,7 @@ def test_controller_loop_runs(tmp_path, mode):
     assert "CAM POSE nadir_right from supervisor: t=(0.0354, -0.4181, 0.7042)" in text
     assert "pitch=53.9deg" in text
     assert "WARNING rowfit camera model" not in text, text
-    log = (tmp_path / "lane-vision.csv").read_text().splitlines()
+    log = (tmp_path / "lane-vision.csv").read_text(encoding="utf-8", errors="replace").splitlines()
     assert "new_frame,run_id," in log[0]
     assert log[0].endswith(
         "obstacle_moving,lane_width_m,width_live,true_width_m,true_width_near_m,width_err_m,center_err_m"
@@ -98,7 +100,7 @@ def test_controller_obstacles_on_sees_box_and_slows(tmp_path):
     assert "OBSTACLES ON — backend" in text and "corridor +-0.54 m" in text, text
     assert "OBSTACLE CLEAR -> SLOW_FOR_OBSTACLE" in text, text
     assert "WARNING obstacles" not in text, text
-    log = (tmp_path / "lane-vision.csv").read_text().splitlines()
+    log = (tmp_path / "lane-vision.csv").read_text(encoding="utf-8", errors="replace").splitlines()
     rows = [dict(zip(log[0].split(","), r.split(","))) for r in log[1:]]
     slow = [r for r in rows if r["obstacle_state"] == "SLOW_FOR_OBSTACLE"]
     assert slow and slow[-1]["obstacle_band"] == "low", log[:3]

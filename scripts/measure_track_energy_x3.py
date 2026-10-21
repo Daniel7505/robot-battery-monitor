@@ -99,7 +99,14 @@ def run_one(url: str, label: str, wheel_v: float, timeout: float) -> dict:
     print("#" * 62)
     print(f"  RUN {label}")
     print("#" * 62)
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     out = (proc.stdout or "") + (proc.stderr or "")
     print(out)
     # Pull latest measurement from API for structured compare

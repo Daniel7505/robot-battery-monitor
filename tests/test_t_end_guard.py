@@ -69,19 +69,27 @@ def test_controller_warns_and_logs_world_track_route(tmp_path):
         RBM_TRACK="plus",
         RBM_ROUTE="S",
         RBM_WORLD_FILE=str(ROOT / "webots" / "worlds" / "butlerbot_plus.wbt"),
+        PYTHONIOENCODING="utf-8",
+        PYTHONUTF8="1",
     )
-    out = subprocess.run([sys.executable, "butlerbot_controller.py"], cwd=CTRL, env=env,
-                         capture_output=True, text=True, timeout=120)
+    out = subprocess.run(
+        [sys.executable, "butlerbot_controller.py"], cwd=CTRL, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+    )
     text = out.stdout + out.stderr
     assert "FINISH REFEREE track t_end" in text, text
     assert "WARNING RBM_TRACK=plus does not match the loaded world butlerbot_t_end.wbt" in text
     assert "WARNING Webots loaded butlerbot_t_end.wbt but the launcher asked for butlerbot_plus.wbt" in text
     import csv
 
-    rows = list(csv.DictReader((tmp_path / "lane-vision-runs.csv").open()))
+    runs_csv = (tmp_path / "lane-vision-runs.csv").open(encoding="utf-8", errors="replace", newline="")
+    rows = list(csv.DictReader(runs_csv))
+    runs_csv.close()
     assert len(rows) == 1
     m = rows[0]
     assert m["world"] == "butlerbot_t_end.wbt" and m["track"] == "t_end" and m["route"] == "S"
     assert "RBM_TRACK=plus" in m["warnings"]
-    lv = list(csv.DictReader((tmp_path / "lane-vision.csv").open()))
+    lane_csv = (tmp_path / "lane-vision.csv").open(encoding="utf-8", errors="replace", newline="")
+    lv = list(csv.DictReader(lane_csv))
+    lane_csv.close()
     assert lv and lv[0]["run_id"] == m["run_id"]

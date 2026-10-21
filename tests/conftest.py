@@ -1,5 +1,11 @@
 """Shared pytest setup.
 
+Repo docs
+---------
+``tests/test_repo_docs_pristine.py`` registers a session autouse fixture so
+``docs/AGENT_JOURNAL.md`` and ``optimizer/KNOWLEDGE.md`` are not modified by
+the test suite.
+
 Postgres
 --------
 Most tests are pure Python. Tests that need the test database

@@ -92,6 +92,12 @@ class ControllerLimits:
     k_steer: float
     bom_build: str | None
     warnings: tuple[str, ...] = ()
+    # Physics cap (see docs/PHYSICS_SPEED_LIMIT.md). ``cruise_m_s`` stays the
+    # optimizer preference; ``effective_*`` is what the controller runs.
+    v_max_m_s: float | None = None
+    effective_cruise_m_s: float | None = None
+    effective_straight_m_s: float | None = None
+    speed_limit_active: bool = False
 
     def as_params(self) -> dict[str, float | str | None]:
         return {
@@ -101,6 +107,13 @@ class ControllerLimits:
             "controller.pivot_w_max_rad_s": self.pivot_w_max_rad_s,
             "controller.k_steer": self.k_steer,
         }
+
+    @property
+    def gate_top_speed_m_s(self) -> float:
+        """Largest forward speed the rowfit + obstacle layers may target."""
+        ec = self.effective_cruise_m_s if self.effective_cruise_m_s is not None else self.cruise_m_s
+        es = self.effective_straight_m_s if self.effective_straight_m_s is not None else self.straight_m_s
+        return max(float(ec), float(es))
 
 
 def _blank(value) -> bool:
@@ -187,7 +200,7 @@ def limits_from_mapping(data: dict | None) -> ControllerLimits:
         resolved["controller.cruise_m_s"] = KNOBS["controller.cruise_m_s"].default
         resolved["controller.straight_m_s"] = KNOBS["controller.straight_m_s"].default
     bom = resolved.get("bom_build")
-    return ControllerLimits(
+    limits = ControllerLimits(
         cruise_m_s=float(resolved["controller.cruise_m_s"]),
         straight_m_s=float(resolved["controller.straight_m_s"]),
         pivot_w_max_rad_s=float(resolved["controller.pivot_w_max_rad_s"]),
@@ -195,6 +208,48 @@ def limits_from_mapping(data: dict | None) -> ControllerLimits:
         bom_build=None if _blank(bom) else str(bom),
         warnings=tuple(warnings),
     )
+    return _apply_physics_speed_limit(limits, data)
+
+
+def _apply_physics_speed_limit(limits: ControllerLimits, data: dict | None) -> ControllerLimits:
+    try:
+        from src.physics_speed_limit import (
+            effective_cruise_m_s,
+            effective_straight_m_s,
+            physics_speed_limit_for_active_robot,
+        )
+
+        physics = physics_speed_limit_for_active_robot(data, bom_build=limits.bom_build)
+        v_max = float(physics.v_max_m_s)
+        eff_c = effective_cruise_m_s(limits.cruise_m_s, v_max)
+        eff_s = effective_straight_m_s(limits.straight_m_s, v_max)
+        active = v_max + 1e-6 < float(limits.cruise_m_s)
+        return ControllerLimits(
+            cruise_m_s=limits.cruise_m_s,
+            straight_m_s=limits.straight_m_s,
+            pivot_w_max_rad_s=limits.pivot_w_max_rad_s,
+            k_steer=limits.k_steer,
+            bom_build=limits.bom_build,
+            warnings=limits.warnings,
+            v_max_m_s=v_max,
+            effective_cruise_m_s=eff_c,
+            effective_straight_m_s=eff_s,
+            speed_limit_active=active,
+        )
+    except Exception as exc:
+        warn = limits.warnings + (f"physics speed limit skipped ({exc})",)
+        return ControllerLimits(
+            cruise_m_s=limits.cruise_m_s,
+            straight_m_s=limits.straight_m_s,
+            pivot_w_max_rad_s=limits.pivot_w_max_rad_s,
+            k_steer=limits.k_steer,
+            bom_build=limits.bom_build,
+            warnings=warn,
+            v_max_m_s=None,
+            effective_cruise_m_s=limits.cruise_m_s,
+            effective_straight_m_s=limits.straight_m_s,
+            speed_limit_active=False,
+        )
 
 
 def load_controller_limits(path: Path | str | None = None) -> ControllerLimits:

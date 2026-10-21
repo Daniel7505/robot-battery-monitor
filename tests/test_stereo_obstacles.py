@@ -233,7 +233,7 @@ def test_stop_distance_is_standoff_plus_reaction_plus_braking():
     assert stop_distance_m(0.44, 0.8, 0.32, 0.35) == pytest.approx(0.35 + 0.44 * 0.32 + 0.44 ** 2 / 1.6)
     g = new_gate()
     assert g.stop_distance(0.0) == pytest.approx(0.35)
-    assert g.slow_distance == pytest.approx(g.stop_distance(V_CRUISE_M_S) + 1.0)
+    assert g.slow_distance(V_CRUISE_M_S) == pytest.approx(g.stop_distance(V_CRUISE_M_S) + 1.0)
 
 
 def test_gate_needs_two_frames_then_slows_then_stops_then_resumes():

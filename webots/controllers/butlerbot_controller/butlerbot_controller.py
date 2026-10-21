@@ -37,6 +37,11 @@ import traceback
 from controller import Camera, Robot, Motor, PositionSensor, GPS, InertialUnit, Keyboard, Display
 
 try:
+    from controller import Gyro
+except ImportError:  # pragma: no cover
+    Gyro = None  # type: ignore[misc, assignment]
+
+try:
     from controller import Supervisor
 except ImportError:  # pragma: no cover - Webots always provides Supervisor
     Supervisor = None  # type: ignore[misc, assignment]
@@ -555,6 +560,25 @@ def _init_devices(
         gps_head = None
     imu: InertialUnit = robot.getDevice("imu")
     imu.enable(timestep)
+    gyro = None
+    if Gyro is not None:
+        try:
+            gyro = robot.getDevice("gyro")
+            gyro.enable(timestep)
+        except Exception:
+            gyro = None
+    if gyro is not None:
+        print("Gyro device enabled (pivot rate + integrated heading)")
+    elif Gyro is not None:
+        print(
+            "WARNING: Gyro device 'gyro' not found — pivot falls back to IMU yaw "
+            "(open-loop rate tracking; no gyro feedback)"
+        )
+    else:
+        print(
+            "WARNING: Gyro API unavailable in this Webots build — pivot open-loop "
+            "(IMU yaw only)"
+        )
 
     keyboard: Keyboard | None = None
     if hasattr(robot, "getKeyboard"):
@@ -595,7 +619,7 @@ def _init_devices(
         f"harvest every {max(1, cam_period // timestep)} ticks."
     )
 
-    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period
+    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period, gyro
 
 
 def _empty_lane_eyes() -> dict:
@@ -710,7 +734,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
-    motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period = _init_devices(
+    motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period, gyro = _init_devices(
         robot, timestep
     )
     harvest_every = max(1, int(cam_period) // max(1, int(timestep)))
@@ -856,7 +880,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         print(f"OBSTACLES {'on' if _obs_on else 'off'} ({_obs_why})")
         if _obs_on:
             try:
-                _ort = ObstacleRuntime()
+                _top = rowfit_rt.limits.gate_top_speed_m_s
+                _ort = ObstacleRuntime(
+                    v_cruise_m_s=_top,
+                    bom_build=rowfit_rt.limits.bom_build,
+                )
                 _msgs = _ort.enable_devices(robot, cam_period)
                 _msgs += _ort.bind(robot, rowfit_rt.cams_model)
                 for msg in _msgs:
@@ -1019,6 +1047,11 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             left_wv_early = abs_brake.wheel_rad_s(sensors, "left_wheel_sensor", dt)
             right_wv_early = abs_brake.wheel_rad_s(sensors, "right_wheel_sensor", dt)
             yaw_rate, prev_yaw = _yaw_rate(imu, prev_yaw, dt)
+            if gyro is not None:
+                try:
+                    yaw_rate = float(gyro.getValues()[2])
+                except Exception:
+                    pass
             gps_xy = _gps_xy(gps)
             if gps_xy is not None and hasattr(finish_ref, "cross_track"):
                 try:
@@ -1247,6 +1280,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     dt,
                     yaw=prev_yaw if imu is not None else None,
                     pose=None if gps_xy is None else (float(gps_xy[0]), float(gps_xy[1])),
+                    yaw_rate_rad_s=yaw_rate if imu is not None else None,
                 )
                 _crossed = (
                     gps_xy is not None
@@ -2084,6 +2118,18 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
         return
     loco["ctrl_cruise_m_s"] = round(float(lim.cruise_m_s), 4)
     loco["ctrl_straight_m_s"] = round(float(lim.straight_m_s), 4)
+    if lim.v_max_m_s is not None:
+        loco["ctrl_v_max_m_s"] = round(float(lim.v_max_m_s), 4)
+    eff_c = lim.effective_cruise_m_s if lim.effective_cruise_m_s is not None else lim.cruise_m_s
+    loco["ctrl_effective_cruise_m_s"] = round(float(eff_c), 4)
+    loco["ctrl_speed_limit_active"] = bool(lim.speed_limit_active)
+    cmd = getattr(rowfit_rt, "last_cmd", None) or {}
+    if cmd.get("yaw_rate_rad_s") is not None:
+        loco["ctrl_yaw_rate_rad_s"] = round(float(cmd["yaw_rate_rad_s"]), 4)
+    if cmd.get("pivot_heading_err_rad") is not None:
+        loco["ctrl_pivot_heading_err_rad"] = round(float(cmd["pivot_heading_err_rad"]), 4)
+    if cmd.get("pivot_integrated_deg") is not None:
+        loco["ctrl_pivot_integrated_deg"] = round(float(cmd["pivot_integrated_deg"]), 2)
     loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
     loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
     loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)

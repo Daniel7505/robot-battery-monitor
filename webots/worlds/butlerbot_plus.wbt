@@ -945,6 +945,9 @@ Robot {
     InertialUnit {
       name "imu"
     }
+    Gyro {
+      name "gyro"
+    }
   ]
   # Physics with no boundingObject is ignored by Webots. Pelvis box sits
   # above the tires so it does not fight the floor.

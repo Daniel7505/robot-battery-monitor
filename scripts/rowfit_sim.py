@@ -191,13 +191,19 @@ class SimObstacles:
 
     def __init__(self, boxes, *, remove_after_stop_s=None, render_range_m=6.0, backend="auto"):
         from src.obstacle_gate import ObstacleGate
-        from src.rowfit_control import DECEL_M_S2, V_MAX_M_S
+        from src.physics_speed_limit import physics_speed_limit_for_active_robot
+        from src.rowfit_control import V_MAX_M_S
         from src.stereo_depth import STEREO_LEFT_CAM, STEREO_RIGHT_CAM, CorridorParams, StereoObstacleSensor, StereoRig
 
         self.boxes = list(boxes)
         self.rig = StereoRig(STEREO_LEFT_CAM, STEREO_RIGHT_CAM)
         self.sensor = StereoObstacleSensor(self.rig, CorridorParams(), backend=backend)
-        self.gate = ObstacleGate(decel_m_s2=DECEL_M_S2, v_cruise_m_s=V_MAX_M_S)
+        physics = physics_speed_limit_for_active_robot()
+        self.gate = ObstacleGate(
+            decel_m_s2=float(physics.a_brake_m_s2),
+            v_cruise_m_s=V_MAX_M_S,
+            latency_s=float(physics.reaction_latency_s),
+        )
         self.remove_after = remove_after_stop_s
         self.render_range = float(render_range_m)
         self.removed_at = None

@@ -24,6 +24,8 @@ class GPS(_Any):
     def getValues(self): return [0.0, 0.0, 0.0]
 class InertialUnit(_Any):
     def getRollPitchYaw(self): return [0.0, 0.0, 0.0]
+class Gyro(_Any):
+    def getValues(self): return [0.0, 0.0, 0.0]
 class Keyboard(_Any):
     def getKey(self): return -1
 class Display(_Any):
@@ -95,6 +97,7 @@ class Robot:
             elif name.startswith("hud"): d = Display(name)
             elif name in ("gps", "gps_head"): d = GPS(name)
             elif name == "imu": d = InertialUnit(name)
+            elif name == "gyro": d = Gyro(name)
             elif name.endswith("sensor"): d = PositionSensor(name)
             else: d = Motor(name)
             self.devs[name] = d

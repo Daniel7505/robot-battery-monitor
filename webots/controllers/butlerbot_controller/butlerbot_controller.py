@@ -567,6 +567,18 @@ def _init_devices(
             gyro.enable(timestep)
         except Exception:
             gyro = None
+    if gyro is not None:
+        print("Gyro device enabled (pivot rate + integrated heading)")
+    elif Gyro is not None:
+        print(
+            "WARNING: Gyro device 'gyro' not found — pivot falls back to IMU yaw "
+            "(open-loop rate tracking; no gyro feedback)"
+        )
+    else:
+        print(
+            "WARNING: Gyro API unavailable in this Webots build — pivot open-loop "
+            "(IMU yaw only)"
+        )
 
     keyboard: Keyboard | None = None
     if hasattr(robot, "getKeyboard"):
@@ -607,7 +619,7 @@ def _init_devices(
         f"harvest every {max(1, cam_period // timestep)} ticks."
     )
 
-    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period
+    return motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period, gyro
 
 
 def _empty_lane_eyes() -> dict:
@@ -722,7 +734,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     timestep = int(robot.getBasicTimeStep())
     publish_every = max(1, int(opts["interval_s"] * 1000 / timestep))
     state_poll_every = max(3, min(publish_every, int(0.1 * 1000 / timestep)))
-    motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period = _init_devices(
+    motors, sensors, gps, gps_head, imu, keyboard, hud, cams, cam_period, gyro = _init_devices(
         robot, timestep
     )
     harvest_every = max(1, int(cam_period) // max(1, int(timestep)))

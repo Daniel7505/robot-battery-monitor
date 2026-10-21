@@ -12,7 +12,7 @@ from optimizer.config_store import ConfigStore
 from optimizer.diagnose import diagnose
 from optimizer.logbook import Logbook
 from optimizer.loop import recover_session, run_loop
-from optimizer.picker import LlmPicker, RulePicker
+from optimizer.picker import LlmPicker, Proposal, RulePicker
 from optimizer.runner import DryRunRunner, RunOutcome, launch_command, stamp_mission_log
 from optimizer.lap_launch import LapLaunch
 from optimizer.body_mass import expected_body_mass_kg
@@ -1181,8 +1181,15 @@ def test_missing_summary_is_invalid_and_retries_same_step(tmp_path):
             self.calls += 1
             if self.calls == 1:
                 return RunOutcome("ok", stamp_mission_log(summary_line(), launch))
-            if self.calls in (2, 3):
-                return RunOutcome("no_summary", "SEGMENT_ENERGY build=light dist_m=1.0", note="no summary")
+            if self.calls == 2:
+                return RunOutcome(
+                    "no_summary",
+                    "dashboard will log MISSION_SUMMARY",
+                    note=(
+                        "MISSION_SUMMARY missing opt_run_id/opt_trial_id stamps "
+                        "for this optimizer trial"
+                    ),
+                )
             return RunOutcome(
                 "ok",
                 stamp_mission_log(
@@ -1207,11 +1214,14 @@ def test_missing_summary_is_invalid_and_retries_same_step(tmp_path):
         for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert rows[1]["decision"] == "invalid"
-    assert "no MISSION_SUMMARY" in rows[1]["reason"]
+    assert "opt_run_id" in rows[1]["reason"]
+    assert "no_summary" in rows[1]["reason"]
     assert rows[1]["err_pct"] is None
     assert rows[2]["param"] == rows[1]["param"]
     assert rows[2]["new"] == rows[1]["new"]
-    assert runner.calls == 4
+    # One launch for the failed trial. The same step is retried as the next
+    # iteration, not as a silent second Webots inside the first trial.
+    assert runner.calls == 3
 
 
 def test_one_fresh_stamped_summary_per_trial(tmp_path, monkeypatch):
@@ -1398,3 +1408,166 @@ def test_rowfit_reset_keeps_the_track_and_the_speed_knobs():
     assert ctl.v_cruise == pytest.approx(0.36)
     assert ctl.v_straight == pytest.approx(0.42)
     assert ctl.pivot_w_max == pytest.approx(0.5)
+
+
+def test_prose_and_unstamped_summaries_do_not_finish_a_lap():
+    """Run 10 killed Webots because a MISSION_SUMMARY mention failed the stamp check."""
+    from optimizer.runner import classify_summary
+
+    launch = LapLaunch.new("r20261021123136", "search-2")
+    prose = "MISSION complete — parked after track finish; dashboard will log MISSION_SUMMARY"
+    assert classify_summary(prose, launch) == ("absent", "")
+    written = "MISSION_SUMMARY written → C:/logs/mission_summary.json"
+    assert classify_summary(written, launch) == ("absent", "")
+    unstamped = summary_line()
+    kind, detail = classify_summary(unstamped, launch)
+    assert kind == "reject"
+    assert "opt_run_id" in detail
+    stamped = summary_line(opt_run_id=launch.run_id, opt_trial_id=launch.trial_id)
+    assert classify_summary(stamped, launch) == ("fresh", "")
+    other = summary_line(opt_run_id=launch.run_id, opt_trial_id="search-1")
+    kind2, detail2 = classify_summary(f"{stamped}\n{other}", launch)
+    assert kind2 == "reject"
+    assert "search-1" in detail2
+
+
+def test_no_summary_does_not_relaunch_but_launcher_exit_retries_once():
+    from optimizer.loop import _run_with_retry
+
+    launch = LapLaunch.new("r20261021123136", "search-2")
+
+    class Once:
+        def __init__(self):
+            self.calls = 0
+
+        def run_lap(self, **kwargs):
+            self.calls += 1
+            return RunOutcome(
+                "no_summary",
+                "dashboard will log MISSION_SUMMARY",
+                note="MISSION_SUMMARY missing opt_run_id/opt_trial_id stamps for this optimizer trial",
+            )
+
+    once = Once()
+    outcome = _run_with_retry(once, PARAMS, 5, "warehouse", None, launch=launch)
+    assert once.calls == 1
+    assert "opt_run_id" in outcome.note
+    assert "retried after" not in outcome.note
+
+    class Exit:
+        def __init__(self):
+            self.calls = 0
+            self.settled = 0
+
+        def settle_between_laps(self):
+            self.settled += 1
+            return "settled 12s between laps"
+
+        def run_lap(self, **kwargs):
+            self.calls += 1
+            return RunOutcome("crash", "", note="launcher exited 1 before a fresh MISSION_SUMMARY")
+
+    exited = Exit()
+    retried = _run_with_retry(exited, PARAMS, 5, "warehouse", None, launch=launch)
+    assert exited.calls == 2
+    assert exited.settled == 1
+    assert retried.note.startswith("retry:")
+    assert "launcher exited 1" in retried.note
+
+
+def test_run_cleans_up_and_records_the_invalid_reason(tmp_path):
+    config, knowledge, run_dir = _layout(tmp_path)
+
+    class Track(ScriptedRunner):
+        def __init__(self):
+            super().__init__(reference_then(
+                RunOutcome(
+                    "no_summary",
+                    "",
+                    note="MISSION_SUMMARY missing opt_run_id/opt_trial_id stamps for this optimizer trial",
+                ),
+            ))
+            self.cleaned = 0
+
+        def cleanup(self):
+            self.cleaned += 1
+            return "stopped webots and butlerbot_controller"
+
+    runner = Track()
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        max_iterations=1,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=summary_line(),
+    )
+    assert runner.cleaned >= 1
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    search = [row for row in rows if row.get("phase") == "search"][0]
+    assert search["decision"] == "invalid"
+    assert "opt_run_id" in search["reason"]
+    assert "lap had no MISSION_SUMMARY / did not finish" not in search["reason"]
+
+
+def test_turn_regression_is_refuted_when_the_score_still_beats_keep(tmp_path):
+    """Run 10 trial 1: score 0.44 (tiny |err| floor) but turn |err| blew the band."""
+    config, knowledge, run_dir = _layout(tmp_path)
+    config.write_text(CONFIG.replace("pivot_w_max_rad_s: 0.9", "pivot_w_max_rad_s: 0.6"), encoding="utf-8")
+
+    reference = "\n".join(
+        [
+            segment(90, -1.8, 0.40),
+            segment(90, -1.9, 0.38),
+            segment(2, -2.2, 0.44),
+            summary_line(err_pct="-0.5", ctrl_pivot_w_max_rad_s="0.60", duration_s="681.3"),
+        ]
+    )
+    search = "\n".join(
+        [
+            segment(90, -9.4, 0.40),
+            segment(90, -9.6, 0.38),
+            segment(2, -2.2, 0.44),
+            summary_line(err_pct="-1.0", ctrl_pivot_w_max_rad_s="0.90", duration_s="680.8"),
+        ]
+    )
+
+    class PivotUp(RulePicker):
+        def pick(self, diagnosis, knowledge, history, params):
+            return Proposal(
+                "controller.pivot_w_max_rad_s",
+                0.9,
+                "Stepping pivot up.",
+                "Turn error should move.",
+                [],
+            )
+
+    runner = ScriptedRunner([
+        RunOutcome("ok", reference),
+        RunOutcome("ok", search),
+    ])
+    run_loop(
+        config_path=config,
+        knowledge_path=knowledge,
+        run_dir=run_dir,
+        runner=runner,
+        picker=PivotUp(),
+        max_iterations=1,
+        max_hours=8,
+        lap_timeout_s=5,
+        initial_log=reference,
+    )
+    rows = [
+        json.loads(line)
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    trial = [row for row in rows if row.get("phase") == "search"][0]
+    assert trial["decision"] == "refuted"
+    assert trial["evidence_status"] == "refuted"
+    assert "worsened" in trial["reason"]
+    assert load_controller_limits(config).pivot_w_max_rad_s == pytest.approx(0.6)

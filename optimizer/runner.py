@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from optimizer.diagnose import diagnose_lap
+from optimizer.diagnose import diagnose_lap, real_summary_line
 from optimizer.lap_launch import (
     BETWEEN_LAP_SETTLE_S,
     MIN_LAUNCH_WALL_S,
@@ -33,7 +33,54 @@ class RunOutcome:
 
 
 def _summary_in(text: str) -> bool:
-    return "MISSION_SUMMARY" in text
+    """True only for a scored summary line (duration or distance present)."""
+    return any(real_summary_line(line) for line in (text or "").splitlines())
+
+
+def classify_summary(
+    text: str,
+    launch: LapLaunch | None,
+    file_mtime: float | None = None,
+) -> tuple[str, str]:
+    """Classify the last real summary in ``text``.
+
+    Returns ``("fresh", "")`` when the line belongs to this trial,
+    ``("reject", reason)`` when a summary is present but must not end the lap,
+    or ``("absent", "")`` when no scored summary line is present.
+    """
+    line = ""
+    for candidate in (text or "").splitlines():
+        if real_summary_line(candidate):
+            line = candidate
+    if not line:
+        return "absent", ""
+    summary = diagnose_lap(line).summary
+    reason = summary_fresh_reason(summary, launch=launch, file_mtime=file_mtime)
+    if reason:
+        return "reject", reason
+    return "fresh", ""
+
+
+def _launch_log_excerpt(path: Path | None, limit: int = 500) -> str:
+    """ERROR / WARNING / launch lines from this trial's launcher log."""
+    if path is None or not path.is_file():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    picked = [
+        line
+        for line in lines
+        if line.startswith("ERROR")
+        or line.startswith("WARNING")
+        or line.startswith("optimizer:")
+        or line.startswith("Launching")
+        or line.startswith("--- retry")
+    ]
+    chosen = picked[-4:] or lines[-4:]
+    return " | ".join(chosen)[:limit]
 
 
 def stamp_mission_log(text: str, launch: LapLaunch | None) -> str:
@@ -263,18 +310,17 @@ def _finish_lap_outcome(
     note: str,
     wall_started: float,
     status_if_summary: str = "ok",
+    ignored: str = "",
+    log_path: Path | None = None,
 ) -> RunOutcome:
+    """Build the outcome after the launcher has stopped or a fresh summary arrived.
+
+    A summary that fails the stamp / mtime / duration checks does not count.
+    ``ignored`` is that rejection, kept so the trial log says why it was invalid.
+    """
     elapsed = time.monotonic() - wall_started
-    if _summary_in(text):
-        summary = diagnose_lap(text).summary
-        _text2, mtime = _mission_summary_pick(None, launch=launch)
-        stale = summary_fresh_reason(summary, launch=launch, file_mtime=mtime)
-        if stale:
-            return RunOutcome(
-                "no_summary",
-                text,
-                f"{stale}. {note}".strip(),
-            )
+    kind, detail = classify_summary(text, launch)
+    if kind == "fresh":
         if elapsed < MIN_LAUNCH_WALL_S:
             return RunOutcome(
                 "crash",
@@ -286,10 +332,29 @@ def _finish_lap_outcome(
                 ).strip(),
             )
         return RunOutcome(status_if_summary, text, note)
+    extra = detail or ignored
+    excerpt = _launch_log_excerpt(log_path)
+    if excerpt:
+        extra = f"{extra} launch log: {excerpt}".strip()
+    if proc.poll() is not None and kind != "fresh":
+        return RunOutcome(
+            "crash",
+            text,
+            (
+                f"launcher exited {proc.returncode} before a fresh MISSION_SUMMARY "
+                f"for this trial. {extra} {note}"
+            ).strip(),
+        )
+    if extra:
+        return RunOutcome(
+            "no_summary",
+            text,
+            f"{extra}. {note}".strip(),
+        )
     return RunOutcome(
         "crash",
         text,
-        f"launcher exited {proc.returncode} before MISSION_SUMMARY. {note}".strip(),
+        f"launcher exited {proc.returncode} before a fresh MISSION_SUMMARY. {note}".strip(),
     )
 
 
@@ -322,10 +387,15 @@ class WebotsLapRunner:
 
     def settle_between_laps(self) -> str:
         """Gap before back-to-back launches (confirm pair, retries)."""
-        _kill_webots()
-        _kill_stray_controller_python()
+        self.cleanup()
         time.sleep(float(BETWEEN_LAP_SETTLE_S))
         return f"settled {BETWEEN_LAP_SETTLE_S:.0f}s between laps"
+
+    def cleanup(self) -> str:
+        """Stop Webots and a leftover butlerbot controller. No settle sleep."""
+        _kill_webots()
+        _kill_stray_controller_python()
+        return "stopped webots and butlerbot_controller"
 
     def restart_dashboard(self) -> str:
         try:
@@ -356,7 +426,6 @@ class WebotsLapRunner:
         log_path: Path | None = None,
         launch: LapLaunch | None = None,
     ) -> RunOutcome:
-        del params  # the launcher reads config.yaml, which the loop already wrote
         if os.name != "nt":
             raise RuntimeError(
                 "Webots laps run on Windows only. Start scripts\\overnight_optimize.ps1 "
@@ -367,9 +436,13 @@ class WebotsLapRunner:
         since_utc = launch.launched_utc - timedelta(seconds=2)
         since_local = launch.launched_utc.astimezone().replace(tzinfo=None) - timedelta(seconds=2)
         wall_started = launch.launched_monotonic
-        _kill_webots()
+        self.cleanup()
         env = merge_launch_env(os.environ.copy(), launch)
         env["RBM_MISSION_LAPS"] = "1"
+        build = str((params or {}).get("bom_build") or "").strip()
+        if build:
+            # launch_webots_twin.ps1 refuses the shipped world when this is set.
+            env["RBM_OPT_BOM_BUILD"] = build
         # The controller prints arrows. A cp1252 console turns those into a crash.
         env.setdefault("PYTHONIOENCODING", "utf-8")
         env.setdefault("PYTHONUTF8", "1")
@@ -377,6 +450,11 @@ class WebotsLapRunner:
         if log_path is not None:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             sink = open(log_path, "ab")
+            sink.write(
+                f"optimizer: launching trial={launch.trial_id} world={world_name} "
+                f"bom_build={build or 'unset'}\n".encode()
+            )
+            sink.flush()
         proc = subprocess.Popen(
             launch_command(self.repo, world_name),
             cwd=str(self.repo),
@@ -386,15 +464,28 @@ class WebotsLapRunner:
         )
         deadline = time.time() + float(timeout_s)
         note = ""
+        ignored = ""
+
+        def _read() -> str:
+            nonlocal note
+            text, note = read_dashboard_log(
+                since_utc=since_utc,
+                since_local=since_local,
+                launch=launch,
+            )
+            return text
+
         try:
             while True:
-                text, note = read_dashboard_log(
-                    since_utc=since_utc,
-                    since_local=since_local,
-                    launch=launch,
-                )
-                if _summary_in(text):
-                    _kill_webots()
+                text = _read()
+                kind, detail = classify_summary(text, launch)
+                if kind == "reject" and detail and detail != ignored:
+                    ignored = detail
+                    if sink is not None:
+                        sink.write(f"optimizer: ignoring summary ({detail})\n".encode())
+                        sink.flush()
+                if kind == "fresh":
+                    self.cleanup()
                     try:
                         proc.wait(timeout=45)
                     except subprocess.TimeoutExpired:
@@ -405,38 +496,45 @@ class WebotsLapRunner:
                         text=text,
                         note=note,
                         wall_started=wall_started,
+                        ignored=ignored,
+                        log_path=log_path,
                     )
                 if proc.poll() is not None:
-                    text, note = read_dashboard_log(
-                        since_utc=since_utc,
-                        since_local=since_local,
-                        launch=launch,
-                    )
-                    if _summary_in(text):
+                    text = _read()
+                    kind, detail = classify_summary(text, launch)
+                    if kind == "reject" and detail:
+                        ignored = detail
+                    # The launcher can return while webots-bin and the controller
+                    # keep running. Always reap them before the next trial.
+                    self.cleanup()
+                    if kind == "fresh":
                         return _finish_lap_outcome(
                             launch=launch,
                             proc=proc,
                             text=text,
                             note=note,
                             wall_started=wall_started,
+                            ignored=ignored,
+                            log_path=log_path,
                         )
-                    return RunOutcome(
-                        "crash",
-                        text,
-                        f"launcher exited {proc.returncode} before MISSION_SUMMARY. {note}".strip(),
+                    return _finish_lap_outcome(
+                        launch=launch,
+                        proc=proc,
+                        text=text,
+                        note=note,
+                        wall_started=wall_started,
+                        ignored=ignored or detail,
+                        log_path=log_path,
                     )
                 if time.time() >= deadline:
-                    _kill_webots()
+                    self.cleanup()
                     try:
                         proc.wait(timeout=45)
                     except subprocess.TimeoutExpired:
                         proc.kill()
-                    text, note = read_dashboard_log(
-                        since_utc=since_utc,
-                        since_local=since_local,
-                        launch=launch,
-                    )
-                    if _summary_in(text):
+                    text = _read()
+                    kind, detail = classify_summary(text, launch)
+                    if kind == "fresh":
                         return _finish_lap_outcome(
                             launch=launch,
                             proc=proc,
@@ -444,13 +542,21 @@ class WebotsLapRunner:
                             note=note,
                             wall_started=wall_started,
                             status_if_summary="timeout",
+                            ignored=ignored,
+                            log_path=log_path,
                         )
-                    return RunOutcome("timeout", text, note)
+                    why = ignored or detail or "no fresh MISSION_SUMMARY for this trial"
+                    excerpt = _launch_log_excerpt(log_path)
+                    if excerpt:
+                        why = f"{why} launch log: {excerpt}"
+                    return RunOutcome("timeout", text, f"{why}. {note}".strip())
                 time.sleep(self.poll_s)
         finally:
             if proc.poll() is None:
-                _kill_webots()
+                self.cleanup()
                 proc.kill()
+            else:
+                self.cleanup()
             if sink is not None:
                 sink.close()
 
@@ -467,6 +573,9 @@ class DryRunRunner:
 
     def settle_between_laps(self) -> str:
         return "dry-run: settle skipped"
+
+    def cleanup(self) -> str:
+        return "dry-run: cleanup skipped"
 
     def run_lap(
         self,

@@ -78,6 +78,16 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
         Write-Host "WARNING: BoM body patch skipped; opening the shipped world" -ForegroundColor Yellow
     }
 }
+# Optimizer trials set RBM_OPT_BOM_BUILD. Launching the shipped world here
+# means config.yaml was read before bom_build landed, and the lap would not
+# be the body under test.
+if ($env:RBM_OPT_BOM_BUILD) {
+    $needle = ".bom-$($env:RBM_OPT_BOM_BUILD)."
+    if ($WorldFile -notlike "*$needle*") {
+        Write-Host "ERROR: optimizer trial expected a *$needle* world, got $WorldFile. Refusing to launch the wrong body." -ForegroundColor Red
+        exit 1
+    }
+}
 # Webots keeps HUD overlay placement per world in worlds\.<world>.wbproj; start a
 # new world with the S world's layout so the shoulder HUDs land in the same spots.
 $WorldBase = [System.IO.Path]::GetFileNameWithoutExtension($WorldFile)

@@ -256,6 +256,34 @@ def recover_session(store: ConfigStore, session_path: Path) -> dict | None:
     return None
 
 
+def _retry_reason(outcome: RunOutcome) -> str | None:
+    """One relaunch only when the launcher died before a lap could exist.
+
+    A stale or unstamped summary is not a reason to start Webots again.
+    That second start is what killed trials 2–6 of run 10 within a minute.
+    """
+    if outcome.status != "crash":
+        return None
+    note = (outcome.note or "").strip()
+    lowered = note.lower()
+    if any(token in lowered for token in ("cached", "too quickly", "too short", "(<")):
+        return None
+    if "launcher exited" in lowered:
+        return note
+    head = note.split(":", 1)[0]
+    if head.endswith("Error") or head.endswith("Exception"):
+        return note
+    return None
+
+
+def _prepare_launch_log(log_path: Path | None, *, truncate: bool) -> None:
+    if log_path is None:
+        return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if truncate:
+        log_path.write_bytes(b"")
+
+
 def _run_with_retry(
     runner,
     params: dict,
@@ -265,6 +293,8 @@ def _run_with_retry(
     *,
     launch: LapLaunch,
 ) -> RunOutcome:
+    """Launch once. Relaunch only after a logged launcher crash, then stop."""
+
     def once() -> RunOutcome:
         try:
             return runner.run_lap(
@@ -277,16 +307,54 @@ def _run_with_retry(
         except Exception as exc:
             return RunOutcome("crash", "", note=f"{type(exc).__name__}: {exc}")
 
+    _prepare_launch_log(log_path, truncate=True)
     first = once()
-    if first.status == "ok" and "MISSION_SUMMARY" in first.log_text:
+    reason = _retry_reason(first)
+    if reason is None:
         return first
+    settle_note = ""
+    settle = getattr(runner, "settle_between_laps", None)
+    if settle is not None:
+        try:
+            settle_note = str(settle() or "")
+        except Exception as exc:
+            settle_note = f"settle failed: {type(exc).__name__}: {exc}"
+    if log_path is not None:
+        with log_path.open("ab") as handle:
+            handle.write(f"\n--- retry: {reason} ---\n".encode())
     second = once()
-    second.note = f"retried after {first.status}. {first.note} {second.note}".strip()
-    if second.status == "ok" and "MISSION_SUMMARY" in second.log_text:
-        return second
-    if second.status == "ok":
-        second.status = "no_summary"
+    second.note = f"retry: {reason}. {settle_note} {second.note}".strip()
     return second
+
+
+def _settle(runner) -> str:
+    settle = getattr(runner, "settle_between_laps", None)
+    if settle is None:
+        return ""
+    try:
+        return str(settle() or "")
+    except Exception as exc:
+        return f"settle failed: {type(exc).__name__}: {exc}"
+
+
+def _invalid_lap_reason(outcome: RunOutcome) -> str | None:
+    """Why this outcome must not be scored, or None when a fresh summary is in hand."""
+    from optimizer.runner import _summary_in
+
+    if outcome.status == "ok" and _summary_in(outcome.log_text or ""):
+        return None
+    detail = (outcome.note or "").strip()
+    if outcome.status == "ok":
+        return detail or (
+            "no fresh MISSION_SUMMARY for this trial; "
+            "no metrics from this lap were scored"
+        )
+    if detail:
+        return f"{outcome.status}: {detail}"
+    return (
+        f"{outcome.status}: no fresh MISSION_SUMMARY for this trial; "
+        "no metrics from this lap were scored"
+    )
 
 
 def run_loop(
@@ -384,15 +452,27 @@ def run_loop(
         if over_time():
             stop_reason = "wall-clock limit before the reference lap"
             return False
+        intended_ref = store.read()
+        cfg_wait = wait_config(store, intended_ref)
+        settle_note = _settle(runner)
         ref_launch = LapLaunch.new(run_id, trial_id_for("reference", 0))
-        outcome = _run_with_retry(
-            runner,
-            store.read(),
-            lap_timeout_s,
-            world,
-            run_dir / "launch_reference.log",
-            launch=ref_launch,
-        )
+        if cfg_wait:
+            outcome = RunOutcome(
+                "crash",
+                "",
+                note=f"config was not stable before launch: {cfg_wait}",
+            )
+        else:
+            outcome = _run_with_retry(
+                runner,
+                intended_ref,
+                lap_timeout_s,
+                world,
+                run_dir / "launch_reference.log",
+                launch=ref_launch,
+            )
+        if settle_note:
+            outcome.note = f"{settle_note} {outcome.note}".strip()
         ref_diag = diagnose(outcome.log_text)
         intended = store.read()
         invalid = trial_invalid_reason(
@@ -723,16 +803,29 @@ def run_loop(
                 )
                 continue
             restart_note = ""
+            intended_now = store.read()
+            cfg_wait = wait_config(store, intended_now)
+            settle_note = _settle(runner)
             search_launch = LapLaunch.new(run_id, trial_id_for("search", iteration))
-            outcome = _run_with_retry(
-                runner,
-                store.read(),
-                lap_timeout_s,
-                world,
-                run_dir / f"launch_{iteration}.log",
-                launch=search_launch,
-            )
-            summary_trusted = "MISSION_SUMMARY" in (outcome.log_text or "")
+            if cfg_wait:
+                outcome = RunOutcome(
+                    "crash",
+                    "",
+                    note=f"config was not stable before launch: {cfg_wait}",
+                )
+            else:
+                outcome = _run_with_retry(
+                    runner,
+                    intended_now,
+                    lap_timeout_s,
+                    world,
+                    run_dir / f"launch_{iteration}.log",
+                    launch=search_launch,
+                )
+            if settle_note:
+                outcome.note = f"{settle_note} {outcome.note}".strip()
+                restart_note = settle_note
+            summary_trusted = _invalid_lap_reason(outcome) is None
             new_diag = diagnose_lap(outcome.log_text) if summary_trusted else diagnose_lap("")
             summary = new_diag.summary
             intended_params = store.read()
@@ -744,28 +837,16 @@ def run_loop(
             noise_detail = ""
             repeat_label: str | None = None
             decision = None
-            if outcome.status == "no_summary" or (
-                outcome.status == "ok" and not summary_trusted
-            ):
+            failed = _invalid_lap_reason(outcome)
+            if failed is not None or outcome.status != "ok":
                 store.apply_one(proposal.param, old)
                 action = "invalid"
-                reason = (
-                    "lap had no MISSION_SUMMARY / did not finish; "
-                    "no metrics from this lap were scored"
+                reason = failed or (
+                    f"{outcome.status}: {outcome.note or 'lap failed'}"
                 )
                 score = None
                 summary = None
-                new_diag = diagnose_lap("")
-                diag = before_diag
-                if not search_is_retry:
-                    retry_search = proposal
-                    retry_search_old = old
-            elif outcome.status != "ok":
-                store.apply_one(proposal.param, old)
-                action = "invalid"
-                reason = f"{outcome.status}: {outcome.note or 'lap failed'}"
-                score = None
-                summary = None
+                summary_trusted = False
                 new_diag = diagnose_lap("")
                 diag = before_diag
                 if not search_is_retry:
@@ -838,7 +919,13 @@ def run_loop(
                     score = decision.score
                     reason = decision.reason
                 if repeat_label is None and decision.action == "keep" and summary is not None:
-                    if within_noise:
+                    if clearly_worse:
+                        store.apply_one(proposal.param, old)
+                        action = "refuted"
+                        _beyond, why = worsened_beyond_band(effects)
+                        reason = f"{why}. {decision.reason}".strip(". ") if why else decision.reason
+                        diag = before_diag
+                    elif within_noise:
                         store.apply_one(proposal.param, old)
                         action = "inconclusive"
                         reason = (
@@ -922,7 +1009,7 @@ def run_loop(
                 picker=picker,
                 store=store,
                 next_diag=diag,
-                within_noise=within_noise and action == "inconclusive",
+                within_noise=within_noise and action in {"inconclusive", "refuted"},
                 noise_detail=noise_detail,
                 summary_trusted=summary_trusted,
                 effects=effects,
@@ -943,6 +1030,12 @@ def run_loop(
         stop_reason = f"{stop_reason}; loop error: {type(exc).__name__}: {exc}"
         raise
     finally:
+        cleanup = getattr(runner, "cleanup", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception:
+                pass
         if pending is not None:
             stop_reason = f"{stop_reason}; last keep was not confirmed before the stop"
         try:

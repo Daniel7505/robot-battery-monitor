@@ -121,6 +121,8 @@ def evidence_status(
         return "reference"
     if action == "invalid":
         return "invalid"
+    if action == "refuted":
+        return "refuted"
     if action == "keep":
         return "tentative"
     if action == "confirm-pass":

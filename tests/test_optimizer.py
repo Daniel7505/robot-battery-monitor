@@ -566,7 +566,9 @@ def test_shipped_limits_match_the_rowfit_constants():
     limits = load_controller_limits()
     assert limits.cruise_m_s == pytest.approx(V_CRUISE_M_S)
     assert limits.straight_m_s == pytest.approx(V_STRAIGHT_M_S)
-    assert limits.pivot_w_max_rad_s == pytest.approx(PIVOT_W_MAX)
+    # Committed config pivot (0.6) is the kept warehouse tune; code default stays 0.9.
+    assert limits.pivot_w_max_rad_s == pytest.approx(0.6)
+    assert PIVOT_W_MAX == pytest.approx(0.9)
     assert limits.k_steer == pytest.approx(DEFAULT_K_STEER)
     assert limits.bom_build is None
 
@@ -983,6 +985,156 @@ def test_scored_lap_can_beat_keep_margin_when_err_moves_enough():
     assert decision.score is not None
     assert decision.score < 0.98
     assert decision.action == "keep"
+
+
+def test_picker_blocks_exact_param_value_against_same_baseline():
+    history = [
+        {
+            "param": "controller.pivot_w_max_rad_s",
+            "new": 0.9,
+            "old": 0.6,
+            "decision": "inconclusive",
+            "reason": "lap repeats search 3 with identical metrics",
+            "score_baseline_label": "kept baseline (cruise=0.44)",
+            "phase": "search",
+        }
+    ]
+    params = dict(PARAMS)
+    params["controller.pivot_w_max_rad_s"] = 0.6
+    proposal = RulePicker().pick(diagnose(summary_line()), "", history, params)
+    assert proposal is not None
+    assert not (
+        proposal.param == "controller.pivot_w_max_rad_s"
+        and proposal.value == pytest.approx(0.9)
+    )
+
+
+def test_worsened_turn_error_beyond_band_is_refuted_not_inconclusive():
+    from optimizer.evidence import measure_effects, worsened_beyond_band
+    from optimizer.postmortem import build_postmortem
+
+    baseline = diagnose(
+        "\n".join(
+            [
+                segment(90, -9.5, 0.40),
+                segment(90, -10.0, 0.38),
+                segment(85, -9.8, 0.36),
+                summary_line(),
+            ]
+        )
+    )
+    after = diagnose(
+        "\n".join(
+            [
+                segment(90, -17.2, 0.40),
+                segment(90, -17.6, 0.38),
+                segment(85, -17.0, 0.36),
+                summary_line(err_pct="-28.0", duration_s="665.0"),
+            ]
+        )
+    )
+    effects = measure_effects(
+        after,
+        baseline.summary,
+        baseline_diag=baseline,
+        baseline_label="kept baseline",
+    )
+    assert effects["turn_delta_pp"] is not None
+    assert float(effects["turn_delta_pp"]) < -2.5
+    assert worsened_beyond_band(effects)[0]
+    post = build_postmortem(
+        param="controller.pivot_w_max_rad_s",
+        old=0.6,
+        new=0.9,
+        action="inconclusive",
+        before=baseline,
+        after=after,
+        within_noise=True,
+        noise_detail=effects["detail"],
+        evidence=effects,
+        baseline_diag=baseline,
+        baseline_label="kept baseline",
+    )
+    assert post["verdict"] == "refuted"
+    assert "not refuted" not in post["lesson"]
+
+
+def test_postmortem_predicted_observed_uses_kept_baseline_not_trial_before():
+    from optimizer.postmortem import build_postmortem
+
+    baseline = diagnose(
+        "\n".join(
+            [
+                segment(90, -12.0, 0.40),
+                segment(90, -11.5, 0.38),
+                summary_line(err_pct="-20.0"),
+            ]
+        )
+    )
+    trial_before = diagnose(
+        "\n".join(
+            [
+                segment(90, -40.0, 0.40),
+                segment(90, -39.0, 0.38),
+                summary_line(err_pct="-28.3"),
+            ]
+        )
+    )
+    after = diagnose(
+        "\n".join(
+            [
+                segment(90, -15.0, 0.40),
+                segment(90, -14.5, 0.38),
+                summary_line(err_pct="-22.0"),
+            ]
+        )
+    )
+    post = build_postmortem(
+        param="controller.pivot_w_max_rad_s",
+        old=0.9,
+        new=0.6,
+        action="rollback",
+        before=trial_before,
+        after=after,
+        baseline_diag=baseline,
+        baseline_label="kept baseline (provisional)",
+    )
+    turn_row = next(row for row in post["metrics"] if row["label"] == "turn segment error")
+    assert "-11.8" in turn_row["observed"]
+    assert "-40.0" not in turn_row["observed"]
+    assert "-39.0" not in turn_row["observed"]
+
+
+def test_agent_journal_next_time_is_complete_and_skips_blocked_step():
+    from optimizer.agent_journal import render_journal_entry
+    from datetime import datetime, timezone
+
+    started = datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc)
+    long_tail = "x" * 400
+    records = [
+        {
+            "decision": "inconclusive",
+            "param": "controller.pivot_w_max_rad_s",
+            "new": 0.9,
+            "score_baseline_label": "kept baseline",
+            "next_hypothesis": (
+                "From that lesson, try `controller.pivot_w_max_rad_s` at 0.9 "
+                f"rather than repeating the step that just finished. {long_tail}"
+            ),
+        }
+    ]
+    text = render_journal_entry(
+        run_id="r20261021010000",
+        started=started,
+        finished=started,
+        records=records,
+        stop_reason="iteration limit",
+    )
+    next_line = next(line for line in text.splitlines() if line.startswith("Next time:"))
+    assert ".." not in next_line
+    assert not next_line.rstrip().endswith("..")
+    assert "0.9" not in next_line
+    assert next_line.endswith(".")
 
 
 def test_postmortem_marks_noise_band_pivot_down_inconclusive_not_refuted():

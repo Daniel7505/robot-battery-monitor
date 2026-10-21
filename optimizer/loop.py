@@ -25,7 +25,12 @@ from optimizer.postmortem import build_postmortem
 from optimizer.agent_journal import append_agent_journal
 from optimizer.report import write_report
 from optimizer.runner import RunOutcome
-from optimizer.evidence import evidence_status, measure_effects, meaningful_improvement
+from optimizer.evidence import (
+    evidence_status,
+    measure_effects,
+    meaningful_improvement,
+    worsened_beyond_band,
+)
 from optimizer.score import (
     ERR_REGRESS_POINTS,
     KEEP_MARGIN,
@@ -825,6 +830,8 @@ def run_loop(
                     ):
                         err_regress = abs(summary.err_pct) - abs(baseline.err_pct)
                         clearly_worse = err_regress > ERR_REGRESS_POINTS
+                    if effects and worsened_beyond_band(effects)[0]:
+                        clearly_worse = True
                     decision = decide(
                         summary, baseline, baseline_label=baseline_label
                     )

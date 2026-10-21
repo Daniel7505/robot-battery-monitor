@@ -94,6 +94,21 @@ def meaningful_improvement(
     return bool(effects["meaningful"]), str(effects["detail"])
 
 
+def worsened_beyond_band(effects: dict | None) -> tuple[bool, str]:
+    """True when |err| or turn |err| moved worse past the configured minimum band."""
+    if not effects:
+        return False, ""
+    band = float(effects.get("turn_noise_band_pp") or TURN_ERR_IMPROVE_MIN)
+    turn_delta = effects.get("turn_delta_pp")
+    if turn_delta is not None and float(turn_delta) < -band:
+        delta = abs(float(turn_delta))
+        return True, f"turn |err| worsened {delta:.1f} pp vs the {band:.1f} pp band"
+    err_gain = effects.get("err_gain_pp")
+    if err_gain is not None and float(err_gain) < -ERR_IMPROVE_MIN:
+        return True, f"|err| worsened {abs(float(err_gain)):.1f} pp beyond the noise band"
+    return False, ""
+
+
 def evidence_status(
     *,
     action: str,

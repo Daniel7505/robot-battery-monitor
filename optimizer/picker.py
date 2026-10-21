@@ -125,6 +125,54 @@ def _rolled_back(history: list[dict], param: str, value) -> bool:
     return False
 
 
+def _baseline_label(history: list[dict]) -> str:
+    for row in reversed(history or []):
+        label = row.get("score_baseline_label")
+        if label:
+            return str(label)
+    return "kept baseline"
+
+
+def _trial_value_key(value) -> str:
+    if value in (None, ""):
+        return ""
+    try:
+        return f"{float(value):.6g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def blocked_exact_trials(history: list[dict], *, baseline_label: str | None = None) -> set[tuple[str, str, str]]:
+    """(param, value, baseline_label) tuples that must not be run again."""
+    blocked: set[tuple[str, str, str]] = set()
+    label = baseline_label or _baseline_label(history)
+    for row in history or []:
+        param = row.get("param")
+        if not param:
+            continue
+        decision = str(row.get("decision") or "")
+        if decision in {"reference", "baseline", "invalid"}:
+            continue
+        row_label = str(row.get("score_baseline_label") or label)
+        val_key = _trial_value_key(row.get("new"))
+        if not val_key:
+            continue
+        blocked.add((str(param), val_key, row_label))
+        reason = str(row.get("reason") or "")
+        if decision == "inconclusive" and "repeats" in reason:
+            blocked.add((str(param), val_key, row_label))
+    return blocked
+
+
+def _value_blocked(
+    blocked: set[tuple[str, str, str]],
+    param: str,
+    value,
+    baseline_label: str,
+) -> bool:
+    return (param, _trial_value_key(value), baseline_label) in blocked
+
+
 def _consecutive_rollbacks(history: list[dict]) -> int:
     count = 0
     for row in reversed(history):
@@ -238,25 +286,74 @@ def _ordered_keys(order: tuple[str, ...], diagnosis, book: dict) -> list[str]:
     return sorted(open_keys, key=rank)
 
 
-def _try_float(params: dict, key: str, direction: int, history: list[dict], book: dict | None = None):
+def _grid_values(key: str) -> list[float]:
+    knob = KNOBS[key]
+    if knob.step is None or knob.lo is None or knob.hi is None:
+        return []
+    values: list[float] = []
+    nxt = float(knob.lo)
+    while nxt <= float(knob.hi) + 1e-9:
+        try:
+            values.append(float(check_param(key, round(nxt, 4))))
+        except AllowlistError:
+            pass
+        nxt += float(knob.step)
+    return values
+
+
+def _try_float(
+    params: dict,
+    key: str,
+    direction: int,
+    history: list[dict],
+    book: dict | None = None,
+    *,
+    baseline_label: str | None = None,
+):
     knob = KNOBS[key]
     current = float(params[key])
+    bl = baseline_label or _baseline_label(history)
+    blocked = blocked_exact_trials(history, baseline_label=bl)
     signs = [direction, -direction]
     if book is not None:
         signs = [sign for sign in signs if (key, _direction_word(sign)) not in book["blocked"]]
+    tried_offsets: set[int] = set()
     for sign in signs:
-        nxt = round(current + sign * float(knob.step), 4)
-        try:
-            nxt = check_param(key, nxt)
-        except AllowlistError:
+        for mult in range(1, 8):
+            offset = sign * mult
+            if offset in tried_offsets:
+                continue
+            tried_offsets.add(offset)
+            nxt = round(current + offset * float(knob.step), 4)
+            try:
+                nxt = check_param(key, nxt)
+            except AllowlistError:
+                continue
+            trial = dict(params)
+            trial[key] = nxt
+            try:
+                check_set(trial)
+            except AllowlistError:
+                continue
+            if _same(current, nxt):
+                continue
+            if _value_blocked(blocked, key, nxt, bl):
+                continue
+            if _rolled_back(history, key, nxt):
+                continue
+            return float(nxt)
+    for nxt in _grid_values(key):
+        if _same(current, nxt):
+            continue
+        if _value_blocked(blocked, key, nxt, bl):
+            continue
+        if _rolled_back(history, key, nxt):
             continue
         trial = dict(params)
         trial[key] = nxt
         try:
             check_set(trial)
         except AllowlistError:
-            continue
-        if _rolled_back(history, key, nxt) or _same(current, nxt):
             continue
         return float(nxt)
     return None
@@ -303,9 +400,20 @@ class RulePicker:
         book = lesson_book(knowledge, history)
         order = _TURN_ORDER if _turn_dominates(diagnosis) else _VISC_ORDER
         kept = _kept_knob_state(history)
+        baseline_label = _baseline_label(history)
+        blocked = blocked_exact_trials(history, baseline_label=baseline_label)
         for key in _ordered_keys(order, diagnosis, book):
-            value = _try_float(params, key, _direction_for(key, diagnosis), history, book)
+            value = _try_float(
+                params,
+                key,
+                _direction_for(key, diagnosis),
+                history,
+                book,
+                baseline_label=baseline_label,
+            )
             if value is None:
+                continue
+            if _value_blocked(blocked, key, value, baseline_label):
                 continue
             proposal = self._float_proposal(params, key, value, diagnosis, suggestions)
             if _undoes_keep(proposal, kept):

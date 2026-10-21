@@ -6,7 +6,13 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from optimizer.picker import blocked_exact_trials
+
 _SECRET = re.compile(r"(?i)(token|password|api[_-]?key|secret)\s*=")
+_TRAIL_STEP = re.compile(
+    r"try `(?P<param>[^`]+)` at (?P<value>[^`\s]+)",
+    re.IGNORECASE,
+)
 
 
 def _redact(text: str) -> str:
@@ -15,6 +21,46 @@ def _redact(text: str) -> str:
     if _SECRET.search(text):
         return "[redacted detail]"
     return text.strip()
+
+
+def _finish_sentence(text: str, *, max_len: int = 500) -> str:
+    """One complete sentence for journal 'Next time', without mid-word cuts."""
+    cleaned = " ".join(_redact(text).split())
+    if not cleaned:
+        return ""
+    cleaned = cleaned.rstrip(".")
+    if len(cleaned) <= max_len:
+        return cleaned + "."
+    chunk = cleaned[:max_len]
+    if " " in chunk:
+        chunk = chunk.rsplit(" ", 1)[0]
+    return chunk.rstrip(".,;:") + "."
+
+
+def _sanitize_next_hypothesis(text: str, records: list[dict]) -> str:
+    """Drop next-step text that repeats a blocked (param, value, baseline) trial."""
+    cleaned = _redact(text)
+    if not cleaned:
+        return ""
+    blocked = blocked_exact_trials(records)
+    match = _TRAIL_STEP.search(cleaned)
+    if match:
+        param = match.group("param")
+        raw_val = match.group("value")
+        try:
+            val_key = f"{float(raw_val):.6g}"
+        except ValueError:
+            val_key = raw_val
+        baseline = ""
+        for row in reversed(records):
+            if row.get("score_baseline_label"):
+                baseline = str(row["score_baseline_label"])
+                break
+        if not baseline:
+            baseline = "kept baseline"
+        if (param, val_key, baseline) in blocked:
+            return ""
+    return cleaned
 
 
 def _confirmed(records: list[dict]) -> list[str]:
@@ -102,12 +148,14 @@ def render_journal_entry(
     next_steps: list[str] = []
     last = records[-1] if records else None
     if last and last.get("next_hypothesis"):
-        next_steps.append(_redact(str(last["next_hypothesis"])))
+        sanitized = _sanitize_next_hypothesis(str(last["next_hypothesis"]), records)
+        if sanitized:
+            next_steps.append(sanitized)
     if stop_reason and "iteration limit" not in stop_reason.lower():
         next_steps.append(_redact(stop_reason))
     if not next_steps:
         next_steps.append("Continue from the last kept baseline on the next run.")
-    lines.append("Next time: " + next_steps[0][:280] + ".")
+    lines.append("Next time: " + _finish_sentence(next_steps[0]))
 
     lines.append("")
     return "\n".join(lines)

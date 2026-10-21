@@ -168,7 +168,7 @@ bom_build:
 controller:
   cruise_m_s: 0.44
   straight_m_s: 0.50
-  pivot_w_max_rad_s: 0.9
+  pivot_w_max_rad_s: 0.6
   k_steer: 2.0
 
 # System-level allocatable power ceiling (includes cooling channel)

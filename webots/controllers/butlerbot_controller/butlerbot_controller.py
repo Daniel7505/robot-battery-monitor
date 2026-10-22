@@ -716,6 +716,25 @@ def _sync_bom_body(robot: Robot) -> bool:
     return False
 
 
+def _emit_turn_log(rowfit_rt) -> None:
+    """Print TURN_LOG when the mission finishes.
+
+    Webots can kill the controller before the post-loop hook, so the
+    checksum has to go out on the mission-complete path, flushed, and
+    into the mission file that already survives that kill.
+    """
+    if rowfit_rt is None:
+        return
+    try:
+        lines = rowfit_rt.ctl.finish_turn_log()
+    except Exception as exc:
+        print(f"TURN_LOG skipped ({type(exc).__name__}: {exc})", flush=True)
+        return
+    for line in lines:
+        print(line, flush=True)
+    _record_mission_lines(lines)
+
+
 def _record_mission_lines(lines: list[str]) -> str | None:
     """Append lines to logs/mission_summary_<ts>.json and the repo dashboard log."""
     try:
@@ -911,6 +930,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
     mission_complete = False
+    turn_log_sent = False
     finish_age_s = 0.0
     mission_travel_m = 0.0
     mission_prev_xy: tuple[float, float] | None = None
@@ -1063,6 +1083,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 if _ct_now is not None:
                     ct_latest_m = float(_ct_now)
                     ct_peak_m = max(ct_peak_m, abs(ct_latest_m))
+                    if rowfit_rt is not None:
+                        rowfit_rt.ctl.note_cross_track(ct_latest_m)
             if not mission_capped and gps_xy is not None:
                 if mission_prev_xy is not None:
                     _step_m = math.hypot(
@@ -1913,6 +1935,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if abs_just_finished and nadir_lobe_done:
                         mission_complete = True
                         mission_event = "complete"
+            if mission_complete and not turn_log_sent:
+                _emit_turn_log(rowfit_rt)
+                turn_log_sent = True
             if mission_complete and not speed_trace.finished:
                 _steer_line = speed_trace.finish()
                 if _steer_line:
@@ -2109,9 +2134,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         _steer_line = speed_trace.finish()
         if _steer_line:
             print(_steer_line)
-    if rowfit_rt is not None:
-        print(rowfit_rt.ctl.turn_log_line())
-    print("ButlerBot controller stopped (simulation ended)")
+    if not turn_log_sent:
+        _emit_turn_log(rowfit_rt)
+    print("ButlerBot controller stopped (simulation ended)", flush=True)
 
 
 def _publish_controller_limits(loco: dict, rowfit_rt) -> None:

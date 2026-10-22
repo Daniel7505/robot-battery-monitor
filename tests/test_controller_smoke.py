@@ -49,6 +49,7 @@ def _run(tmp_path, mode, world=None, extra=None):
 def test_controller_loop_runs(tmp_path, mode):
     text = _run(tmp_path, mode)
     assert "ButlerBot controller stopped" in text, text
+    assert "TURN_LOG " in text, text
     assert "Controller step error" not in text, text
     assert "fatal error" not in text, text
     assert "HUD paint is off" in text, text

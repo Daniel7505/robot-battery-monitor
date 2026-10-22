@@ -82,6 +82,73 @@ SPEED_TRACE t_sim=2.0 t_wall=2.0 rtf=1.0 v_body=0.650 v_odo=0.650 wL_cmd=0 wR_cm
     assert flags == []
 
 
+def test_heading_wiggle_is_not_a_missing_corner_flag():
+    """Three pivots and heading_turns=11 is the baseline warehouse lap."""
+    route = "S,S,S,S,R,S,S,S,L,S,L"
+    pivots = [
+        {
+            "turn": i,
+            "heading_change_deg": 90.0,
+            "entry_v_m_s": 0.04,
+            "max_lateral_m": 0.02,
+            "pivot_start": "(0,0)",
+        }
+        for i in (1, 2, 3)
+    ]
+    records = [{"turn": i, "kind": "pivot", "entry_v_m_s": 0.04} for i in (1, 2, 3)]
+    flags = build_flags(
+        fields={
+            "err_pct": "-2.0",
+            "turns": "3",
+            "dist_m": "200.91",
+            "heading_turns": "11",
+        },
+        turns=pivots,
+        telemetry_gap_s=0.2,
+        gyro="found",
+        turn_records=records,
+        console_text=f"ROUTE RBM_ROUTE={route} -> receiving_2",
+    )
+    assert flags == []
+    assert not any("12" in flag or "heading_turns" in flag for flag in flags)
+
+
+def test_warehouse_flag_uses_the_route_turn_count():
+    flags = build_flags(
+        fields={"err_pct": "1.0", "turns": "11", "dist_m": "200.91", "heading_turns": "11"},
+        turns=[],
+        telemetry_gap_s=0.2,
+        gyro="found",
+        console_text="",
+    )
+    assert any("expects 3 turns" in flag and "back_loop_to_receiving" in flag for flag in flags)
+    assert not any("12" in flag or "yaw/90" in flag for flag in flags)
+
+
+def test_report_demotes_heading_turns(tmp_path):
+    lap_dir = tmp_path / "20261021-120000_t2"
+    lap_dir.mkdir()
+    (lap_dir / "console.log").write_text(
+        "SEGMENT_RECORD seg=1 after_turn=0 ct_max_m=0.164 length_m=58.50 "
+        "start_pos=(0.000,0.000) end_pos=(58.500,0.000) close=pivot\n",
+        encoding="utf-8",
+    )
+    summary = (
+        "MISSION_SUMMARY build=light duration_s=600.0 dist_m=200.91 turns=3 "
+        "wh_measured_drive_elec=5.0 err_pct=-2.0 heading_turns=11 gyro_found=1"
+    )
+    (lap_dir / "summary.json").write_text(
+        json.dumps({"lines": [summary]}),
+        encoding="utf-8",
+    )
+    body = finalize_lap_folder(lap_dir, label="t2").read_text(encoding="utf-8")
+    assert "heading_turns (info)" in body
+    assert "not a corner count" in body
+    assert "0.164" in body
+    assert "expects 3" not in body
+    assert "yaw/90" not in body
+
+
 def test_flags_detect_bad_turn_and_energy():
     turns = [{"turn": 1, "heading_change_deg": 126.0, "entry_v_m_s": 0.27, "max_lateral_m": 0.29, "pivot_start": "(0,0)"}]
     flags = build_flags(

@@ -58,8 +58,19 @@ _TURN_RECORD = re.compile(
     r"TURN_RECORD turn=(?P<turn>\d+) kind=(?P<kind>\w+).*?entry_v_m_s=(?P<entry>[-+0-9.]+)",
     re.IGNORECASE,
 )
-_WAREHOUSE_COURSE_TURNS = 12
+_SEGMENT_RECORD = re.compile(
+    r"SEGMENT_RECORD seg=(?P<seg>\d+).*?"
+    r"after_turn=(?P<after>\d+).*?"
+    r"ct_max_m=(?P<ct>[-+0-9.]+).*?"
+    r"length_m=(?P<length>[-+0-9.]+).*?"
+    r"start_pos=(?P<start>\([^)]+\)|unknown).*?"
+    r"end_pos=(?P<end>\([^)]+\)|unknown)",
+    re.IGNORECASE,
+)
 _REFERENCE_WAREHOUSE_LAP_S = 616.0
+# Long enough that a finished warehouse lap (about 150 m of centerline, more
+# on the measured path) is what the course-turn flag is judging.
+_WAREHOUSE_LAP_DIST_M = 150.0
 
 
 def _host_path(text: str) -> Path:
@@ -384,6 +395,26 @@ def gyro_status(console_text: str, fields: dict[str, str], payload: dict | None)
     return "unknown"
 
 
+def parse_segment_records(console_text: str, *, summary_lines: list[str] | None = None) -> list[dict]:
+    """Straights between pivots. ``ct_max_m`` is the peak |cross-track| on that leg."""
+    blob = console_text or ""
+    if summary_lines:
+        blob = blob + "\n" + "\n".join(summary_lines)
+    rows: list[dict] = []
+    for match in _SEGMENT_RECORD.finditer(blob):
+        rows.append(
+            {
+                "seg": int(match.group("seg")),
+                "after_turn": int(match.group("after")),
+                "ct_max_m": float(match.group("ct")),
+                "length_m": float(match.group("length")),
+                "start_pos": match.group("start"),
+                "end_pos": match.group("end"),
+            }
+        )
+    return rows
+
+
 def build_flags(
     *,
     fields: dict[str, str],
@@ -391,6 +422,7 @@ def build_flags(
     telemetry_gap_s: float | None,
     gyro: str,
     turn_records: list[dict] | None = None,
+    console_text: str = "",
 ) -> list[str]:
     flags: list[str] = []
     err = fields.get("err_pct")
@@ -409,16 +441,6 @@ def build_flags(
         flags.append(f"telemetry gap max {telemetry_gap_s:.2f} s (> 1 s)")
     if gyro == "missing":
         flags.append("gyro missing on mission summary")
-    heading_turns = fields.get("heading_turns")
-    if heading_turns is not None and fields.get("turns") is not None:
-        try:
-            if int(heading_turns) != int(fields["turns"]):
-                flags.append(
-                    f"heading_turns={heading_turns} (yaw/90°) differs from pivot turns={fields['turns']}; "
-                    "see CURVE_RECORD for non-pivot bends"
-                )
-        except ValueError:
-            pass
     turns_n = fields.get("turns") or fields.get("ctrl_pivot_count")
     pivot_rows = [row for row in (turns or []) if row.get("heading_change_deg") is not None]
     if turn_records:
@@ -435,14 +457,6 @@ def build_flags(
                     flags.append(
                         f"PIVOT_RECORD count={len(pivot_rows)} does not match summary turns={n}"
                     )
-                try:
-                    dist_m = float(fields.get("dist_m") or 0.0)
-                except (TypeError, ValueError):
-                    dist_m = 0.0
-                if dist_m > 150.0 and n != _WAREHOUSE_COURSE_TURNS:
-                    flags.append(
-                        f"warehouse course expects {_WAREHOUSE_COURSE_TURNS} corners; summary turns={n}"
-                    )
             except ValueError:
                 pass
     elif turns_n is not None and pivot_rows:
@@ -453,7 +467,36 @@ def build_flags(
                 )
         except ValueError:
             pass
+    _flag_course_turns(flags, fields, console_text)
     return flags
+
+
+def _flag_course_turns(flags: list[str], fields: dict[str, str], console_text: str) -> None:
+    """Compare summary pivots with the warehouse route's L/R count.
+
+    ``heading_turns`` is accumulated |heading| / 30° (lane-follow wiggle plus
+    the pivots). It is not a corner count and does not raise a flag.
+    """
+    from optimizer.warehouse_course import resolve_course
+
+    course = resolve_course(console_text)
+    if course is None:
+        return
+    raw = fields.get("turns") or fields.get("ctrl_pivot_count")
+    if raw is None:
+        return
+    try:
+        n = int(raw)
+        dist_m = float(fields.get("dist_m") or 0.0)
+    except (TypeError, ValueError):
+        return
+    if not course.from_log and dist_m <= _WAREHOUSE_LAP_DIST_M:
+        return
+    if n != course.turns:
+        flags.append(
+            f"warehouse route {course.name} expects {course.turns} turns "
+            f"({course.route}); summary turns={n}"
+        )
 
 
 def build_report_md(
@@ -482,6 +525,7 @@ def build_report_md(
         telemetry_gap_s=gap,
         gyro=gyro,
         turn_records=turn_records,
+        console_text=console_text,
     )
     try:
         duration = float(fields.get("duration_s") or 0.0)
@@ -491,7 +535,7 @@ def build_report_md(
         extra = duration - _REFERENCE_WAREHOUSE_LAP_S
         flags.append(
             f"lap time {duration:.0f} s is +{extra:.0f} s vs {_REFERENCE_WAREHOUSE_LAP_S:.0f} s reference "
-            f"(pre-pivot creep; PIVOT_BRAKE_ZONE_M is 0.12 m so the axle still reaches the vertex)"
+            "(pivot still opens at 0.015 m; far approach keeps cruise until the last metre)"
         )
     if duplicate_of:
         flags.insert(
@@ -599,6 +643,42 @@ def build_report_md(
             )
     else:
         md.append("| — | (no PIVOT lines in console.log) | — | — | — |")
+    segments = parse_segment_records(console_text, summary_lines=lines)
+    md.extend(
+        [
+            "",
+            "## Straights between turns",
+            "",
+            "| Seg | After turn | ct_max (m) | Length (m) | Start | End |",
+            "| --- | --- | --- | --- | --- | --- |",
+        ]
+    )
+    if segments:
+        for row in segments:
+            md.append(
+                f"| {row['seg']} | {row['after_turn']} | {row['ct_max_m']:.3f} | "
+                f"{row['length_m']:.2f} | {row['start_pos']} | {row['end_pos']} |"
+            )
+    else:
+        md.append("| — | (no SEGMENT_RECORD lines) | — | — | — | — |")
+    heading_raw = fields.get("heading_turns")
+    heading_info = "—"
+    if heading_raw not in (None, ""):
+        heading_info = (
+            f"{heading_raw} (accumulated |heading| / 30°, lane-follow wiggle plus the pivots; "
+            "not a corner count)"
+        )
+    course_info = "—"
+    try:
+        from optimizer.warehouse_course import resolve_course
+
+        course = resolve_course(console_text)
+        dist_gate = float(fields.get("dist_m") or 0.0)
+    except (TypeError, ValueError):
+        course = None
+        dist_gate = 0.0
+    if course is not None and (course.from_log or dist_gate > _WAREHOUSE_LAP_DIST_M):
+        course_info = f"{course.turns} ({course.name}: {course.route})"
     md.extend(
         [
             "",
@@ -611,6 +691,8 @@ def build_report_md(
             f"| Lap time | {duration} s |",
             f"| Distance | {dist} m |",
             f"| Turns (summary) | {fields.get('turns', '—')} |",
+            f"| Course turns | {course_info} |",
+            f"| heading_turns (info) | {heading_info} |",
             "",
             "## FLAGS",
             "",
@@ -677,6 +759,7 @@ def finalize_lap_folder(
         telemetry_gap_s=gap,
         gyro=gyro,
         turn_records=turn_records,
+        console_text=console_text,
     )
     if duplicate_of:
         dup_flag = (

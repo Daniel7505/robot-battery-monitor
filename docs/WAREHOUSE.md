@@ -119,9 +119,21 @@ routes on `plus` / `t_end` / `t_left` / `t_right` / `gap45` (tested).
 | `dock_shuttle` | RCV-1 → dock lane → SHP-2 | 51.5 m | 2 (+1 corner) | `L,S` |
 | `odd_aisle_to_shipping` | RCV-1 → front cross aisle → **down aisle 5** (front → back) → back cross aisle → down aisle 8 → SHP-1 | 156 m | 14 | `S,S,L,S,S,R,S,L,S,S,L,S,S,S` |
 
-**With no `RBM_ROUTE` the robot never stops.** The default (straight, else
-left) circles the perimeter and never reaches an exit; the planner reports
-this, and `routes.default` is `null`.
+**With no `RBM_ROUTE` the policy is straight, otherwise left.** That circles
+the perimeter and never reaches an exit (`routes.default` is `null`). A run
+with no distance cap keeps going. The scored warehouse lap leaves the route
+unset and sets `RBM_MISSION_LAPS=1`, which stops at one perimeter length
+(201 m). On that prefix the robot makes three left pivots:
+
+1. Junction left at the back T `(58.5, 0)`, after 58.5 m up the start lane (y = 0) to back cross aisle E.
+2. Tape left at `(58.5, 48)`, after 48 m along the back aisle to far edge aisle F.
+3. Tape left at `(18, 48)`, after 40.5 m down F to front cross aisle C.
+
+The return along C reaches the main lane at `(18, 0)` (195 m on the centreline).
+The 201 m cap is `(18, −6)`, six metres past that crossing. The next tape
+corner, `(18, −12)`, is at 207 m and is past the lap. `back_loop_to_receiving`
+is a separate mission: right at the back T, then the dock, ending at
+receiving_2 (148.5 m).
 
 ## Offline sim
 

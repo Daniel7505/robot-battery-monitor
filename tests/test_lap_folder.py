@@ -83,8 +83,7 @@ SPEED_TRACE t_sim=2.0 t_wall=2.0 rtf=1.0 v_body=0.650 v_odo=0.650 wL_cmd=0 wR_cm
 
 
 def test_heading_wiggle_is_not_a_missing_corner_flag():
-    """Three pivots and heading_turns=11 is the baseline warehouse lap."""
-    route = "S,S,S,S,R,S,S,S,L,S,L"
+    """Three left pivots and heading_turns=11 is the unset-route warehouse lap."""
     pivots = [
         {
             "turn": i,
@@ -107,13 +106,22 @@ def test_heading_wiggle_is_not_a_missing_corner_flag():
         telemetry_gap_s=0.2,
         gyro="found",
         turn_records=records,
-        console_text=f"ROUTE RBM_ROUTE={route} -> receiving_2",
+        console_text="ROUTE RBM_ROUTE unset -> default",
     )
     assert flags == []
     assert not any("12" in flag or "heading_turns" in flag for flag in flags)
+    named = build_flags(
+        fields={"err_pct": "-2.0", "turns": "3", "dist_m": "148.5"},
+        turns=pivots,
+        telemetry_gap_s=0.2,
+        gyro="found",
+        turn_records=records,
+        console_text="ROUTE RBM_ROUTE=S,S,S,S,R,S,S,S,L,S,L -> receiving_2",
+    )
+    assert named == []
 
 
-def test_warehouse_flag_uses_the_route_turn_count():
+def test_warehouse_flag_uses_the_default_lap():
     flags = build_flags(
         fields={"err_pct": "1.0", "turns": "11", "dist_m": "200.91", "heading_turns": "11"},
         turns=[],
@@ -121,8 +129,11 @@ def test_warehouse_flag_uses_the_route_turn_count():
         gyro="found",
         console_text="",
     )
-    assert any("expects 3 turns" in flag and "back_loop_to_receiving" in flag for flag in flags)
-    assert not any("12" in flag or "yaw/90" in flag for flag in flags)
+    assert any(
+        "3 left" in flag and "RBM_ROUTE unset" in flag and "summary turns=11" in flag
+        for flag in flags
+    )
+    assert not any("back_loop" in flag or "12" in flag or "yaw/90" in flag for flag in flags)
 
 
 def test_report_demotes_heading_turns(tmp_path):
@@ -145,6 +156,10 @@ def test_report_demotes_heading_turns(tmp_path):
     assert "heading_turns (info)" in body
     assert "not a corner count" in body
     assert "0.164" in body
+    assert "3 left (RBM_ROUTE unset, straight-else-left, stop at 201 m)" in body
+    assert "left (junction) at (58.5, 0.0)" in body
+    assert "stop (18.0, -6.0)" in body
+    assert "back_loop" not in body
     assert "expects 3" not in body
     assert "yaw/90" not in body
 

@@ -472,10 +472,12 @@ def build_flags(
 
 
 def _flag_course_turns(flags: list[str], fields: dict[str, str], console_text: str) -> None:
-    """Compare summary pivots with the warehouse route's L/R count.
+    """Compare summary pivots with the driven warehouse course.
 
-    ``heading_turns`` is accumulated |heading| / 30° (lane-follow wiggle plus
-    the pivots). It is not a corner count and does not raise a flag.
+    An unset route is the one-perimeter lap (three left pivots). A printed
+    mission route uses that mission's L/R count. ``heading_turns`` is
+    accumulated |heading| / 30° (lane-follow wiggle plus the pivots). It is
+    not a corner count and does not raise a flag.
     """
     from optimizer.warehouse_course import resolve_course
 
@@ -494,8 +496,7 @@ def _flag_course_turns(flags: list[str], fields: dict[str, str], console_text: s
         return
     if n != course.turns:
         flags.append(
-            f"warehouse route {course.name} expects {course.turns} turns "
-            f"({course.route}); summary turns={n}"
+            f"warehouse course {course.describe()}; summary turns={n}"
         )
 
 
@@ -677,8 +678,10 @@ def build_report_md(
     except (TypeError, ValueError):
         course = None
         dist_gate = 0.0
+    course_layout = ""
     if course is not None and (course.from_log or dist_gate > _WAREHOUSE_LAP_DIST_M):
-        course_info = f"{course.turns} ({course.name}: {course.route})"
+        course_info = course.describe()
+        course_layout = course.layout()
     md.extend(
         [
             "",
@@ -692,6 +695,7 @@ def build_report_md(
             f"| Distance | {dist} m |",
             f"| Turns (summary) | {fields.get('turns', '—')} |",
             f"| Course turns | {course_info} |",
+            f"| Course path | {course_layout or '—'} |",
             f"| heading_turns (info) | {heading_info} |",
             "",
             "## FLAGS",

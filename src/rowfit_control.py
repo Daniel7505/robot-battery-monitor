@@ -346,10 +346,12 @@ class RowfitController:
         self._curve_ct = 0.0
         self._seg_n = 0
         self._seg_ct = 0.0
+        self._seg_ct_fit = 0.0
         self._seg_len = 0.0
         self._seg_start: tuple[float, float] | None = None
         self._seg_prev: tuple[float, float] | None = None
         self._pivot_lateral_max_m = 0.0
+        self._pivot_ct_fit_max_m = 0.0
         self._pivot_entry_v_m_s = 0.0
         self.pivot_integrated_rad = 0.0
         self.pivot_yaw_rate_rad_s = 0.0
@@ -409,7 +411,11 @@ class RowfitController:
         )
 
     def note_cross_track(self, ct_m: float | None) -> None:
-        """Peak |cross-track| on the open straight. Ignored during a pivot."""
+        """Peak |true cross-track| on the open straight (GPS vs centreline).
+
+        Ignored during a pivot. Camera lane-fit offset is tracked separately
+        via :meth:`note_cross_track_fit`.
+        """
         if ct_m is None or self.state == STATE_PIVOT:
             return
         try:
@@ -419,13 +425,50 @@ class RowfitController:
         if val > self._seg_ct:
             self._seg_ct = val
 
-    def _observe_segment(self, pose, est) -> None:
+    def note_cross_track_fit(self, offset_m: float | None) -> None:
+        """Peak |camera lane-fit offset| on the open straight (diagnostic)."""
+        if offset_m is None or self.state == STATE_PIVOT:
+            return
+        try:
+            val = abs(float(offset_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._seg_ct_fit:
+            self._seg_ct_fit = val
+
+    def _note_pivot_cross_track(self, ct_m: float | None) -> None:
+        if ct_m is None:
+            return
+        try:
+            val = abs(float(ct_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._pivot_lateral_max_m:
+            self._pivot_lateral_max_m = val
+
+    def _note_pivot_cross_track_fit(self, offset_m: float | None) -> None:
+        if offset_m is None:
+            return
+        try:
+            val = abs(float(offset_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._pivot_ct_fit_max_m:
+            self._pivot_ct_fit_max_m = val
+
+    @staticmethod
+    def _ct_fit_suffix(fit_max: float) -> str:
+        return f" ct_fit_max_m={fit_max:.3f}" if fit_max > 1e-4 else ""
+
+    def _observe_segment(self, pose, est, *, cross_track_m: float | None = None) -> None:
         if self.state == STATE_PIVOT:
             return
+        if cross_track_m is not None:
+            self.note_cross_track(cross_track_m)
         if est is not None:
             off = getattr(est, "offset_m", None)
             if off is not None:
-                self.note_cross_track(off)
+                self.note_cross_track_fit(off)
         if pose is None:
             return
         try:
@@ -450,10 +493,12 @@ class RowfitController:
         self._seg_n += 1
         self._event(
             f"SEGMENT_RECORD seg={self._seg_n} after_turn={self.pivots} "
-            f"ct_max_m={self._seg_ct:.3f} length_m={self._seg_len:.3f} "
+            f"ct_max_m={self._seg_ct:.3f}{self._ct_fit_suffix(self._seg_ct_fit)} "
+            f"length_m={self._seg_len:.3f} "
             f"start_pos={start_txt} end_pos={end_txt} close={why}"
         )
         self._seg_ct = 0.0
+        self._seg_ct_fit = 0.0
         self._seg_len = 0.0
         self._seg_start = end
         self._seg_prev = end
@@ -857,7 +902,7 @@ class RowfitController:
             return
         self.remaining_m = max(0.0, float(rem) - float(v_cmd) * max(0.0, float(dt)))
 
-    def _note_curve_yaw(self, yaw, est) -> None:
+    def _note_curve_yaw(self, yaw, est, *, cross_track_m: float | None = None) -> None:
         """A ~90° heading change in LANE is not a pivot. Log it on its own."""
         if self.state == STATE_PIVOT:
             self._curve_yaw0 = None
@@ -868,10 +913,10 @@ class RowfitController:
             self._curve_yaw0 = float(yaw)
             self._curve_ct = 0.0
             return
-        if est is not None:
-            off = abs(float(getattr(est, "offset_m", 0.0) or 0.0))
-            if off > self._curve_ct:
-                self._curve_ct = off
+        if cross_track_m is not None:
+            val = abs(float(cross_track_m))
+            if val > self._curve_ct:
+                self._curve_ct = val
         delta = math.degrees(
             math.atan2(
                 math.sin(float(yaw) - self._curve_yaw0),
@@ -903,6 +948,7 @@ class RowfitController:
         self.pivot_settle = 0
         self.pivot_integrated_rad = 0.0
         self._pivot_lateral_max_m = 0.0
+        self._pivot_ct_fit_max_m = 0.0
         pose = self.pose
         pos_txt = (
             f"({pose[0]:.3f},{pose[1]:.3f})"
@@ -1007,7 +1053,8 @@ class RowfitController:
         self._event(
             f"PIVOT_RECORD turn={turn_id} dir={'left' if self.corner_dir > 0 else 'right'} "
             f"heading_change_deg={heading_change:+.1f} entry_v_m_s={self._pivot_entry_v_m_s:.3f} "
-            f"ct_max_m={self._pivot_lateral_max_m:.3f} start_pos={start_pos}"
+            f"ct_max_m={self._pivot_lateral_max_m:.3f}"
+            f"{self._ct_fit_suffix(self._pivot_ct_fit_max_m)} start_pos={start_pos}"
         )
         self._curve_yaw0 = None
         self._event(
@@ -1037,14 +1084,14 @@ class RowfitController:
         yaw: float,
         *,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
     ) -> dict:
         self.pivot_t += dt
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
         self.pivot_heading_err_rad = float(err)
+        self._note_pivot_cross_track(cross_track_m)
         if est is not None and getattr(est, "valid", False):
-            off = abs(float(getattr(est, "offset_m", 0.0) or 0.0))
-            if off > self._pivot_lateral_max_m:
-                self._pivot_lateral_max_m = off
+            self._note_pivot_cross_track_fit(getattr(est, "offset_m", None))
         rate = 0.0 if yaw_rate_rad_s is None else float(yaw_rate_rad_s)
         self.pivot_yaw_rate_rad_s = rate
         from src.gyro_pivot import integrate_heading_rad, pivot_turn_progress_rad, rate_tracking_adjustment
@@ -1106,6 +1153,7 @@ class RowfitController:
         yaw: float | None = None,
         pose=None,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
     ) -> dict:
         """One physics tick. ``yaw``: IMU yaw (rad, + = left/CCW). Without it a
         corner is still approached, but the robot brakes at the pivot point.
@@ -1113,13 +1161,17 @@ class RowfitController:
         ``pose`` is ``(x, y)`` in world metres. With a track set, it is the
         pivot distance while a turn is already committed. It does not start
         a turn by itself.
+
+        ``cross_track_m`` is true position vs the lane centreline (same source
+        as the lap ``ct_max_m``). When it is missing, segment and pivot records
+        do not fall back to the camera lane-fit offset.
         """
         if pose is not None:
             self.pose = (float(pose[0]), float(pose[1]))
         if yaw is not None:
             self._yaw = yaw
-        self._observe_segment(self.pose, est)
-        self._note_curve_yaw(yaw, est)
+        self._observe_segment(self.pose, est, cross_track_m=cross_track_m)
+        self._note_curve_yaw(yaw, est, cross_track_m=cross_track_m)
         if new_frame:
             self._steer_est = est
             self._corner_frame(est, yaw)
@@ -1135,7 +1187,12 @@ class RowfitController:
                                  new_frame=new_frame)
             else:
                 return self._pivot_tick(
-                    est, new_frame, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s
+                    est,
+                    new_frame,
+                    dt,
+                    float(yaw),
+                    yaw_rate_rad_s=yaw_rate_rad_s,
+                    cross_track_m=cross_track_m,
                 )
         if self.state == STATE_APPROACH:
             return self._approach_tick(

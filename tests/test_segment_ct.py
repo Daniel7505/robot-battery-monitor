@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from src.rowfit_control import STATE_PIVOT, RowfitController
 
@@ -42,6 +45,54 @@ def test_segment_ct_max_is_the_straight_before_the_pivot():
     assert "ct_max_m=0.050" in final
     assert "after_turn=1" in final
     assert "0.900" not in final
+
+
+def test_blind_gap_camera_spike_does_not_raise_segment_ct():
+    """Lane-fit offset blows up with no tape; true GPS cross-track stays small."""
+    ctl = RowfitController()
+    est_ok = SimpleNamespace(valid=True, offset_m=0.02, held=False)
+    ctl.step(
+        est_ok,
+        new_frame=False,
+        dt=0.008,
+        pose=(9.0, 0.0),
+        cross_track_m=0.005,
+    )
+    est_gap = SimpleNamespace(valid=True, offset_m=0.371, held=False)
+    ctl.step(
+        est_gap,
+        new_frame=False,
+        dt=0.008,
+        pose=(9.57, 0.0),
+        cross_track_m=0.004,
+    )
+    assert ctl._seg_ct == pytest.approx(0.005, abs=1e-6)
+    assert ctl._seg_ct_fit >= 0.371
+    ctl.corner_dir = 1
+    ctl._start_pivot(0.0, entry_v_m_s=0.04)
+    seg = next(row for row in ctl._turn_records if row.startswith("SEGMENT_RECORD"))
+    assert "ct_max_m=0.005" in seg
+    assert "ct_fit_max_m=0.371" in seg
+    assert "ct_max_m=0.371" not in seg
+
+
+def test_pivot_ct_max_uses_true_cross_track_not_camera():
+    ctl = RowfitController()
+    ctl.corner_dir = 1
+    ctl._start_pivot(0.0, entry_v_m_s=0.04)
+    est = SimpleNamespace(valid=True, offset_m=0.722)
+    ctl.step(
+        est,
+        new_frame=False,
+        dt=0.008,
+        yaw=0.2,
+        cross_track_m=0.031,
+    )
+    ctl._end_pivot(math.pi / 2, "settled")
+    rec = next(row for row in ctl._turn_records if row.startswith("PIVOT_RECORD"))
+    assert "ct_max_m=0.031" in rec
+    assert "ct_fit_max_m=0.722" in rec
+    assert "ct_max_m=0.722" not in rec
 
 
 def test_turn_log_is_printed_on_mission_complete():

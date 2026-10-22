@@ -1305,6 +1305,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     yaw=prev_yaw if imu is not None else None,
                     pose=None if gps_xy is None else (float(gps_xy[0]), float(gps_xy[1])),
                     yaw_rate_rad_s=yaw_rate if imu is not None else None,
+                    cross_track_m=ct_latest_m,
                 )
                 _crossed = (
                     gps_xy is not None

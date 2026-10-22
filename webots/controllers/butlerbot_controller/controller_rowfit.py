@@ -502,6 +502,7 @@ class RowfitRuntime:
         *,
         pose=None,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
         log=print,
     ) -> dict:
         """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
@@ -520,6 +521,7 @@ class RowfitRuntime:
             yaw=yaw,
             pose=pose,
             yaw_rate_rad_s=yaw_rate_rad_s,
+            cross_track_m=cross_track_m,
         )
         if self.obstacles is not None:
             gate = self.obstacles.gate

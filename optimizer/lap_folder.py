@@ -396,7 +396,7 @@ def gyro_status(console_text: str, fields: dict[str, str], payload: dict | None)
 
 
 def parse_segment_records(console_text: str, *, summary_lines: list[str] | None = None) -> list[dict]:
-    """Straights between pivots. ``ct_max_m`` is the peak |cross-track| on that leg."""
+    """Straights between pivots. ``ct_max_m`` is peak |true cross-track| (GPS)."""
     blob = console_text or ""
     if summary_lines:
         blob = blob + "\n" + "\n".join(summary_lines)

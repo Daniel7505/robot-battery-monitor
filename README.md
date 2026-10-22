@@ -24,7 +24,7 @@ Owner: [Daniel7505](https://github.com/Daniel7505) · Co-built with Grok Build �
 7. [Settings you might change](#7-settings-you-might-change)
 8. [Common problems](#8-common-problems)
 9. [Where things live (folder map)](#9-where-things-live-folder-map)
-10. [Credits and AI collaboration](#10-credits-and-ai-collaboration)
+10. [Credits and Licenses](#10-credits-and-licenses)
 11. [Project journey](#11-project-journey)
 
 ---
@@ -533,7 +533,105 @@ Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware
 
 ---
 
-## 10. Credits and AI collaboration
+## 10. Credits and Licenses
+
+This section lists third-party software and assets used by the project, what license applies, and what you must keep when you redistribute or ship binaries. It also records an **attribution audit** (Oct 2026): searched `requirements.txt`, Docker/CI manifests, Webots worlds, bundled images, and source comments/URLs for copied or adapted material.
+
+There is **no** `package.json`, `pyproject.toml`, or ROS 2 `package.xml` in this repository.
+
+### This repository
+
+| Item | Link | License | Notes |
+|------|------|---------|--------|
+| **robot-battery-monitor** (this repo) | [GitHub](https://github.com/Daniel7505/robot-battery-monitor) | [MIT](LICENSE) | [`LICENSE`](LICENSE) is present (Copyright (c) 2026 Daniel). Keep the MIT notice in copies or substantial portions. |
+
+### Python — pinned in `requirements.txt` (dashboard / Docker)
+
+Installed by `pip install -r requirements.txt` and the [`Dockerfile`](Dockerfile). Matplotlib pulls in additional transitive packages (NumPy, Pillow, fonttools, etc.); run `pip install pip-licenses && pip-licenses --from=mixed` in your environment for the full tree.
+
+| Package | Version (pinned) | Link | License | Redistribution notes |
+|---------|------------------|------|---------|----------------------|
+| [Flask](https://pypi.org/project/Flask/) | 3.1.0 | https://pypi.org/project/Flask/ | BSD-3-Clause | Retain copyright and license notices. |
+| [Flask-SocketIO](https://pypi.org/project/Flask-SocketIO/) | 5.5.0 | https://pypi.org/project/Flask-SocketIO/ | MIT | Retain copyright and permission notice. |
+| [eventlet](https://pypi.org/project/eventlet/) | 0.37.0 | https://pypi.org/project/eventlet/ | MIT | Retain copyright and permission notice. |
+| [PyYAML](https://pypi.org/project/PyYAML/) | 6.0.2 | https://pyyaml.org/ | MIT | Retain copyright and permission notice. |
+| [matplotlib](https://pypi.org/project/matplotlib/) | 3.10.0 | https://matplotlib.org/ | [PSF / Matplotlib license](https://matplotlib.org/stable/project/license.html) (BSD-style) | Retain the Matplotlib Development Team copyright notice; brief change summary if you distribute a derivative of matplotlib itself. |
+| [psycopg2-binary](https://pypi.org/project/psycopg2-binary/) | 2.9.10 | https://www.psycopg.org/ | **LGPL-3.0-or-later** (library) | **Copyleft (weak).** Shipping the prebuilt wheel (e.g. in a Docker image) triggers LGPL obligations: provide license text, allow relinking/replacement of the library, and document how users can substitute their own build. See the [psycopg2 license](https://www.psycopg.org/license/). |
+
+### Python — CI and tests only
+
+| Package | Where | Link | License | Notes |
+|---------|-------|------|---------|--------|
+| [pytest](https://pypi.org/project/pytest/) | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) (`pip install pytest`) | https://docs.pytest.org/ | MIT | Not in `requirements.txt`; used only in CI/local test runs. |
+
+### Python — optional on the host (Webots / scripts)
+
+Not pinned in `requirements.txt`; install manually when using obstacle worlds, `scripts/warehouse_builder.py`, or host-side Webots controllers (see [`webots/README.md`](webots/README.md)).
+
+| Package | Link | License | Notes |
+|---------|------|---------|--------|
+| [NumPy](https://pypi.org/project/numpy/) | https://numpy.org/ | BSD-3-Clause | Used by `src/stereo_depth.py`, `src/stereo_synth.py`, tests, and warehouse tooling. Also installed transitively via matplotlib in Docker. |
+| [opencv-python](https://pypi.org/project/opencv-python/) | https://opencv.org/ | Apache-2.0 | Optional faster stereo backend (`StereoSGBM` in `src/stereo_depth.py`). Not required for CI (numpy fallback). |
+| [Pillow](https://pypi.org/project/pillow/) | https://python-pillow.org/ | HPND (permissive) | Used only when regenerating textures/previews via `scripts/warehouse_builder.py` (`write_prop_texture`, `draw_preview`). |
+
+### Docker images and base OS packages
+
+| Component | Where | Link | License | Notes |
+|-----------|-------|------|---------|--------|
+| [python:3.12-slim](https://hub.docker.com/_/python) | [`Dockerfile`](Dockerfile) | https://www.python.org/psf/license/ | Python Software Foundation License | Base image for the dashboard container. |
+| Debian packages (`libglib2.0-0`, `libsm6`, `libxext6`, `libxrender-dev`) | [`Dockerfile`](Dockerfile) `apt-get` | https://www.debian.org/legal/licenses/ | Mixed (mostly GPL/LGPL for libs) | Runtime deps for matplotlib; standard container practice is to ship with the image and honor Debian copyright files in `/usr/share/doc/`. |
+| [postgres:16-alpine](https://hub.docker.com/_/postgres) | [`docker-compose.yml`](docker-compose.yml) | https://www.postgresql.org/about/licence/ | PostgreSQL License (permissive, BSD-like) | Database service; not linked into application Python code. |
+| [postgres:16](https://hub.docker.com/_/postgres) | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) CI service | same | same | CI-only Postgres instance. |
+| [osrf/ros:rolling-ros-base](https://hub.docker.com/r/osrf/ros) | [`docker-compose.yml`](docker-compose.yml) (`profile: full`) | https://www.ros.org/ | Mostly Apache-2.0 and BSD-3-Clause per package | Optional ROS 2 peer; not used in default `docker compose up`. |
+
+### GitHub Actions (CI)
+
+| Action / image | Where | Link | License |
+|----------------|-------|------|---------|
+| [actions/checkout@v4](https://github.com/actions/checkout) | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) | https://github.com/actions/checkout | MIT |
+| [actions/setup-python@v5](https://github.com/actions/setup-python) | same | https://github.com/actions/setup-python | MIT |
+
+### Webots simulator and PROTO assets
+
+| Item | Link | License | Notes |
+|------|------|---------|--------|
+| [Webots](https://cyberbotics.com/) (host install, not in repo) | https://cyberbotics.com/ | [Apache-2.0](https://github.com/cyberbotics/webots/blob/master/LICENSE) (open-source distribution) | Worlds and controllers target Webots **R2023b+** (tested with **R2025a**). You install Webots separately; it is not vendored in git. |
+| **Parquetry.proto** | `EXTERNPROTO` in all `webots/worlds/butlerbot*.wbt` → [Cyberbotics Webots R2025a](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto) | Apache-2.0 (Webots project) | Loaded from GitHub at world load time; not copied into this repo. |
+| **Floor.proto** | same pattern → [Floor.proto](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto) | Apache-2.0 (Webots project) | same |
+
+All ButlerBot `.wbt` worlds under [`webots/worlds/`](webots/worlds/) reference only these two external PROTOs. Robot geometry, track paint, warehouse layout, and controllers in this repo are **original to this project** (generated or authored here).
+
+### Bundled images and models (in git)
+
+| Asset | Path | Origin | License |
+|-------|------|--------|---------|
+| Obstacle prop speckle texture | [`webots/worlds/textures/obstacle_speckle.png`](webots/worlds/textures/obstacle_speckle.png) | Generated by `scripts/warehouse_builder.py` (`write_prop_texture`, deterministic NumPy noise) | Same as this repo (**MIT**) |
+| Warehouse layout preview | [`docs/warehouse_preview.png`](docs/warehouse_preview.png) | Generated by `scripts/warehouse_builder.py` (`draw_preview`) | Same as this repo (**MIT**) |
+| Track calibration / paths | `webots/worlds/s_track_path.csv`, `webots/worlds/track_calibration.json`, [`tracks/*.json`](tracks/) | Project data | Same as this repo (**MIT**) |
+| Parts catalog DB | [`data/parts.db`](data/parts.db) | SQLite BOM seeded from project config (`config/bom/`, `src/parts_db.py`); vendor **URLs** point to public product pages, not copied datasheets | Same as this repo (**MIT**); respect third-party site terms when visiting links |
+
+No `.proto` files, font files, 3D mesh assets (`.obj`/`.dae`/`.stl`), or external texture packs are committed besides the PNGs above.
+
+### Attribution audit — code, algorithms, and comments
+
+Searched the tree for `EXTERNPROTO`, `Copyright`, `SPDX`, `adapted`, `copied`, `based on`, and `http(s)://` in source headers. **Findings:**
+
+| Topic | Verdict |
+|-------|---------|
+| **Copied third-party source files** | None found. No vendored upstream modules besides Python packages installed via pip/Docker. |
+| **`tests/fake_webots/controller.py`** | Original minimal stub for CI; not the Cyberbotics Webots `controller` module. |
+| **`src/lane_vision.py`** | Original; stdlib-only by design. |
+| **`src/rowfit_control.py` / pure pursuit** | Standard geometric path-following algorithm described in docs ([`docs/ROWFIT_LANE_VISION.md`](docs/ROWFIT_LANE_VISION.md)); **implemented in-repo**, not pasted from an external repo. |
+| **`src/stereo_depth.py`** | Original pipeline; calls OpenCV `StereoSGBM` when available, else an **original** NumPy block matcher (documented in file header). |
+| **Motor / battery constants** | Comments and YAML cite [Pololu](https://www.pololu.com/), [Adafruit](https://www.adafruit.com/), and similar **datasheet URLs** for engineering values — reference only, not copied code. |
+| **Hardware BOM JSON** | `config/bom/bom.json` and profiles link to vendor product pages; no scraped proprietary text committed as code. |
+| **Archived world snippet** | [`archives/butlerbot_track_boxes_2026-10-01.wbt`](archives/butlerbot_track_boxes_2026-10-01.wbt) is an in-repo archive of an older track representation, not third-party. |
+
+**GPL / strong copyleft in application dependencies:** only **psycopg2-binary (LGPL-3.0)** among pinned Python wheels. No GPL-licensed application code was identified in the repo. **Unlicensed third-party material:** none identified; all bundled assets above are project-authored or generated by project scripts.
+
+**ROS 2:** integration code lives in [`src/ros2_bridge.py`](src/ros2_bridge.py) / [`src/ros2_node.py`](src/ros2_node.py); default runs use `ROS2_MOCK=true` without installing ROS. Optional `osrf/ros` image noted above.
+
+### People and AI tools
 
 This repo is a **human + AI co-build** (credit where credit is due):
 

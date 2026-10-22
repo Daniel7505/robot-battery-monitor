@@ -37,6 +37,7 @@ Invariants
 
 import json
 import os
+import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -466,9 +467,15 @@ def _configure_retention_session(conn) -> None:
         cur.execute("SET statement_timeout = %s", (RETENTION_STATEMENT_TIMEOUT,))
         cur.execute("SET lock_timeout = %s", (RETENTION_LOCK_TIMEOUT,))
         if getattr(conn, "server_version", 0) >= 140000:
+            # Windows libpq requires 0; Linux CI may use a positive interval.
+            interval = (
+                "0"
+                if sys.platform == "win32"
+                else RETENTION_CLIENT_CHECK_INTERVAL
+            )
             cur.execute(
                 "SET client_connection_check_interval = %s",
-                (RETENTION_CLIENT_CHECK_INTERVAL,),
+                (interval,),
             )
     conn.commit()
 

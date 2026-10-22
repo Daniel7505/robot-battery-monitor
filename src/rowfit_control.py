@@ -90,10 +90,19 @@ STATE_APPROACH = "CORNER_APPROACH"
 STATE_PIVOT = "PIVOT"
 STATE_REACQUIRE = "REACQUIRE"
 CORNER_MIN_CONF = 0.6  # act on a persistent cue at least this sure
-V_APPROACH_M_S = 0.25  # cap while closing on the pivot point
+V_APPROACH_M_S = 0.25  # cap on the last metre into the pivot (not the whole leg)
+# Beyond this, the approach keeps cruise. A 0.25 m/s cap for the entire
+# corner cue (often several metres) was most of the extra lap time.
+APPROACH_CRUISE_BEYOND_M = 1.0
 A_APPROACH_M_S2 = 0.30  # stopping profile v = sqrt(2 a remaining)
 V_CREEP_M_S = 0.04  # last centimetres (no zero-speed stall short of the point)
-PIVOT_ARRIVE_M = 0.015  # remaining distance that starts the pivot
+PIVOT_ARRIVE_M = 0.015  # remaining distance that starts the pivot (axle at the vertex)
+# Forced creep only in the last few centimetres, and only when not coasting.
+# The pivot gate stays at PIVOT_ARRIVE_M, so a shorter zone does not open
+# the spin before the vertex.
+PIVOT_BRAKE_ZONE_M = 0.06
+# Coast arms only when speed is clearly above the pivot-entry creep.
+COAST_ARM_ABOVE_M_S = 0.02
 # One fresh fit may pull the pivot closer by this much. A short view
 # (lookahead under the lane gate) may not move it at all.
 VISION_SHRINK_MAX_M = 0.20
@@ -247,6 +256,7 @@ class RowfitController:
         v_straight: float | None = None,
         pivot_w_max: float | None = None,
         turn_brake=None,
+        coast_into_turn=None,
     ) -> None:
         self.k_steer = float(k_steer)
         self.ld_min = float(ld_min)
@@ -324,6 +334,25 @@ class RowfitController:
         self.obstacle_v_cap: float | None = None
         # Turn-approach braking (``src.physics_speed_limit.TurnBrakeParams``).
         self.turn_brake = turn_brake
+        self.coast_into_turn = coast_into_turn
+        self._coast_active = False
+        self._coast_latched = False  # one arm per approach, cleared at the pivot
+        self._coasted_this_approach = False
+        self._coast_wh_saved = 0.0
+        self._coast_starts = 0
+        self._open_turn_id: int | None = None
+        self._turn_records: list[str] = []
+        self._curve_yaw0: float | None = None
+        self._curve_ct = 0.0
+        self._seg_n = 0
+        self._seg_ct = 0.0
+        self._seg_ct_fit = 0.0
+        self._seg_len = 0.0
+        self._seg_start: tuple[float, float] | None = None
+        self._seg_prev: tuple[float, float] | None = None
+        self._pivot_lateral_max_m = 0.0
+        self._pivot_ct_fit_max_m = 0.0
+        self._pivot_entry_v_m_s = 0.0
         self.pivot_integrated_rad = 0.0
         self.pivot_yaw_rate_rad_s = 0.0
         self.pivot_heading_err_rad = 0.0
@@ -333,6 +362,7 @@ class RowfitController:
         track = self.track
         vc, vs, pw = self.v_cruise, self.v_straight, self.pivot_w_max
         tb = self.turn_brake
+        coast = self.coast_into_turn
         self.__init__(
             k_steer=self.k_steer,
             ld_min=self.ld_min,
@@ -341,6 +371,7 @@ class RowfitController:
             v_straight=vs,
             pivot_w_max=pw,
             turn_brake=tb,
+            coast_into_turn=coast,
         )
         self.tracker = tracker
         self.track = track
@@ -365,6 +396,119 @@ class RowfitController:
 
     def _event(self, msg: str) -> None:
         self.events.append(msg)
+        if msg.startswith(("TURN_RECORD", "PIVOT_RECORD", "CURVE_RECORD", "SEGMENT_RECORD")):
+            self._turn_records.append(msg)
+
+    def turn_log_line(self) -> str:
+        """One checksum line. Live TURN_RECORD / PIVOT_RECORD lines stay singular."""
+        turns = sum(1 for row in self._turn_records if row.startswith("TURN_RECORD"))
+        pivots = sum(1 for row in self._turn_records if row.startswith("PIVOT_RECORD"))
+        curves = sum(1 for row in self._turn_records if row.startswith("CURVE_RECORD"))
+        segments = sum(1 for row in self._turn_records if row.startswith("SEGMENT_RECORD"))
+        return (
+            f"TURN_LOG turns={turns} pivots={pivots} curves={curves} "
+            f"segments={segments} controller_pivots={self.pivots}"
+        )
+
+    def note_cross_track(self, ct_m: float | None) -> None:
+        """Peak |true cross-track| on the open straight (GPS vs centreline).
+
+        Ignored during a pivot. Camera lane-fit offset is tracked separately
+        via :meth:`note_cross_track_fit`.
+        """
+        if ct_m is None or self.state == STATE_PIVOT:
+            return
+        try:
+            val = abs(float(ct_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._seg_ct:
+            self._seg_ct = val
+
+    def note_cross_track_fit(self, offset_m: float | None) -> None:
+        """Peak |camera lane-fit offset| on the open straight (diagnostic)."""
+        if offset_m is None or self.state == STATE_PIVOT:
+            return
+        try:
+            val = abs(float(offset_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._seg_ct_fit:
+            self._seg_ct_fit = val
+
+    def _note_pivot_cross_track(self, ct_m: float | None) -> None:
+        if ct_m is None:
+            return
+        try:
+            val = abs(float(ct_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._pivot_lateral_max_m:
+            self._pivot_lateral_max_m = val
+
+    def _note_pivot_cross_track_fit(self, offset_m: float | None) -> None:
+        if offset_m is None:
+            return
+        try:
+            val = abs(float(offset_m))
+        except (TypeError, ValueError):
+            return
+        if val > self._pivot_ct_fit_max_m:
+            self._pivot_ct_fit_max_m = val
+
+    @staticmethod
+    def _ct_fit_suffix(fit_max: float) -> str:
+        return f" ct_fit_max_m={fit_max:.3f}" if fit_max > 1e-4 else ""
+
+    def _observe_segment(self, pose, est, *, cross_track_m: float | None = None) -> None:
+        if self.state == STATE_PIVOT:
+            return
+        if cross_track_m is not None:
+            self.note_cross_track(cross_track_m)
+        if est is not None:
+            off = getattr(est, "offset_m", None)
+            if off is not None:
+                self.note_cross_track_fit(off)
+        if pose is None:
+            return
+        try:
+            xy = (float(pose[0]), float(pose[1]))
+        except (TypeError, ValueError, IndexError):
+            return
+        if self._seg_start is None:
+            self._seg_start = xy
+        if self._seg_prev is not None:
+            self._seg_len += math.hypot(xy[0] - self._seg_prev[0], xy[1] - self._seg_prev[1])
+        self._seg_prev = xy
+
+    def _close_segment(self, why: str) -> None:
+        """End the straight that leads into a pivot, or the leg after the last one."""
+        empty = self._seg_len < 1e-3 and self._seg_ct <= 0.0 and self._seg_start is None
+        if empty and (why != "pivot" or self._seg_n > 0):
+            return
+        start = self._seg_start
+        end = self._seg_prev
+        start_txt = f"({start[0]:.3f},{start[1]:.3f})" if start is not None else "unknown"
+        end_txt = f"({end[0]:.3f},{end[1]:.3f})" if end is not None else "unknown"
+        self._seg_n += 1
+        self._event(
+            f"SEGMENT_RECORD seg={self._seg_n} after_turn={self.pivots} "
+            f"ct_max_m={self._seg_ct:.3f}{self._ct_fit_suffix(self._seg_ct_fit)} "
+            f"length_m={self._seg_len:.3f} "
+            f"start_pos={start_txt} end_pos={end_txt} close={why}"
+        )
+        self._seg_ct = 0.0
+        self._seg_ct_fit = 0.0
+        self._seg_len = 0.0
+        self._seg_start = end
+        self._seg_prev = end
+
+    def finish_turn_log(self) -> list[str]:
+        """Close the last straight and return lines to print before process kill."""
+        if self.state != STATE_PIVOT:
+            self._close_segment("mission")
+        fresh = self.drain_events()
+        return fresh + [self.turn_log_line()]
 
     def _pursuit(self, est, v: float) -> tuple[float, float]:
         """(pure-pursuit curvature, goal distance^2) on the estimate's centre arc."""
@@ -727,9 +871,75 @@ class RowfitController:
             "yaw_rate_rad_s": round(self.pivot_yaw_rate_rad_s, 4),
             "pivot_heading_err_rad": round(self.pivot_heading_err_rad, 4),
             "pivot_integrated_deg": round(math.degrees(self.pivot_integrated_rad), 2),
+            "coast_active": bool(self._coast_active),
+            "coast_wh_saved": round(self._coast_wh_saved, 6),
+            "coast_starts": int(self._coast_starts),
         }
 
-    def _start_pivot(self, yaw: float) -> None:
+    def coast_summary_fields(self) -> dict:
+        return {
+            "coast_wh_saved": round(self._coast_wh_saved, 6),
+            "coast_starts": int(self._coast_starts),
+        }
+
+    def _pivot_entry_speed_cap_m_s(self) -> float:
+        coast_cfg = self.coast_into_turn
+        v_pivot = V_CREEP_M_S
+        if coast_cfg is not None:
+            v_pivot = max(V_CREEP_M_S, float(coast_cfg.v_pivot_m_s))
+        return v_pivot + 0.01
+
+    def _advance_remaining(self, rem: float, v_cmd: float, dt: float, mapped: float | None) -> None:
+        """Shrink vision remaining only while the wheels are actually told to roll.
+
+        A zero speed command used to subtract ``gov.v * dt`` anyway, so the
+        pivot gate opened while the axle was still short of the intersection.
+        Map distance, when present, already replaced ``remaining_m`` this tick.
+        """
+        if mapped is not None:
+            return
+        if float(v_cmd) <= 0.02:
+            return
+        self.remaining_m = max(0.0, float(rem) - float(v_cmd) * max(0.0, float(dt)))
+
+    def _note_curve_yaw(self, yaw, est, *, cross_track_m: float | None = None) -> None:
+        """A ~90° heading change in LANE is not a pivot. Log it on its own."""
+        if self.state == STATE_PIVOT:
+            self._curve_yaw0 = None
+            return
+        if yaw is None or self.state != STATE_LANE:
+            return
+        if self._curve_yaw0 is None:
+            self._curve_yaw0 = float(yaw)
+            self._curve_ct = 0.0
+            return
+        if cross_track_m is not None:
+            val = abs(float(cross_track_m))
+            if val > self._curve_ct:
+                self._curve_ct = val
+        delta = math.degrees(
+            math.atan2(
+                math.sin(float(yaw) - self._curve_yaw0),
+                math.cos(float(yaw) - self._curve_yaw0),
+            )
+        )
+        if abs(delta) < 80.0:
+            return
+        n = sum(1 for row in self._turn_records if "kind=curve" in row) + 1
+        self._event(
+            f"TURN_RECORD turn={n} kind=curve "
+            f"dir={'left' if delta > 0 else 'right'} "
+            f"entry_v_m_s={float(self.gov.v):.3f} rem_m=0.000 src=lane"
+        )
+        self._event(
+            f"CURVE_RECORD turn={n} heading_change_deg={delta:+.1f} "
+            f"ct_max_m={self._curve_ct:.3f} entry_v_m_s={float(self.gov.v):.3f}"
+        )
+        self._curve_yaw0 = float(yaw)
+        self._curve_ct = 0.0
+
+    def _start_pivot(self, yaw: float, *, entry_v_m_s: float | None = None) -> None:
+        self._close_segment("pivot")
         base = self.lane_yaw if self.lane_yaw is not None else float(yaw)
         self.yaw_target = base + self.corner_dir * PIVOT_ANGLE_RAD
         self.pivot_start_yaw = float(yaw)
@@ -737,6 +947,33 @@ class RowfitController:
         self.pivot_t = 0.0
         self.pivot_settle = 0
         self.pivot_integrated_rad = 0.0
+        self._pivot_lateral_max_m = 0.0
+        self._pivot_ct_fit_max_m = 0.0
+        pose = self.pose
+        pos_txt = (
+            f"({pose[0]:.3f},{pose[1]:.3f})"
+            if pose is not None
+            else "unknown"
+        )
+        self._pivot_start_pos = pos_txt
+        self._pivot_entry_v_m_s = float(entry_v_m_s if entry_v_m_s is not None else self.gov.v)
+        self._open_turn_id = self.pivots + 1
+        self._event(
+            f"TURN_RECORD turn={self._open_turn_id} kind=pivot "
+            f"dir={'left' if self.corner_dir > 0 else 'right'} "
+            f"entry_v_m_s={self._pivot_entry_v_m_s:.3f} rem_m="
+            f"{float(self.remaining_m or 0.0):.3f} src={self.turn_src}"
+        )
+        coast_was = bool(self._coasted_this_approach or self._coast_latched)
+        if self._coast_latched or self._coast_active:
+            self._event(
+                f"COAST stop — pivot gate entry_v={self._pivot_entry_v_m_s:.3f} m/s "
+                f"rem={float(self.remaining_m or 0.0):.3f} m"
+            )
+        self._coast_active = False
+        self._coast_latched = False
+        self._coasted_this_approach = False
+        self._curve_yaw0 = None
         self.state = STATE_PIVOT
         self.gov.v = 0.0
         self.filter = SteerFilter()
@@ -744,20 +981,87 @@ class RowfitController:
         self._event(
             f"PIVOT start {'left' if self.corner_dir > 0 else 'right'} yaw {math.degrees(yaw):+.1f}deg -> "
             f"target {math.degrees(self.yaw_target):+.1f}deg (lane {math.degrees(base):+.1f}deg, "
-            f"remaining {self.remaining_m:+.3f} m)"
+            f"remaining {float(self.remaining_m or 0.0):+.3f} m) entry_v={self._pivot_entry_v_m_s:.3f} m/s "
+            f"pos={pos_txt} coast_into_turn={coast_was}"
+        )
+
+    def _brake_to_pivot_cap(
+        self,
+        est,
+        new_frame: bool,
+        dt: float,
+        rem: float,
+        mapped: float | None,
+        v_cap: float,
+        *,
+        yaw_rate_rad_s: float | None = None,
+    ) -> dict:
+        # Do not drop the approach latch here. This creep still rolls; the
+        # latch ends in ``_start_pivot`` so the pivot line can say it coasted.
+        self._coast_active = False
+        self.target_speed = V_CREEP_M_S
+        if self.gov.v > V_CREEP_M_S:
+            self.gov.v = max(V_CREEP_M_S, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+        v = self.gov.v
+        self._advance_remaining(rem, v, dt, mapped)
+        raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
+        raw = max(-STEER_CAP, min(STEER_CAP, raw))
+        steer = self.filter.step(raw, dt)
+        left, right = wheels_from_steer(
+            steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0
+        )
+        return self._cmd(
+            left,
+            right,
+            steer=steer,
+            reason=f"corner brake-to-pivot {rem:.2f} m v={v:.3f}>{v_cap:.3f}",
+            phase="rowfit_approach",
+            v=v,
+            new_frame=new_frame,
         )
 
     def _end_pivot(self, yaw: float, how: str) -> None:
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
+        if self.pivot_start_yaw is not None:
+            heading_change = math.degrees(
+                math.atan2(
+                    math.sin(float(yaw) - float(self.pivot_start_yaw)),
+                    math.cos(float(yaw) - float(self.pivot_start_yaw)),
+                )
+            )
+        else:
+            heading_change = 0.0
+        pose = self.pose
+        pos_txt = (
+            f"({pose[0]:.3f},{pose[1]:.3f})"
+            if pose is not None
+            else "unknown"
+        )
         self.last_pivot = {
             "dir": self.corner_dir, "target_deg": round(math.degrees(self.yaw_target), 2),
             "yaw_deg": round(math.degrees(yaw), 2), "err_deg": round(math.degrees(err), 2),
             "time_s": round(self.pivot_t, 2), "exit": how,
+            "entry_v_m_s": round(self._pivot_entry_v_m_s, 3),
+            "heading_change_deg": round(heading_change, 1),
+            "max_lateral_m": round(self._pivot_lateral_max_m, 3),
+            "pos_end": pos_txt,
         }
         self.pivots += 1
+        turn_id = self._open_turn_id if self._open_turn_id is not None else self.pivots
+        self._open_turn_id = None
+        start_pos = getattr(self, "_pivot_start_pos", pos_txt)
+        self._event(
+            f"PIVOT_RECORD turn={turn_id} dir={'left' if self.corner_dir > 0 else 'right'} "
+            f"heading_change_deg={heading_change:+.1f} entry_v_m_s={self._pivot_entry_v_m_s:.3f} "
+            f"ct_max_m={self._pivot_lateral_max_m:.3f}"
+            f"{self._ct_fit_suffix(self._pivot_ct_fit_max_m)} start_pos={start_pos}"
+        )
+        self._curve_yaw0 = None
         self._event(
             f"PIVOT done yaw {math.degrees(yaw):+.1f}deg (target {math.degrees(self.yaw_target):+.1f}, "
-            f"err {math.degrees(err):+.1f}deg, {self.pivot_t:.1f} s, {how}) — REACQUIRE"
+            f"err {math.degrees(err):+.1f}deg, heading_change {heading_change:+.1f}deg, "
+            f"entry_v={self._pivot_entry_v_m_s:.3f} m/s ct_max={self._pivot_lateral_max_m:.3f} m, "
+            f"{self.pivot_t:.1f} s, {how}) — REACQUIRE"
         )
         self.state = STATE_REACQUIRE
         self.pivot_w = 0.0
@@ -780,10 +1084,14 @@ class RowfitController:
         yaw: float,
         *,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
     ) -> dict:
         self.pivot_t += dt
         err = math.atan2(math.sin(self.yaw_target - yaw), math.cos(self.yaw_target - yaw))
         self.pivot_heading_err_rad = float(err)
+        self._note_pivot_cross_track(cross_track_m)
+        if est is not None and getattr(est, "valid", False):
+            self._note_pivot_cross_track_fit(getattr(est, "offset_m", None))
         rate = 0.0 if yaw_rate_rad_s is None else float(yaw_rate_rad_s)
         self.pivot_yaw_rate_rad_s = rate
         from src.gyro_pivot import integrate_heading_rad, pivot_turn_progress_rad, rate_tracking_adjustment
@@ -815,8 +1123,8 @@ class RowfitController:
             return self._cmd(0.0, 0.0, reason="pivot done (gyro heading)", phase="rowfit_" + self.state.lower(),
                              new_frame=new_frame)
         if self.pivot_t > PIVOT_TIMEOUT_S:
-            self.state = STATE_LANE
             self._event(f"PIVOT timeout after {self.pivot_t:.1f} s, yaw err {math.degrees(err):+.1f}deg — braking")
+            self._end_pivot(yaw, "timeout")
             return self._cmd(0.0, 0.0, reason="pivot timeout", phase="rowfit_stop", brake=True,
                              new_frame=new_frame)
         want = PIVOT_K_YAW * err
@@ -845,6 +1153,7 @@ class RowfitController:
         yaw: float | None = None,
         pose=None,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
     ) -> dict:
         """One physics tick. ``yaw``: IMU yaw (rad, + = left/CCW). Without it a
         corner is still approached, but the robot brakes at the pivot point.
@@ -852,10 +1161,17 @@ class RowfitController:
         ``pose`` is ``(x, y)`` in world metres. With a track set, it is the
         pivot distance while a turn is already committed. It does not start
         a turn by itself.
+
+        ``cross_track_m`` is true position vs the lane centreline (same source
+        as the lap ``ct_max_m``). When it is missing, segment and pivot records
+        do not fall back to the camera lane-fit offset.
         """
         if pose is not None:
             self.pose = (float(pose[0]), float(pose[1]))
-        self._yaw = yaw
+        if yaw is not None:
+            self._yaw = yaw
+        self._observe_segment(self.pose, est, cross_track_m=cross_track_m)
+        self._note_curve_yaw(yaw, est, cross_track_m=cross_track_m)
         if new_frame:
             self._steer_est = est
             self._corner_frame(est, yaw)
@@ -863,11 +1179,20 @@ class RowfitController:
             self._straight_reset()  # the bump never outlives plain LANE following
         if self.state == STATE_PIVOT:
             if yaw is None:
-                self.state = STATE_LANE
+                held = float(self._yaw) if self._yaw is not None else 0.0
+                self._event("PIVOT yaw lost — closing the pivot record")
+                self._end_pivot(held, "yaw lost")
                 self.frames_lost = LOST_FRAMES_STOP
+                return self._cmd(0.0, 0.0, reason="pivot yaw lost", phase="rowfit_stop", brake=True,
+                                 new_frame=new_frame)
             else:
                 return self._pivot_tick(
-                    est, new_frame, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s
+                    est,
+                    new_frame,
+                    dt,
+                    float(yaw),
+                    yaw_rate_rad_s=yaw_rate_rad_s,
+                    cross_track_m=cross_track_m,
                 )
         if self.state == STATE_APPROACH:
             return self._approach_tick(
@@ -978,35 +1303,125 @@ class RowfitController:
                 self._event("CORNER reached but no IMU yaw — braking at the corner (no pivot)")
                 return self._cmd(0.0, 0.0, reason="corner without IMU", phase="rowfit_stop", brake=True,
                                  new_frame=new_frame)
-            self._start_pivot(float(yaw))
+            v_entry = float(self.gov.v)
+            v_cap = self._pivot_entry_speed_cap_m_s()
+            if v_entry > v_cap + 1e-3:
+                return self._brake_to_pivot_cap(
+                    est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
+                )
+            self._start_pivot(float(yaw), entry_v_m_s=v_entry)
             return self._pivot_tick(est, False, dt, float(yaw), yaw_rate_rad_s=yaw_rate_rad_s)
         rem_brake = max(0.0, rem - PIVOT_ARRIVE_M)
         v_turn = self._turn_v_allowed(rem_brake)
-        target = min(
-            V_APPROACH_M_S,
-            math.sqrt(2.0 * A_APPROACH_M_S2 * rem_brake),
-        )
+        profile = math.sqrt(2.0 * A_APPROACH_M_S2 * max(0.0, rem_brake))
+        if rem_brake > APPROACH_CRUISE_BEYOND_M:
+            target = self.v_cruise
+        else:
+            target = min(V_APPROACH_M_S, profile)
+        target = max(V_CREEP_M_S, target)
         if v_turn is not None:
             target = min(target, v_turn, self.v_cruise)
         else:
             target = min(target, self.v_cruise)
-        target = max(V_CREEP_M_S, target)
         if self.obstacle_v_cap is not None:
             target = min(target, max(0.0, float(self.obstacle_v_cap)))
-        self.target_speed = target
-        # this profile can need more than the governor's slow-in decel: follow it directly
-        if self.gov.v > target:
-            self.gov.v = max(target, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+        coast_cfg = self.coast_into_turn
+        v_now = float(self.gov.v)
+        coasting = False
+        v_pivot = V_CREEP_M_S
+        if coast_cfg is not None and coast_cfg.enabled:
+            from src.physics_speed_limit import coast_decel_m_s2, coast_distance_m, effective_turn_distance_m
+
+            v_pivot = float(coast_cfg.v_pivot_m_s)
+            if self.v_cruise <= v_pivot + 1e-3:
+                if self._coast_latched:
+                    self._event(
+                        f"COAST stop — cruise {self.v_cruise:.2f} m/s is not above "
+                        f"pivot entry {v_pivot:.2f} m/s"
+                    )
+                    self._coast_latched = False
+                    self._coast_active = False
+            elif not self._coast_latched and v_now > v_pivot + COAST_ARM_ABOVE_M_S:
+                a_coast = coast_decel_m_s2(
+                    crr=coast_cfg.crr,
+                    mass_kg=coast_cfg.total_mass_kg,
+                    v_m_s=v_now,
+                    drag_linear_n_s_per_m=coast_cfg.drag_linear_n_s_per_m,
+                )
+                d_coast = coast_distance_m(
+                    v_now,
+                    v_target_m_s=v_pivot,
+                    a_coast_m_s2=a_coast,
+                    margin_m=coast_cfg.margin_m,
+                )
+                d_avail = effective_turn_distance_m(rem_brake, perception_horizon_m=self.ld_max)
+                # The brake-zone floor is not part of this distance. Arming inside
+                # 0.32 m at creep speed logged a new COAST start on every tick.
+                d_zone = min(d_coast, max(0.0, d_avail))
+                if d_coast >= 0.05 and rem_brake <= d_zone + 1e-3:
+                    self._coast_starts += 1
+                    self._coast_latched = True
+                    self._coasted_this_approach = True
+                    note = (
+                        f"COAST start {v_now:.2f} m/s -> {v_pivot:.2f} m/s over ~{d_coast:.2f} m "
+                        f"(a_coast={a_coast:.3f} m/s²)"
+                    )
+                    if d_coast > d_avail + 1e-3:
+                        note += f" [look-ahead {d_avail:.2f} m < coast {d_coast:.2f} m]"
+                    self._event(note)
+            if self._coast_latched:
+                coasting = True
+                self._coast_active = True
+        elif self._coast_latched or self._coast_active:
+            self._event("COAST stop — coasting disabled")
+            self._coast_latched = False
+            self._coast_active = False
+        v_cap = self._pivot_entry_speed_cap_m_s()
+        if coasting:
+            target = v_pivot
+            self.target_speed = target
+            a_coast = coast_decel_m_s2(
+                crr=coast_cfg.crr,
+                mass_kg=coast_cfg.total_mass_kg,
+                v_m_s=v_now,
+                drag_linear_n_s_per_m=coast_cfg.drag_linear_n_s_per_m,
+            )
+            self.gov.v = max(v_pivot, v_now - a_coast * max(0.0, float(dt)))
+            v = self.gov.v
+            if coast_cfg.a_brake_m_s2 > a_coast + 1e-6:
+                p_saved = (
+                    coast_cfg.total_mass_kg
+                    * v
+                    * (coast_cfg.a_brake_m_s2 - a_coast)
+                    * max(0.0, float(dt))
+                )
+                self._coast_wh_saved += max(0.0, p_saved) / 3600.0
+        elif rem <= PIVOT_BRAKE_ZONE_M and float(self.gov.v) > v_cap + 1e-3:
+            return self._brake_to_pivot_cap(
+                est, new_frame, dt, rem, mapped, v_cap, yaw_rate_rad_s=yaw_rate_rad_s
+            )
         else:
-            self.gov.step(target, dt)
-        v = self.gov.v
-        if mapped is None:
-            self.remaining_m = rem - v * dt
+            self.target_speed = target
+            # this profile can need more than the governor's slow-in decel: follow it directly
+            if self.gov.v > target:
+                self.gov.v = max(target, self.gov.v - max(DECEL_M_S2, A_APPROACH_M_S2 * 2.0) * dt)
+            else:
+                self.gov.step(target, dt)
+            v = self.gov.v
+        self._advance_remaining(rem, v, dt, mapped)
         raw = steer_for_curvature(self.kappa_cmd, v, self.k_steer)
         raw = max(-STEER_CAP, min(STEER_CAP, raw))
         steer = self.filter.step(raw, dt)
-        left, right = wheels_from_steer(steer, cruise=v / WHEEL_RADIUS_M, k_steer=self.k_steer, turn_slow=0.0)
-        return self._cmd(left, right, steer=steer, reason=f"corner approach {rem:.2f} m to pivot",
+        # Match the coasting speed. A zero hub is a velocity hold at stall,
+        # which spiked pack current and froze the axle short of the vertex.
+        hub = max(v, v_pivot if coasting else 0.0) / WHEEL_RADIUS_M
+        left, right = wheels_from_steer(steer, cruise=hub, k_steer=self.k_steer, turn_slow=0.0)
+        reason = (
+            f"corner coast {rem:.2f} m to pivot"
+            if coasting
+            else f"corner approach {rem:.2f} m to pivot"
+        )
+        return self._cmd(left, right, steer=steer, reason=reason,
                          phase="rowfit_approach", v=v, new_frame=new_frame)
 
     def _enter_recover(self) -> None:

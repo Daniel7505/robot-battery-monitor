@@ -41,6 +41,26 @@ v_cmd = min(effective_cruise, v_allowed, …)
 
 Config: `controller.speed_limit.approach_target_m_s` (default **0.04 m/s**, `V_CREEP_M_S`).
 
+**Coast into turns** (`controller.coast_enabled`, default **true**): before the pivot, cut drive and decelerate on rolling resistance so the robot arrives near `approach_target_m_s` with less commanded braking.
+
+```text
+a_coast = C_rr · g   (+ linear drag if configured)
+d_coast = (v_cruise² − v_pivot²) / (2 · a_coast) + coast_margin_m
+```
+
+Coast arms only when `v_cruise > v_pivot` and `d_coast ≤ min(remaining_m, ld_max)`; otherwise the approach falls back to the braking profile above. `controller.pivot_w_max_rad_s` does not enter this distance (it caps in-place yaw rate).
+
+**Pivot gate:** at `remaining_m ≤ PIVOT_ARRIVE_M` the controller brakes to `approach_target_m_s` before starting `PIVOT` (avoids pivoting while coast still has forward speed). Rowfit logs `PIVOT start` / `PIVOT done` with entry speed, heading change, and max lateral error.
+
+**Mission motor copper (speed-dependent):** above `0.44 m/s` the model adds armature I²R per motor:
+
+```text
+R_a ≈ V / I_stall
+P_copper = 2 · R_a · max(0, I(v)² − I(0.44 m/s)²)
+```
+
+added to the brushed duty·V·I/η line (`src/twin_energy.brushed_drive_point`). `coast_wh_saved` on `MISSION_SUMMARY` is informational only; it is not subtracted from `wh_model_drive`.
+
 ### (b) Obstacles (stereo + radar, when `RBM_OBSTACLES=1`)
 
 | Source | Parameter | Value |

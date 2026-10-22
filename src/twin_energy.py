@@ -28,6 +28,8 @@ OVERRIDE_PATH = _REPO / "data" / "twin_energy.json"
 TEN_FT_M = 3.048
 GRAVITY_M_S2 = 9.81
 DEFAULT_CRR = 0.015
+# Copper I²R above the rolling-only current at this speed (mission model).
+MOTOR_COPPER_REF_SPEED_M_S = 0.44
 DEFAULT_DRIVER_EFF = 0.92
 # Drawn mesh and contact cylinder in every shipped butlerbot*.wbt, and the
 # radius the controller's v = ω·r uses. A selected bom_build changes body
@@ -217,6 +219,32 @@ def brushed_drive_point(
         eta_driver=float(eta_driver),
     )
     drive_w = float(motors) * drive_one
+    if (
+        speed > MOTOR_COPPER_REF_SPEED_M_S + 1e-6
+        and float(stall_current_a) > 1e-6
+        and float(voltage_v) > 0.0
+    ):
+        ref_omega = MOTOR_COPPER_REF_SPEED_M_S / radius
+        ref_tau = min(
+            (float(crr) * float(mass_kg) * GRAVITY_M_S2 + max(0.0, float(extra_force_n)))
+            * radius
+            / float(motors)
+            + added,
+            tau_stall,
+        )
+        _, i_ref, _ = _pack_watts_from_shaft(
+            ref_tau,
+            ref_omega,
+            voltage_v=float(voltage_v),
+            no_load_rpm=float(no_load_rpm),
+            no_load_current_a=float(no_load_current_a),
+            stall_current_a=float(stall_current_a),
+            stall_torque_nm=tau_stall,
+            eta_driver=float(eta_driver),
+        )
+        r_arm = float(voltage_v) / float(stall_current_a)
+        copper = r_arm * max(0.0, float(current) ** 2 - float(i_ref) ** 2)
+        drive_w += float(motors) * copper
     seconds = TEN_FT_M / speed
     drive_wh = drive_w * seconds / 3600.0
 
@@ -292,7 +320,20 @@ LOCO_PASSTHROUGH_KEYS = ENERGY_COUNTER_KEYS + (
     "center_err_m",
     "lane_frame_n",
     "energy_elec_gaps",
+    "gyro_found",
+    "coast_wh_saved",
+    "coast_starts",
+    "ctrl_pivot_count",
+    "ctrl_coast_enabled",
+    "left_wheel_rad_s",
+    "right_wheel_rad_s",
 )
+
+
+# Body slower than creep and both hinges quieter than a slow pivot:
+# the kinematic roll term bills 0 W, but a velocity hold at 0 rad/s does not.
+STALL_HOLD_BODY_M_S = 0.08
+STALL_HOLD_WHEEL_RAD_S = 0.15
 
 
 def published_motor_circuit(
@@ -1045,6 +1086,48 @@ def estimate_mission_energy(
         "track": track,
         "payload_kg": float(payload_kg),
     }
+
+
+def stall_hold_electrical_wh(dt_s: float, profile: dict | None) -> float:
+    """Pack watt-hours for ``dt_s`` with both drive motors at published stall.
+
+    ``ω = 0`` and ``τ = τstall`` is the point a velocity command of 0 rad/s
+    hits while the axle still has load. The distance-based roll term is 0 W
+    there (``brushed_drive_point`` returns early when speed is 0). Two motors,
+    ``P = duty·V·I/η`` with duty = 1 and I = Istall.
+    """
+    if profile is None or dt_s <= 0.0:
+        return 0.0
+    motors = profile.get("motors") or {}
+    spec = {}
+    if isinstance(motors, dict):
+        spec = dict(motors.get("left_wheel") or motors.get("right_wheel") or {})
+    try:
+        voltage = float(spec.get("voltage_v"))
+        rpm = float(spec.get("no_load_rpm"))
+        i0 = float(spec.get("no_load_current_a"))
+        i_stall = float(spec.get("stall_current_a"))
+        tau = float(spec.get("stall_torque_nm"))
+    except (TypeError, ValueError):
+        return 0.0
+    assumptions = profile.get("assumptions") or {}
+    driver = profile.get("motor_driver") or {}
+    eta = driver.get("efficiency")
+    if eta is None:
+        eta = assumptions.get("driver_eff", DEFAULT_DRIVER_EFF)
+    point = electrical_from_shaft_w(
+        tau,
+        0.0,
+        voltage_v=voltage,
+        no_load_rpm=rpm,
+        no_load_current_a=i0,
+        stall_current_a=i_stall,
+        stall_torque_nm=tau,
+        eta_driver=float(eta),
+    )
+    if point.get("elec_w") is None:
+        return 0.0
+    return 2.0 * float(point["elec_w"]) * float(dt_s) / 3600.0
 
 
 def bom_run_energy_wh(

@@ -567,17 +567,17 @@ def _init_devices(
             gyro.enable(timestep)
         except Exception:
             gyro = None
-    if gyro is not None:
-        print("Gyro device enabled (pivot rate + integrated heading)")
+    gyro_found = gyro is not None
+    if gyro_found:
+        print("Gyro: device found and enabled (pivot rate + integrated heading)")
     elif Gyro is not None:
         print(
-            "WARNING: Gyro device 'gyro' not found — pivot falls back to IMU yaw "
+            "Gyro: device not found — pivot falls back to IMU yaw "
             "(open-loop rate tracking; no gyro feedback)"
         )
     else:
         print(
-            "WARNING: Gyro API unavailable in this Webots build — pivot open-loop "
-            "(IMU yaw only)"
+            "Gyro: API unavailable in this Webots build — pivot open-loop (IMU yaw only)"
         )
 
     keyboard: Keyboard | None = None
@@ -716,6 +716,25 @@ def _sync_bom_body(robot: Robot) -> bool:
     return False
 
 
+def _emit_turn_log(rowfit_rt) -> None:
+    """Print TURN_LOG when the mission finishes.
+
+    Webots can kill the controller before the post-loop hook, so the
+    checksum has to go out on the mission-complete path, flushed, and
+    into the mission file that already survives that kill.
+    """
+    if rowfit_rt is None:
+        return
+    try:
+        lines = rowfit_rt.ctl.finish_turn_log()
+    except Exception as exc:
+        print(f"TURN_LOG skipped ({type(exc).__name__}: {exc})", flush=True)
+        return
+    for line in lines:
+        print(line, flush=True)
+    _record_mission_lines(lines)
+
+
 def _record_mission_lines(lines: list[str]) -> str | None:
     """Append lines to logs/mission_summary_<ts>.json and the repo dashboard log."""
     try:
@@ -795,6 +814,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
     if _LANE_MODE == "rowfit":
         try:
             rowfit_rt = RowfitRuntime()
+            rowfit_rt.gyro_found = gyro is not None
             lane_vision_log = LaneVisionLog()
             _lane_csv = os.path.abspath(lane_vision_log.path)
             print(
@@ -804,6 +824,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             _record_mission_lines([f"LANE_VISION file={_lane_csv}"])
             print(rowfit_rt.route_line())
             print(rowfit_rt.limits_line())
+            print(rowfit_rt.coast_line())
             for _wmsg in rowfit_rt.route_warnings:
                 print(f"WARNING {_wmsg}")
         except Exception as exc:
@@ -909,6 +930,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
             print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
     mission_complete = False
+    turn_log_sent = False
     finish_age_s = 0.0
     mission_travel_m = 0.0
     mission_prev_xy: tuple[float, float] | None = None
@@ -1061,6 +1083,8 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 if _ct_now is not None:
                     ct_latest_m = float(_ct_now)
                     ct_peak_m = max(ct_peak_m, abs(ct_latest_m))
+                    if rowfit_rt is not None:
+                        rowfit_rt.ctl.note_cross_track(ct_latest_m)
             if not mission_capped and gps_xy is not None:
                 if mission_prev_xy is not None:
                     _step_m = math.hypot(
@@ -1281,6 +1305,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     yaw=prev_yaw if imu is not None else None,
                     pose=None if gps_xy is None else (float(gps_xy[0]), float(gps_xy[1])),
                     yaw_rate_rad_s=yaw_rate if imu is not None else None,
+                    cross_track_m=ct_latest_m,
                 )
                 _crossed = (
                     gps_xy is not None
@@ -1911,6 +1936,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     if abs_just_finished and nadir_lobe_done:
                         mission_complete = True
                         mission_event = "complete"
+            if mission_complete and not turn_log_sent:
+                _emit_turn_log(rowfit_rt)
+                turn_log_sent = True
             if mission_complete and not speed_trace.finished:
                 _steer_line = speed_trace.finish()
                 if _steer_line:
@@ -2107,7 +2135,9 @@ def _run_loop(robot: Robot, opts: dict) -> None:
         _steer_line = speed_trace.finish()
         if _steer_line:
             print(_steer_line)
-    print("ButlerBot controller stopped (simulation ended)")
+    if not turn_log_sent:
+        _emit_turn_log(rowfit_rt)
+    print("ButlerBot controller stopped (simulation ended)", flush=True)
 
 
 def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
@@ -2133,9 +2163,19 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
     loco["ctrl_pivot_w_max_rad_s"] = round(float(lim.pivot_w_max_rad_s), 4)
     loco["ctrl_k_steer"] = round(float(lim.k_steer), 4)
     loco["ctrl_bom_build"] = "" if not lim.bom_build else str(lim.bom_build)
+    loco["gyro_found"] = bool(getattr(rowfit_rt, "gyro_found", False))
+    if cmd.get("coast_wh_saved") is not None:
+        loco["coast_wh_saved"] = round(float(cmd["coast_wh_saved"]), 6)
+    if cmd.get("coast_starts") is not None:
+        loco["coast_starts"] = int(cmd["coast_starts"])
+    coast_cfg = getattr(getattr(rowfit_rt, "ctl", None), "coast_into_turn", None)
+    if coast_cfg is not None:
+        loco["ctrl_coast_enabled"] = 1 if coast_cfg.enabled else 0
+    loco["ctrl_pivot_count"] = int(getattr(getattr(rowfit_rt, "ctl", None), "pivots", 0))
     for env_key, field in (
         ("RBM_OPT_RUN_ID", "opt_run_id"),
         ("RBM_OPT_TRIAL_ID", "opt_trial_id"),
+        ("RBM_LAP_START_WALLCLOCK", "lap_start_wallclock"),
     ):
         stamped = os.environ.get(env_key)
         if stamped:
@@ -2148,6 +2188,38 @@ def _publish_controller_limits(loco: dict, rowfit_rt) -> None:
             loco["body_mass_kg"] = round(float(physics.mass_kg), 4)
     except Exception:
         pass
+
+
+class _TeeStream:
+    """Mirror controller stdout/stderr to a host log file (optimizer laps)."""
+
+    def __init__(self, stream, file_obj):
+        self._stream = stream
+        self._file = file_obj
+
+    def write(self, data):
+        self._stream.write(data)
+        self._file.write(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._file.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _install_controller_log_tee() -> None:
+    path = (os.environ.get("RBM_CONTROLLER_LOG") or "").strip()
+    if not path:
+        return
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+    handle = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = _TeeStream(sys.stdout, handle)
+    sys.stderr = _TeeStream(sys.stderr, handle)
+    print(f"Controller console tee -> {path}")
 
 
 def _prefer_utf8_stdio() -> None:
@@ -2164,6 +2236,7 @@ def _prefer_utf8_stdio() -> None:
 
 def main() -> None:
     _prefer_utf8_stdio()
+    _install_controller_log_tee()
     opts = parse_controller_args()
     if Supervisor is not None:
         robot = Supervisor()

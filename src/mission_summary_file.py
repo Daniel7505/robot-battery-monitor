@@ -66,10 +66,14 @@ def append_mission_lines(
     state = _STATE.get(key)
     if state is None:
         os.makedirs(folder, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(folder, f"mission_summary_{stamp}.json")
-        if os.path.exists(path):
-            path = os.path.join(folder, f"mission_summary_{stamp}_{os.getpid()}.json")
+        basename = (os.environ.get("RBM_MISSION_SUMMARY_BASENAME") or "").strip()
+        if basename:
+            path = os.path.join(folder, basename)
+        else:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            path = os.path.join(folder, f"mission_summary_{stamp}.json")
+            if os.path.exists(path):
+                path = os.path.join(folder, f"mission_summary_{stamp}_{os.getpid()}.json")
         state = {"path": path, "lines": [], "source": source}
         _STATE[key] = state
     state["lines"].extend(kept)
@@ -84,6 +88,16 @@ def append_mission_lines(
         payload["opt_run_id"] = run_id
     if trial_id:
         payload["opt_trial_id"] = trial_id
+    lap_start = os.environ.get("RBM_LAP_START_WALLCLOCK")
+    if lap_start:
+        payload["lap_start_wallclock"] = lap_start
+    summary_line = next((line for line in state["lines"] if "MISSION_SUMMARY" in line), None)
+    if summary_line:
+        fields = _kv_tokens(summary_line)
+        if "gyro_found" in fields:
+            payload["gyro_found"] = fields["gyro_found"] in {"1", "true", "True"}
+        if "coast_wh_saved" in fields:
+            payload["coast_wh_saved"] = _proof_number(fields.get("coast_wh_saved"))
     with open(state["path"], "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
         fh.write("\n")

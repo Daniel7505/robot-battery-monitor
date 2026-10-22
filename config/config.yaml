@@ -170,6 +170,8 @@ controller:
   straight_m_s: 0.50
   pivot_w_max_rad_s: 0.6
   k_steer: 2.0
+  coast_enabled: true             # cut drive before pivot when physics allows (false = legacy brake-only)
+  coast_margin_m: 0.0             # extra m added to coast start distance
   # Physics speed cap: effective cruise = min(cruise_m_s, v_max). See docs/PHYSICS_SPEED_LIMIT.md.
   speed_limit:
     # stop_available_m: optional override (m). Default: min(nadir ld_max ~1.60, obstacle range 4.0 when obstacles_in_d_available).

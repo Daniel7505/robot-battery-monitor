@@ -46,6 +46,17 @@ def test_payload_is_ignored_until_a_bom_build_is_selected():
     assert straight_wh_per_m(0.44, 10) == pytest.approx(straight_wh_per_m(), rel=1e-9)
 
 
+def test_copper_loss_is_zero_at_reference_speed_and_rises_at_065():
+    from src.bom_profile import load_bom
+    from src.hardware_profile import build_profile_from_bom
+    from src.twin_energy import MOTOR_COPPER_REF_SPEED_M_S, bom_drive_terms
+
+    prof = build_profile_from_bom("light")
+    ref = bom_drive_terms(prof, MOTOR_COPPER_REF_SPEED_M_S)
+    fast = bom_drive_terms(prof, 0.65)
+    assert fast["drive_w"] > ref["drive_w"] + 0.08
+
+
 def test_brushed_model_matches_the_light_table_and_the_shift_total():
     # Published light build at 0.44 m/s: drive ~3.43 W, 0.0066 Wh/10 ft.
     point = brushed_drive_point(

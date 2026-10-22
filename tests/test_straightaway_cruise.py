@@ -147,9 +147,14 @@ def test_approach_and_junction_caps_ignore_the_bump():
     ctl = rc.RowfitController()
     drive(ctl, est(), 10)
     assert ctl.gov.v == pytest.approx(rc.V_STRAIGHT_M_S, abs=1e-3)
+    # Several metres out, the approach keeps cruise. The 0.25 cap is the last metre.
     ctl.state, ctl.turn_src, ctl.remaining_m, ctl.corner_dir = rc.STATE_APPROACH, "corner", 3.0, 1
     cmd = drive(ctl, est(), 2, yaw=0.0)
     assert not ctl.straight_boost
+    assert rc.V_APPROACH_M_S + 0.05 < cmd["speed_cmd"] <= ctl.v_cruise + 1e-6
+    ctl.state, ctl.remaining_m = rc.STATE_APPROACH, 0.40
+    cmd = drive(ctl, est(), 2, yaw=0.0)
+    assert ctl.state == rc.STATE_APPROACH
     assert cmd["speed_cmd"] <= rc.V_APPROACH_M_S + 1e-6
 
 

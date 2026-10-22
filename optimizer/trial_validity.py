@@ -117,6 +117,15 @@ def summary_fresh_reason(
             f"summary opt_trial_id={summary.opt_trial_id!r} "
             f"does not match trial id {launch.trial_id!r}"
         )
+    if launch.lap_start_wallclock:
+        got = summary.lap_start_wallclock
+        if not got:
+            return "MISSION_SUMMARY missing lap_start_wallclock for this optimizer lap"
+        if got != launch.lap_start_wallclock:
+            return (
+                f"summary lap_start_wallclock={got!r} does not match "
+                f"this lap {launch.lap_start_wallclock!r} (stale or copied summary)"
+            )
     if summary.duration_s is not None and summary.duration_s < MIN_MISSION_DURATION_S:
         return (
             f"mission duration_s={summary.duration_s:.1f} is too short for a warehouse lap "

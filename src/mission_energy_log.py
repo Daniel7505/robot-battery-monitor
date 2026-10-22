@@ -322,8 +322,13 @@ class MissionEnergyLog:
         self._ctrl_pivot_w_max_rad_s: float | None = None
         self._ctrl_k_steer: float | None = None
         self._ctrl_bom_build: str | None = None
+        self._ctrl_pivot_count: int | None = None
+        self._gyro_found: bool | None = None
+        self._coast_wh_saved: float | None = None
+        self._coast_starts: int | None = None
         self._opt_run_id: str | None = None
         self._opt_trial_id: str | None = None
+        self._lap_start_wallclock: str | None = None
         self._body_mass_kg: float | None = None
         self._mission_dt = 0.0
         self._mission_dist = 0.0
@@ -334,6 +339,7 @@ class MissionEnergyLog:
         self._mission_wh_idle = 0.0
         self._mission_wh_accel = 0.0
         self._mission_wh_turn = 0.0
+        self._mission_wh_hold = 0.0
         self._clear_segment()
         self._clear_power()
         self._run_id = ""
@@ -477,11 +483,16 @@ class MissionEnergyLog:
             and abs(speed - self._last_speed) / dt >= ACCEL_EVENT_M_S2
         ):
             accel = 1
+        energy_build = resolve_energy_bom_build(self._ctrl_bom_build, self._build)
         if trusted and self._last_speed is not None and speed > self._last_speed:
-            wh_accel_step = _accel_step_wh(self._last_speed, speed, dt, self._payload_kg)
+            wh_accel_step = _accel_step_wh(
+                self._last_speed, speed, dt, self._payload_kg, bom_build=energy_build
+            )
         wh_turn_step = 0.0
         if trusted:
-            wh_turn_step = _turn_step_wh(speed, heading_deg, dt, self._payload_kg)
+            wh_turn_step = _turn_step_wh(
+                speed, heading_deg, dt, self._payload_kg, bom_build=energy_build
+            )
         self._last_speed = speed
 
         self._mission_dt += dt
@@ -497,6 +508,7 @@ class MissionEnergyLog:
         self._mission_wh_idle += wh_idle
         self._mission_wh_accel += wh_accel_step
         self._mission_wh_turn += wh_turn_step
+        self._mission_wh_hold += _stall_hold_step_wh(sample, dt, speed, energy_build)
         self._note_steer_motion(sample, step_m if trusted else 0.0, dt)
         self._note_soc(sample)
         if trusted:
@@ -694,6 +706,7 @@ class MissionEnergyLog:
             self._payload_kg,
             self._heading_accum_deg,
             self._mission_wh_accel,
+            bom_build=resolve_energy_bom_build(self._ctrl_bom_build, self._build),
         )
         roll = None if model is None else model.get("wh_model_roll")
         visc = None if model is None else model.get("wh_model_visc")
@@ -821,19 +834,48 @@ class MissionEnergyLog:
         build = sample.get("ctrl_bom_build")
         if build not in (None, ""):
             self._ctrl_bom_build = str(build).strip()
+        pivot_n = sample.get("ctrl_pivot_count")
+        if pivot_n is not None:
+            try:
+                self._ctrl_pivot_count = int(pivot_n)
+            except (TypeError, ValueError):
+                pass
         for key, attr in (
             ("opt_run_id", "_opt_run_id"),
             ("opt_trial_id", "_opt_trial_id"),
+            ("lap_start_wallclock", "_lap_start_wallclock"),
         ):
             value = sample.get(key)
             if value not in (None, ""):
                 setattr(self, attr, str(value).strip())
+        gyro = sample.get("gyro_found")
+        if gyro is not None:
+            self._gyro_found = bool(gyro) if not isinstance(gyro, str) else gyro.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+        coast_wh = _as_float(sample.get("coast_wh_saved"))
+        if coast_wh is not None:
+            self._coast_wh_saved = coast_wh
+        coast_n = sample.get("coast_starts")
+        if coast_n is not None:
+            try:
+                self._coast_starts = int(coast_n)
+            except (TypeError, ValueError):
+                pass
 
     def _arm(self, sample: dict, ts: datetime) -> None:
         self._armed = True
         self._last_ts = ts
         self._build = resolve_log_build(sample.get("build"))
         self._note_controller_limits(sample)
+        import os
+
+        if not self._lap_start_wallclock:
+            wall = os.environ.get("RBM_LAP_START_WALLCLOCK")
+            if wall:
+                self._lap_start_wallclock = str(wall).strip()
         payload = _as_float(sample.get("payload_kg"))
         self._payload_kg = 0.0 if payload is None else payload
         cap = _as_float(sample.get("capacity_wh"))
@@ -924,6 +966,7 @@ class MissionEnergyLog:
             self._seg_heading_deg,
             self._seg_wh_accel,
             self._payload_kg,
+            bom_build=resolve_energy_bom_build(self._ctrl_bom_build, self._build),
         )
         # Per-sample integral. Averaging the segment's yaw under-bills a
         # corner that occupies only part of the 10 ft.
@@ -1044,6 +1087,7 @@ class MissionEnergyLog:
             self._payload_kg,
             self._heading_accum_deg,
             self._mission_wh_accel,
+            bom_build=resolve_energy_bom_build(self._ctrl_bom_build, self._build),
         )
         idle = None if model is None else model["wh_model_idle"]
         roll = None if model is None else model.get("wh_model_roll")
@@ -1051,11 +1095,12 @@ class MissionEnergyLog:
         accel_wh = None if model is None else model.get("wh_model_accel")
         # Sample integral, not yaw averaged over the whole lap.
         turn = round(self._mission_wh_turn, 3)
+        hold = round(self._mission_wh_hold, 3)
         drive = None
         wh_model = None
         if model is not None:
             drive = round(
-                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0),
+                float(roll or 0.0) + float(visc or 0.0) + turn + float(accel_wh or 0.0) + hold,
                 3,
             )
             wh_model = round(float(idle or 0.0) + drive, 3)
@@ -1104,16 +1149,30 @@ class MissionEnergyLog:
             ctrl += f" opt_run_id={self._opt_run_id}"
         if self._opt_trial_id:
             ctrl += f" opt_trial_id={self._opt_trial_id}"
+        if self._lap_start_wallclock:
+            ctrl += f" lap_start_wallclock={self._lap_start_wallclock}"
+        if self._gyro_found is not None:
+            ctrl += f" gyro_found={1 if self._gyro_found else 0}"
+        if self._coast_wh_saved is not None:
+            ctrl += f" coast_wh_saved={self._coast_wh_saved:.6f}"
+        if self._coast_starts is not None:
+            ctrl += f" coast_starts={self._coast_starts}"
+        if self._ctrl_pivot_count is not None:
+            ctrl += f" ctrl_pivot_count={self._ctrl_pivot_count}"
+            if int(self._turns) != int(self._ctrl_pivot_count):
+                ctrl += f" heading_turns={self._turns}"
+        turns_n = self._ctrl_pivot_count if self._ctrl_pivot_count is not None else self._turns
         return (
             f"MISSION_SUMMARY build={self._build} "
             f"duration_s={self._mission_dt:.1f} dist_m={self._mission_dist:.2f} "
-            f"turns={self._turns} payload_kg={self._payload_kg:g} "
+            f"turns={turns_n} payload_kg={self._payload_kg:g} "
             f"soc_start={_fmt(self._soc_start, 2)} soc_end={_fmt(self._soc_end, 2)} "
             f"wh_model={_fmt(wh_model, 3)} wh_model_idle={_fmt(idle, 3)} "
             f"wh_model_drive={_fmt(drive, 3)} "
             f"wh_model_roll={_fmt(roll, 3)} wh_model_visc={_fmt(visc, 3)} "
             f"wh_model_turn={_fmt(turn, 3)} "
             f"wh_model_accel={_fmt(accel_wh, 3)} "
+            f"wh_model_hold={_fmt(hold, 3)} "
             f"wh_measured_drive_shaft={_na(None if shaft is None else round(shaft, 3), 3)} "
             f"wh_measured_drive_elec={_na(None if elec is None else round(elec, 3), 3)} "
             f"eta_avg={eta} "
@@ -1226,6 +1285,28 @@ def _idle_w(sample: dict, subs: dict[str, float | None]) -> float:
     return idle
 
 
+_BOM_BUILDS = frozenset({"light", "heavy", "budget"})
+
+
+def resolve_energy_bom_build(
+    ctrl_bom_build: str | None = None,
+    log_build: str | None = None,
+) -> str | None:
+    """BoM id for twin energy when config ``bom_build`` is blank/default."""
+    for raw in (ctrl_bom_build, log_build):
+        if raw is None:
+            continue
+        text = str(raw).strip().lower()
+        if text in _BOM_BUILDS:
+            return text
+    try:
+        from src.hardware_profile import active_bom_build
+
+        return active_bom_build()
+    except Exception:
+        return None
+
+
 def resolve_log_build(stamped) -> str:
     """Build name for a log line.
 
@@ -1246,28 +1327,72 @@ def resolve_log_build(stamped) -> str:
     return text
 
 
-def _turn_step_wh(speed: float, heading_deg: float, dt: float, payload_kg: float) -> float:
+def _profile_for_energy(bom_build: str | None):
+    from src.hardware_profile import build_profile_from_bom, get_active_profile
+
+    if bom_build:
+        return build_profile_from_bom(bom_build)
+    return get_active_profile()
+
+
+def _stall_hold_step_wh(sample: dict, dt: float, speed: float, bom_build: str | None) -> float:
+    """Bill published stall power while both hinges are held near 0 rad/s.
+
+    Samples without wheel rates contribute nothing, so older logs stay put.
+    A creep at 0.04 m/s is about 0.5 rad/s on the 0.08 m hinge and is not a hold.
+    """
+    if not bom_build or dt <= 0.0:
+        return 0.0
+    from src.twin_energy import STALL_HOLD_BODY_M_S, STALL_HOLD_WHEEL_RAD_S, stall_hold_electrical_wh
+
+    if abs(float(speed)) >= STALL_HOLD_BODY_M_S:
+        return 0.0
+    left = _as_float(sample.get("left_wheel_rad_s"))
+    right = _as_float(sample.get("right_wheel_rad_s"))
+    if left is None or right is None:
+        return 0.0
+    if abs(left) >= STALL_HOLD_WHEEL_RAD_S or abs(right) >= STALL_HOLD_WHEEL_RAD_S:
+        return 0.0
     try:
-        from src.hardware_profile import active_bom_build, get_active_profile
+        return stall_hold_electrical_wh(dt, _profile_for_energy(bom_build))
+    except Exception:
+        return 0.0
+
+
+def _turn_step_wh(
+    speed: float,
+    heading_deg: float,
+    dt: float,
+    payload_kg: float,
+    *,
+    bom_build: str | None = None,
+) -> float:
+    try:
         from src.twin_energy import turning_scrub_wh
 
-        if not active_bom_build():
+        if not bom_build:
             return 0.0
         return turning_scrub_wh(
-            get_active_profile(), speed, heading_deg, dt, payload_kg
+            _profile_for_energy(bom_build), speed, heading_deg, dt, payload_kg
         )
     except Exception:
         return 0.0
 
 
-def _accel_step_wh(v0: float, v1: float, dt: float, payload_kg: float) -> float:
+def _accel_step_wh(
+    v0: float,
+    v1: float,
+    dt: float,
+    payload_kg: float,
+    *,
+    bom_build: str | None = None,
+) -> float:
     try:
-        from src.hardware_profile import active_bom_build, get_active_profile
         from src.twin_energy import accel_electrical_wh
 
-        if not active_bom_build():
+        if not bom_build:
             return 0.0
-        return accel_electrical_wh(get_active_profile(), v0, v1, dt, payload_kg)
+        return accel_electrical_wh(_profile_for_energy(bom_build), v0, v1, dt, payload_kg)
     except Exception:
         return 0.0
 
@@ -1278,6 +1403,8 @@ def _drive_breakdown(
     heading_deg: float,
     wh_accel: float,
     payload_kg: float,
+    *,
+    bom_build: str | None = None,
 ) -> dict:
     zeros = {
         "wh_roll": 0.0,
@@ -1286,12 +1413,18 @@ def _drive_breakdown(
         "wh_accel": max(0.0, float(wh_accel)),
     }
     try:
-        from src.hardware_profile import active_bom_build
         from src.twin_energy import segment_model_terms
 
-        if not active_bom_build():
+        if not bom_build:
             return zeros
-        return segment_model_terms(dist_m, avg_speed, heading_deg, wh_accel, payload_kg)
+        return segment_model_terms(
+            dist_m,
+            avg_speed,
+            heading_deg,
+            wh_accel,
+            payload_kg,
+            profile=_profile_for_energy(bom_build),
+        )
     except Exception:
         return zeros
 
@@ -1302,17 +1435,19 @@ def _model(
     payload_kg: float,
     heading_deg: float,
     wh_accel: float,
+    *,
+    bom_build: str | None = None,
 ) -> dict | None:
     try:
-        from src.hardware_profile import active_bom_build
         from src.twin_energy import bom_run_energy_wh
 
-        if not active_bom_build():
+        if not bom_build:
             return None
         return bom_run_energy_wh(
             dist_m,
             duration_s,
             payload_kg,
+            profile=_profile_for_energy(bom_build),
             heading_change_deg=heading_deg,
             wh_accel=wh_accel,
         )

@@ -269,35 +269,45 @@ class RowfitRuntime:
     """Owns the tracker/controller; fed images on harvest ticks, wheels every tick."""
 
     def __init__(self) -> None:
-        from src.controller_limits import load_controller_limits
+        from src.controller_limits import load_controller_limits, resolve_config_yaml_path
         from src.lane_vision import NADIR_CAMS, LaneTracker
         from src.rowfit_control import RowfitController
 
         self.cams_model = dict(NADIR_CAMS)
         self.pose_source: dict[str, str] = {n: "constants" for n in self.cams_model}
         self.tracker = LaneTracker(self.cams_model)
-        self.limits = load_controller_limits()
+        self.config_path = resolve_config_yaml_path()
+        self.limits = load_controller_limits(self.config_path)
         eff_cruise = self.limits.effective_cruise_m_s or self.limits.cruise_m_s
         eff_straight = self.limits.effective_straight_m_s or self.limits.straight_m_s
         turn_brake = None
+        coast_into_turn = None
+        self._coast_init_error: str | None = None
         try:
             import yaml
-            from src.controller_limits import DEFAULT_CONFIG_PATH
-            from src.physics_speed_limit import turn_brake_params_for_robot
+            from src.physics_speed_limit import (
+                coast_into_turn_params_for_robot,
+                turn_brake_params_for_robot,
+            )
 
-            with open(DEFAULT_CONFIG_PATH, encoding="utf-8") as fh:
+            with open(self.config_path, encoding="utf-8") as fh:
                 cfg_data = yaml.safe_load(fh) or {}
             turn_brake = turn_brake_params_for_robot(
                 cfg_data, bom_build=self.limits.bom_build
             )
-        except Exception:
-            pass
+            coast_into_turn = coast_into_turn_params_for_robot(
+                cfg_data, bom_build=self.limits.bom_build
+            )
+        except Exception as exc:
+            self._coast_init_error = f"{type(exc).__name__}: {exc}"
+            coast_into_turn = None
         self.ctl = RowfitController(
             k_steer=self.limits.k_steer,
             v_cruise=eff_cruise,
             v_straight=eff_straight,
             pivot_w_max=self.limits.pivot_w_max_rad_s,
             turn_brake=turn_brake,
+            coast_into_turn=coast_into_turn,
         )
         self.ctl.tracker = self.tracker  # re-acquire after a corner pivot
         self.last_cmd: dict = {}
@@ -313,6 +323,7 @@ class RowfitRuntime:
         self.configure_route()
         self.obstacles = None  # controller_obstacles.ObstacleRuntime when RBM_OBSTACLES is on
         self.inventory = None  # controller_inventory.InventoryRuntime (trolley + pretend pick)
+        self.gyro_found = False
 
     def configure_route(self) -> None:
         """RBM_ROUTE (junction choices, e.g. S,L,R), RBM_MAX_BLIND_M (default 4.0),
@@ -353,6 +364,19 @@ class RowfitRuntime:
             f"cruise={lim.cruise_m_s:.2f} m/s straight={lim.straight_m_s:.2f} m/s "
             f"pivot_w_max={lim.pivot_w_max_rad_s:.2f} rad/s k_steer={lim.k_steer:.2f}"
             f"{physics}{warn}"
+        )
+
+    def coast_line(self) -> str:
+        coast = self.ctl.coast_into_turn
+        if coast is None:
+            err = self._coast_init_error or "unknown"
+            return f"COAST CONFIG unavailable ({err}) — coast_into_turn disabled"
+        return (
+            "COAST CONFIG "
+            f"enabled={coast.enabled} v_pivot_m_s={coast.v_pivot_m_s:.3f} "
+            f"margin_m={coast.margin_m:.2f} mass_kg={coast.total_mass_kg:.3f} "
+            f"crr={coast.crr:.4f} a_brake_m_s2={coast.a_brake_m_s2:.3f} "
+            f"config={self.config_path}"
         )
 
     def route_line(self) -> str:
@@ -478,6 +502,7 @@ class RowfitRuntime:
         *,
         pose=None,
         yaw_rate_rad_s: float | None = None,
+        cross_track_m: float | None = None,
         log=print,
     ) -> dict:
         """Wheel command for this tick. ``yaw`` = IMU yaw (rad); it enables the
@@ -496,6 +521,7 @@ class RowfitRuntime:
             yaw=yaw,
             pose=pose,
             yaw_rate_rad_s=yaw_rate_rad_s,
+            cross_track_m=cross_track_m,
         )
         if self.obstacles is not None:
             gate = self.obstacles.gate

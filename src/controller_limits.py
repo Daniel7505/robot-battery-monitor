@@ -10,6 +10,7 @@ A missing section leaves the robot on those constants.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,16 +52,25 @@ KNOBS: dict[str, Knob] = {
         choices=("", "light", "heavy", "budget"),
     ),
     "controller.cruise_m_s": Knob(
-        "controller.cruise_m_s", "float", 0.44, lo=0.30, hi=0.50, step=0.06
+        "controller.cruise_m_s", "float", 0.44, lo=0.30, hi=2.50, step=0.06
     ),
     "controller.straight_m_s": Knob(
-        "controller.straight_m_s", "float", 0.50, lo=0.36, hi=0.56, step=0.02
+        "controller.straight_m_s", "float", 0.50, lo=0.36, hi=2.62, step=0.06
     ),
     "controller.pivot_w_max_rad_s": Knob(
         "controller.pivot_w_max_rad_s", "float", 0.9, lo=0.40, hi=1.20, step=0.30
     ),
     "controller.k_steer": Knob(
         "controller.k_steer", "float", 2.0, lo=1.4, hi=3.0, step=0.5
+    ),
+    "controller.coast_enabled": Knob(
+        "controller.coast_enabled",
+        "choice",
+        "true",
+        choices=("", "true", "false", "1", "0"),
+    ),
+    "controller.coast_margin_m": Knob(
+        "controller.coast_margin_m", "float", 0.0, lo=0.0, hi=0.30, step=0.05
     ),
 }
 
@@ -77,6 +87,8 @@ OPTIMIZER_TUNING_KEYS = (
     "controller.cruise_m_s",
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
+    "controller.coast_enabled",
+    "controller.coast_margin_m",
 )
 
 
@@ -132,6 +144,8 @@ def check_param(key: str, value) -> float | str | None:
         )
     knob = KNOBS[key]
     if knob.kind == "choice":
+        if isinstance(value, bool):
+            value = "true" if value else "false"
         text = "" if _blank(value) else str(value).strip()
         if text not in knob.choices:
             raise AllowlistError(
@@ -252,9 +266,17 @@ def _apply_physics_speed_limit(limits: ControllerLimits, data: dict | None) -> C
         )
 
 
+def resolve_config_yaml_path() -> Path:
+    """Lap trials may point at a per-lap copy via ``RBM_CONFIG_YAML``."""
+    override = (os.environ.get("RBM_CONFIG_YAML") or "").strip()
+    if override:
+        return Path(override)
+    return DEFAULT_CONFIG_PATH
+
+
 def load_controller_limits(path: Path | str | None = None) -> ControllerLimits:
     """Read ``config.yaml`` from disk (not the process-wide singleton)."""
-    config_path = Path(path) if path else DEFAULT_CONFIG_PATH
+    config_path = Path(path) if path else resolve_config_yaml_path()
     if not config_path.is_file():
         return limits_from_mapping({})
     try:

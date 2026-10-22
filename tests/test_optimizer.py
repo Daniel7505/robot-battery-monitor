@@ -35,6 +35,8 @@ bom_build: light
 
 # Rowfit speeds
 controller:
+  coast_enabled: true
+  coast_margin_m: 0.00
   cruise_m_s: 0.44
   straight_m_s: 0.50
   pivot_w_max_rad_s: 0.9
@@ -47,6 +49,8 @@ PARAMS = {
     "controller.straight_m_s": 0.50,
     "controller.pivot_w_max_rad_s": 0.9,
     "controller.k_steer": 2.0,
+    "controller.coast_enabled": "true",
+    "controller.coast_margin_m": 0.0,
 }
 
 
@@ -203,7 +207,7 @@ def test_allowlist_rejects_the_energy_model_and_out_of_range_speeds():
     with pytest.raises(AllowlistError):
         check_param("src/twin_energy.py", 1)
     with pytest.raises(AllowlistError):
-        check_param("controller.cruise_m_s", 2.0)
+        check_param("controller.cruise_m_s", 3.0)
     assert "src/twin_energy.py" not in ALLOWLIST
     limits = limits_from_mapping({"controller": {"cruise_m_s": 9}})
     assert limits.cruise_m_s == pytest.approx(0.44)
@@ -1423,7 +1427,15 @@ def test_prose_and_unstamped_summaries_do_not_finish_a_lap():
     kind, detail = classify_summary(unstamped, launch)
     assert kind == "reject"
     assert "opt_run_id" in detail
-    stamped = summary_line(opt_run_id=launch.run_id, opt_trial_id=launch.trial_id)
+    partial = summary_line(opt_run_id=launch.run_id, opt_trial_id=launch.trial_id)
+    kind_p, detail_p = classify_summary(partial, launch)
+    assert kind_p == "reject"
+    assert "lap_start_wallclock" in detail_p
+    stamped = summary_line(
+        opt_run_id=launch.run_id,
+        opt_trial_id=launch.trial_id,
+        lap_start_wallclock=launch.lap_start_wallclock,
+    )
     assert classify_summary(stamped, launch) == ("fresh", "")
     other = summary_line(opt_run_id=launch.run_id, opt_trial_id="search-1")
     kind2, detail2 = classify_summary(f"{stamped}\n{other}", launch)
@@ -1571,3 +1583,44 @@ def test_turn_regression_is_refuted_when_the_score_still_beats_keep(tmp_path):
     assert trial["evidence_status"] == "refuted"
     assert "worsened" in trial["reason"]
     assert load_controller_limits(config).pivot_w_max_rad_s == pytest.approx(0.6)
+
+
+def test_keep_reason_states_lower_score_is_better():
+    ref = diagnose(summary_line()).summary
+    better = diagnose(summary_line(err_pct="-18.0", wh_measured_drive_elec="3.400")).summary
+    decision = decide(better, ref)
+    assert decision.action == "keep"
+    assert "lower scores are better" in decision.reason
+    assert "beat 0.98 (lower is better)" not in decision.reason
+
+
+def test_postmortem_predictions_include_numeric_physics_strings():
+    from optimizer.postmortem import build_postmortem
+
+    before = diagnose(summary_line())
+    after = diagnose(summary_line(err_pct="-20.0", wh_measured_drive_elec="3.35"))
+    post = build_postmortem(
+        param="controller.cruise_m_s",
+        old=0.44,
+        new=0.50,
+        action="rollback",
+        before=before,
+        after=after,
+    )
+    err_row = next(row for row in post["metrics"] if row["label"] == "err_pct")
+    assert "m/s" in err_row["predicted"] or "%" in err_row["predicted"]
+
+
+def test_picker_stops_k_steer_after_three_inconclusive():
+    history = [
+        {
+            "param": "controller.k_steer",
+            "new": 2.5,
+            "decision": "inconclusive",
+            "phase": "search",
+        }
+        for _ in range(3)
+    ]
+    params = dict(PARAMS)
+    proposal = RulePicker().pick(diagnose(summary_line()), "", history, params)
+    assert proposal is None or proposal.param != "controller.k_steer"

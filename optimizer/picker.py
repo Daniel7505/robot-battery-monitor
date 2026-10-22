@@ -21,12 +21,18 @@ _VISC_ORDER = (
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
     "controller.cruise_m_s",
+    "controller.coast_enabled",
+    "controller.coast_margin_m",
 )
 _TURN_ORDER = (
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
     "controller.cruise_m_s",
+    "controller.coast_enabled",
+    "controller.coast_margin_m",
 )
+
+_K_STEER_INCONCLUSIVE_CAP = 3
 
 
 @dataclass
@@ -171,6 +177,36 @@ def _value_blocked(
     baseline_label: str,
 ) -> bool:
     return (param, _trial_value_key(value), baseline_label) in blocked
+
+
+def _knob_exhausted(history: list[dict], param: str) -> bool:
+    """Stop proposing a knob after repeated inconclusive trials (run 11: k_steer)."""
+    if param != "controller.k_steer":
+        return False
+    inconclusive = 0
+    for row in reversed(history or []):
+        if row.get("param") != param:
+            continue
+        decision = str(row.get("decision") or "")
+        if decision == "inconclusive":
+            inconclusive += 1
+            if inconclusive >= _K_STEER_INCONCLUSIVE_CAP:
+                return True
+        elif decision in {"keep", "confirm-pass", "refuted", "rollback"}:
+            break
+    return inconclusive >= _K_STEER_INCONCLUSIVE_CAP
+
+
+def _physics_cruise_cap(params: dict) -> float | None:
+    try:
+        from src.controller_limits import load_controller_limits
+
+        lim = load_controller_limits()
+        if lim.v_max_m_s is not None:
+            return float(lim.v_max_m_s)
+    except Exception:
+        pass
+    return None
 
 
 def _consecutive_rollbacks(history: list[dict]) -> int:
@@ -403,16 +439,47 @@ class RulePicker:
         baseline_label = _baseline_label(history)
         blocked = blocked_exact_trials(history, baseline_label=baseline_label)
         for key in _ordered_keys(order, diagnosis, book):
-            value = _try_float(
-                params,
-                key,
-                _direction_for(key, diagnosis),
-                history,
-                book,
-                baseline_label=baseline_label,
-            )
+            if _knob_exhausted(history, key):
+                continue
+            if key == "controller.coast_enabled":
+                current = str(params.get(key) or "true").lower()
+                flip = "false" if current in {"true", "1", ""} else "true"
+                if _value_blocked(blocked, key, flip, baseline_label):
+                    continue
+                proposal = Proposal(
+                    key,
+                    flip,
+                    "Coast into turns cuts drive before the pivot when look-ahead allows.",
+                    "Turn approach should use less braking energy when coasting fits in ld_max.",
+                    suggestions,
+                )
+                if _undoes_keep(proposal, kept) or _reverts_confirmed_keep(proposal, history):
+                    continue
+                return proposal
+            if key == "controller.coast_margin_m":
+                value = _try_float(
+                    params,
+                    key,
+                    1,
+                    history,
+                    book,
+                    baseline_label=baseline_label,
+                )
+            else:
+                value = _try_float(
+                    params,
+                    key,
+                    _direction_for(key, diagnosis),
+                    history,
+                    book,
+                    baseline_label=baseline_label,
+                )
             if value is None:
                 continue
+            if key == "controller.cruise_m_s":
+                cap = _physics_cruise_cap(params)
+                if cap is not None and float(value) > cap + 1e-6:
+                    continue
             if _value_blocked(blocked, key, value, baseline_label):
                 continue
             proposal = self._float_proposal(params, key, value, diagnosis, suggestions)

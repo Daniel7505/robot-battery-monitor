@@ -44,10 +44,16 @@ def _find_config_yaml() -> str | None:
     """
     here = os.path.abspath(os.path.dirname(__file__))
     repo = os.path.dirname(here)
-    candidates = [
-        os.path.join(os.getcwd(), "config", "config.yaml"),
-        os.path.join(repo, "config", "config.yaml"),
-    ]
+    override = (os.environ.get("RBM_CONFIG_YAML") or "").strip()
+    candidates = []
+    if override:
+        candidates.append(override)
+    candidates.extend(
+        [
+            os.path.join(os.getcwd(), "config", "config.yaml"),
+            os.path.join(repo, "config", "config.yaml"),
+        ]
+    )
     for path in candidates:
         if os.path.isfile(path):
             return path

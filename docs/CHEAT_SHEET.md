@@ -184,8 +184,11 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World g
 
 Warehouse: one `RBM_ROUTE` entry per junction passed, straight past an aisle
 included. The strings are in `tracks/warehouse.json` (`missions`) and in
-`docs/WAREHOUSE.md`. **Always set RBM_ROUTE here:** with no route the robot
-circles the perimeter and never stops.
+`docs/WAREHOUSE.md`. A mission that should reach an exit needs `RBM_ROUTE`.
+With the route unset the robot goes straight, otherwise left, and circles
+the perimeter. The scored one-lap run is that unset route plus
+`RBM_MISSION_LAPS=1`: three left pivots, stop at 201 m on the front cross
+aisle. See `docs/WAREHOUSE.md`.
 
 ```bat
 set RBM_ROUTE=L,S

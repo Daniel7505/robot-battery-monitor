@@ -113,6 +113,16 @@ def _gaps_x(solids: dict, prefix: str) -> list[float]:
     return gaps
 
 
+def _gaps_y(solids: dict, prefix: str) -> list[float]:
+    segs = sorted(_prefixed(solids, prefix), key=lambda item: item["ymin"])
+    gaps = []
+    for low, high in zip(segs, segs[1:]):
+        gap = high["ymin"] - low["ymax"]
+        if gap > 0.05:
+            gaps.append(gap)
+    return gaps
+
+
 def _measured(solids: dict) -> dict[str, float]:
     return {
         "A_living_width": _agg(solids, "APT_WALL_EAST", "xmin", "min")
@@ -123,24 +133,48 @@ def _measured(solids: dict) -> dict[str, float]:
         - _agg(solids, "APT_WALL_WEST", "xmax", "max"),
         "D_bedroom_length": _agg(solids, "APT_WALL_NORTH", "ymin", "min")
         - _agg(solids, "APT_WALL_BED_SOUTH", "ymax", "max"),
-        "E_hallway_width": _agg(solids, "APT_WALL_SHARED", "xmin", "min")
-        - _agg(solids, "APT_WALL_HALL_WEST", "xmax", "max"),
+        # E is the entry clear width from the straight shared wall to the fridge.
+        "E_hallway_width": solids["APT_FURN_FRIDGE"]["xmin"]
+        - _agg(solids, "APT_WALL_SHARED", "xmax", "max"),
         "F_kitchen_aisle": solids["APT_FURN_ISLAND"]["ymin"] - solids["APT_FURN_COUNTER"]["ymax"],
     }
 
 
 def _door_widths(solids: dict) -> dict[str, float]:
     bed = _gaps_x(solids, "APT_WALL_BED_SOUTH")
-    assert len(bed) == 2, bed
-    # West gap is the open bedroom-to-bath walkway. East gap is door G.
+    assert len(bed) == 1, bed
+    # Door G is the one gap in the shared wall, near the hall end of the bedroom.
+    shared = _gaps_y(solids, "APT_WALL_SHARED")
+    assert len(shared) == 1, shared
+    shared_segs = sorted(_prefixed(solids, "APT_WALL_SHARED"), key=lambda item: item["ymin"])
+    gap_ymin = shared_segs[0]["ymax"]
+    bed_ymax = _agg(solids, "APT_WALL_BED_SOUTH", "ymax", "max")
+    assert 0.0 < gap_ymin - bed_ymax <= 0.16
+    faces = {(round(seg["xmin"], 4), round(seg["xmax"], 4)) for seg in shared_segs}
+    assert faces == {(round(shared_segs[0]["xmin"], 4), round(shared_segs[0]["xmax"], 4))}
+    # Walkway is the left end of the bedroom's inner wall, directly above the bath.
+    bed_segs = sorted(_prefixed(solids, "APT_WALL_BED_SOUTH"), key=lambda item: item["xmin"])
+    walk_center = (bed_segs[0]["xmax"] + bed_segs[1]["xmin"]) / 2.0
+    west = _agg(solids, "APT_WALL_WEST", "xmax", "max")
+    bedroom_width = _agg(solids, "APT_WALL_SHARED", "xmin", "min") - west
+    assert walk_center < west + 0.35 * bedroom_width
+    # Door H is the open gap in the bath's south wall, into the hall passage.
+    bath = _gaps_x(solids, "APT_WALL_BATH_SOUTH")
+    assert len(bath) == 1, bath
     south = _gaps_x(solids, "APT_WALL_SOUTH")
     north = _gaps_x(solids, "APT_WALL_NORTH")
     assert len(south) == 1 and len(north) == 1
-    # Door H is the closed leaf at the north end of the hall, under the bedroom wall.
-    bath_door = _agg(solids, "APT_WALL_BED_SOUTH", "ymin", "min") - solids["APT_WALL_HALL_WEST"]["ymax"]
+    # Closets stay inside the left block. Nothing from that block stands in the main room.
+    banned = ("APT_WALL_PANTRY", "APT_WALL_STORAGE", "APT_WALL_HALL_WEST", "APT_DOOR_PANTRY", "APT_DOOR_STORAGE")
+    assert not any(name.startswith(banned) for name in solids)
+    island = solids["APT_FURN_ISLAND"]
+    living_mid = (
+        _agg(solids, "APT_WALL_SHARED", "xmax", "max") + _agg(solids, "APT_WALL_EAST", "xmin", "min")
+    ) / 2.0
+    assert (island["xmin"] + island["xmax"]) / 2.0 > living_mid
     return {
-        "H_bathroom_door": bath_door,
-        "G_bedroom_door": bed[-1],
+        "H_bathroom_door": bath[0],
+        "G_bedroom_door": shared[0],
         "I_front_door": south[0],
         "J_patio_door": north[0],
         "bedroom_bath_walkway": bed[0],
@@ -181,19 +215,20 @@ def _sample_points(solids: dict, spawn: tuple[float, float]) -> dict[str, tuple[
     island = solids["APT_FURN_ISLAND"]
     counter = solids["APT_FURN_COUNTER"]
     hall = solids["APT_FLOOR_HALL"]
-    bed_wall = _prefixed(solids, "APT_WALL_BED_SOUTH")
-    bed_wall.sort(key=lambda item: item["xmin"])
-    door_x = (bed_wall[-2]["xmax"] + bed_wall[-1]["xmin"]) / 2.0
-    door_y = bed_wall[-1]["ymax"] + 0.35
-    # West gap is the open walkway into the bathroom.
+    closet = solids["APT_FLOOR_CLOSET"]
+    laundry = solids["APT_FLOOR_LAUNDRY"]
+    bed_wall = sorted(_prefixed(solids, "APT_WALL_BED_SOUTH"), key=lambda item: item["xmin"])
+    shared = sorted(_prefixed(solids, "APT_WALL_SHARED"), key=lambda item: item["ymin"])
     walk_x = (bed_wall[0]["xmax"] + bed_wall[1]["xmin"]) / 2.0
-    bath_y = bed_wall[0]["ymin"] - 0.40
+    g_y = (shared[0]["ymax"] + shared[1]["ymin"]) / 2.0
     return {
         "main_room": spawn,
         "kitchen_aisle": ((island["xmin"] + island["xmax"]) / 2.0, (counter["ymax"] + island["ymin"]) / 2.0),
         "hallway": ((hall["xmin"] + hall["xmax"]) / 2.0, (hall["ymin"] + hall["ymax"]) / 2.0),
-        "bedroom": (door_x, door_y),
-        "bathroom": (walk_x, bath_y),
+        "bedroom": (shared[0]["xmin"] - 0.40, g_y),
+        "bathroom": (walk_x, bed_wall[0]["ymin"] - 0.45),
+        "walk_in": ((closet["xmin"] + closet["xmax"]) / 2.0, (closet["ymin"] + closet["ymax"]) / 2.0),
+        "laundry": ((laundry["xmin"] + laundry["xmax"]) / 2.0, (laundry["ymin"] + laundry["ymax"]) / 2.0),
     }
 
 
@@ -341,6 +376,8 @@ def test_floor_zones_and_carpet_step(solids: dict):
         "bathroom": "APT_FLOOR_BATH",
         "closet": "APT_FLOOR_CLOSET",
         "laundry": "APT_FLOOR_LAUNDRY",
+        "pantry": "APT_FLOOR_PANTRY",
+        "storage": "APT_FLOOR_STORAGE",
         "bedroom": "APT_FLOOR_BEDROOM",
     }
     for zone, box in gt["zones_m"].items():
@@ -390,6 +427,16 @@ def test_furniture_boxes_match_scoring_ground_truth(solids: dict):
     assert "APT_FURN_DINING" not in solids
     assert "APT_FURN_RUG" not in solids
     assert world_text_pendants() == 0
+    # Desk group stays flush to the far wall. The chair may pass the desk face by a few inches.
+    east = _agg(solids, "APT_WALL_EAST", "xmin", "min")
+    desk = solids["APT_FURN_DESK"]
+    chair = solids["APT_FURN_OFFICE_CHAIR"]
+    assert abs(desk["xmax"] - east) <= 0.01
+    assert chair["xmin"] >= desk["xmin"] - 0.22
+    for name in ("APT_FURN_TV_STAND", "APT_FURN_TRASH"):
+        assert solids[name]["xmin"] >= desk["xmin"] - 0.01
+        assert abs(solids[name]["xmax"] - east) <= 0.01
+    assert solids["APT_FURN_ISLAND_CHAIR"]["ymin"] >= solids["APT_FURN_ISLAND"]["ymax"] - 0.01
 
 
 def world_text_pendants() -> int:

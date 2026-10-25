@@ -1,0 +1,522 @@
+{
+  "purpose": "Scoring ground truth only. The ButlerBot controller must not import or open this file. The robot has its own sensors and must build its own map. Room dimensions, furniture positions, and this floor plan are not controller inputs.",
+  "inch_to_metre": 0.0254,
+  "tolerance_m": 0.01,
+  "drivable_path_in": 24,
+  "frame": {
+    "coordinate_system": "ENU",
+    "up": "+Z",
+    "plus_x": "from the bedroom left wall toward the living room right wall",
+    "plus_y": "from the kitchen back wall toward the patio / window wall",
+    "origin": "interior corner of the bedroom left wall and the back wall"
+  },
+  "measured_in": {
+    "A_living_width": 184.0,
+    "B_living_kitchen_length": 328.0,
+    "C_bedroom_width": 144.0,
+    "D_bedroom_length": 146.0,
+    "E_hallway_width": 44.0,
+    "F_kitchen_aisle": 38.0,
+    "G_bedroom_door": 32.0,
+    "H_bathroom_door": 32.0,
+    "I_front_door": 36.0,
+    "J_patio_door": 32.0
+  },
+  "estimates": {
+    "wall_thickness_in": 4.0,
+    "wall_height_in": 96.0,
+    "bathroom_depth_in": 72.0,
+    "bathroom_width_in": 96.0,
+    "closet_depth_in": 48.0,
+    "closet_width_in": 96.0,
+    "laundry_depth_in": 50.0,
+    "laundry_width_in": 96.0,
+    "hallway_length_in": 178.0,
+    "counter_depth_in": 25.0,
+    "fridge_width_in": 30.0,
+    "fridge_depth_in": 30.0,
+    "island_width_in": 60.0,
+    "island_depth_in": 36.0,
+    "kitchen_opening_height_in": 66.0,
+    "carpet_step_in": 0.5,
+    "note": "Bathroom, closet, laundry, hallway length, the cased opening from the hall into the kitchen, wall thickness, wall height, counter depth, island size, and the carpet lip are not on Dan's tape. Closet and laundry floors are laminate by assumption. The patio beyond door J is out of scope."
+  },
+  "zones_m": {
+    "living": {
+      "min_m": [
+        3.7592,
+        2.5146,
+        -0.02
+      ],
+      "max_m": [
+        8.4328,
+        8.3312,
+        0.0
+      ]
+    },
+    "kitchen": {
+      "min_m": [
+        3.7592,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        8.4328,
+        2.5146,
+        0.0
+      ]
+    },
+    "hallway": {
+      "min_m": [
+        2.54,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        3.6576,
+        4.5212,
+        0.0
+      ]
+    },
+    "bathroom": {
+      "min_m": [
+        0.0,
+        2.6924,
+        -0.02
+      ],
+      "max_m": [
+        2.4384,
+        4.5212,
+        0.0
+      ]
+    },
+    "closet": {
+      "min_m": [
+        0.0,
+        1.3716,
+        -0.02
+      ],
+      "max_m": [
+        2.4384,
+        2.5908,
+        0.0
+      ]
+    },
+    "laundry": {
+      "min_m": [
+        0.0,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        2.4384,
+        1.27,
+        0.0
+      ]
+    },
+    "bedroom": {
+      "min_m": [
+        0.0,
+        4.6228,
+        -0.0073
+      ],
+      "max_m": [
+        3.6576,
+        8.3312,
+        0.0127
+      ]
+    }
+  },
+  "floors": {
+    "laminate_contact_material": "laminate",
+    "carpet_contact_material": "carpet",
+    "laminate_zones": [
+      "living",
+      "kitchen",
+      "hallway",
+      "bathroom",
+      "closet",
+      "laundry"
+    ],
+    "carpet_zones": [
+      "bedroom"
+    ],
+    "documented_crr": {
+      "laminate": 0.012,
+      "carpet": 0.05
+    },
+    "contact_force_dependent_slip": {
+      "drive_wheel_laminate": 0.01,
+      "drive_wheel_carpet": 0.04
+    },
+    "energy_model_wired": false,
+    "crr_note": "Webots R2025a ContactProperties has no Crr field. forceDependentSlip is the stand-in (ODE v = k*F). These Crr values are not read by the energy model."
+  },
+  "spawn": {
+    "room": "living",
+    "translation_m": [
+      6.1,
+      4.7,
+      0.0
+    ],
+    "facing": "+Y toward the patio wall"
+  },
+  "furniture": [
+    {
+      "id": "loveseat",
+      "estimated": true,
+      "size_in": [
+        38.0,
+        60.0,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          3.7792,
+          5.792,
+          0
+        ],
+        "max_m": [
+          4.7444,
+          7.316,
+          1.016
+        ]
+      },
+      "note": "Dark brown leather reclining loveseat along the living room's left wall."
+    },
+    {
+      "id": "end_table",
+      "estimated": true,
+      "size_in": [
+        22.0,
+        22.0,
+        24.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          3.7892,
+          7.336,
+          0
+        ],
+        "max_m": [
+          4.348,
+          7.8948,
+          0.6096
+        ]
+      },
+      "note": "Small square end table between the loveseat and the 3-seat sofa."
+    },
+    {
+      "id": "sofa",
+      "estimated": true,
+      "size_in": [
+        84.0,
+        38.0,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.388,
+          7.346,
+          0
+        ],
+        "max_m": [
+          6.5216,
+          8.3112,
+          1.016
+        ]
+      },
+      "note": "Dark brown leather 3-seat reclining sofa under the patio/window wall."
+    },
+    {
+      "id": "side_table",
+      "estimated": true,
+      "size_in": [
+        18.0,
+        18.0,
+        24.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          6.5616,
+          7.854,
+          0
+        ],
+        "max_m": [
+          7.0188,
+          8.3112,
+          0.6096
+        ]
+      },
+      "note": "Small side table at the right end of the 3-seat sofa."
+    },
+    {
+      "id": "desk",
+      "estimated": true,
+      "size_in": [
+        30.0,
+        60.0,
+        29.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.6508,
+          6.6572,
+          0
+        ],
+        "max_m": [
+          8.4128,
+          8.1812,
+          0.7366
+        ]
+      },
+      "note": "Office desk, about 60 by 30 in, on the right by the patio door."
+    },
+    {
+      "id": "office_chair",
+      "estimated": true,
+      "size_in": [
+        22.0,
+        22.0,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.142,
+          7.1398,
+          0
+        ],
+        "max_m": [
+          7.7008,
+          7.6986,
+          1.016
+        ]
+      },
+      "note": "Black mesh office chair on casters, at the desk."
+    },
+    {
+      "id": "trash",
+      "estimated": true,
+      "size_in": [
+        11.0,
+        11.0,
+        15.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.7686,
+          6.1627,
+          0
+        ],
+        "max_m": [
+          8.048,
+          6.4421,
+          0.381
+        ]
+      },
+      "note": "Small black trash can beside the desk."
+    },
+    {
+      "id": "tv_stand",
+      "estimated": true,
+      "size_in": [
+        12.0,
+        24.0,
+        42.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          8.108,
+          5.9976,
+          0
+        ],
+        "max_m": [
+          8.4128,
+          6.6072,
+          1.0668
+        ]
+      },
+      "note": "Monitor / TV on a stand beside the desk."
+    },
+    {
+      "id": "fridge",
+      "estimated": true,
+      "size_in": [
+        30.0,
+        30.0,
+        70.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          3.7592,
+          0,
+          0
+        ],
+        "max_m": [
+          4.5212,
+          0.762,
+          1.778
+        ]
+      },
+      "note": "Stainless fridge, about 30 in wide, first along the back wall from the entry."
+    },
+    {
+      "id": "stove",
+      "estimated": true,
+      "size_in": [
+        30.0,
+        25.0,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.5212,
+          0,
+          0
+        ],
+        "max_m": [
+          5.2832,
+          0.635,
+          0.9144
+        ]
+      },
+      "note": "Stove between the fridge and the cabinets."
+    },
+    {
+      "id": "counter",
+      "estimated": true,
+      "size_in": [
+        124.0,
+        25.0,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          5.2832,
+          0,
+          0
+        ],
+        "max_m": [
+          8.4328,
+          0.635,
+          0.9144
+        ]
+      },
+      "note": "Dark base cabinets and counter along the back wall after the stove."
+    },
+    {
+      "id": "island",
+      "estimated": true,
+      "size_in": [
+        60.0,
+        36.0,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.7244,
+          1.6002,
+          0
+        ],
+        "max_m": [
+          6.2484,
+          2.5146,
+          0.9144
+        ]
+      },
+      "note": "Kitchen island with sink, granite top, dark cabinets."
+    },
+    {
+      "id": "island_chair",
+      "estimated": true,
+      "size_in": [
+        18.0,
+        18.0,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          5.2578,
+          2.5646,
+          0
+        ],
+        "max_m": [
+          5.715,
+          3.0218,
+          0.9144
+        ]
+      },
+      "note": "One wooden spindle-back chair on the living-room side of the island."
+    },
+    {
+      "id": "bed",
+      "estimated": true,
+      "size_in": [
+        60.0,
+        80.0,
+        48.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.762,
+          6.2592,
+          0.0127
+        ],
+        "max_m": [
+          2.286,
+          8.2912,
+          1.2319
+        ]
+      },
+      "note": "Queen bed, assumed 60 by 80 in, on the bedroom's far wall."
+    },
+    {
+      "id": "nightstand",
+      "estimated": true,
+      "size_in": [
+        24.0,
+        16.0,
+        28.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.06,
+          7.8848,
+          0.0127
+        ],
+        "max_m": [
+          0.6696,
+          8.2912,
+          0.7239
+        ]
+      },
+      "note": "Dark wood nightstand / dresser near the bed."
+    },
+    {
+      "id": "coat_stand",
+      "estimated": true,
+      "size_in": [
+        16.0,
+        16.0,
+        65.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.1968,
+          4.9196,
+          0.0127
+        ],
+        "max_m": [
+          0.6032,
+          5.326,
+          1.6637
+        ]
+      },
+      "note": "Coat / garment stand in the bedroom's left corner."
+    }
+  ],
+  "absent": [
+    "dining_table",
+    "rug"
+  ]
+}

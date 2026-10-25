@@ -120,6 +120,9 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     beside the start lane). Its `# OBSTACLES on` tag turns stereo+radar on.
   * `butlerbot_radar_motion.wbt`: S track + rolling ball into the lane
     (`# OBSTACLES on`). Expect `WAITING_FOR_MOVING` then stop/clear.
+  * `apartment.wbt`: Dan's apartment, the next course after the warehouse.
+    No tape. `-World apartment`. Scoring numbers are not for the controller
+    (`docs/APARTMENT_TWIN.md`).
 * **Obstacle sensing** (`docs/OBSTACLES.md`): forward stereo pair (static
   height/depth) + `radar_fwd` (moving objects) in every world →
   `ObstacleFusion` → `ObstacleGate` states `CLEAR` /
@@ -137,7 +140,7 @@ repo `.env`. A value set with `set` wins.
 |---|---|
 | `RBM_LANE_MODE` | Leave unset. The only lane mode is `rowfit`. A leftover `gap` is ignored, with a warning. |
 | `RBM_TRACK` | Track name or `.json` for the finish referee and the `ct=` console value (never steering). The launcher sets it from the world's `# TRACK_FILE` tag; a different value left in the cmd window is overridden with a loud `WARNING`, and the controller does the same. Only needed when the world has no tag. |
-| `RBM_WORLD` | World for the launcher: `butlerbot`, `camera_s`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion` or a `.wbt` file. Same as `-World`. |
+| `RBM_WORLD` | World for the launcher: `butlerbot`, `camera_s`, `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`, `apartment` or a `.wbt` file. Same as `-World`. |
 | `RBM_ROUTE` | Junction choices in order, e.g. `S,L,R` (S = straight, L, R). Unset = straight if possible, else left. A choice the junction does not offer falls back to that default. |
 | `RBM_MAX_BLIND_M` | Max distance crossed with both lines gone (GAP_CROSS). Default `4.0`. |
 | `RBM_LOOK_AROUND` | `0` = after the max blind distance just stop (no +90/−90 look-around). Default on. |

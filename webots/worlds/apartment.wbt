@@ -1,0 +1,1181 @@
+#VRML_SIM R2025a utf8
+
+# Apartment twin of Dan's Halcyon Castle Hills plan A2 (1 bed, 1 bath).
+# Next ButlerBot course after the warehouse. The warehouse world,
+# controllers, and energy model are not modified.
+# No lane paint and no track file. This course is for vision and SLAM later.
+# STEER_TRACK off
+# A launch must not steer from the S-course waypoints.
+# With no track tag the finish referee stays the built-in S rule
+# (GPS x >= 16.5 m), which this apartment never reaches.
+#
+# NO FORESIGHT. Geometry here is what the sensors can see. The inch
+# measurements, furniture poses, and floor plan are scoring ground truth
+# and are not written into this file as a lookup table. The controller
+# must map from its own sensors.
+#
+# Frame: ENU, Z up. +X from the bedroom's left wall toward the living
+# room's right wall. +Y from the kitchen back wall toward the patio wall.
+# Origin: interior corner of the bedroom left wall and the back wall.
+# Bedroom door leaf is open (it swings toward the kitchen) and is not
+# a solid in the opening. Bathroom, front, and patio doors are closed.
+# Patio beyond the stop is out of scope. No dining table. No rug.
+# Bathroom, closet, laundry, the hall-to-kitchen opening, wall thickness,
+# wall height, and every furniture size and position are estimates.
+# Carpet lip at the bedroom threshold is an estimate. Floor contact
+# materials are laminate and carpet. Energy model is not wired to them.
+# Carpet forceDependentSlip is higher than laminate (rolling-resistance stand-in).
+
+EXTERNPROTO "../protos/ButlerBot.proto"
+
+WorldInfo {
+  basicTimeStep 8
+  # Same solver as the other ButlerBot worlds (cylinder wheels on a floor).
+  ERP 0.6
+  CFM 1e-9
+  coordinateSystem "ENU"
+  contactProperties [
+    # Drive hubs on grey-brown laminate. Same mu / slip as drive_wheel
+    # against "default" on butlerbot_warehouse.wbt (mu=8, FDS=0.01).
+    # Documented rolling resistance for a later energy hookup: Crr 0.012.
+    ContactProperties {
+      material1 "drive_wheel"
+      material2 "laminate"
+      coulombFriction [
+        8
+      ]
+      forceDependentSlip [
+        0.01
+      ]
+      frictionRotation 0 0
+      bounce 0
+      softCFM 1e-6
+      softERP 0.7
+    }
+    # Drive hubs on medium-pile bedroom carpet. Higher forceDependentSlip
+    # stands in for higher rolling resistance. Documented Crr 0.050.
+    # Not read by src/twin_energy_cruise.py.
+    ContactProperties {
+      material1 "drive_wheel"
+      material2 "carpet"
+      coulombFriction [
+        8
+      ]
+      forceDependentSlip [
+        0.04
+      ]
+      frictionRotation 0 0
+      bounce 0
+      softCFM 1e-6
+      softERP 0.7
+    }
+    ContactProperties {
+      material1 "caster"
+      material2 "laminate"
+      coulombFriction [
+        0.08
+      ]
+      forceDependentSlip [
+        1
+      ]
+      bounce 0
+      softCFM 1e-5
+      softERP 0.5
+    }
+    # Casters scrub a little harder on carpet than on laminate.
+    ContactProperties {
+      material1 "caster"
+      material2 "carpet"
+      coulombFriction [
+        0.15
+      ]
+      forceDependentSlip [
+        0.6
+      ]
+      bounce 0
+      softCFM 1e-5
+      softERP 0.5
+    }
+    # Drive hubs against anything still on the default material
+    # (walls, furniture). Copied from the warehouse world.
+    ContactProperties {
+      material1 "drive_wheel"
+      material2 "default"
+      coulombFriction [
+        8
+      ]
+      forceDependentSlip [
+        0.01
+      ]
+      frictionRotation 0 0
+      bounce 0
+      softCFM 1e-6
+      softERP 0.7
+    }
+    ContactProperties {
+      material1 "caster"
+      material2 "default"
+      coulombFriction [
+        0.08
+      ]
+      forceDependentSlip [
+        1
+      ]
+      bounce 0
+      softCFM 1e-5
+      softERP 0.5
+    }
+    ContactProperties {
+      coulombFriction [
+        40
+      ]
+      forceDependentSlip [
+        0
+      ]
+      bounce 0
+      softCFM 1e-6
+      softERP 0.6
+    }
+  ]
+  info [
+    "ButlerBot apartment twin — Halcyon Castle Hills plan A2, 1 bed 1 bath"
+    "Measured A-J in docs/APARTMENT_TWIN.md. Furniture sizes are estimates."
+    "No track, no lane paint. Warehouse remains the regression course."
+    "Floors: contactMaterial laminate / carpet. Energy model is not wired to them."
+  ]
+}
+
+DEF VIEWPOINT Viewpoint {
+  # Top-down follow, same idea as the warehouse cam, low enough to read rooms.
+  follow "ButlerBot"
+  followType "Tracking Shot"
+  followSmoothness 0.2
+  orientation 0 1 0 1.5708
+  position 0 0 14
+  fieldOfView 0.75
+  near 0.2
+  far 50
+}
+
+Background {
+  skyColor 0.72 0.76 0.82
+}
+
+# Indoor fill. Shadows off so the greige walls do not black out the floor.
+DirectionalLight {
+  direction 0.2 -0.3 -1
+  intensity 1.0
+  castShadows FALSE
+}
+DirectionalLight {
+  direction -0.35 0.45 -1
+  intensity 0.55
+  castShadows FALSE
+}
+
+# --- shell. Inner faces are the measured wall-to-wall limits. ---
+DEF APT_WALL_WEST Solid {
+  translation -0.0508 4.1656 1.2192
+  name "apt_wall_west"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_WALL PBRAppearance {
+        baseColor 0.76 0.73 0.68
+        roughness 0.92
+        metalness 0
+      }
+      geometry Box {
+        size 0.1016 8.5344 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 8.5344 2.4384
+  }
+}
+DEF APT_WALL_EAST Solid {
+  translation 8.4836 4.1656 1.2192
+  name "apt_wall_east"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.1016 8.5344 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 8.5344 2.4384
+  }
+}
+DEF APT_WALL_NORTH_A Solid {
+  translation 3.6322 8.382 1.2192
+  name "apt_wall_north_a"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 7.4676 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 7.4676 0.1016 2.4384
+  }
+}
+DEF APT_WALL_NORTH_B Solid {
+  translation 8.3566 8.382 1.2192
+  name "apt_wall_north_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.3556 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.3556 0.1016 2.4384
+  }
+}
+DEF APT_WALL_SOUTH_A Solid {
+  translation 1.27 -0.0508 1.2192
+  name "apt_wall_south_a"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 2.7432 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.7432 0.1016 2.4384
+  }
+}
+DEF APT_WALL_SOUTH_B Solid {
+  translation 6.0452 -0.0508 1.2192
+  name "apt_wall_south_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 4.9784 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 4.9784 0.1016 2.4384
+  }
+}
+# Shared wall between the left column and the main room. Gap is the
+# estimated cased opening from the entry hall into the kitchen.
+DEF APT_WALL_SHARED_A Solid {
+  translation 3.7084 5.0546 1.2192
+  name "apt_wall_shared_a"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.1016 6.5532 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 6.5532 2.4384
+  }
+}
+DEF APT_WALL_SHARED_B Solid {
+  translation 3.7084 0.0508 1.2192
+  name "apt_wall_shared_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.1016 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 0.1016 2.4384
+  }
+}
+# Bedroom south partition. Gaps: H (bath, west, closed) and G (bedroom, east, open).
+DEF APT_WALL_BED_SOUTH_A Solid {
+  translation 0.1524 4.572 1.2192
+  name "apt_wall_bed_south_a"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.3048 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.3048 0.1016 2.4384
+  }
+}
+DEF APT_WALL_BED_SOUTH_B Solid {
+  translation 1.905 4.572 1.2192
+  name "apt_wall_bed_south_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 1.5748 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1.5748 0.1016 2.4384
+  }
+}
+DEF APT_WALL_BED_SOUTH_C Solid {
+  translation 3.5814 4.572 1.2192
+  name "apt_wall_bed_south_c"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.1524 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1524 0.1016 2.4384
+  }
+}
+# Hallway west wall. Bifold closet / laundry doors are this wall (closed).
+# Clear hall width E = 44 in is x 2.54 to 3.6576.
+DEF APT_WALL_HALL_WEST Solid {
+  translation 2.4892 2.2606 1.2192
+  name "apt_wall_hall_west"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.1016 4.5212 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 4.5212 2.4384
+  }
+}
+# ESTIMATE partitions under the bedroom: bath / closet / laundry.
+DEF APT_WALL_BATH_SOUTH Solid {
+  translation 1.2192 2.6416 1.2192
+  name "apt_wall_bath_south"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 2.4384 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.4384 0.1016 2.4384
+  }
+}
+DEF APT_WALL_CLOSET_SOUTH Solid {
+  translation 1.2192 1.3208 1.2192
+  name "apt_wall_closet_south"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 2.4384 0.1016 2.4384
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.4384 0.1016 2.4384
+  }
+}
+# Closed doors. Slabs fill the measured opening; the test ignores APT_DOOR_*
+# when it measures jamb-to-jamb width.
+DEF APT_DOOR_BATH Solid {
+  translation 0.7112 4.572 1.0119
+  name "door_bath"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_DOOR PBRAppearance {
+        baseColor 0.93 0.93 0.91
+        roughness 0.55
+        metalness 0
+      }
+      geometry Box {
+        size 0.8128 0.1016 2.0239
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.8128 0.1016 2.0239
+  }
+}
+DEF APT_DOOR_FRONT Solid {
+  translation 3.0988 -0.0508 1.0119
+  name "door_front"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.9144 0.1016 2.0239
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.9144 0.1016 2.0239
+  }
+}
+DEF APT_DOOR_PATIO Solid {
+  translation 7.7724 8.382 1.1217
+  name "door_patio"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_GLASS PBRAppearance {
+        baseColor 0.62 0.74 0.80
+        roughness 0.12
+        metalness 0.05
+      }
+      geometry Box {
+        size 0.8128 0.1016 2.2433
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.8128 0.1016 2.2433
+  }
+}
+# Window graphic behind the sofa. Not an opening; J is the only patio gap.
+DEF APT_VIS_WINDOW Transform {
+  translation 5.4548 8.3242 1.55
+  children [
+    Shape {
+      appearance USE APT_APP_GLASS
+      geometry Box {
+        size 2.1336 0.01 1.2
+      }
+    }
+  ]
+}
+DEF APT_VIS_BIFOLD_CLOSET_L Transform {
+  translation 2.542 1.7222 1.025
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.012 0.498 2.01
+      }
+    }
+  ]
+}
+DEF APT_VIS_BIFOLD_CLOSET_R Transform {
+  translation 2.542 2.2402 1.025
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.012 0.498 2.01
+      }
+    }
+  ]
+}
+DEF APT_VIS_BIFOLD_LAUNDRY_L Transform {
+  translation 2.542 0.376 1.025
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.012 0.498 2.01
+      }
+    }
+  ]
+}
+DEF APT_VIS_BIFOLD_LAUNDRY_R Transform {
+  translation 2.542 0.894 1.025
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.012 0.498 2.01
+      }
+    }
+  ]
+}
+DEF APT_VIS_HALL_DOOR Transform {
+  translation 3.6556 2.681 1.035
+  children [
+    Shape {
+      appearance USE APT_APP_DOOR
+      geometry Box {
+        size 0.012 0.762 2.03
+      }
+    }
+  ]
+}
+
+# --- floors. Tops: laminate z=0, bedroom carpet z=0.5 in. ---
+# Main room split into living and kitchen zones at the island's north face.
+DEF APT_FLOOR_LIVING Solid {
+  translation 6.096 5.4229 -0.01
+  name "floor_living"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance DEF APT_APP_LAMINATE PBRAppearance {
+        baseColor 0.45 0.38 0.30
+        roughness 0.55
+        metalness 0
+      }
+      geometry Box {
+        size 4.6736 5.8166 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 4.6736 5.8166 0.02
+  }
+}
+DEF APT_FLOOR_KITCHEN Solid {
+  translation 6.096 1.2573 -0.01
+  name "floor_kitchen"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 4.6736 2.5146 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 4.6736 2.5146 0.02
+  }
+}
+DEF APT_FLOOR_HALL Solid {
+  translation 3.0988 2.2606 -0.01
+  name "floor_hall"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 1.1176 4.5212 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1.1176 4.5212 0.02
+  }
+}
+DEF APT_FLOOR_BATH Solid {
+  translation 1.2192 3.6068 -0.01
+  name "floor_bath"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 2.4384 1.8288 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.4384 1.8288 0.02
+  }
+}
+DEF APT_FLOOR_CLOSET Solid {
+  translation 1.2192 1.9812 -0.01
+  name "floor_closet"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 2.4384 1.2192 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.4384 1.2192 0.02
+  }
+}
+DEF APT_FLOOR_LAUNDRY Solid {
+  translation 1.2192 0.635 -0.01
+  name "floor_laundry"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 2.4384 1.27 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.4384 1.27 0.02
+  }
+}
+# Carpet sits on the laminate with an estimated 0.5 in lip at the doorway.
+DEF APT_FLOOR_BEDROOM Solid {
+  translation 1.8288 6.477 0.0027
+  name "floor_bedroom"
+  contactMaterial "carpet"
+  children [
+    Shape {
+      appearance DEF APT_APP_CARPET PBRAppearance {
+        baseColor 0.52 0.48 0.42
+        roughness 0.95
+        metalness 0
+      }
+      geometry Box {
+        size 3.6576 3.7084 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 3.6576 3.7084 0.02
+  }
+}
+DEF APT_FLOOR_CARPET_EDGE Solid {
+  translation 3.0988 4.571 0.0027
+  name "floor_carpet_edge"
+  contactMaterial "carpet"
+  children [
+    Shape {
+      appearance USE APT_APP_CARPET
+      geometry Box {
+        size 0.8128 0.1036 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.8128 0.1036 0.02
+  }
+}
+# Laminate bridge across the shared-wall thickness at the kitchen opening.
+DEF APT_FLOOR_ENTRY_BRIDGE Solid {
+  translation 3.7084 0.9398 -0.01
+  name "floor_entry_bridge"
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 0.1016 1.6764 0.02
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.1016 1.6764 0.02
+  }
+}
+
+# --- furniture. Every size and position is an estimate from Dan's photos. ---
+# No dining table. No rug.
+DEF APT_FURN_LOVESEAT Solid {
+  translation 4.2618 6.554 0.508
+  name "loveseat"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_LEATHER PBRAppearance {
+        baseColor 0.20 0.11 0.06
+        roughness 0.48
+        metalness 0
+      }
+      geometry Box {
+        size 0.9652 1.524 1.016
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.9652 1.524 1.016
+  }
+}
+DEF APT_FURN_END_TABLE Solid {
+  translation 4.0686 7.6154 0.3048
+  name "end_table"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_WOOD PBRAppearance {
+        baseColor 0.28 0.16 0.08
+        roughness 0.6
+        metalness 0
+      }
+      geometry Box {
+        size 0.5588 0.5588 0.6096
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.5588 0.5588 0.6096
+  }
+}
+DEF APT_FURN_SOFA Solid {
+  translation 5.4548 7.8286 0.508
+  name "sofa"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_LEATHER
+      geometry Box {
+        size 2.1336 0.9652 1.016
+      }
+    }
+  ]
+  boundingObject Box {
+    size 2.1336 0.9652 1.016
+  }
+}
+DEF APT_FURN_SIDE_TABLE Solid {
+  translation 6.7902 8.0826 0.3048
+  name "side_table"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WOOD
+      geometry Box {
+        size 0.4572 0.4572 0.6096
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4572 0.4572 0.6096
+  }
+}
+DEF APT_FURN_DESK Solid {
+  translation 8.0318 7.4192 0.3683
+  name "desk"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_DESK PBRAppearance {
+        baseColor 0.16 0.16 0.17
+        roughness 0.5
+        metalness 0.15
+      }
+      geometry Box {
+        size 0.762 1.524 0.7366
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.762 1.524 0.7366
+  }
+}
+DEF APT_FURN_OFFICE_CHAIR Solid {
+  translation 7.4214 7.4192 0.508
+  name "office_chair"
+  radarCrossSection 1
+  children [
+    Pose {
+      translation 0 0 -0.0508
+      children [
+        Shape {
+          appearance DEF APT_APP_BLACK PBRAppearance {
+        baseColor 0.05 0.05 0.055
+        roughness 0.45
+        metalness 0.1
+      }
+          geometry Box {
+            size 0.475 0.475 0.08
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.2294 0 0.2286
+      children [
+        Shape {
+          appearance USE APT_APP_BLACK
+          geometry Box {
+            size 0.06 0.447 0.5588
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 0 -0.458
+      children [
+        Shape {
+          appearance USE APT_APP_BLACK
+          geometry Box {
+            size 0.28 0.28 0.06
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 0.5588 0.5588 1.016
+  }
+}
+DEF APT_FURN_TRASH Solid {
+  translation 7.9083 6.3024 0.1905
+  name "trash"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_BLACK
+      geometry Box {
+        size 0.2794 0.2794 0.381
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.2794 0.2794 0.381
+  }
+}
+DEF APT_FURN_TV_STAND Solid {
+  translation 8.2604 6.3024 0.5334
+  name "tv_stand"
+  radarCrossSection 1
+  children [
+    Pose {
+      translation 0 0 -0.3302
+      children [
+        Shape {
+          appearance USE APT_APP_BLACK
+          geometry Box {
+            size 0.3048 0.6096 0.4064
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.03 0 0.1016
+      children [
+        Shape {
+          appearance DEF APT_APP_SCREEN PBRAppearance {
+        baseColor 0.12 0.16 0.20
+        roughness 0.2
+        metalness 0.3
+      }
+          geometry Box {
+            size 0.04 0.5182 0.4572
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 0.3048 0.6096 1.0668
+  }
+}
+DEF APT_FURN_FRIDGE Solid {
+  translation 4.1402 0.381 0.889
+  name "fridge"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance DEF APT_APP_STEEL PBRAppearance {
+        baseColor 0.74 0.75 0.76
+        roughness 0.28
+        metalness 0.72
+      }
+      geometry Box {
+        size 0.762 0.762 1.778
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.762 0.762 1.778
+  }
+}
+DEF APT_FURN_STOVE Solid {
+  translation 4.9022 0.3175 0.4572
+  name "stove"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_BLACK
+      geometry Box {
+        size 0.762 0.635 0.9144
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.762 0.635 0.9144
+  }
+}
+DEF APT_FURN_COUNTER Solid {
+  translation 6.858 0.3175 0.4572
+  name "counter"
+  radarCrossSection 1
+  children [
+    Pose {
+      translation 0 0 -0.015
+      children [
+        Shape {
+          appearance DEF APT_APP_CABINET PBRAppearance {
+        baseColor 0.11 0.09 0.08
+        roughness 0.55
+        metalness 0.05
+      }
+          geometry Box {
+            size 3.1496 0.635 0.8844
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 0 0.4422
+      children [
+        Shape {
+          appearance DEF APT_APP_GRANITE PBRAppearance {
+        baseColor 0.42 0.42 0.40
+        roughness 0.32
+        metalness 0.08
+      }
+          geometry Box {
+            size 3.1496 0.635 0.03
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 -0.1651 1.2954
+      children [
+        Shape {
+          appearance USE APT_APP_CABINET
+          geometry Box {
+            size 3.1496 0.3048 0.762
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 3.1496 0.635 0.9144
+  }
+}
+DEF APT_FURN_ISLAND Solid {
+  translation 5.4864 2.0574 0.4572
+  name "island"
+  radarCrossSection 1
+  children [
+    Pose {
+      translation 0 0 -0.015
+      children [
+        Shape {
+          appearance USE APT_APP_CABINET
+          geometry Box {
+            size 1.524 0.9144 0.8844
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 0 0.4422
+      children [
+        Shape {
+          appearance USE APT_APP_GRANITE
+          geometry Box {
+            size 1.524 0.9144 0.03
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 0.1016 0.4522
+      children [
+        Shape {
+          appearance USE APT_APP_STEEL
+          geometry Box {
+            size 0.4064 0.3048 0.02
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 1.524 0.9144 0.9144
+  }
+}
+DEF APT_FURN_ISLAND_CHAIR Solid {
+  translation 5.4864 2.7932 0.4572
+  name "island_chair"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WOOD
+      geometry Box {
+        size 0.4115 0.4115 0.05
+      }
+    }
+    Pose {
+      translation -0.16 -0.16 -0.254
+      children [
+        Shape {
+          appearance USE APT_APP_WOOD
+          geometry Box {
+            size 0.04 0.04 0.4064
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.16 -0.16 -0.254
+      children [
+        Shape {
+          appearance USE APT_APP_WOOD
+          geometry Box {
+            size 0.04 0.04 0.4064
+          }
+        }
+      ]
+    }
+    Pose {
+      translation -0.16 0.16 -0.254
+      children [
+        Shape {
+          appearance USE APT_APP_WOOD
+          geometry Box {
+            size 0.04 0.04 0.4064
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0.16 0.16 -0.254
+      children [
+        Shape {
+          appearance USE APT_APP_WOOD
+          geometry Box {
+            size 0.04 0.04 0.4064
+          }
+        }
+      ]
+    }
+    Pose {
+      translation 0 0.192 0.2032
+      children [
+        Shape {
+          appearance USE APT_APP_WOOD
+          geometry Box {
+            size 0.3658 0.03 0.4064
+          }
+        }
+      ]
+    }
+  ]
+  boundingObject Box {
+    size 0.4572 0.4572 0.9144
+  }
+}
+# Three pendants over the island. Visual only (Transform, no boundingObject).
+DEF APT_PENDANT_1 Transform {
+  translation 5.0292 2.0574 1.9
+  children [
+    Shape {
+      appearance USE APT_APP_BLACK
+      geometry Sphere {
+        radius 0.06
+      }
+    }
+  ]
+}
+DEF APT_PENDANT_2 Transform {
+  translation 5.4864 2.0574 1.9
+  children [
+    Shape {
+      appearance USE APT_APP_BLACK
+      geometry Sphere {
+        radius 0.06
+      }
+    }
+  ]
+}
+DEF APT_PENDANT_3 Transform {
+  translation 5.9436 2.0574 1.9
+  children [
+    Shape {
+      appearance USE APT_APP_BLACK
+      geometry Sphere {
+        radius 0.06
+      }
+    }
+  ]
+}
+DEF APT_FURN_BED Solid {
+  translation 1.524 7.2752 0.6223
+  name "bed"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WOOD
+      geometry Box {
+        size 1.524 2.032 1.2192
+      }
+    }
+  ]
+  boundingObject Box {
+    size 1.524 2.032 1.2192
+  }
+}
+DEF APT_FURN_NIGHTSTAND Solid {
+  translation 0.3648 8.088 0.3683
+  name "nightstand"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WOOD
+      geometry Box {
+        size 0.6096 0.4064 0.7112
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.6096 0.4064 0.7112
+  }
+}
+DEF APT_FURN_COAT_STAND Solid {
+  translation 0.4 5.1228 0.8382
+  name "coat_stand"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WOOD
+      geometry Box {
+        size 0.4064 0.4064 1.651
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.4064 0.4064 1.651
+  }
+}
+
+ButlerBot {
+  # Main room, between the sofas and the island. Facing the patio wall (+Y).
+  translation 6.1 4.7 0
+  rotation 0 0 1 1.5708
+  name "ButlerBot"
+  controller "butlerbot_controller"
+  controllerArgs [
+    "--dashboard-url=http://127.0.0.1:5000"
+  ]
+}
+

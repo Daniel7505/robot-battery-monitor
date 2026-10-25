@@ -1178,9 +1178,7 @@ def test_light_motor_electrical_point_cites_published_specs():
     assert missed.wh_elec == 0.0
     assert missed.wh_idle == pytest.approx(9.96 * 0.008 / 3600.0, rel=1e-12)
 
-    controller = Path(
-        "webots/controllers/butlerbot_controller/butlerbot_controller.py"
-    ).read_text(encoding="utf-8")
+    controller = _controller_tree_text()
     assert "SimPackMeter" in controller
     assert "pack_drain_dt_s" not in controller
     assert "measured_drive_split" in controller
@@ -1617,10 +1615,16 @@ def test_summary_file_keeps_body_summary_and_measured_without_a_bom_build(tmp_pa
         _restore_bom(old)
 
 
+def _controller_tree_text() -> str:
+    """Every controller module, so a moved string cannot hide in a sibling."""
+    folder = Path("webots/controllers/butlerbot_controller")
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(folder.glob("*.py"))
+    )
+
+
 def test_controller_writes_the_summary_file_and_meters_a_blank_build():
-    controller = Path(
-        "webots/controllers/butlerbot_controller/butlerbot_controller.py"
-    ).read_text(encoding="utf-8")
+    controller = _controller_tree_text()
     assert "observe_controller_payload" in controller
     assert "MISSION_SUMMARY written" in controller
     assert "append_mission_lines" in controller

@@ -113,7 +113,7 @@ def test_approach_coast_no_op_when_cruise_leq_pivot_speed_cap():
 
 def test_gyro_startup_log_line_in_controller_source():
     text = (
-        __import__("pathlib").Path("webots/controllers/butlerbot_controller/butlerbot_controller.py")
+        __import__("pathlib").Path("webots/controllers/butlerbot_controller/controller_devices.py")
         .read_text(encoding="utf-8")
     )
     assert "Gyro: device found and enabled" in text

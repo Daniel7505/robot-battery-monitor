@@ -12,11 +12,17 @@ CTRL_DIR = CTRL_SRC.parent
 
 
 def test_gyro_returned_from_init_and_unpacked_in_run_loop():
-    text = CTRL_SRC.read_text(encoding="utf-8")
-    assert "cam_period, gyro" in text
-    assert "cam_period, gyro = _init_devices" in text
-    assert "if gyro is not None:" in text
-    assert "gyro.getValues()" in text
+    """Init still returns gyro; the sense step still reads it.
+
+    Device setup lives in controller_devices.py and the per-tick read
+    lives in controller_sensing.py. Both have to keep the gyro name.
+    """
+    devices = (CTRL_DIR / "controller_devices.py").read_text(encoding="utf-8")
+    sensing = (CTRL_DIR / "controller_sensing.py").read_text(encoding="utf-8")
+    assert "cam_period, gyro" in devices
+    assert "cam_period, gyro = _init_devices" in devices
+    assert "if gyro is not None:" in sensing
+    assert "gyro.getValues()" in sensing
 
 
 def test_controller_smoke_enables_gyro_without_step_errors(tmp_path):

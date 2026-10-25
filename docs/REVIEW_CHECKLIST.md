@@ -114,7 +114,7 @@ If you ship a meaningful arc, **add a short line** under [Credits & lineage](#7-
 
 These are **high blast radius**. Change only with tests (and a short Forward→Stop / Turn→Stop visual pass when Webots is involved):
 
-- `webots/controllers/butlerbot_controller/butlerbot_controller.py` — stop / ABS / park / teleop loop  
+- `webots/controllers/butlerbot_controller/` — `butlerbot_controller.py` entry plus `controller_devices.py`, `controller_sensing.py`, `controller_mission.py`, `controller_energy.py` (stop / ABS / park / teleop loop)  
 - `src/teleop_agent.py` — drive math, ABS helpers, settle, throttle merge  
 - `src/twin/bridge.py` — `stop_epoch`, battery override, external vs internal arbitration  
 - `src/twin/power_feed.py` / `src/twin/webots_power.py` — power contract into PMS  

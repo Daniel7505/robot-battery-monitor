@@ -81,6 +81,11 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     update `lane_yaw`; held (odometry) priors are preferred. Remaining to the
     pivot centre never increases from a late vision frame.
 * **Controller glue** (`webots/controllers/butlerbot_controller/`):
+  * `butlerbot_controller.py`: Webots entry. `_run_loop` calls the step modules.
+  * `controller_devices.py`: device setup, BoM reload, wheel commands.
+  * `controller_sensing.py`: IMU, follow camera, GPS / encoder reads.
+  * `controller_mission.py`: route, R-key phases, nadir harvest, mission end.
+  * `controller_energy.py`: pack watt-hours and telemetry POST.
   * `controller_rowfit.py`: `RowfitRuntime` and the `LaneVisionLog` writer.
   * `controller_hud.py`: shoulder HUDs (state line, fit dots, crossbar bar).
   * The GPS finish referee comes from the loaded track. It is only a referee,

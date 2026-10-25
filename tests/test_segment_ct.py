@@ -97,7 +97,7 @@ def test_pivot_ct_max_uses_true_cross_track_not_camera():
 
 def test_turn_log_is_printed_on_mission_complete():
     text = (
-        ROOT / "webots/controllers/butlerbot_controller/butlerbot_controller.py"
+        ROOT / "webots/controllers/butlerbot_controller/controller_mission.py"
     ).read_text(encoding="utf-8")
     complete = text.index("if mission_complete and not turn_log_sent:")
     stopped = text.index('print("ButlerBot controller stopped')

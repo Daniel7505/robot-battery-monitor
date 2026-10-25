@@ -100,7 +100,10 @@ def test_cameras_sit_in_their_shoulder_boxes():
     import re
     from pathlib import Path
 
-    wbt = (Path(__file__).resolve().parent.parent / "webots/worlds/butlerbot.wbt").read_text()
+    from src.butlerbot_proto import expand_world_text
+
+    raw = (Path(__file__).resolve().parent.parent / "webots/worlds/butlerbot.wbt").read_text()
+    wbt = expand_world_text(raw)
     for box, pose in (("NADIR_BOX_L", NADIR_LEFT_POSE), ("NADIR_BOX_R", NADIR_RIGHT_POSE)):
         blk = wbt[wbt.index(f"DEF {box} Transform"):]
         c = [float(v) for v in re.search(r"translation\s+([-0-9. ]+)\n", blk).group(1).split()]
@@ -324,7 +327,11 @@ def test_butlerbot_nadir_rows_under_this_convention():
     import re
     from pathlib import Path
 
-    wbt = (Path(__file__).resolve().parent.parent / "webots/worlds/butlerbot.wbt").read_text()
+    from src.butlerbot_proto import expand_world_text
+
+    wbt = expand_world_text(
+        (Path(__file__).resolve().parent.parent / "webots/worlds/butlerbot.wbt").read_text()
+    )
     robot = wbt[wbt.index("Robot {"):]
     rot = [float(v) for v in re.search(r"(?m)^\s*rotation\s+([-0-9. ]+)$", robot).group(1).split()]
     assert rot[3] == 0.0  # angle 0 = identity whatever the axis
@@ -604,7 +611,9 @@ def test_lane_tracker_works_with_toed_out_cameras(yaw_deg):
 
 def test_parse_wbt_reads_a_yawed_camera(tmp_path):
     cams, p = _toed_out_pair(10.0)
-    text = (ROOT_WORLD).read_text(encoding="utf-8")
+    from src.butlerbot_proto import expand_world_text
+
+    text = expand_world_text(ROOT_WORLD.read_text(encoding="utf-8"))
     rl = " ".join(f"{v:.6f}" for v in cams["nadir_left"].rotation)
     rr = " ".join(f"{v:.6f}" for v in cams["nadir_right"].rotation)
     a, b = text.split("rotation 0 1 0 0.9411", 2)[0:2], text.split("rotation 0 1 0 0.9411", 2)[2]

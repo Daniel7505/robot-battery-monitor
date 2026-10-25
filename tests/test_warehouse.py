@@ -128,7 +128,7 @@ def test_planner_no_path():
 def test_world_shape(built):
     text = WORLD.read_text(encoding="utf-8")
     base = (ROOT / "webots" / "worlds" / "butlerbot.wbt").read_text(encoding="utf-8")
-    assert text.split("\nRobot {", 1)[1] == base.split("\nRobot {", 1)[1]  # robot / spawn byte-identical
+    assert text.split("\nButlerBot {", 1)[1] == base.split("\nButlerBot {", 1)[1]  # same PROTO instance / spawn
     assert text.count("{") == text.count("}") and text.count("[") == text.count("]")
     assert re.findall(r"^DEF TRACK Pose \{", text, re.M) == ["DEF TRACK Pose {"]
     assert not re.search(r"^(Transform|Pose) \{", text, re.M)
@@ -319,7 +319,7 @@ def test_obstacles_world_is_generator_output_with_three_props(built):
         assert f"DEF WH_{name} " in text
     clean = WORLD.read_text(encoding="utf-8")
     assert "OBS_" not in clean and "# OBSTACLES on" not in clean  # the clean warehouse stays clean
-    assert text.split("\nRobot {", 1)[1] == clean.split("\nRobot {", 1)[1]  # same robot, same spawn
+    assert text.split("\nButlerBot {", 1)[1] == clean.split("\nButlerBot {", 1)[1]  # same PROTO instance, same spawn
 
 
 def test_unset_bom_build_leaves_the_robot_text_alone():

@@ -12,6 +12,10 @@ axle, and print the Webots ``rotation`` line plus the floor coverage. Uses
     python scripts/aim_camera.py --box-center 0.01042 0.41808 0.72919 --box-size 0.05
     python scripts/aim_camera.py --yaw 10            # toe the camera 10 deg outward
 
+The printed ``rotation`` / ``translation`` lines belong in
+``webots/protos/ButlerBot.proto`` (``DEF NADIR_CAM_L`` / ``DEF NADIR_CAM_R``),
+not in a ``.wbt``. Worlds only instance that PROTO.
+
 Webots: ``rotation 0 1 0 theta`` pitches the view down by theta. Mirror a
 pure-pitch shoulder camera by negating translation Y only (same rotation line).
 With ``--yaw`` the camera is yawed first, then pitched (Rz(yaw) * Ry(pitch),
@@ -164,6 +168,8 @@ def main(argv=None) -> int:
         chk = box_inside_near(cam, a.box_center, a.box_size, a.near)
         verdict = "box never rendered" if chk["box_invisible"] else "BOX MAY SHOW (raise near or move lens to the box face)"
         print(f"own box: farthest corner depth {chk['max_depth_m']:.4f} m vs near {a.near} m -> {verdict}")
+    def_name = "NADIR_CAM_L" if side == "left" else "NADIR_CAM_R"
+    print(f"paste into webots/protos/ButlerBot.proto DEF {def_name} (mirror is the other NADIR_CAM_*)")
     return 0
 
 

@@ -23,11 +23,11 @@ def bind_teleop(mod) -> None:
     _teleop = mod
 
 
-# Must stay ≤ RotationalMotor maxVelocity in butlerbot.wbt (wheels = 15).
+# Must stay ≤ RotationalMotor maxVelocity in ButlerBot.proto (wheels = 15).
 MOTOR_MAX_VELOCITY = 15.0
 # Pololu 37D 50:1 (#4753) stall ≈ 2.06 N·m @ 12 V (datasheet extrapolated).
 # Available torque slightly above stall so ABS park can still hold hubs.
-# Must match butlerbot.wbt RotationalMotor maxTorque and hardware profile.
+# Must match ButlerBot.proto RotationalMotor maxTorque and hardware profile.
 WHEEL_STALL_TORQUE_NM = 2.06
 WHEEL_AVAILABLE_TORQUE_NM = 2.5
 MAX_WHEEL_V = 10.0

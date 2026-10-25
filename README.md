@@ -340,7 +340,7 @@ Other worlds:
 .\scripts\launch_webots_twin.ps1 -World plus          # crossroads
 .\scripts\launch_webots_twin.ps1 -World warehouse     # warehouse
 ```
-Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play.
+Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play. Every world instances the same robot from [`webots/protos/ButlerBot.proto`](webots/protos/ButlerBot.proto).
 
 ✅ **It worked if** the robot starts driving along the yellow lane and the dashboard badge says **TWIN LIVE**.
 
@@ -606,7 +606,7 @@ Not pinned in `requirements.txt`; install manually when using obstacle worlds, `
 | **Parquetry.proto** | `EXTERNPROTO` in all `webots/worlds/butlerbot*.wbt` → [Cyberbotics Webots R2025a](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto) | Apache-2.0 (Webots project) | Loaded from GitHub at world load time; not copied into this repo. |
 | **Floor.proto** | same pattern → [Floor.proto](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto) | Apache-2.0 (Webots project) | same |
 
-All ButlerBot `.wbt` worlds under [`webots/worlds/`](webots/worlds/) reference only these two external PROTOs. Robot geometry, track paint, warehouse layout, and controllers in this repo are **original to this project** (generated or authored here).
+All ButlerBot `.wbt` worlds under [`webots/worlds/`](webots/worlds/) reference only these two external PROTOs, plus the local [`webots/protos/ButlerBot.proto`](webots/protos/ButlerBot.proto). That robot PROTO, the track paint, the warehouse layout, and the controllers in this repo are **original to this project** (generated or authored here).
 
 ### Bundled images and models (in git)
 

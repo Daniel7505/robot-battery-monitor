@@ -22,7 +22,7 @@ The sim models a **dark factory with no humans present**. Forward speed is cappe
 
 | Source | Parameter | Value |
 |--------|-----------|------:|
-| `webots/worlds/butlerbot*.wbt` `NADIR_CAM_L/R` | resolution | **128 × 128** px |
+| `webots/protos/ButlerBot.proto` `NADIR_CAM_L/R` | resolution | **128 × 128** px |
 | same | `fieldOfView` | **1.2 rad** |
 | same | `near` | **0.03 m** |
 | `src/lane_vision.py` | `MAX_RANGE_M` (floor projection discard) | **3.5 m** |
@@ -65,8 +65,8 @@ added to the brushed duty·V·I/η line (`src/twin_energy.brushed_drive_point`).
 
 | Source | Parameter | Value |
 |--------|-----------|------:|
-| `webots/worlds/butlerbot*.wbt` `STEREO_CAM_*` | size / FOV | **320×240**, **1.4 rad** |
-| `webots/worlds/butlerbot*.wbt` `RADAR_FWD` | range / HFOV | **0.15–8 m**, **1.0 rad** |
+| `webots/protos/ButlerBot.proto` `STEREO_CAM_*` | size / FOV | **320×240**, **1.4 rad** |
+| `webots/protos/ButlerBot.proto` `RADAR_FWD` | range / HFOV | **0.15–8 m**, **1.0 rad** |
 | `src/stereo_depth.py` `CorridorParams` | corridor depth | **4.0 m** (`max_range_m`) |
 | `docs/OBSTACLES.md` | floor seen from axle | **≈ 0.75 m** |
 | `src/obstacle_gate.py` | `STANDOFF_M` | **0.35 m** |

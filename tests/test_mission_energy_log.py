@@ -554,6 +554,94 @@ def test_dashboard_summary_bills_the_same_stall_hold_as_the_controller(caplog):
     assert dfields["err_pct"] != "na"
 
 
+def test_mission_energy_line_includes_the_stall_hold(caplog):
+    """The dashboard energy line adds the same stall hold the summary bills.
+
+    Reporting only. A parked light-build lap used to print wh_model from the
+    drive model alone (the summary's ~0.035 Wh hold missing, err_pct about
+    -0.6 instead of about -1.3). Both lines now include that hold. Their
+    err_pct formulas still differ: the summary is drive electrical over
+    model drive, and this line is total measured over total model.
+    """
+    import logging
+
+    from src.logger import logger
+    from src.twin.bridge import DigitalTwinBridge
+    from src.twin_energy import format_mission_energy_line
+
+    dt_s = 3.0
+
+    def payload(ts, event=None):
+        sensors = {"left_wheel_rad_s": 0.0, "right_wheel_rad_s": 0.0}
+        if event:
+            sensors["mission_event"] = event
+        return {
+            "source": "webots",
+            "adapter": "webots",
+            "timestamp": ts.isoformat(),
+            "robot": {
+                "name": "ButlerBot",
+                "main_battery_pct": 90.0,
+                "battery_capacity_wh": 240.0,
+            },
+            "mission": {"task": "idle"},
+            "channel_draws": {
+                "Legs": 0.0, "Arms": 0.0, "Torso": 0.0, "Compute": 8.0, "Cooling": 0.0,
+            },
+            "locomotion": {
+                "gait": "stand",
+                "speed_m_s": 0.0,
+                "phase": "standby",
+                "bom_build": "light",
+                "ctrl_bom_build": "light",
+                "payload_kg": 0.0,
+                "measured_drive_elec_w": 12.0,
+            },
+            "pose": {"x_m": 0.0, "y_m": 0.0, "heading_rad": 0.0},
+            "sensors": sensors,
+        }
+
+    old = _use_bom("light")
+    try:
+        bridge = DigitalTwinBridge()
+        with caplog.at_level(logging.INFO, logger=logger.name):
+            assert bridge.ingest_telemetry(payload(_T0), adapter="webots")["ok"] is True
+            assert bridge.ingest_telemetry(
+                payload(_T0 + timedelta(seconds=dt_s), event="complete"),
+                adapter="webots",
+            )["ok"] is True
+        summary = _fields(next(
+            rec.message for rec in caplog.records if rec.message.startswith("MISSION_SUMMARY")
+        ))
+        energy = _fields(next(
+            rec.message for rec in caplog.records if rec.message.startswith("MISSION_ENERGY")
+        ))
+        hold = float(summary["wh_model_hold"])
+        assert hold > 0.01
+        assert float(energy["wh_model_hold"]) == pytest.approx(hold, abs=5e-4)
+        assert float(energy["wh_model"]) == pytest.approx(float(summary["wh_model"]), abs=0.002)
+        model = float(energy["wh_model"])
+        # wh_measured on this line is printed to 2 decimals. err_pct uses the
+        # unrounded total, so recompute from the summary's 3-decimal measured.
+        measured = float(summary["wh_measured"])
+        bare = format_mission_energy_line(
+            0.0, payload_kg=0.0, wh_measured=measured, duration_s=dt_s, wh_hold=0.0,
+        )
+        held = format_mission_energy_line(
+            0.0, payload_kg=0.0, wh_measured=measured, duration_s=dt_s, wh_hold=hold,
+        )
+        bare_fields = _fields(bare)
+        held_fields = _fields(held)
+        assert model == pytest.approx(float(bare_fields["wh_model"]) + hold, abs=0.002)
+        assert model == pytest.approx(float(held_fields["wh_model"]), abs=0.002)
+        # Printed wh_measured is 2 decimals, so err_pct is not recomputed from
+        # that token. It must move once the hold is in the model.
+        assert energy["err_pct"] != bare_fields["err_pct"]
+        assert float(bare_fields["wh_model_hold"]) == 0.0
+    finally:
+        _restore_bom(old)
+
+
 def test_mission_complete_does_not_wait_forever_on_gps_noise():
     from src.mission_park import mission_should_complete
 

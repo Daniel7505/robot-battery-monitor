@@ -104,7 +104,7 @@ python scripts/track_builder.py corner90 --world webots/worlds/butlerbot_corner9
 python scripts/s_track.py --write-track --write-world      # the S (butlerbot.wbt)
 ```
 
-* If the world does not exist, it is created from `butlerbot.wbt`. Robot, cameras, HUDs, lights and floor are copied unchanged (a test checks the Robot block is byte-identical). Then the track block is replaced.
+* If the world does not exist, it is created from `butlerbot.wbt`. The `ButlerBot` PROTO instance, lights and floor stay as in the template (a test checks that instance is byte-identical). Cameras and the robot body live in `webots/protos/ButlerBot.proto`. Then the track block is replaced.
 * The track is one `DEF TRACK Pose` with Shapes `TRACK_LINE_L`, `TRACK_LINE_R`, `TRACK_START`, `TRACK_FINISH` (and `TRACK_TICKS` on the S). Each is a single `IndexedFaceSet` ribbon:
   * top, walls and end caps
   * `ccw TRUE`

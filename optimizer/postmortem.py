@@ -217,19 +217,20 @@ def _straight_improved(before: Diagnosis | None, after: Diagnosis | None) -> boo
 
 def invalid_lesson(reason: str) -> str:
     """Plain lesson when there is no scored lap."""
+    from optimizer.bad_lap import has_phrase
+
     text = (reason or "").strip()
-    lower = text.lower()
     if not text:
         return "No lap to score. Retry after a fresh Webots launch."
-    if "45s" in lower or "instant" in lower or "cached summary" in lower:
+    if has_phrase(text, "45s", "instant", "cached summary"):
         return f"No lap to score: {text}. The launch returned too quickly; settle and retry once."
-    if "launcher exited" in lower or "crash" in lower or "timeout" in lower:
+    if has_phrase(text, "launcher exited", "crash", "timeout"):
         return f"No lap to score: {text}. Check Webots/controller cleanup and retry once."
-    if "stale" in lower or "opt_run" in lower or "opt_trial" in lower:
+    if has_phrase(text, "stale", "opt_run", "opt_trial"):
         return f"No lap to score: {text}. Retry after a fresh stamped mission summary."
-    if "turn_err" in lower or "segment_energy" in lower or "turn segment" in lower:
+    if has_phrase(text, "turn_err", "segment_energy", "turn segment"):
         return f"No lap to score: {text}. Retry confirm when dashboard logs include SEGMENT_ENERGY."
-    if "config" in lower and "before launch" in lower:
+    if "config" in text.lower() and has_phrase(text, "before launch"):
         return f"No lap to score: {text}. Fix the config write race and retry."
     return f"No lap to score: {text}"
 

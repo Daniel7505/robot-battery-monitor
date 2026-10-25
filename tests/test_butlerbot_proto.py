@@ -1,0 +1,94 @@
+"""The shared ButlerBot PROTO expands to the robot the worlds used to paste.
+
+Checked before the split: the 11 committed worlds pasted one Robot node
+(md5 f7e514cd3e70cad39251257e4207c006). Pose, name, and controller did not
+differ. They are still fields, and every committed instance leaves them at
+the PROTO defaults, so expansion is that node byte for byte. Devices, names,
+masses, physics, bounding objects, and positions are that text.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from pathlib import Path
+
+import pytest
+
+from src.butlerbot_proto import SHIPPED_ROBOT_MD5, expand_world_text
+
+ROOT = Path(__file__).resolve().parents[1]
+WORLDS = sorted((ROOT / "webots" / "worlds").glob("butlerbot*.wbt"))
+
+DEVICE_NAMES = (
+    "left_wheel",
+    "left_wheel_sensor",
+    "left_wheel_solid",
+    "right_wheel",
+    "right_wheel_sensor",
+    "right_wheel_solid",
+    "front_left_caster",
+    "front_right_caster",
+    "rear_left_caster",
+    "rear_right_caster",
+    "torso_joint",
+    "torso_sensor",
+    "torso_solid",
+    "gps_head",
+    "left_arm",
+    "left_arm_sensor",
+    "left_arm_solid",
+    "right_arm",
+    "right_arm_sensor",
+    "right_arm_solid",
+    "nadir_left",
+    "nadir_right",
+    "stereo_left",
+    "stereo_right",
+    "radar_fwd",
+    "hud_nadir",
+    "hud_nadir_r",
+    "gps",
+    "imu",
+    "gyro",
+)
+
+
+def _robot(name: str) -> str:
+    text = (ROOT / "webots" / "worlds" / name).read_text(encoding="utf-8")
+    expanded = expand_world_text(text)
+    return expanded[expanded.index("Robot {") :]
+
+
+@pytest.mark.parametrize("world", WORLDS, ids=lambda path: path.name)
+def test_every_world_expands_to_the_shipped_robot(world):
+    robot = _robot(world.name)
+    assert hashlib.md5(robot.encode("utf-8")).hexdigest() == SHIPPED_ROBOT_MD5
+    assert not robot.endswith("\n")
+
+
+def test_warehouse_and_s_share_devices_mass_physics_and_bounds():
+    warehouse = _robot("butlerbot_warehouse.wbt")
+    course = _robot("butlerbot.wbt")
+    assert warehouse == course
+    names = re.findall(r'(?m)^\s*name "([^"]+)"', warehouse)
+    for device in DEVICE_NAMES:
+        assert device in names
+    assert warehouse.count('name "ButlerBot"') == 1
+    assert "    mass 3.2\n" in warehouse
+    assert warehouse.count("mass 0.085") == 2
+    assert "0.055 0.062 0.078" in warehouse
+    assert "centerOfMass [\n      0 0 0.12\n    ]" in warehouse
+    assert "boundingObject Pose" in warehouse
+    assert "boundingObject Sphere" in warehouse
+    assert "boundingObject Box" in warehouse
+    assert "Cylinder {" in warehouse
+    assert "translation 0.03542 0.41808 0.70419" in warehouse
+    assert "translation 0.03542 -0.41808 0.70419" in warehouse
+    assert "translation 0.16 0 0.45" in warehouse
+    assert "rotation 0 1 0 1.5708" in warehouse
+    assert "DEF RADAR_FWD Radar" in warehouse
+    assert "DEF NADIR_CAM_L Camera" in warehouse
+    assert "DEF NADIR_CAM_R Camera" in warehouse
+    assert "DEF LEFT_WHEEL_JOINT HingeJoint" in warehouse
+    assert "DEF RIGHT_WHEEL_JOINT HingeJoint" in warehouse

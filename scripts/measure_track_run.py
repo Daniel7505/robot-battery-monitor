@@ -24,15 +24,18 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import argparse
 import json
 import math
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
+
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from dashboard_http import _req, cmd, twin  # noqa: E402
 
 # Defaults match webots/worlds/track_calibration.json and butlerbot.wbt paint
 START_X = 0.0
@@ -55,27 +58,6 @@ def _default_battery_capacity_wh() -> float:
     from src.hardware_profile import battery_capacity_wh
 
     return float(battery_capacity_wh())
-
-
-def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0) -> dict:
-    data = None
-    headers = {}
-    if os.environ.get("RBM_API_TOKEN"):
-        headers["X-API-Token"] = os.environ["RBM_API_TOKEN"]
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def twin(base: str) -> dict:
-    return _req(f"{base}/api/twin/state")
-
-
-def cmd(base: str, body: dict) -> dict:
-    return _req(f"{base}/api/twin/command", method="POST", body=body)
 
 
 def diag(st: dict) -> dict:
@@ -555,7 +537,7 @@ def main() -> int:
         },
     }
     try:
-        res = _req(f"{base}/api/measurements", method="POST", body=row)
+        res = _req(f"{base}/api/measurements", method="POST", body=row, timeout=8.0)
         print(f"  DB id = {res.get('id')}")
     except urllib.error.URLError as e:
         print(f"  DB write failed: {e}")

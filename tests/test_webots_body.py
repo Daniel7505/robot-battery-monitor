@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from src.butlerbot_proto import expand_world_text
 from src.hardware_profile import build_profile_from_bom
 from src.webots_body import (
     BODY_INERTIA_DIAG,
@@ -57,9 +58,13 @@ def select_build():
         config._config.pop("bom_build", None)
 
 
-def _robot(text: str) -> tuple[str, str]:
-    idx = text.index("\nRobot {")
-    return text[:idx], text[idx:]
+def _prefix(text: str) -> str:
+    return text.split("\nButlerBot {", 1)[0]
+
+
+def _expanded_robot(text: str) -> str:
+    expanded = expand_world_text(text)
+    return expanded[expanded.index("Robot {"):]
 
 
 @pytest.mark.parametrize("build", BUILDS)
@@ -80,9 +85,9 @@ def test_each_build_sets_mass_and_keeps_the_contact_radius(build, world):
 
     original = world.read_text(encoding="utf-8")
     patched = apply_bom_body_vrml(original, physics)
-    before, robot = _robot(original)
-    after, robot_after = _robot(patched)
-    assert after == before  # floor, racks, and the rest of the world stay put
+    assert _prefix(patched) == _prefix(original)  # floor, racks, and the rest of the world stay put
+    robot = _expanded_robot(original)
+    robot_after = _expanded_robot(patched)
     assert "    mass 3.2\n" not in robot_after
     assert robot_after.count("mass 0.085") == robot.count("mass 0.085")
     # Casters stay the shipped spheres. A 0.04 m BoM wheel is a drive-wheel
@@ -107,9 +112,11 @@ def test_each_build_sets_mass_and_keeps_the_contact_radius(build, world):
         assert wheel.anchor_z_m == pytest.approx(DRAWN_WHEEL_RADIUS_M)
         assert wheel.translation_z_m == pytest.approx(DRAWN_WHEEL_RADIUS_M)
         assert wheel.inertia == pytest.approx(WHEEL_INERTIA_DIAG)
-    assert f"contact cylinder stays {DRAWN_WHEEL_RADIUS_M:g} m" in robot_after
-    assert f"Catalog wheel {physics.wheel_radius_m:g} m" in robot_after
-    assert f"BoM {build}:" in robot_after
+    # The BoM note is a field comment on the ButlerBot instance. Expansion
+    # keeps the mass and inertia, and drops that comment.
+    assert f"contact cylinder stays {DRAWN_WHEEL_RADIUS_M:g} m" in patched
+    assert f"Catalog wheel {physics.wheel_radius_m:g} m" in patched
+    assert f"BoM {build}:" in patched
     assert body_matches(patched, physics)
 
 

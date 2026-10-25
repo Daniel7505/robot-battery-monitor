@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass, field
+
+from src.mission_summary_file import parse_mission_kv
 
 # A corner occupies part of a 10 ft segment. 20° keeps gentle weave on
 # the straight side and warehouse pivots on the turn side.
 TURN_HEADING_DEG = 20.0
-
-_KV = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)="
-    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
-    r"|-?(?:\d+(?:\.\d*)?|\.\d+)"
-    r"|na"
-    r"|[^\s]+)"
-)
 
 
 def _num(text: str | None) -> float | None:
@@ -32,7 +25,7 @@ def _num(text: str | None) -> float | None:
 
 
 def _kv(line: str) -> dict[str, str]:
-    return {key: value for key, value in _KV.findall(line)}
+    return parse_mission_kv(line)
 
 
 @dataclass

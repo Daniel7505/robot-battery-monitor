@@ -504,3 +504,32 @@ def test_propose_exposes_paper_and_twin(tmp_path: Path):
     assert t["energy_source"] == "v1_wheeled_energy_baseline"
     assert t["energy_wh_paper"] is not None
     assert t["energy_wh_est"] < t["energy_wh_paper"]
+
+
+def test_split_keeps_the_import_path():
+    import src.twin_energy as te
+    import src.twin_energy_cruise as cruise
+    import src.twin_energy_drive as drive
+    import src.twin_energy_mission as mission
+    import src.twin_energy_motor as motor
+
+    assert te.estimate_mission_energy is cruise.estimate_mission_energy
+    assert te.paper_energy is cruise.paper_energy
+    assert te.TWIN_CRUISE is cruise.TWIN_CRUISE
+    assert te.GRAVITY_M_S2 is cruise.GRAVITY_M_S2
+    assert te.electrical_from_shaft_w is motor.electrical_from_shaft_w
+    assert te.SimPackMeter is motor.SimPackMeter
+    assert te.brushed_drive_point is motor.brushed_drive_point
+    assert te.stall_hold_electrical_wh is motor.stall_hold_electrical_wh
+    assert te.bom_drive_terms is drive.bom_drive_terms
+    assert te.turning_scrub_wh is drive.turning_scrub_wh
+    assert te.shift_energy_wh is drive.shift_energy_wh
+    assert te._hub_electrical_w is drive._hub_electrical_w
+    assert te._profile_motor_args is drive._profile_motor_args
+    assert te.format_mission_energy_line is mission.format_mission_energy_line
+    assert te.bom_run_energy_wh is mission.bom_run_energy_wh
+    assert te.segment_model_terms is mission.segment_model_terms
+    assert te.format_mission_energy_line.__module__ == "src.twin_energy_mission"
+    assert te.SimPackMeter.step.__module__ == "src.twin_energy_motor"
+    assert te.turning_scrub_point.__module__ == "src.twin_energy_drive"
+    assert te.estimate_mission_energy.__module__ == "src.twin_energy_cruise"

@@ -17,7 +17,7 @@ A dated, honest log of how this project was built: which AI tools I used at each
 | ~2026-06 → 2026-09 | Grok Build (CLI coding agent) | 5,378 (06-20) → 23,987 (09-04) | Docker + Postgres stack, Webots twin, robot talks to the dashboard, long fight with the S track |
 | 2026-10-01 → 2026-10-25 | Grok Bot (agent with GitHub, CI, its own machine) | 24,031 (10-01) → 41,497 (10-05) | Tests fixed + CI, security, rowfit lane vision, corners, junctions, warehouse, obstacles, picking, PRs #1-#17 |
 
-Test files grew from 2 (2026-05-15) to 42 (2026-09-04) to 65 (2026-10-05). As of 2026-10-25, pytest collects 867 tests: 27 need Postgres (the `db` marker), and one skips without the docker CLI. The suite runs in GitHub Actions on every pull request.
+Test files grew from 2 (2026-05-15) to 42 (2026-09-04) to 65 (2026-10-05). As of 2026-10-25, pytest collects 880 tests: 27 need Postgres (the `db` marker), and one skips without the docker CLI. The suite runs in GitHub Actions on every pull request.
 
 ---
 

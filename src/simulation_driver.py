@@ -25,6 +25,7 @@ advancing the internal script.
 from __future__ import annotations
 
 from src.config import config
+from src.hardware_profile import battery_capacity_wh
 from src.logger import logger
 from src.mission_tasks import TASK_PROFILES, TICK_SECONDS, MissionTaskManager
 
@@ -75,9 +76,9 @@ class SimulationDriver:
         self._loop = bool(sim_cfg.get("loop", True))
         self._driver_name = sim_cfg.get("driver", "butlerbot")
         self._robot_name = sim_cfg.get("robot_name") or config.get("robot", "name", "ButlerBot")
-        self._battery_wh = sim_cfg.get("battery_capacity_wh") or config.get(
-            "robot", "main_battery_capacity_wh", 480
-        )
+        # Profile pack, not the raw simulation/robot keys. Blank bom_build
+        # is the wheeled YAML 480 Wh; light is the BoM 240 Wh.
+        self._battery_wh = float(battery_capacity_wh())
         self._script = _load_script(sim_cfg)
         # Config draw_profiles override defaults per task_id.
         self._draw_profiles = {

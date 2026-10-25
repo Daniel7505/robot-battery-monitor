@@ -1,7 +1,7 @@
 # Prototype warehouse course
 
 **Status: starting template, not the final design.** Stereo + radar obstacle
-sensing, one-SKU inventory/trolley pretend-pick, and multi-trip shopping list
+sensing, one-SKU inventory pretend-pick, and multi-trip shopping list
 are in. See `docs/INVENTORY_TROLLEY.md` and `docs/SHOPPING_LIST.md`.
 
 ![preview](warehouse_preview.png)
@@ -162,22 +162,23 @@ The clean `butlerbot_warehouse.wbt` keeps an empty `WH_OBSTACLES` group.
 The world's `# OBSTACLES on` tag turns stereo sensing on there. Details are
 in `docs/OBSTACLES.md`.
 
-## Inventory + trolley + shopping list
+## Inventory + shopping list
 
-Placeholder inventory cubes (`DEF WH_INVENTORY`, grouped by aisle/block SKU) and a
-pull-behind trolley prop (`DEF WH_TROLLEY`). Mission `pick_one_sku_to_shipping`
+Placeholder inventory cubes (`DEF WH_INVENTORY`, grouped by aisle/block SKU).
+The pull-behind trolley prop was removed. Mission `pick_one_sku_to_shipping`
 uses the same route as `odd_aisle_to_shipping` and stops at demo SKU
 `SKU-A05-B0-L` when `RBM_PICK_SKU=demo`. Multi-trip shopping list: missions
-`shopping_list_trip_1`…`_4`, env `RBM_SHOPPING_LIST`. Full CMD:
-`docs/INVENTORY_TROLLEY.md`, `docs/SHOPPING_LIST.md`, `docs/CHEAT_SHEET.md`.
+`shopping_list_trip_1`…`_4`, env `RBM_SHOPPING_LIST`, carry capacity 2.
+Full CMD: `docs/SHOPPING_LIST.md`, `docs/CHEAT_SHEET.md`.
+`docs/INVENTORY_TROLLEY.md` is a one-line note that the prop is gone.
 
 
 ## Next steps
 
 1. **Stereo obstacle sensing**: first pass done (`docs/OBSTACLES.md`). Open: avoidance and re-routing around a blocked aisle.
 2. **Radar**: first pass done (`docs/OBSTACLES.md`). Path-around still open.
-3. **Inventory / trolley / shopping list**: one-SKU pretend pick done
-   (`docs/INVENTORY_TROLLEY.md`); multi-trip fill-trolley-then-ship done
-   (`docs/SHOPPING_LIST.md`). Open: continuous dock-return in one Webots
-   session; dashboard battery/time panel (stub in track JSON).
+3. **Inventory / shopping list**: one-SKU pretend pick done; multi-trip
+   fill-then-ship done (`docs/SHOPPING_LIST.md`). The trolley prop is gone.
+   Open: continuous dock-return in one Webots session; dashboard battery/time
+   panel (stub in track JSON).
 4. Design: a second middle cross aisle (`n_mid_cross`), and realistic dock levelers / door states.

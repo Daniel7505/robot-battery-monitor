@@ -322,7 +322,7 @@ class RowfitRuntime:
         self.route_text, self.route_warnings = "", []
         self.configure_route()
         self.obstacles = None  # controller_obstacles.ObstacleRuntime when RBM_OBSTACLES is on
-        self.inventory = None  # controller_inventory.InventoryRuntime (trolley + pretend pick)
+        self.inventory = None  # controller_inventory.InventoryRuntime (pretend pick)
         self.gyro_found = False
 
     def configure_route(self) -> None:

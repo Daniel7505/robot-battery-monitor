@@ -224,7 +224,17 @@ CONTROL_SPEED_CAP_M_S = 0.85
 MOTION_SETTLED_SPEED_M_S = 0.08
 MOTION_SETTLED_WHEEL_RAD_S = 0.2
 
-BATTERY_CAPACITY_WH = 480.0
+def active_battery_capacity_wh() -> float:
+    """Pack Wh for the build in force at this call.
+
+    Looked up on use, not at import. A light ``bom_build`` is the BoM
+    240 Wh pack. A blank ``bom_build`` stays the wheeled YAML 480 Wh pack.
+    """
+    from src.hardware_profile import battery_capacity_wh
+
+    return float(battery_capacity_wh())
+
+
 # Real-world physics: Wh → % with no demo time-compression.
 # (Was 12.0 for wall-clock demos; agent/hardware optimization needs scale=1.)
 BATTERY_DRAIN_SCALE = 1.0
@@ -415,7 +425,7 @@ def battery_drain_pct(
     draw_w: float,
     dt_s: float,
     *,
-    capacity_wh: float = BATTERY_CAPACITY_WH,
+    capacity_wh: float | None = None,
     scale: float = BATTERY_DRAIN_SCALE,
     drain_scale: float = 1.0,
 ) -> float:
@@ -424,7 +434,11 @@ def battery_drain_pct(
     Default ``scale`` is 1.0 (building / agent optimization). Demo time-compression
     is intentionally off — accelerated drain confuses hardware optimization.
     ``drain_scale`` remains for idle/brake soft factors only (≤1), not demos.
+    ``capacity_wh`` defaults to :func:`active_battery_capacity_wh` so a light
+    build drains the BoM pack and a blank ``bom_build`` drains the YAML pack.
     """
+    if capacity_wh is None:
+        capacity_wh = active_battery_capacity_wh()
     if draw_w <= 0 or dt_s <= 0 or capacity_wh <= 0:
         return 0.0
     return (draw_w * dt_s) / (capacity_wh * 3600.0) * 100.0 * scale * drain_scale

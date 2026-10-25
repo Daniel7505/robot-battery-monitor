@@ -164,8 +164,14 @@ every 3 s. This log integrated the timestamp gap and dropped any
 gap over 15 s. The controller drained every physics step's wall
 gap, including each gap under 15 s while a POST was failing or the
 dashboard had just restarted. Those seconds moved the percent and
-never entered ``wh_measured``. Runs #8 and #9 matched within 0.1%
-because no such hole landed between arm and summary.
+never entered ``wh_measured``. On runs #8 and #9 the SoC-derived
+and integrated measured Wh agreed to about 0.1% (two meters on the
+same drain) because no such hole landed between arm and summary.
+That agreement is not model-versus-measured error. Lap #12
+(``docs/baselines/2026-10-13_light_warehouse.md``) model error is
+−28.3% drive-only / −21.2% drive+idle. The 0.08 m wheel-radius
+damping fix predicts model drive about 3.7 Wh versus 3.742 Wh
+measured; that prediction is unverified until a rerun lap is logged.
 
 The same wall clock made HUD paint look like an energy change.
 Run #9 (HUD on, 0.70× realtime, 896 s) measured 5.075 Wh of drive.

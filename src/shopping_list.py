@@ -1,9 +1,10 @@
-"""Multi-trip shopping list: fill trolley capacity, ship, repeat.
+"""Multi-trip shopping list: fill carry capacity, ship, repeat.
 
-Builds on one-SKU pretend pick + hitch trolley (``src/inventory_pick.py``).
-This module is pure (no Webots): pack a shopping list into 3–4 trips that fill
-the trolley before shipping, order picks with a simple route heuristic, and
-drive a multi-trip state machine that clears the trolley load between trips.
+Builds on one-SKU pretend pick (``src/inventory_pick.py``). This module is
+pure (no Webots): pack a shopping list into 3–4 trips that fill
+``CARRY_CAPACITY`` before shipping, order picks with a simple route
+heuristic, and drive a multi-trip state machine that clears the load
+between trips.
 
 Webots glue lives in ``controller_inventory.py``. Continuous multi-trip in one
 Webots session (dock-return without finish) is deferred — CMD runs one trip
@@ -15,18 +16,14 @@ import math
 from dataclasses import dataclass, field
 
 from src.inventory_pick import (
-    DEFAULT_CUBE_M,
     DEFAULT_PICK_DWELL_S,
     DEFAULT_PICK_RADIUS_M,
-    DEFAULT_TROLLEY_LENGTH_M,
-    DEFAULT_TROLLEY_WIDTH_M,
     InventoryGroup,
     PickCommand,
     ST_DONE,
     ST_PICKING,
     ST_TO_PICK,
     ST_TO_SHIP,
-    TrolleyGeom,
     find_group,
 )
 
@@ -37,18 +34,11 @@ ST_IDLE = "IDLE"
 ORDER_AISLE = "aisle"  # sort by aisle, then block, then sku
 ORDER_NEAREST = "nearest"  # nearest-neighbour from start / last pick
 
-# Floor packing: bed 0.55×0.40 / cube 0.28×0.28 ≈ 2. Derived, not magic.
-DEFAULT_TROLLEY_CAPACITY = max(
-    1,
-    int(
-        (DEFAULT_TROLLEY_LENGTH_M * DEFAULT_TROLLEY_WIDTH_M)
-        // (DEFAULT_CUBE_M[0] * DEFAULT_CUBE_M[1])
-    ),
-)
+# Cubes one trip may carry. A plain constant, not a trolley-bed derivation.
+CARRY_CAPACITY = 2
 
 ASSUMPTIONS = (
-    "Trolley capacity = floor cubes that fit on the bed (length×width / cube "
-    "footprint), currently 2 — no stacking / no mass limit.",
+    "Carry capacity is 2 cubes per trip (CARRY_CAPACITY) — no stacking / no mass limit.",
     "Each shopping line is one pretend-pick cube removal (qty counts cubes).",
     "Trip packing is first-fit after visit ordering: fill to capacity, then ship.",
     "Visit order default = aisle ascending, then block, then SKU (warehouse "
@@ -60,17 +50,6 @@ ASSUMPTIONS = (
     "continuous dock-return.",
     "Ultrasound and path-around remain deferred. BoM held.",
 )
-
-
-def trolley_capacity_units(
-    geom: TrolleyGeom | None = None,
-    cube_m: tuple[float, float, float] = DEFAULT_CUBE_M,
-) -> int:
-    """Derive integer floor capacity from trolley bed × cube footprint."""
-    g = geom or TrolleyGeom()
-    bed = max(1e-9, g.length_m * g.width_m)
-    foot = max(1e-9, cube_m[0] * cube_m[1])
-    return max(1, int(bed // foot))
 
 
 def shopping_group_specs(layout) -> list[dict]:
@@ -229,7 +208,7 @@ def plan_shopping_trips(
     ship_exit: str = "shipping_1",
 ) -> ShoppingPlan:
     """Pack lines into capacity-limited trips with a simple visit order."""
-    cap = trolley_capacity_units() if capacity is None else max(1, int(capacity))
+    cap = CARRY_CAPACITY if capacity is None else max(1, int(capacity))
     mode = order if order in (ORDER_AISLE, ORDER_NEAREST) else ORDER_AISLE
     units = _expand_units(lines, groups)
     ordered = _order_stops(units, mode, start_xy)
@@ -334,11 +313,10 @@ def plan_to_json(plan: ShoppingPlan) -> dict:
 
 @dataclass
 class MultiTripState:
-    """Fill trolley → ship → unload/reset → next trip (pure state machine).
+    """Fill carry capacity → ship → unload/reset → next trip (pure state machine).
 
-    Reuses the one-SKU pick dwell geometry. ``load_units`` tracks cubes on the
-    bed; ``clear_load`` is set when unloading so the controller can hide
-    ``WH_TROLLEY_LOAD``.
+    Reuses the one-SKU pick dwell geometry. ``load_units`` tracks cubes picked
+    on this trip. ``clear_load`` is set when unloading between trips.
     """
 
     plan: ShoppingPlan

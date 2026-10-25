@@ -1,12 +1,12 @@
-# Multi-trip shopping list (fill trolley → ship → repeat)
+# Multi-trip shopping list (fill carry capacity → ship → repeat)
 
-**Status: next vertical slice after inventory/trolley.** A shopping list of
-several SKUs across aisle groups is packed into **3–4 trolley trips** that fill
-capacity before shipping. Route order is a simple aisle sweep (optional
-nearest-neighbour). Reuses pretend pick + hitch trolley; clears the trolley
-load between trips. BoM held. Ultrasound / path-around deferred. Plan-side battery/time efficiency remains a **light stub** (dict + track JSON).
-Live twin mission totals (time / Wh / distance) are on the Live Monitor
-efficiency strip — see `src/mission_efficiency.py` / CHEAT_SHEET.
+**Status: in the repo.** A shopping list of several SKUs across aisle groups
+is packed into **3–4 trips** that fill carry capacity before shipping. Route
+order is a simple aisle sweep (optional nearest-neighbour). Reuses pretend
+pick. The pull-behind trolley prop was removed (visual only). BoM held.
+Ultrasound / path-around deferred. Plan-side battery/time efficiency remains
+a **light stub** (dict + track JSON). Live twin mission totals (time / Wh /
+distance) are on the This lap panel — see `src/mission_efficiency.py`.
 
 ## What you get
 
@@ -21,9 +21,8 @@ efficiency strip — see `src/mission_efficiency.py` / CHEAT_SHEET.
 
 ## Capacity / trip rules
 
-* **Capacity = 2 cubes** — floor packing on the trolley bed
-  (`0.55 × 0.40 / 0.28 × 0.28 ≈ 2`). No stacking, no mass limit. Derived from
-  `TrolleyGeom` + cube footprint (`trolley_capacity_units()`).
+* **Capacity = 2 cubes** — `CARRY_CAPACITY` in `src/shopping_list.py`. A named
+  constant, not a bed-size derivation. No stacking, no mass limit.
 * **Demo list = 7 lines** (one cube per seeded SKU) → **4 trips** at cap 2:
   `(2)+(2)+(2)+(1)`.
 * **Packing:** visit-order first, then first-fit into capacity buckets; each
@@ -35,7 +34,7 @@ efficiency strip — see `src/mission_efficiency.py` / CHEAT_SHEET.
 
 ## Assumptions (also in `shopping_list.assumptions`)
 
-1. Capacity is floor cubes on the bed, not weight.
+1. Capacity is `CARRY_CAPACITY` (2 cubes), not weight.
 2. Each list qty unit = one pretend-pick cube removal.
 3. Fill-then-ship packing after visit ordering (not cluster TSP).
 4. Aisle sweep by default; nearest-neighbour optional.
@@ -54,7 +53,7 @@ pip install -r requirements.txt
 
 REM dashboard twin must already be running: scripts\start.ps1
 
-REM --- trip 1 smoke (two SKUs, fill trolley, ship) ---
+REM --- trip 1 smoke (two SKUs, fill carry capacity, ship) ---
 set RBM_ROUTE=S,S,R,L,L,R,L,L,S,R,S,S,S,S,L,S
 set RBM_SHOPPING_LIST=1
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World warehouse

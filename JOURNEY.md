@@ -15,9 +15,9 @@ A dated, honest log of how this project was built: which AI tools I used at each
 | ~2025, over a year before Oct 2026 (before git) | Gemini, copy-paste in chat | (not in git) | Barely past `main.py` |
 | up to mid-2026 (git starts 2026-05-15) | Grok web app | 342 on 2026-05-15 | A good-looking dashboard where nothing really worked |
 | ~2026-06 → 2026-09 | Grok Build (CLI coding agent) | 5,378 (06-20) → 23,987 (09-04) | Docker + Postgres stack, Webots twin, robot talks to the dashboard, long fight with the S track |
-| 2026-10-01 → | Grok Bot (agent with GitHub, CI, its own machine) | 24,031 (10-01) → 41,497 (10-05) | Tests fixed + CI, security, rowfit lane vision, corners, junctions, warehouse, obstacles, picking, PRs #1-#17 |
+| 2026-10-01 → 2026-10-25 | Grok Bot (agent with GitHub, CI, its own machine) | 24,031 (10-01) → 41,497 (10-05) | Tests fixed + CI, security, rowfit lane vision, corners, junctions, warehouse, obstacles, picking, PRs #1-#17 |
 
-Test files grew from 2 (2026-05-15) to 42 (2026-09-04) to 65 (2026-10-05). The suite is now about 630 tests and runs in GitHub Actions on every pull request.
+Test files grew from 2 (2026-05-15) to 42 (2026-09-04) to 65 (2026-10-05). As of 2026-10-25, pytest collects 868 tests: 27 need Postgres (the `db` marker), and one skips without the docker CLI. The suite runs in GitHub Actions on every pull request.
 
 ---
 
@@ -101,7 +101,7 @@ Copy this block, newest entry at the bottom of the current stage (or start a new
 - The model was comparing motor-shaft energy against battery-side (electrical) energy. Converting both to the same units on the Pololu motor curve fixed the mismatch.
 - Turns were off by about 110% because turning wasn't modeled at all. We added a turn scrub term.
 - Dan suspected the gap came from timing between telemetry updates. He was right: the dashboard was integrating sparse posts and dropping about 101 seconds of data. The controller now keeps cumulative energy totals on simulation time.
-- The model still ran 28% high because damping was billed at a 0.04 m wheel radius instead of 0.08 m. After that fix, a full warehouse lap matched within **0.1%** (5.569 Wh modeled vs 5.556 Wh measured).
+- Damping was billed at a 0.04 m wheel radius instead of 0.08 m. On runs #8 and #9, SoC-derived and integrated measured Wh agreed to about 0.1% (two meters on the same drain, not model versus measured). Lap #12 (`docs/baselines/2026-10-13_light_warehouse.md`) model error is −28.3% drive-only / −21.2% drive+idle. The 0.08 m wheel-radius damping fix (`ee98c61`) predicts model drive about 3.7 Wh versus 3.742 Wh measured, but that is unverified until a rerun lap is logged.
 
 **Debugging calls.** The stutter Dan saw was rendering only (real-time factor swinging 0.6–1.5x while actual speed barely changed). Turning off the HUD did not cut energy use. It only shortened wall-clock time, and Grok Bot corrected its own earlier claim about that.
 

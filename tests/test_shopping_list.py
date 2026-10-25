@@ -20,7 +20,7 @@ from src.inventory_pick import (  # noqa: E402
     demo_group_specs,
 )
 from src.shopping_list import (  # noqa: E402
-    DEFAULT_TROLLEY_CAPACITY,
+    CARRY_CAPACITY,
     ORDER_AISLE,
     ORDER_NEAREST,
     ST_DONE,
@@ -32,7 +32,6 @@ from src.shopping_list import (  # noqa: E402
     plan_shopping_trips,
     plan_to_json,
     shopping_efficiency_metrics,
-    trolley_capacity_units,
 )
 import warehouse_builder as wb  # noqa: E402
 
@@ -47,9 +46,10 @@ def groups(lay):
     return build_inventory_groups(lay)
 
 
-def test_capacity_derived_from_bed():
-    assert DEFAULT_TROLLEY_CAPACITY == 2
-    assert trolley_capacity_units() == 2
+def test_carry_capacity_is_two():
+    assert CARRY_CAPACITY == 2
+    plan = plan_shopping_trips([], [])
+    assert plan.capacity == CARRY_CAPACITY
 
 
 def test_demo_seeds_enough_skus_for_multi_trip(lay, groups):

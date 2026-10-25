@@ -18,6 +18,17 @@ robot:
   main_battery_capacity_wh: 480   # kept in sync with profile battery.capacity_wh
 ```
 
+## Which battery pack?
+
+`battery_capacity_wh()` in `src/hardware_profile.py` is the pack teleop, the simulation driver, and the Webots drain fallback use.
+
+| `bom_build` | Pack |
+| --- | --- |
+| blank (default) | Wheeled YAML pack, **480 Wh** |
+| `light` | BoM pack, **240 Wh** (Bioenno 24V 10Ah LiFePO4) |
+
+The overnight optimizer and reference laps #8–#12 use `light`. Blank `bom_build` still means the wheeled 480 Wh YAML pack.
+
 ## Parts in the v1 profile
 
 | Block | What |

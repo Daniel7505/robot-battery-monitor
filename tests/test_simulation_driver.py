@@ -4,11 +4,34 @@ from src.simulation_driver import SimulationDriver, BUTLERBOT_SCRIPT
 from src.mission_tasks import MissionTaskManager, TICK_SECONDS
 from src.hardware import reset_hardware_source
 from src.hardware_ros2 import ROS2BatterySource
+from src.hardware_profile import clear_profile_cache
 
 
 def test_butlerbot_script_has_full_cycle():
     tasks = [s["task"] for s in BUTLERBOT_SCRIPT]
     assert tasks == ["idle", "moving", "balanced", "high_load", "idle"]
+
+
+def test_driver_capacity_blank_is_yaml_480_light_is_bom_240():
+    """SimulationDriver pack follows battery_capacity_wh(), not the raw YAML keys."""
+    from src.config import config
+
+    had = "bom_build" in config._config
+    old = config._config.get("bom_build", None)
+    try:
+        config._config["bom_build"] = None
+        clear_profile_cache()
+        assert SimulationDriver()._battery_wh == 480
+        config._config["bom_build"] = "light"
+        clear_profile_cache()
+        assert SimulationDriver()._battery_wh == 240
+        assert SimulationDriver().status()["battery_capacity_wh"] == 240
+    finally:
+        if had:
+            config._config["bom_build"] = old
+        else:
+            config._config.pop("bom_build", None)
+        clear_profile_cache()
 
 
 def test_draw_profiles_realistic_totals():

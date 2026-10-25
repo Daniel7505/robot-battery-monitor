@@ -2,7 +2,7 @@ import pytest
 
 from src.hardware_profile import battery_capacity_wh
 from src.teleop_agent import (
-    BATTERY_CAPACITY_WH,
+    active_battery_capacity_wh,
     BATTERY_DRAIN_SCALE,
     CONTROL_SPEED_CAP_M_S,
     abs_brake_complete,
@@ -63,13 +63,39 @@ def test_brake_complete_when_slow_enough():
 
 def test_battery_drain_real_world_scale():
     """40 W for 30 s = 1200 J ≈ 0.333 Wh → 0.333/480 ≈ 0.069 % (no demo accel)."""
-    assert BATTERY_CAPACITY_WH == battery_capacity_wh()
+    cap = active_battery_capacity_wh()
+    assert cap == battery_capacity_wh()
     dt = 0.032
     steps = int(30 / dt)
     drop = sum(battery_drain_pct(40.0, dt, drain_scale=1.0) for _ in range(steps))
-    expected = 40.0 * steps * dt / 3600.0 / BATTERY_CAPACITY_WH * 100.0
+    expected = 40.0 * steps * dt / 3600.0 / cap * 100.0
     assert drop == pytest.approx(expected, rel=1e-9)
     assert BATTERY_DRAIN_SCALE == 1.0
+
+
+def test_battery_capacity_blank_is_yaml_480_light_is_bom_240():
+    """Teleop drain follows the active pack, looked up at call time."""
+    from src.config import config
+    from src.hardware_profile import clear_profile_cache
+
+    had = "bom_build" in config._config
+    old = config._config.get("bom_build", None)
+    try:
+        config._config["bom_build"] = None
+        clear_profile_cache()
+        assert active_battery_capacity_wh() == 480
+        assert battery_drain_pct(480.0, 3600.0) == pytest.approx(100.0)
+        config._config["bom_build"] = "light"
+        clear_profile_cache()
+        assert active_battery_capacity_wh() == 240
+        assert battery_drain_pct(240.0, 3600.0) == pytest.approx(100.0)
+        assert battery_drain_pct(480.0, 3600.0, capacity_wh=480.0) == pytest.approx(100.0)
+    finally:
+        if had:
+            config._config["bom_build"] = old
+        else:
+            config._config.pop("bom_build", None)
+        clear_profile_cache()
 
 
 def test_latch_uses_last_forward_drive_after_turn():

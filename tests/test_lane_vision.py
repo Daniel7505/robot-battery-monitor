@@ -640,3 +640,25 @@ def test_aim_camera_yaw_prints_mirrored_rotation():
     assert "rotation -0.0858892 0.981718 0.169862 0.9512" in out
     assert "rotation 0.0858892 0.981718 -0.169862 0.9512" in out
     assert "53.65 deg down" in out
+
+
+def test_split_keeps_the_import_path():
+    import src.lane_camera as cam
+    import src.lane_draw as draw
+    import src.lane_geom as geom
+    import src.lane_lines as lines
+    import src.lane_mask as mask
+    import src.lane_vision as lv
+
+    assert lv.CameraModel is cam.CameraModel
+    assert lv.yellow_mask is mask.yellow_mask
+    assert lv.corner_cues is lines.corner_cues
+    assert lv._median is lines._median
+    assert lv.LaneTracker is geom.LaneTracker
+    assert lv.fit_lane is geom.fit_lane
+    assert lv.render_lane_bgra is draw.render_lane_bgra
+    assert lv.camera_model_from_device.__module__ == "src.lane_camera"
+    assert lv.detect_points.__module__ == "src.lane_mask"
+    assert lv.trace_lines.__module__ == "src.lane_lines"
+    assert lv.LaneTracker.process.__module__ == "src.lane_geom"
+    assert lv.offset_polyline.__module__ == "src.lane_draw"

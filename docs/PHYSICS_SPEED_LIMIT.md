@@ -88,7 +88,7 @@ Hand-check at **t = 0.32 s**, light **`a = 7.848`**, heavy **`a = 0.874`**: slow
 Total mass:
 
 ```text
-m = body mass (BoM mass_kg_known, e.g. light 6.142 kg) + payload_kg + trolley tare (when configured)
+m = body mass (BoM mass_kg_known, e.g. light 6.142 kg) + payload_kg
 ```
 
 Friction-limited deceleration (driven wheels):

@@ -1,6 +1,7 @@
 import time
 
 from src.twin import DigitalTwinBridge, get_twin_bridge, reset_twin_bridge
+from src.twin.power_feed import POWER_FEED_SCHEMA_VERSION
 from src.twin.butlerbot import BUTLERBOT_WALKING_FLOW, butlerbot_telemetry_step
 from src.twin.adapters import get_adapter
 from src.hardware import reset_hardware_source
@@ -11,6 +12,8 @@ def test_bridge_schema_documents_contract():
     bridge = DigitalTwinBridge()
     schema = bridge.schema()
     assert schema["schema_version"] == "1.1"
+    assert schema["power_feed"]["schema_version"] == POWER_FEED_SCHEMA_VERSION
+    assert "GET /api/live" in schema["integration_notes"]["verify"]
     assert schema["bridge_class"] == "DigitalTwinBridge"
     assert "webots" in schema["adapters"]
     assert "butlerbot_example" in schema

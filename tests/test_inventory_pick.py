@@ -1,7 +1,6 @@
-"""Pure inventory / trolley / one-SKU pretend-pick logic (no Webots)."""
+"""Pure inventory / one-SKU pretend-pick logic (no Webots)."""
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from src.inventory_pick import (  # noqa: E402
     ST_PICKING,
     ST_TO_PICK,
     ST_TO_SHIP,
-    TrolleyGeom,
     build_inventory_groups,
     demo_group_specs,
     demo_sku,
@@ -79,21 +77,6 @@ def test_inventory_json_roundtrip(lay):
     assert demo_sku(groups) == next(r["sku"] for r in rows if r["demo"])
     assert find_group(groups, rows[0]["sku"]).sku == rows[0]["sku"]
     assert find_group(groups, "no-such") is None
-
-
-def test_trolley_hitch_behind_robot():
-    tg = TrolleyGeom()
-    x, y, yaw = tg.world_pose((0.0, 0.0), 0.0)
-    assert x == pytest.approx(-tg.hitch_behind_m)
-    assert y == pytest.approx(0.0) and yaw == pytest.approx(0.0)
-    # facing +y (π/2): trolley is at −y
-    x2, y2, yaw2 = tg.world_pose((10.0, 5.0), math.pi / 2)
-    assert x2 == pytest.approx(10.0)
-    assert y2 == pytest.approx(5.0 - tg.hitch_behind_m)
-    assert yaw2 == pytest.approx(math.pi / 2)
-    assert tg.hitch_behind_m == pytest.approx(
-        tg.chassis_length_m / 2 + tg.hitch_clear_m + tg.tongue_m + tg.length_m / 2
-    )
 
 
 def test_pick_state_machine_one_sku(lay):

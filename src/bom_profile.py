@@ -34,7 +34,6 @@ BOM_CATEGORY_MAP = {
     "compute": "compute",
     "battery": "battery",
     "chassis": "structure",
-    "trolley_hitch": "structure",
 }
 
 # Energy gate: a blank idle watt on these parts fails the build.
@@ -454,7 +453,7 @@ def compute_camera_unknown_ids(build: dict, parts: dict) -> list[str]:
 
 
 def rolling_mass_kg(profile: dict) -> float:
-    """Known BoM mass plus payload and trolley tare when those are set."""
+    """Known BoM mass plus payload when that is set."""
     geom = profile.get("geometry") or {}
     mass = float(geom.get("mass_kg_known") or 0.0)
     if geom.get("payload_kg") is not None:
@@ -463,10 +462,4 @@ def rolling_mass_kg(profile: dict) -> float:
         from src.config import config
 
         mass += float(config.get("robot", "payload_kg") or 0.0)
-    if geom.get("trolley_tare_kg") is not None:
-        mass += float(geom["trolley_tare_kg"])
-    else:
-        from src.config import config
-
-        mass += float(config.get("robot", "trolley_tare_kg") or 0.0)
     return mass

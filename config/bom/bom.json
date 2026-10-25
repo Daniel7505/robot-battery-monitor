@@ -16,8 +16,7 @@
       "gps + gps_head",
       "imu (InertialUnit)",
       "ultrasound: deferred (none in sim)"
-    ],
-    "trolley": "visual-only Supervisor prop, capacity 2 floor cubes, no mass"
+    ]
   },
   "units": {
     "mass": "g",
@@ -47,7 +46,7 @@
       "motor_model": "Linear brushed-DC model from published no-load speed/current and stall torque/current (gearbox losses are inside these gearmotor figures). The design table is flat floor and constant speed. The live mission log adds published hinge damping, an m·a bound, and the turn term in turning_scrub. Datasheet peak efficiency is not an operating-point η.",
       "turning_scrub": "ASSUMPTION gaps, not a fit. Billed only on the mission log. Slip speed of each hub is (track/2)·|yaw rate| with track_width_m 0.34 from butlerbot_wheeled.yaml (world anchors ±0.17 m). Force is min(μ·N, v_slip/k). μ=8 and k=0.01 are drive_wheel vs default in butlerbot_warehouse.wbt (ODE: v = k·F). μ is a cap; the world comment says μ=80 made yaw impossible. frictionRotation is 0 0, so bore torque is not billed. Torque is F times the drawn wheel radius 0.08 m, then the Pololu 4693 duty/current line. Driver η 0.92 is applied once. ASSUMPTION: both drive wheels carry the weight because caster bottoms are ~4 mm above the tire. Straight-line contact torque above dampingConstant 0.15 is not given a coefficient. Fully mobilizing μ=8 as a skid is not billed.",
       "straight_contact": "Not billed. Run #9 (commit 255e769, warehouse, 1 lap, light) straights stayed about 10-25% low near 0.2 m/s and 30-40% low near 0.29 m/s. rollingFriction is unset on drive_wheel vs default, so ODE applies none (default 0 0 0). softCFM 1e-6 and softERP 0.7 are contact-joint softness, not a longitudinal drag. Caster bottoms are about 4 mm above the tire (anchor z=0.044, sphere radius 0.04), so BallJoint dampingConstant 0.8 is not floor drag. A constant extra shaft torque makes the percent error fall as speed rises. An added viscous coefficient stays nearly flat from 0.20 to 0.29 m/s. The logged gap grows with speed, so neither is that term. Left/right wheel-speed split is logged as STEER_SPLIT (variance, not a coefficient). Run #11 (fc55ab7, HUD paint off) measured drive 4.287 Wh against model drive 4.814 Wh because the log and the pack drain multiplied sim watts by wall time; HUD-on run #9 was 0.70x realtime and billed a longer wall clock. That sign flip is not a new drag coefficient. The pack integral is now the simulation step. Run #12 (2040e34, warehouse, 1 lap, light, sim-time accounting) model drive was 5.222 Wh against measured electrical drive 3.742 Wh. wh_visc was 4.667 of that 5.222 because damping torque 0.15*v/0.08 was converted at omega = v/0.04. The hinge and getTorqueFeedback turn at v/0.08. Webots JointParameters: dampingConstant for a rotational motor is N.m.s/rad and the joint torque is -c*omega, in addition to the motor. The motor page says getTorqueFeedback does not add that damper torque on top of motor effort. Measured shaft on that lap (0.866 Wh, about 4.7 W) matches 2*c*omega^2 at the 0.08 m hinge (about 4.3 W at the mean 0.304 m/s), so the feedback already contains the motor load against the damper, once. Visc is not subtracted from measured torque. The viscous bill now uses the hinge rate. The rolling design bill stays at v/0.04.",
-      "payload": "Payload rolls on the trolley with the same Crr. Trolley tare mass is unknown and excluded."
+      "payload": "Payload uses the same Crr. There is no separate trolley tare."
     }
   },
   "formulas": {
@@ -1084,38 +1083,6 @@
       "part_number": null,
       "name": "Aluminum plate chassis 0.36 x 0.28 x 0.12 m (repo placeholder)",
       "source_url": "https://github.com/Daniel7505/robot-battery-monitor/blob/main/config/hardware_profiles/butlerbot_wheeled.yaml"
-    },
-    {
-      "price_usd": null,
-      "price_note": null,
-      "price_date": "2026-10-13",
-      "mass_g": null,
-      "voltage_v": null,
-      "idle_w": null,
-      "active_w": null,
-      "rated_current_a": null,
-      "stall_current_a": null,
-      "peak_current_a": null,
-      "no_load_rpm": null,
-      "stall_torque_nm": null,
-      "max_efficiency": null,
-      "dimensions": null,
-      "datasheet_url": null,
-      "twin_channel": null,
-      "unknown": [
-        "SKU",
-        "mass",
-        "price",
-        "rolling resistance"
-      ],
-      "notes": "Sim trolley is visual-only (no physics mass), with hitch ~0.89 m behind the axle and bed height 0.18 m.",
-      "id": "hitch_trolley_gap",
-      "category": "trolley_hitch",
-      "tier": "all",
-      "vendor": null,
-      "part_number": null,
-      "name": "Trolley + hitch (not sourced)",
-      "source_url": "https://github.com/Daniel7505/robot-battery-monitor/blob/main/docs/INVENTORY_TROLLEY.md"
     }
   ],
   "builds": {

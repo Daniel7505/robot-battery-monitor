@@ -36,7 +36,7 @@ Imagine a small wheeled robot that carries things around a warehouse. Before any
 - **Drive it in a 3D simulator** ([Webots](https://cyberbotics.com/), free). The robot follows yellow painted lanes using two downward-facing cameras, turns at corners and intersections, slows for obstacles, and stops cleanly.
 - **Watch its "fuel gauge" live** in a web page: battery %, how many watts each body part uses (wheels, arms, torso, computer, cooling), safety warnings, and how long the battery should last.
 - **Save the history** in a database so you can look back at past runs.
-- **Test ideas without the simulator**: a fast "offline" lane-following simulator and about 630 automated tests.
+- **Test ideas without the simulator**: a fast "offline" lane-following simulator and 868 automated tests.
 - **Start designing real robots**: a small catalog of real, buyable parts and a first-draft "design agent" that suggests the cheapest parts list for a mission.
 
 The long-term goal ([`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)) is an agent that picks real parts, designs the cheapest robot that can finish a mission, tests it in the simulator, and then builds it for real. Today's robot and dashboard are the **test bench** for that goal. The north star may evolve as the project learns; `NORTH_STAR.md` is the current version.
@@ -49,9 +49,9 @@ You **do not need a real robot**. Everything runs on a normal PC.
 
 | Where | What it looks like |
 |-------|--------------------|
-| **Browser** at `http://127.0.0.1:5000` | A page titled **"ButlerBot Live Monitor"** with a big battery %, power per channel, green/yellow/red safety status, forecast, mission info and history charts. Numbers update by themselves every second or two. |
-| **Webots window** | ButlerBot (wheeled base, torso, two arms) driving along a yellow lane: by default a double S-curve (about 17.4 m along the lane) that ends at a red finish line at GPS x=16.5 m, or corners, intersections, or a warehouse with boxes and a pull-behind trolley. Small camera overlays show what the robot sees. |
-| **Dashboard while Webots runs** | The **Digital Twin Bridge** panel changes from `SOURCE: INTERNAL` to **`FEED: webots`**. Battery and watts now come from the simulated robot. A strip shows mission time, energy used (Wh) and distance. |
+| **Browser** at `http://127.0.0.1:5000` | The page that shipped after PR #23. Cards for **battery**, **system draw**, **runtime left**, and **energy left**. A **This lap** panel (phase, speed, position, mission time, energy used, distance) with teleop buttons (Forward, Back, Left, Right, Stop, Lane keep) and a **Proof** panel (measured vs model, steer source, cross-track, width and center error). The badge reads **TWIN LIVE** while Webots is posting and **AWAITING TWIN** otherwise. The page polls `GET /api/live` every 500 ms. |
+| **Webots window** | ButlerBot (wheeled base, torso, two arms) driving along a yellow lane: by default a double S-curve (about 17.4 m along the lane) that ends at a red finish line at GPS x=16.5 m, or corners, intersections, or a warehouse with boxes. Small camera overlays show what the robot sees. |
+| **Dashboard while Webots runs** | The badge changes from **AWAITING TWIN** to **TWIN LIVE**. Battery, system draw, and the This lap numbers come from the simulated robot. |
 | **Terminal (no Webots)** | `rowfit_sim.py` prints a small table: did the robot finish the course, how far off the lane it drifted (cm), and how long it took. |
 
 ---
@@ -265,8 +265,8 @@ python -m pytest
 
 That works with or without a database:
 
-- **No Postgres running:** the ~30 tests marked `db` are **skipped** with a note at the end, and everything else runs (about 600 tests). ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
-- **With Postgres:** every test runs. ✅ **It worked if** the last line says roughly `629 passed, 1 skipped` (the count grows over time; the one skip is a Docker check that only runs when the `docker` command is available).
+- **No Postgres running:** the 27 tests marked `db` are **skipped**, and everything else runs. One more test skips when the `docker` command is not on PATH. ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
+- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 868 tests.
 
 The full run takes about 5 minutes. To run just one file: `python -m pytest tests/test_lane_keep.py`.
 
@@ -338,11 +338,11 @@ Other worlds:
 ```
 .\scripts\launch_webots_twin.ps1 -World corner90      # sharp corner
 .\scripts\launch_webots_twin.ps1 -World plus          # crossroads
-.\scripts\launch_webots_twin.ps1 -World warehouse     # warehouse + trolley
+.\scripts\launch_webots_twin.ps1 -World warehouse     # warehouse
 ```
 Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play.
 
-✅ **It worked if** the robot starts driving along the yellow lane and the dashboard's **Digital Twin Bridge** panel shows **`FEED: webots`**.
+✅ **It worked if** the robot starts driving along the yellow lane and the dashboard badge says **TWIN LIVE**.
 
 **Step 5. Stop everything**
 
@@ -412,17 +412,17 @@ Same as C, with these differences:
 
 A script you can start before bed. It runs warehouse laps one after another, changes **one** allowlisted setting at a time, and leaves `optimizer/runs/morning.md` for the morning. Webots has to be on this PC. The cloud and Linux cannot launch it.
 
-What it is allowed to change, in `config/config.yaml`:
+What the overnight loop tunes, in `config/config.yaml`. These are exactly `OPTIMIZER_TUNING_KEYS` in `src/controller_limits.py`:
 
 | Key | What it does |
 | --- | --- |
-| `bom_build` | `light`, `heavy`, or `budget` (the launcher applies that mass) |
 | `controller.cruise_m_s` | Rowfit curve / lane cruise |
-| `controller.straight_m_s` | Straightaway cap |
 | `controller.pivot_w_max_rad_s` | In-place turn rate |
 | `controller.k_steer` | How hard the steer command is |
+| `controller.coast_enabled` | Coast into a turn instead of braking to a stop |
+| `controller.coast_margin_m` | How early that coast starts |
 
-It does **not** edit the energy model or `config/bom/bom.json` to chase a better score. A change that looks good is checked on another BoM build (or a second lap, when the change was the build itself). Ideas for code changes are written in the report and are not committed. When the loop stops, those five keys are put back to what they were at the start.
+`bom_build` stays `light` for the whole run. `controller.straight_m_s` is still read by the controller and is not tuned. Heavy-build confirm is off: a heavy lap is not a held-out physics check (see [`optimizer/KNOWLEDGE.md`](optimizer/KNOWLEDGE.md)). The loop does **not** edit the energy model or `config/bom/bom.json` to chase a better score. A change that looks good is checked with two fresh light laps (the value before the keep, and the kept value). Ideas for code changes are written in the report and are not committed. When the loop stops, those five tuning keys are put back to what they were at the start.
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\start.ps1
@@ -456,20 +456,18 @@ The command reads a JSON request on stdin and prints one JSON proposal (`param`,
 
 ## 6. Reading the dashboard
 
-The old engineering view is saved on branch `archive/engineering-dashboard`. See [`docs/ENGINEERING_DASHBOARD_ARCHIVE.md`](docs/ENGINEERING_DASHBOARD_ARCHIVE.md).
+The page polls `GET /api/live` every 500 ms.
 
-| Panel | Meaning |
-|-------|---------|
-| **Main Battery** | The big battery % for the whole robot |
-| **Power Channels** | Watts, amps and status for Legs (drive wheels), Arms, Torso, Compute, Cooling |
-| **Safety & Thermal Status** | Green = OK. Yellow/red = high draw, low battery or heat |
-| **Power Allocation** | How the power budget is split across channels |
-| **LRU / Requirements** | Parts grouped into units ("Line Replaceable Units") and whether each is within its limit for the current task |
-| **Mission / Energy Forecast** | What the robot is doing and how long the battery should last at this rate |
-| **Digital Twin Bridge** | Where the numbers come from: `SOURCE: INTERNAL` (built-in simulation) or `FEED: webots` (the Webots robot) |
-| **Efficiency strip** | Mission time, energy used (Wh) and distance; starts with the first Webots reading, resets with a battery reset |
-| **ROS2** | Usually says MOCK. That is normal |
-| **History charts** | Trends saved in Postgres (power, battery, missions, anomalies) |
+| On the page | Meaning |
+|-------------|---------|
+| **Battery** | Pack percent |
+| **System draw** | Sum of channel watts, and percent of the power budget |
+| **Runtime left** | How long the pack lasts at the current draw |
+| **Energy left** | Watt-hours still in the pack |
+| **This lap** | Badge **TWIN LIVE** or **AWAITING TWIN**. Phase, speed, position, mission time, energy used, battery change, distance, average speed. Teleop: Forward, Back, Left, Right, Stop, Lane keep, and a steer bar |
+| **Proof** | Measured vs model drive watt-hours, steer source (camera / held / track), cross-track, width error, center error |
+
+The previous engineering view is on branch `archive/engineering-dashboard`. See [`docs/ENGINEERING_DASHBOARD_ARCHIVE.md`](docs/ENGINEERING_DASHBOARD_ARCHIVE.md). That archive stays in the repo.
 
 ---
 
@@ -488,6 +486,17 @@ All in `.env` (copied from [`.env.example`](.env.example)). After editing, resta
 
 Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware profiles in `config/hardware_profiles/`.
 
+### Which battery pack?
+
+`battery_capacity_wh()` in `src/hardware_profile.py` is the pack the teleop drain, the simulation driver, and the Webots fallback use.
+
+| `bom_build` | Pack |
+| --- | --- |
+| blank (the default) | Wheeled YAML pack, **480 Wh** |
+| `light` | BoM pack, **240 Wh** (Bioenno 24V 10Ah LiFePO4) |
+
+The overnight optimizer and reference laps #8–#12 use `light`. A blank `bom_build` still means the wheeled 480 Wh YAML pack.
+
 **Security defaults:** the dashboard and database listen on `127.0.0.1` only (not reachable from other computers). `/api/demo/launch-webots` only answers local requests.
 
 ---
@@ -503,7 +512,7 @@ Deeper knobs live in [`config/config.yaml`](config/config.yaml) and the hardware
 | `set POSTGRES_PASSWORD in .env` error from Docker | You have no `.env`. Run `copy .env.example .env` (Windows) or `cp .env.example .env` |
 | Dashboard page doesn't load | Wait 30 s and refresh. Check `docker compose logs dashboard` |
 | Many tests `skipped` with "Postgres test database not reachable" | Normal without a database. To run them, see "Optional: run the database tests too" in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) |
-| Twin panel stays `SOURCE: INTERNAL` while Webots runs | Start the dashboard **before** Webots. Check `http://127.0.0.1:5000/api/twin/schema` opens in the browser. Make sure `HARDWARE_MODE` is not `simulator` |
+| Badge stays **AWAITING TWIN** while Webots runs | Start the dashboard **before** Webots. The page polls `GET /api/live` every 500 ms. Check `http://127.0.0.1:5000/api/twin/schema` opens in the browser. Make sure `HARDWARE_MODE` is not `simulator` |
 | Webots console: `Twin publish failed` | Same as above: the dashboard isn't reachable |
 | Webots: controller fails to start / Python not found | Install Python 3.12 (64-bit) and make sure `python` works in a new terminal; in Webots check **Tools → Preferences → Python command** |
 | Obstacle or warehouse worlds error on `numpy` | `pip install numpy` (and optionally `opencv-python`) for the Python that Webots uses |

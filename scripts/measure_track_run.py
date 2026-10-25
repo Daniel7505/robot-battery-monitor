@@ -41,7 +41,20 @@ FINISH_X = 16.5
 FINISH_Y = 0.0
 TRACK_LENGTH_M = 17.42
 WHEEL_RADIUS_M = 0.08
-BATTERY_CAPACITY_WH = 480.0
+
+
+def _default_battery_capacity_wh() -> float:
+    """Pack Wh when the track calibration file does not name one.
+
+    Same source as teleop: light ``bom_build`` is the BoM 240 Wh pack,
+    blank ``bom_build`` is the wheeled YAML 480 Wh pack.
+    """
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from src.hardware_profile import battery_capacity_wh
+
+    return float(battery_capacity_wh())
 
 
 def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 8.0) -> dict:
@@ -173,7 +186,10 @@ def main() -> int:
     lane = cal.get("lane") or {}
     track_len = float(lane.get("length_m", lane.get("path_length_m", TRACK_LENGTH_M)))
     r = float(cal.get("wheel_radius_m", WHEEL_RADIUS_M))
-    capacity_wh = float(cal.get("battery_capacity_wh", BATTERY_CAPACITY_WH))
+    raw_cap = cal.get("battery_capacity_wh")
+    capacity_wh = (
+        float(raw_cap) if raw_cap is not None else _default_battery_capacity_wh()
+    )
     v_cmd = args.wheel_v * r
     dt = 1.0 / max(args.sample_hz, 2.0)
 

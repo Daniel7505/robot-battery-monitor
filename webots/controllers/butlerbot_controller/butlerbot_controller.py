@@ -914,20 +914,20 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     rowfit_rt.obstacles = _ort
             except Exception as exc:
                 print(f"WARNING: obstacle sensing not loaded ({type(exc).__name__}: {exc}) — driving without it")
-        # Inventory + pull-behind trolley (warehouse worlds with WH_TROLLEY).
         # Pretend pick when RBM_PICK_SKU is set (demo / SKU-A05-B0-L).
+        # Shopping list when RBM_SHOPPING_LIST is set. No trolley prop.
         try:
             _inv = InventoryRuntime()
             _track = getattr(finish_ref, "name", None) or "warehouse"
             for msg in _inv.enable(robot, track_name=str(_track)):
                 print(f"WARNING inventory: {msg}")
-            if _inv.ok or _inv.pick is not None:
+            if _inv.pick is not None:
                 rowfit_rt.inventory = _inv
                 print(_inv.describe())
             else:
                 print(f"INVENTORY off ({_inv.why})")
         except Exception as exc:
-            print(f"WARNING: inventory/trolley not loaded ({type(exc).__name__}: {exc})")
+            print(f"WARNING: inventory not loaded ({type(exc).__name__}: {exc})")
     nadir_lobe_done = False
     mission_complete = False
     turn_log_sent = False
@@ -1095,9 +1095,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                 mission_prev_xy = (float(gps_xy[0]), float(gps_xy[1]))
             if rowfit_rt is not None:
                 rowfit_rt.odometry(left_wv_early, right_wv_early, dt, WHEEL_RADIUS_M)
-                # Pull-behind trolley hitch (every tick)
-                if getattr(rowfit_rt, "inventory", None) is not None:
-                    rowfit_rt.inventory.follow(gps_xy, prev_yaw)
 
             hubs_locked = (
                 abs(left_wv_early) < STOP_WHEEL_RAD_S
@@ -1707,20 +1704,16 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         cap_wh = 0.0
                         drain_dt = dt
                         pack_step_wh = None
+            # A failed pack read leaves cap_wh at 0. Drain the active pack:
+            # BoM Wh on a light build, wheeled YAML 480 when bom_build is blank.
+            if cap_wh <= 0:
+                cap_wh = _pack_capacity_wh()
             if pack_step_wh is not None:
-                if cap_wh <= 0:
-                    cap_wh = float(
-                        getattr(_teleop, "BATTERY_CAPACITY_WH", 240.0) or 240.0
-                    ) if _teleop is not None else 240.0
                 if cap_wh > 0:
                     battery_pct = max(
                         5.0, battery_pct - pack_step_wh / cap_wh * 100.0
                     )
             elif _teleop is not None:
-                if cap_wh <= 0:
-                    cap_wh = float(
-                        getattr(_teleop, "BATTERY_CAPACITY_WH", 480.0) or 480.0
-                    )
                 battery_pct = max(
                     5.0,
                     battery_pct
@@ -1732,9 +1725,7 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                         drain_scale=1.0,
                     ),
                 )
-            else:
-                if cap_wh <= 0:
-                    cap_wh = 480.0
+            elif cap_wh > 0:
                 battery_pct = max(
                     5.0,
                     battery_pct
@@ -2258,6 +2249,23 @@ def _uses_bom_pack() -> bool:
         return bool(active_bom_build())
     except Exception:
         return False
+
+
+def _pack_capacity_wh() -> float:
+    """Wh to drain against when the preview did not name a pack.
+
+    A failed pack read on a light build must use the BoM pack (240 Wh),
+    not the wheeled YAML 480. Blank ``bom_build`` stays 480.
+    """
+    try:
+        from src.hardware_profile import battery_capacity_wh
+
+        cap = float(battery_capacity_wh())
+        if cap > 0:
+            return cap
+    except Exception:
+        pass
+    return 480.0
 
 
 def _estimate_joint_power(

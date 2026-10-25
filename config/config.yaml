@@ -125,10 +125,8 @@ robot:
   name: "ButlerBot"
   main_battery_capacity_wh: 480   # 48V ~10Ah — compact mobile robot pack
   hardware_profile: butlerbot_wheeled
-  # Kilograms on the trolley, and the trolley's own mass. Both stay 0 until
-  # a trolley SKU is sourced (the hitch part in bom.json has no mass).
+  # Kilograms of payload on a run. 0 until a mission sets one.
   payload_kg: 0
-  trolley_tare_kg: 0
   # Optional stop for a world that loops (the warehouse has no finish).
   # Leave blank to run until the track finish — the S track is unchanged.
   # Set a number of metres, or set the env var RBM_MISSION_MAX_M (that

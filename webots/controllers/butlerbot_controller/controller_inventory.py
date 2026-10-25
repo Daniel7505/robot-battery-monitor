@@ -1,24 +1,21 @@
-"""Inventory cubes + pull-behind trolley + pretend pick / shopping list (Webots glue).
+"""Inventory cubes + pretend pick / shopping list (Webots glue).
 
 Pure planning lives in ``src/inventory_pick.py`` and ``src/shopping_list.py``.
 This module:
 
-* follows ``DEF WH_TROLLEY`` behind ButlerBot each frame (Robot block stays
-  byte-identical across worlds — the trolley is a warehouse Solid);
 * when ``RBM_SHOPPING_LIST`` is set (``demo`` or trip index), runs the
-  multi-trip fill-trolley-then-ship state machine for that trip's stops;
+  multi-trip fill-then-ship state machine for that trip's stops;
 * else when ``RBM_PICK_SKU`` is set, runs the one-SKU pretend-pick machine;
-* on pick: Supervisor-removes one ``WH_INV_*`` cube and raises
-  ``WH_TROLLEY_LOAD`` onto the bed; on unload between trips, hides the load.
+* on pick: Supervisor-removes one ``WH_INV_*`` cube.
 
-Shopping list off by default. One-SKU: ``RBM_PICK_SKU=demo``. Multi-trip:
-``RBM_SHOPPING_LIST=demo`` (or ``1``..``N`` for a single trip) plus the matching
-``RBM_ROUTE`` from ``tracks/warehouse.json`` missions ``shopping_list_trip_N``.
+The pull-behind trolley prop is gone. Shopping list off by default.
+One-SKU: ``RBM_PICK_SKU=demo``. Multi-trip: ``RBM_SHOPPING_LIST=demo``
+(or ``1``..``N`` for a single trip) plus the matching ``RBM_ROUTE`` from
+``tracks/warehouse.json`` missions ``shopping_list_trip_N``.
 """
 from __future__ import annotations
 
 import json
-import math
 import os
 from pathlib import Path
 
@@ -162,15 +159,10 @@ def resolve_sku(raw: str, catalog: list[dict]) -> tuple[str | None, str]:
 
 
 class InventoryRuntime:
-    """Trolley hitch + optional one-SKU pretend pick."""
+    """Optional one-SKU pretend pick or a shopping-list trip."""
 
     def __init__(self) -> None:
-        from src.inventory_pick import TrolleyGeom
-
         self.robot = None
-        self.trolley = None
-        self.load_node = None
-        self.geom = TrolleyGeom()
         self.catalog: list[dict] = []
         self.sku: str | None = None
         self.why = "off"
@@ -180,7 +172,6 @@ class InventoryRuntime:
         self.cube_defs: list[str] = []
         self._sku_cubes: dict[str, list[str]] = {}
         self.removed: list[str] = []
-        self.cargo_placed = False
         self.last_state = ""
         self.ok = False
         self._pick_holding = False  # True while we forced obstacle_v_cap=0 for pick
@@ -248,47 +239,24 @@ class InventoryRuntime:
                         self.cube_defs = list(row.get("cube_defs") or [])
                         self.pick = PickState(sku=sku, approach_xy=(float(ax), float(ay)))
             else:
-                self.why = (
-                    f"{SHOP_ENV}/{PICK_ENV} unset: trolley follow only (no pretend pick)"
-                )
+                self.why = f"{SHOP_ENV}/{PICK_ENV} unset"
 
-        try:
-            self.trolley = robot.getFromDef("WH_TROLLEY") if robot is not None else None
-        except Exception as exc:
-            self.trolley = None
-            msgs.append(f"WH_TROLLEY: {type(exc).__name__}: {exc}")
-        try:
-            self.load_node = robot.getFromDef("WH_TROLLEY_LOAD") if robot is not None else None
-        except Exception:
-            self.load_node = None
-
-        if self.trolley is None:
-            msgs.append("WH_TROLLEY not in this world — trolley follow disabled")
-            self.ok = False
-        else:
-            self.ok = True
-            # TrolleyGeom defaults match WarehouseSpec (chassis 0.36 + tongue + half bed).
-            # Re-derived here only if the catalog carries hitch_behind_m later.
+        self.ok = self.pick is not None
         return msgs
 
     def describe(self) -> str:
-        hitch = self.geom.hitch_behind_m
         if self.pick is not None and self.multi:
             stop = getattr(self.pick, "current_stop", None)
             ap = stop.approach_xy if stop else None
-            return (f"INVENTORY shopping — trolley hitch {hitch:.2f} m; {self.why}; "
-                    f"approach {ap}")
+            return f"INVENTORY shopping — {self.why}; approach {ap}"
         if self.pick is not None:
-            return (f"INVENTORY on — trolley hitch {hitch:.2f} m; pretend pick {self.why}; "
-                    f"approach {self.pick.approach_xy}")
-        return f"INVENTORY trolley follow — hitch {hitch:.2f} m ({self.why})"
+            return (
+                f"INVENTORY on — pretend pick {self.why}; "
+                f"approach {self.pick.approach_xy}"
+            )
+        return f"INVENTORY off ({self.why})"
 
     # ---- per-frame ----------------------------------------------------------
-    def follow(self, gps_xy, yaw: float) -> None:
-        """Hitch the trolley behind the robot (call every controller tick)."""
-        if self.ok:
-            self._follow_trolley(gps_xy, yaw)
-
     def update(self, gps_xy, yaw: float, dt: float, ctl=None) -> None:
         """Pretend-pick state machine; may set ctl.obstacle_v_cap = 0 while stopped.
 
@@ -298,8 +266,6 @@ class InventoryRuntime:
         """
         from src.inventory_pick import apply_pick_speed_cap
 
-        if self.ok:
-            self._follow_trolley(gps_xy, yaw)
         if self.pick is None or ctl is None:
             return
         cmd = self.pick.update(gps_xy, dt)
@@ -318,8 +284,6 @@ class InventoryRuntime:
         ctl.obstacle_v_cap = new_cap
         if cmd.pick_now:
             self._do_pick()
-        if self.multi and getattr(self.pick, "clear_load", False):
-            self._hide_cargo()
 
     def mark_shipped(self) -> None:
         if self.pick is None:
@@ -328,8 +292,6 @@ class InventoryRuntime:
             cmd = self.pick.mark_shipped()
             print(f"PICK -> {cmd.state} ({cmd.note})")
             self.last_state = cmd.state
-            # one-shot unload hide; MultiTripState.clear_load fires on next ticks too
-            self._hide_cargo()
             self._pick_holding = False
             self._pre_pick_cap = None
             return
@@ -358,23 +320,8 @@ class InventoryRuntime:
         }
 
     # ---- supervisor actions -------------------------------------------------
-    def _follow_trolley(self, gps_xy, yaw: float) -> None:
-        if self.trolley is None or gps_xy is None:
-            return
-        try:
-            x, y, _ = self.geom.world_pose((float(gps_xy[0]), float(gps_xy[1])), float(yaw))
-            z = self.geom.bed_h_m / 2.0
-            field = self.trolley.getField("translation")
-            if field is not None:
-                field.setSFVec3f([x, y, z])
-            rot = self.trolley.getField("rotation")
-            if rot is not None:
-                rot.setSFRotation([0.0, 0.0, 1.0, float(yaw)])
-        except Exception:
-            pass
-
     def _do_pick(self) -> None:
-        """Remove one remaining cube and show cargo on the trolley bed."""
+        """Remove one remaining inventory cube (pretend pick)."""
         name = None
         for def_name in self.cube_defs:
             if def_name in self.removed:
@@ -396,36 +343,4 @@ class InventoryRuntime:
         if name is None:
             print("PICK: no inventory cube left to remove")
         else:
-            print(f"PICK: removed {name} (pretend pick onto trolley)")
-        self._show_cargo()
-
-    def _show_cargo(self) -> None:
-        if self.cargo_placed or self.load_node is None:
-            return
-        try:
-            # bed top relative to trolley solid centre (centre at bed_h/2)
-            z = self.geom.bed_h_m / 2.0 + 0.14
-            field = self.load_node.getField("translation")
-            if field is not None:
-                field.setSFVec3f([0.0, 0.0, z])
-            self.cargo_placed = True
-            print("PICK: WH_TROLLEY_LOAD raised onto bed")
-        except Exception as exc:
-            print(f"PICK: could not place cargo ({type(exc).__name__}: {exc})")
-
-    def _hide_cargo(self) -> None:
-        """Clear trolley load between trips (reset bed visual)."""
-        if self.load_node is None:
-            self.cargo_placed = False
-            return
-        try:
-            field = self.load_node.getField("translation")
-            if field is not None:
-                # sink below bed (same hidden pose the world starts with: translation 0 0 -2)
-                field.setSFVec3f([0.0, 0.0, -2.0])
-            if self.cargo_placed:
-                print("PICK: WH_TROLLEY_LOAD cleared (unload between trips)")
-            self.cargo_placed = False
-        except Exception as exc:
-            print(f"PICK: could not clear cargo ({type(exc).__name__}: {exc})")
-            self.cargo_placed = False
+            print(f"PICK: removed {name}")

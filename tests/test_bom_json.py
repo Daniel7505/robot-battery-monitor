@@ -41,7 +41,7 @@ def _walk_numbers(obj, path=""):
 def test_bom_json_schema():
     data = json.loads(BOM_JSON_PATH.read_text(encoding="utf-8"))
     parts = data["parts"]
-    assert len(parts) == 32
+    assert len(parts) == 31
     assert set(data["builds"]) == {"light", "heavy", "budget"}
     ids = set()
     for part in parts:
@@ -61,9 +61,9 @@ def test_seed_from_bom_json_upserts_motor_and_battery(tmp_path: Path):
     db = tmp_path / "parts.db"
     conn = connect(db)
     n = seed_from_bom_json(conn)
-    assert n == 32
-    assert seed_from_bom_json(conn) == 32
-    assert len(list_parts(conn)) >= 32
+    assert n == 31
+    assert seed_from_bom_json(conn) == 31
+    assert len(list_parts(conn)) >= 31
     motor = next(r for r in list_parts(conn) if r["sku"] == "4693")
     full = get_part(conn, motor["id"])
     assert full["category"] == "motor"

@@ -107,9 +107,9 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     (intersections; the referee reports which exit was crossed).
   * `butlerbot_warehouse.wbt`: the 70 × 65 m prototype warehouse. It has
     6 m racks, dock doors and staging, all Solids with boundingObjects, plus
-    placeholder inventory cubes (`WH_INVENTORY`) and a pull-behind trolley
-    (`WH_TROLLEY`). One-SKU pick: `docs/INVENTORY_TROLLEY.md`. Multi-trip
-    shopping list: `docs/SHOPPING_LIST.md`.
+    placeholder inventory cubes (`WH_INVENTORY`). The pull-behind trolley
+    prop was removed. One-SKU pick and the multi-trip shopping list:
+    `docs/SHOPPING_LIST.md`.
   * `butlerbot_warehouse_obstacles.wbt`: the same warehouse plus three test
     props (box in aisle 5, waist-high table edge on the dock lane, shelf corner
     beside the start lane). Its `# OBSTACLES on` tag turns stereo+radar on.
@@ -141,7 +141,7 @@ repo `.env`. A value set with `set` wins.
 | `RBM_OBSTACLES` | `1` = stereo+radar obstacle sensing on, `0` = off. Unset = on only in a world tagged `# OBSTACLES on` (`warehouse_obstacles`, `radar_motion`), off everywhere else. |
 | `RBM_STEREO_BACKEND` | `auto` (default: OpenCV StereoSGBM if `cv2` imports, else numpy), `sgbm` or `numpy`. numpy works without OpenCV but costs ~170 ms per frame. |
 | `RBM_OBS_REMOVE_AFTER_S` | Test harness: after N s in `STOPPED_FOR_OBSTACLE` the supervisor deletes the `WH_OBSTACLES` prop nearest the robot, so you can watch it resume. Unset = never. |
-| `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube onto the trolley, then continues to shipping. Ignored when `RBM_SHOPPING_LIST` is set. See `docs/INVENTORY_TROLLEY.md`. |
+| `RBM_PICK_SKU` | One-SKU pretend pick: `demo` (or `SKU-A05-B0-L`) stops at the demo shelf group, removes a cube, then continues to shipping. Ignored when `RBM_SHOPPING_LIST` is set. See `docs/SHOPPING_LIST.md`. |
 | `RBM_SHOPPING_LIST` | Multi-trip shopping list: `demo`/`1`…`N` = that trip (use matching `shopping_list_trip_N` `RBM_ROUTE`); `all` = multi-trip state machine. Capacity 2, fill then ship. See `docs/SHOPPING_LIST.md`. |
 
 ## Commands (Windows cmd, from the repo folder)
@@ -235,10 +235,10 @@ powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World r
 
 Unit tests (no Webots): `python -m pytest tests\test_radar_obstacles.py -q`
 
-Inventory + trolley (one-SKU pretend pick). Use the **clean** `warehouse` world
+Inventory pretend pick (one SKU). Use the **clean** `warehouse` world
 (not `warehouse_obstacles` — that still has the aisle-5 box on the same spine).
-Console: `INVENTORY on …`, `PICK … -> PICKING`, cube removed, cargo on trolley,
-then finish at SHP-1. Details: `docs/INVENTORY_TROLLEY.md`.
+Console: `INVENTORY on …`, `PICK … -> PICKING`, cube removed,
+then finish at SHP-1. Details: `docs/SHOPPING_LIST.md`.
 
 ```bat
 set RBM_ROUTE=S,S,L,S,S,R,S,L,S,S,L,S,S,S
@@ -250,7 +250,7 @@ set RBM_PICK_SKU=
 
 Unit tests (no Webots): `python -m pytest tests\test_inventory_pick.py -q`
 
-Shopping list (multi-trip, fill trolley then ship). Capacity 2 cubes; demo list
+Shopping list (multi-trip, fill carry capacity then ship). Capacity 2 cubes; demo list
 is 7 SKUs → 4 trips. **One trip per Webots launch** (finish at SHP). Routes and
 SKU pairs: `tracks\warehouse.json` / `python scripts\warehouse_builder.py --summary`.
 Details: `docs/SHOPPING_LIST.md`.
@@ -456,8 +456,8 @@ See `docs/RUN_HISTORY.md`.
   Webots runs.
 * **Bot-body reference in the frame.** Use the robot's own visible parts
   (front caster or wheel corner) as an in-image calibration reference.
-* **480 Wh hardcode.** `BATTERY_CAPACITY_WH = 480.0` at
-  `src/teleop_agent.py:227` should come from the hardware profile YAML
+* **Battery pack.** Blank `bom_build` is the wheeled YAML 480 Wh pack.
+  `light` is the BoM 240 Wh pack. Teleop reads `battery_capacity_wh()`
   (see `docs/HARDWARE_PROFILE.md`).
 * **`DASHBOARD_PORT` compose bug.** `docker-compose.yml` maps
   `127.0.0.1:${DASHBOARD_PORT}:5000`, but the dashboard container also gets

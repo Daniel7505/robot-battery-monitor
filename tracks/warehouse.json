@@ -188,7 +188,7 @@
     },
     {
       "name": "shopping_list_trip_1",
-      "description": "shopping trip 1/4: pick SKU-A01-B0-L, SKU-A03-B1-L (trolley cap 2) -> shipping SHP-1",
+      "description": "shopping trip 1/4: pick SKU-A01-B0-L, SKU-A03-B1-L (carry cap 2) -> shipping SHP-1",
       "to": "shipping_1",
       "via": [
         [28.125, -6.0],
@@ -202,7 +202,7 @@
     },
     {
       "name": "shopping_list_trip_2",
-      "description": "shopping trip 2/4: pick SKU-A04-B0-L, SKU-A05-B0-L (trolley cap 2) -> shipping SHP-1",
+      "description": "shopping trip 2/4: pick SKU-A04-B0-L, SKU-A05-B0-L (carry cap 2) -> shipping SHP-1",
       "to": "shipping_1",
       "via": [
         [28.125, 12.0],
@@ -216,7 +216,7 @@
     },
     {
       "name": "shopping_list_trip_3",
-      "description": "shopping trip 3/4: pick SKU-A05-B1-L, SKU-A06-B0-L (trolley cap 2) -> shipping SHP-1",
+      "description": "shopping trip 3/4: pick SKU-A05-B1-L, SKU-A06-B0-L (carry cap 2) -> shipping SHP-1",
       "to": "shipping_1",
       "via": [
         [48.375, 18.0],
@@ -230,7 +230,7 @@
     },
     {
       "name": "shopping_list_trip_4",
-      "description": "shopping trip 4/4: pick SKU-A07-B1-L (trolley cap 2) -> shipping SHP-1",
+      "description": "shopping trip 4/4: pick SKU-A07-B1-L (carry cap 2) -> shipping SHP-1",
       "to": "shipping_1",
       "via": [
         [48.375, 30.0]
@@ -520,7 +520,7 @@
       }
     ],
     "assumptions": [
-      "Trolley capacity = floor cubes that fit on the bed (length\u00d7width / cube footprint), currently 2 \u2014 no stacking / no mass limit.",
+      "Carry capacity is 2 cubes per trip (CARRY_CAPACITY) \u2014 no stacking / no mass limit.",
       "Each shopping line is one pretend-pick cube removal (qty counts cubes).",
       "Trip packing is first-fit after visit ordering: fill to capacity, then ship.",
       "Visit order default = aisle ascending, then block, then SKU (warehouse sweep). Optional nearest-neighbour from start_xy / last approach.",
@@ -551,7 +551,7 @@
     "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
     "Default route (no RBM_ROUTE): loops forever (default policy circles the network).",
     "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
-    "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md).",
-    "Shopping list: multi-trip fill-trolley-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N."
+    "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); one-SKU pretend pick via RBM_PICK_SKU (docs/SHOPPING_LIST.md).",
+    "Shopping list: multi-trip fill-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N. Carry capacity is 2."
   ]
 }

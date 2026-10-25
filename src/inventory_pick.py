@@ -1,8 +1,9 @@
 """Placeholder inventory + one-SKU pretend-pick planning (pure, no Webots).
 
 Vertical slice after radar: locate one shelf SKU group, stop beside it, pretend
-to pick (caller removes / hides a cube and optionally shows trolley cargo), then
-continue to shipping. Multi-trip shopping lists live in ``src/shopping_list.py``.
+to pick (caller removes / hides a cube), then continue to shipping. Multi-trip
+shopping lists live in ``src/shopping_list.py``. The pull-behind trolley prop
+is gone; carry capacity is a constant in the shopping list.
 
 Geometry is derived from a warehouse layout (aisle centres, rack blocks, rack
 depth, beam pitch) — nothing aisle- or bay-hardcoded beyond which demo groups
@@ -21,15 +22,6 @@ ST_PICKING = "PICKING"
 ST_TO_SHIP = "DRIVING_TO_SHIP"
 ST_DONE = "DONE"
 
-# Defaults derived from the wheeled chassis profile (chassis_length 0.36 m) +
-# a short tongue; the controller may override hitch from the live robot.
-DEFAULT_CHASSIS_LENGTH_M = 0.36
-DEFAULT_TONGUE_M = 0.28
-DEFAULT_HITCH_CLEAR_M = 0.15  # extra gap axle-rear → tongue tip so the cart never kisses the body
-DEFAULT_TROLLEY_LENGTH_M = 0.55
-DEFAULT_TROLLEY_WIDTH_M = 0.40
-DEFAULT_TROLLEY_BED_H_M = 0.18
-DEFAULT_TROLLEY_RAIL_H_M = 0.32
 DEFAULT_CUBE_M = (0.28, 0.28, 0.28)  # placeholder tote / carton
 DEFAULT_CUBES_PER_GROUP = 4
 DEFAULT_PICK_RADIUS_M = 1.10  # stop when this close to the approach point on the lane
@@ -76,31 +68,6 @@ class InventoryGroup:
             sum(c.cx for c in self.cubes) / len(self.cubes),
             sum(c.cy for c in self.cubes) / len(self.cubes),
         )
-
-
-@dataclass
-class TrolleyGeom:
-    """Pull-behind trolley dimensions (metres), derived from the chassis + tongue."""
-
-    chassis_length_m: float = DEFAULT_CHASSIS_LENGTH_M
-    tongue_m: float = DEFAULT_TONGUE_M
-    hitch_clear_m: float = DEFAULT_HITCH_CLEAR_M
-    length_m: float = DEFAULT_TROLLEY_LENGTH_M
-    width_m: float = DEFAULT_TROLLEY_WIDTH_M
-    bed_h_m: float = DEFAULT_TROLLEY_BED_H_M
-    rail_h_m: float = DEFAULT_TROLLEY_RAIL_H_M
-
-    @property
-    def hitch_behind_m(self) -> float:
-        """Axle → trolley bed centre, along −x in the robot frame."""
-        return (self.chassis_length_m / 2.0 + self.hitch_clear_m + self.tongue_m + self.length_m / 2.0)
-
-    def world_pose(self, robot_xy: tuple[float, float], yaw: float) -> tuple[float, float, float]:
-        """Trolley bed centre (x, y, yaw) behind the robot, same heading."""
-        hb = self.hitch_behind_m
-        x = robot_xy[0] - hb * math.cos(yaw)
-        y = robot_xy[1] - hb * math.sin(yaw)
-        return (x, y, yaw)
 
 
 def sku_id(aisle: int, block: int, side: str = "left") -> str:
@@ -264,7 +231,7 @@ class PickCommand:
 
     state: str
     v_cap: float | None  # None = do not override; 0 = stop for pick
-    pick_now: bool = False  # fire the remove / hide + place-on-trolley once
+    pick_now: bool = False  # fire the cube removal once
     sku: str = ""
     note: str = ""
     approach_xy: tuple[float, float] | None = None

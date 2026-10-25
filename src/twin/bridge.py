@@ -74,7 +74,11 @@ from src.twin.butlerbot import butlerbot_flow_description
 from src.twin.models import TWIN_SCHEMA_VERSION, TwinTelemetry
 from src.mission_efficiency import MissionEfficiencyTracker
 from src.mission_energy_log import MissionEnergyLog
-from src.twin.power_feed import PowerFeed, power_feed_from_telemetry
+from src.twin.power_feed import (
+    POWER_FEED_SCHEMA_VERSION,
+    PowerFeed,
+    power_feed_from_telemetry,
+)
 from src.twin_energy import LOCO_PASSTHROUGH_KEYS
 
 _VALID_TASKS = frozenset(TASK_PROFILES.keys())
@@ -695,7 +699,7 @@ class DigitalTwinBridge:
                 "locomotion": "optional gait/speed metadata",
             },
             "power_feed": {
-                "schema_version": "1.0",
+                "schema_version": POWER_FEED_SCHEMA_VERSION,
                 "description": (
                     "Minimal contract that becomes hardware.last_readings: "
                     "main battery % + per-channel watts. See src/twin/power_feed.py."
@@ -727,7 +731,7 @@ class DigitalTwinBridge:
                     "apply_battery_override=true; hardware.mode=real type=ros2."
                 ),
                 "verify": (
-                    "POST sample telemetry → GET /api/battery (or WebSocket) shows matching "
+                    "POST sample telemetry → GET /api/live shows matching "
                     "main_battery + channel draws; twin.external_active true; power_source=webots."
                 ),
             },

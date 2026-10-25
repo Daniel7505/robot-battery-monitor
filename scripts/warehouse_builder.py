@@ -32,9 +32,10 @@ later see them. The clean world has an empty ``WH_OBSTACLES`` group; the
 controller turns stereo obstacle sensing on there by default.
 
 Placeholder inventory cubes (grouped by aisle / block SKU) live in
-``DEF WH_INVENTORY``; a pull-behind trolley prop ``DEF WH_TROLLEY`` starts
-behind the spawn and the controller keeps it hitched. See
-``src/inventory_pick.py``, ``src/shopping_list.py``, ``docs/INVENTORY_TROLLEY.md``, and ``docs/SHOPPING_LIST.md``.
+``DEF WH_INVENTORY``. Pretend pick removes one cube; the shopping list
+packs trips at ``CARRY_CAPACITY``. See ``src/inventory_pick.py``,
+``src/shopping_list.py``, and ``docs/SHOPPING_LIST.md``. The pull-behind
+trolley prop was removed (visual only; lap energy did not use it).
 """
 from __future__ import annotations
 
@@ -112,15 +113,9 @@ class WarehouseSpec:
     obs_shelf_m: tuple = (1.2, 0.6, 1.8)  # free-standing shelf unit x, y, height beside the start lane
     obs_shelf_gap_m: float = 0.10  # its corner this far OUTSIDE the lane edge (outside the corridor: pass)
     obs_shelf_x_m: float = 13.0  # its near corner x on the start lane (after the forklift crossing)
-    # placeholder inventory (grouped cubes on rack faces) + pull-behind trolley prop
+    # placeholder inventory (grouped cubes on rack faces)
     inv_cube_m: tuple = (0.28, 0.28, 0.28)  # tote / carton placeholder
     inv_cubes_per_group: int = 4
-    trolley_length_m: float = 0.55
-    trolley_width_m: float = 0.40
-    trolley_bed_h_m: float = 0.18
-    trolley_rail_h_m: float = 0.32
-    trolley_tongue_m: float = 0.28
-    chassis_length_m: float = 0.36  # ButlerBot wheeled chassis (profile); hitch derives from this
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +281,7 @@ class Layout:
              "to": "shipping_1", "via": [[round((xa + xb) / 2, 2), round(self.aisle_y[odd], 3)] for xa, xb in self.rack_blocks] +
                                         [[round((far_block[0] + far_block[1]) / 2, 2), round(self.ship_y, 3)]]},
         ]
-        # multi-trip shopping list: one mission per trolley trip (via = stop approach points)
+        # multi-trip shopping list: one mission per carry-capacity trip (via = stop approach points)
         from src.shopping_list import demo_shopping_lines, plan_shopping_trips
 
         groups = self.inventory_groups()
@@ -297,7 +292,7 @@ class Layout:
                 "description": (
                     f"shopping trip {trip.trip_index}/{shop.n_trips}: pick "
                     + ", ".join(trip.skus)
-                    + f" (trolley cap {shop.capacity}) -> shipping SHP-1"
+                    + f" (carry cap {shop.capacity}) -> shipping SHP-1"
                 ),
                 "to": "shipping_1",
                 "via": [[round(float(v[0]), 3), round(float(v[1]), 3)] for v in trip.via],
@@ -502,8 +497,8 @@ def build_track(lay: Layout):
         "RBM_ROUTE strings come from src/route_planner.py (python scripts/warehouse_builder.py --summary prints them).",
         f"Default route (no RBM_ROUTE): {dflt.note or ('ends at ' + str(dflt.exit))}.",
         "Obstacles: stereo + forward radar on ButlerBot (docs/OBSTACLES.md); test props in butlerbot_warehouse_obstacles.wbt; rolling-ball world butlerbot_radar_motion.wbt.",
-        "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); pull-behind WH_TROLLEY; one-SKU pretend pick via RBM_PICK_SKU (docs/INVENTORY_TROLLEY.md).",
-        "Shopping list: multi-trip fill-trolley-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N.",
+        "Inventory: placeholder cubes in WH_INVENTORY (grouped by aisle/block SKU); one-SKU pretend pick via RBM_PICK_SKU (docs/SHOPPING_LIST.md).",
+        "Shopping list: multi-trip fill-then-ship via RBM_SHOPPING_LIST=demo (docs/SHOPPING_LIST.md); per-trip missions shopping_list_trip_N. Carry capacity is 2.",
     ]
     return d, TrackNetwork.from_dict(d, TRACK_JSON), g, dflt
 
@@ -540,7 +535,6 @@ _COLORS = {  # none of these pass the lane yellow test (min(R,G) - B >= 0.22)
     "pallet_wood": (0.55, 0.45, 0.36), "pallet_load": (0.62, 0.58, 0.55), "table": (0.35, 0.37, 0.4),
     "inv_cube": (0.55, 0.28, 0.22),  # terracotta tote — fails yellow (min-B = 0.06)
     "inv_cube_demo": (0.22, 0.45, 0.55),  # teal demo SKU — fails yellow
-    "trolley": (0.25, 0.28, 0.32), "trolley_bed": (0.40, 0.42, 0.38), "trolley_load": (0.55, 0.28, 0.22),
 }
 WH_RULE = "# -----------------------------------------------------------------------------\n"
 WH_BEGIN = "# WAREHOUSE_BEGIN"
@@ -687,24 +681,6 @@ def inventory_props_vrml(groups: list, app) -> str:
     return "".join(out)
 
 
-def sourced_trolley_mass_kg() -> float | None:
-    """Kilograms for WH_TROLLEY physics, or None while the hitch has no SKU mass.
-
-    bom.json part ``hitch_trolley_gap`` is the placeholder. Its mass is blank
-    on purpose. This returns that mass only when a vendor page fills it in.
-    """
-    try:
-        from src.bom_profile import load_bom, parts_by_id
-
-        part = parts_by_id(load_bom()).get("hitch_trolley_gap") or {}
-    except Exception:
-        return None
-    mass_g = part.get("mass_g")
-    if mass_g is None:
-        return None
-    return float(mass_g) / 1000.0
-
-
 def apply_bom_build_to_robot(text: str) -> str:
     """Set Robot mass from ``bom_build``. The contact wheel stays 0.08 m.
 
@@ -720,69 +696,6 @@ def apply_bom_build_to_robot(text: str) -> str:
         return apply_active_bom_body(text)
     except Exception:
         return text
-
-
-def trolley_vrml(lay: Layout, app) -> str:
-    """Pull-behind trolley prop at the spawn hitch pose (controller keeps it following).
-
-    Not a Robot child (Robot block stays byte-identical across worlds). Supervisor
-    teleports DEF WH_TROLLEY each frame. Cargo WH_TROLLEY_LOAD starts under the
-    floor and is raised onto the bed after a pretend pick.
-
-    Visual-only: **no boundingObject / no Physics**. A static Solid with a
-    boundingObject behind the bot (clipping the floor) was stalling forward
-    motion — Webots treated it as an immovable hitch / contact sink. There is no
-    physics mass to lighten; collision geometry was the bug.
-    """
-    from src.inventory_pick import TrolleyGeom
-
-    sp = lay.sp
-    tg = TrolleyGeom(
-        chassis_length_m=sp.chassis_length_m,
-        tongue_m=sp.trolley_tongue_m,
-        length_m=sp.trolley_length_m,
-        width_m=sp.trolley_width_m,
-        bed_h_m=sp.trolley_bed_h_m,
-        rail_h_m=sp.trolley_rail_h_m,
-    )
-    # start pose: behind spawn facing +x (yaw 0)
-    x, y, _yaw = tg.world_pose((0.0, 0.0), 0.0)
-    L, W, bed_h, rail_h = tg.length_m, tg.width_m, tg.bed_h_m, tg.rail_h_m
-    tongue = tg.tongue_m
-    zc = bed_h / 2
-    ch = ""
-    ch += _shape(app, "trolley_bed", (L, W, 0.04), (0, 0, -zc + 0.02), "        ")
-    for dy in (-1, 1):
-        ch += _shape(app, "trolley", (L - 0.04, 0.03, rail_h - bed_h), (0, dy * (W / 2 - 0.02), -zc + bed_h + (rail_h - bed_h) / 2), "        ")
-    ch += _shape(app, "trolley", (0.03, W - 0.04, rail_h - bed_h), (L / 2 - 0.02, 0, -zc + bed_h + (rail_h - bed_h) / 2), "        ")
-    ch += _shape(app, "trolley", (tongue, 0.04, 0.04), (L / 2 + tongue / 2, 0, -zc + 0.06), "        ")
-    for dx in (-1, 1):
-        for dy in (-1, 1):
-            ch += _shape(app, "trolley", (0.08, 0.04, 0.08), (dx * (L / 2 - 0.1), dy * (W / 2 - 0.05), -zc + 0.04), "        ")
-    ch += (
-        "        DEF WH_TROLLEY_LOAD Solid {\n"
-        "          translation 0 0 -2\n"
-        '          name "trolley_load"\n'
-        "          radarCrossSection 0.5\n"
-        "          children [\n"
-    )
-    ch += _shape(app, "trolley_load", (0.28, 0.28, 0.28), (0, 0, 0), "            ")
-    ch += (
-        "          ]\n"
-        "        }\n"
-    )
-    s = (f"    # PULL-BEHIND TROLLEY prop (controller follows ButlerBot; hitch {tg.hitch_behind_m:.2f} m).\n"
-         f"    # Visual only: no boundingObject / no Physics — a static BO here stalled the robot.\n")
-    s += f"    DEF WH_TROLLEY Solid {{\n      translation {_f(x)} {_f(y)} {_f(zc)}\n"
-    s += f'      name "trolley"\n      radarCrossSection 1.5\n      children [\n{ch}      ]\n'
-    # Physics mass only after a trolley SKU publishes one. Today the hitch
-    # part in bom.json has no mass, so this stays visual-only.
-    trolley_kg = sourced_trolley_mass_kg()
-    if trolley_kg is not None:
-        s += f"      physics Physics {{\n        density -1\n        mass {_f(trolley_kg)}\n      }}\n"
-    s += "    }\n"
-    return s
-
 
 
 def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str:
@@ -821,7 +734,7 @@ def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str
                     ch += _shape(app, "table", (0.05, 0.05, b.h - 0.05),
                                  (dx * (b.sx / 2 - 0.05), dy * (b.sy / 2 - 0.05), -0.025), "        ")
         out.append(_solid(b, app, ch))
-    # ---- placeholder inventory cubes (grouped by aisle/block SKU) + pull-behind trolley ----
+    # ---- placeholder inventory cubes (grouped by aisle/block SKU) ----
     groups = lay.inventory_groups()
     out.append(
         "    # ---- INVENTORY: placeholder cubes on rack faces (src/inventory_pick.py). Demo SKU is teal.\n"
@@ -830,7 +743,6 @@ def warehouse_vrml(lay: Layout, staging: list, props: list | None = None) -> str
     inv = inventory_props_vrml(groups, app)
     out.append("".join(("    " + ln + "\n") if ln else "\n" for ln in inv.rstrip("\n").split("\n")))
     out.append("      ]\n    }\n")
-    out.append(trolley_vrml(lay, app))
     if props:
         out.append("    # ---- OBSTACLE TEST PROPS (scripts/warehouse_builder.py obstacle_props). Textured: block-matching\n"
                    "    #      stereo needs texture. Delete one in the scene tree while the robot waits = 'removed'.\n")
@@ -929,8 +841,8 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None, pr
             lines.insert(k + 1, f'    "WAREHOUSE: {sp.width_m:g} x {sp.depth_m:g} m prototype, start inside receiving door RCV-1, '
                                 f'RBM_ROUTE per junction (see tracks/warehouse.json missions)"')
             lines.insert(k + 2, '    "INVENTORY: placeholder cubes in WH_INVENTORY (aisle/block SKUs); '
-                                   'pull-behind WH_TROLLEY; one-SKU pretend pick: set RBM_PICK_SKU '
-                                   '(see tracks/warehouse.json inventory + docs/INVENTORY_TROLLEY.md)"')
+                                   'one-SKU pretend pick: set RBM_PICK_SKU '
+                                   '(see tracks/warehouse.json inventory + docs/SHOPPING_LIST.md)"')
             if props:
                 lines.insert(k + 3, '    "OBSTACLES: test props in WH_OBSTACLES (box in the odd aisle, table edge on the dock lane, '
                                     'shelf beside the start lane); stereo obstacle sensing ON here (RBM_OBSTACLES=0 = off)"')

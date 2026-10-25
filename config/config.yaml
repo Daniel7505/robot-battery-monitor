@@ -4,7 +4,7 @@
 # Loaded by src.config. Section roles:
 #   dashboard, monitoring, safety, lru, requirements, robot, power,
 #   cooling, database, power_channels, digital_twin, agent, simulation,
-#   hardware, logging
+#   hardware
 # Hardware kinematics/profile details also live under config/hardware_profiles/.
 # =============================================================================
 
@@ -12,10 +12,9 @@
 dashboard:
   host: "127.0.0.1"          # DASHBOARD_HOST env overrides (Docker sets 0.0.0.0)
   port: 5000
-  # SocketIO browser origins (RBM_CORS_ORIGINS env overrides, comma list).
+  # Browser origins for the API cookie (RBM_CORS_ORIGINS env overrides, comma list).
   # Empty/missing → http://127.0.0.1:<port> and http://localhost:<port>.
   cors_origins: []
-  refresh_seconds: 3
 
 # Logging / archive cadence for historical battery samples
 monitoring:
@@ -188,7 +187,6 @@ power:
 
 cooling:
   max_draw_w: 10
-  label: "Dry-ice / active cooling loop"
 
 # Postgres connection for host-local runs (Docker overrides via env / DATABASE_URL)
 database:
@@ -231,7 +229,6 @@ digital_twin:
   adapter: generic
   webots:
     dashboard_url: "http://127.0.0.1:5000"
-    telemetry_interval_s: 0.5
   accept_external_commands: true
   accept_external_telemetry: true
   prefer_external: true
@@ -257,9 +254,6 @@ agent:
   # Do not treat noisy short-horizon HIGH as an intervention above this SOC
   # when loop forecast is comfortable (or not yet computed).
   prediction_risk_min_battery_pct: 25
-  lane_keep_cruise: 5.5
-  lane_keep_k_steer: 2.4
-  lane_keep_red_thresh: 0.28
 
 # Internal scripted mission driver (dashboard Sim panel) — not Webots itself
 simulation:
@@ -305,6 +299,3 @@ hardware:
       mission_command: "/robot/battery/command/mission"
       throttle_command: "/robot/battery/command/throttle"
       sensor_power: "/robot/sensors/power_draw"
-
-logging:
-  level: "INFO"

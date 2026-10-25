@@ -22,7 +22,7 @@ service robot (ButlerBot). Layers, roughly outside-in:
     demo_mode
 
   Integration
-    ros2_bridge / ros2_node, twin/* (Webots digital twin), dashboard, database
+    ros2_bridge (via hardware_ros2), twin/* (Webots digital twin), dashboard, database
 
 Import submodules directly (e.g. ``from src.config import config``); this
 package does not re-export a public API surface.

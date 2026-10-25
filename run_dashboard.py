@@ -7,7 +7,7 @@ Boot sequence (order matters):
   2. Resolve the hardware source via factory (`get_hardware_source`) —
      simulator, ROS2 physics loop, or generic real hardware depending on config.
   3. Start the hardware telemetry thread (background daemon).
-  4. Hand control to the Flask/SocketIO dashboard (`run_dashboard`), which
+  4. Hand control to the Flask dashboard (`run_dashboard`), which
      blocks until the process is stopped.
 
 This is the process operators launch for live monitoring. Offline history
@@ -30,7 +30,7 @@ if __name__ == "__main__":
         logger.info("✅ Hardware source started")
 
         logger.info("🌐 Launching dashboard...")
-        # Blocks on Flask/SocketIO event loop until process exit.
+        # Blocks on the Flask HTTP server until process exit.
         run_dashboard()
 
     except Exception as e:

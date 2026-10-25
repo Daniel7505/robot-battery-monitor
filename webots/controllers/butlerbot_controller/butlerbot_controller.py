@@ -423,17 +423,11 @@ def _format_pose(gps: GPS) -> str:
 _CAM_EYE = (-3.18573, -0.03020, 3.54536)
 _CAM_FOV = 0.85
 _CAM_ORIENTATION = (-0.001250, 0.999989, 0.004550, 0.536256)
-_NADIR_PLACE_CHECK = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "NADIR_PLACE_CHECK"
-)
 _FINISH_X_M = 16.5
 # Physics / robot.step stay at basicTimeStep (8 ms). Nadir Camera.enable
 # is the OpenGL pass. Fair trade: 128×128 @ 320 ms (~3 Hz, ~14 cm at
 # 0.44 m/s). Harvest only on a new frame. Next sitting: 640 ms.
 _NADIR_CAM_PERIOD_MS = 320
-_NADIR_SNAP_DIR = os.path.join(
-    os.path.expanduser("~"), "OneDrive", "Desktop", "Grok Workspace"
-)
 
 
 def _is_top_down(rot) -> bool:
@@ -1033,22 +1027,6 @@ def _run_loop(robot: Robot, opts: dict) -> None:
                     "pure pursuit + curve speed governor, "
                     f"to the finish ({finish_ref.describe()})."
                 )
-            if tick == 25 and os.path.isfile(_NADIR_PLACE_CHECK):
-                cam = cams.get("nadir_left")
-                if cam is not None:
-                    try:
-                        path = os.path.join(
-                            _NADIR_SNAP_DIR, "butlerbot", "images", "nadir-left-place-check.png"
-                        )
-                        os.makedirs(os.path.dirname(path), exist_ok=True)
-                        cam.saveImage(path, 90)
-                        print(f"NADIR place-check snapshot → {path}")
-                    except Exception as exc:
-                        print(f"NADIR place-check snapshot skipped: {exc}")
-                try:
-                    os.remove(_NADIR_PLACE_CHECK)
-                except OSError:
-                    pass
             if park_holdoff_s > 0.0:
                 park_holdoff_s = max(0.0, park_holdoff_s - dt)
             if drive_grace_s > 0.0:

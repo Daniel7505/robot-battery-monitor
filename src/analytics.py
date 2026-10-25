@@ -6,8 +6,8 @@ Role in the system
 Created at ``init_db()`` time. Defines SQL views over allocation_snapshots,
 channel_readings, and energy_predictions for:
 
-  - Dashboard analytics API endpoints
   - CLI ``--report`` via ``build_report`` / ``format_report_text``
+    (the dashboard no longer serves ``/api/analytics``)
 
 View inventory (v_*)
 --------------------

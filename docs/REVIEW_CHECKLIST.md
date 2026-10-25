@@ -42,7 +42,7 @@ We are building an agent that **catalogs real parts**, **takes a mission**, **de
 
 What this repo **runs today** is the harness, not that product:
 
-- Flask / SocketIO **PMS dashboard** (channels, battery, agent, history)
+- Flask **PMS dashboard** (channels, battery, agent, history; the page polls `GET /api/live`)
 - **Webots digital twin** (ButlerBot wheeled) with teleop, ABS-style stop, and lane-keep
 - HTTP **twin bridge** (telemetry in, state/commands out, `stop_epoch`)
 - **Onboard agent** that can throttle / intervene when the operator pushes power/heat
@@ -170,7 +170,7 @@ No micro-opts unless correctness/demo reliability. Do not edit until ranked.
 ### Not the goal right now (unless Daniel asks)
 
 - Full ROS2 real-hardware fleet readiness  
-- Micro-optimizing SocketIO or Flask for scale  
+- Micro-optimizing Flask for scale  
 - Replacing Webots with a different sim “for cleanliness”  
 
 ---

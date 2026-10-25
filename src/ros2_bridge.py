@@ -341,10 +341,6 @@ class ROS2Bridge:
         self._commanded_throttle = None
         return throttle
 
-    def get_throttle_override(self) -> float | None:
-        """Peek throttle without consuming."""
-        return self._commanded_throttle
-
     def get_sensor_draws(self) -> dict[str, float]:
         """Latest sensor channel draws (sticky until next sensor message)."""
         return dict(self._sensor_draws)

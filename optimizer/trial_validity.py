@@ -139,7 +139,6 @@ def trial_invalid_reason(
     intended: dict | None,
     run_body: str,
     *,
-    held_out_build: str | None = None,
     launch: LapLaunch | None = None,
     file_mtime: float | None = None,
 ) -> str | None:
@@ -151,14 +150,7 @@ def trial_invalid_reason(
         return "no MISSION_SUMMARY"
     if summary.err_pct is None:
         return "err_pct is na"
-    expect_body = held_out_build or run_body
-    if held_out_build:
-        name = lap_body_name(summary) or summary.build or "unknown"
-        if name != held_out_build:
-            return (
-                f"held-out lap build {name} does not match expected {held_out_build}"
-            )
-    elif not body_matches_run(summary, run_body):
+    if not body_matches_run(summary, run_body):
         name = lap_body_name(summary) or summary.build or "unknown"
         return (
             f"lap build {name} does not match the fixed run body {run_body}; "
@@ -167,8 +159,7 @@ def trial_invalid_reason(
     mismatch = limits_match_intended(summary, intended)
     if mismatch:
         return mismatch
-    mass_body = held_out_build if held_out_build else run_body
-    ok_mass, mass_reason = mass_matches_run(summary, mass_body)
+    ok_mass, mass_reason = mass_matches_run(summary, run_body)
     if not ok_mass and mass_reason:
         return mass_reason
     return None

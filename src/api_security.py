@@ -6,9 +6,10 @@ Secure by default, frictionless for local dev:
 * **Bind host** — ``DASHBOARD_HOST`` env, else ``dashboard.host`` in config,
   else ``127.0.0.1``. Docker sets ``DASHBOARD_HOST=0.0.0.0`` inside the
   container and compose publishes the port on ``127.0.0.1`` only.
-* **CORS (SocketIO)** — ``RBM_CORS_ORIGINS`` (comma list), else
+* **Browser origins** — ``RBM_CORS_ORIGINS`` (comma list), else
   ``dashboard.cors_origins``, else ``http://127.0.0.1:<port>`` and
-  ``http://localhost:<port>``.
+  ``http://localhost:<port>``. Used when a browser cookie authorizes a
+  write. There is no websocket.
 * **API token** — optional ``RBM_API_TOKEN``. When set, every POST / PUT /
   PATCH / DELETE needs ``X-API-Token: <token>`` (Webots controller, scripts)
   **or** the ``rbm_api_token`` cookie (browser UI). The browser gets the
@@ -57,7 +58,7 @@ def bind_host() -> str:
 
 
 def allowed_origins() -> list[str]:
-    """Browser origins allowed to open the SocketIO connection."""
+    """Browser origins allowed to authorize a write with the API cookie."""
     env = os.getenv("RBM_CORS_ORIGINS")
     if env is not None and env.strip():
         return [o.strip().rstrip("/") for o in env.split(",") if o.strip()]

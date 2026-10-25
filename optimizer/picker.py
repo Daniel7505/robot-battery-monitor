@@ -15,8 +15,6 @@ from dataclasses import dataclass, field
 
 from src.controller_limits import KNOBS, AllowlistError, check_param, check_set
 
-BUILDS = ("light", "heavy", "budget")
-
 _VISC_ORDER = (
     "controller.pivot_w_max_rad_s",
     "controller.k_steer",
@@ -395,37 +393,10 @@ def _try_float(
     return None
 
 
-def _next_build(params: dict, history: list[dict]) -> str | None:
-    current = params.get("bom_build") or ""
-    seen = {
-        row.get("build")
-        for row in history
-        if row.get("decision") in {"baseline", "reference", "keep", "confirm-pass"}
-    }
-    for name in BUILDS:
-        if name != current and name not in seen and not _rolled_back(history, "bom_build", name):
-            return name
-    start = BUILDS.index(current) if current in BUILDS else -1
-    for offset in range(1, len(BUILDS) + 1):
-        name = BUILDS[(start + offset) % len(BUILDS)]
-        if name != current and not _rolled_back(history, "bom_build", name):
-            return name
-    return None
-
-
 def _turn_dominates(diagnosis) -> bool:
     if diagnosis.turn_err is None or diagnosis.straight_err is None:
         return False
     return abs(diagnosis.turn_err) > abs(diagnosis.straight_err) + 10.0
-
-
-def held_out_build(current: str | None) -> str:
-    """A different BoM build for the confirmation lap."""
-    if current == "light":
-        return "heavy"
-    if current == "heavy":
-        return "budget"
-    return "light"
 
 
 class RulePicker:
@@ -519,20 +490,6 @@ class RulePicker:
                 "Otherwise the change is rolled back. The energy model is not edited."
             )
         return Proposal(key, value, hypothesis, expected, suggestions)
-
-    def _build_proposal(self, params, build: str, diagnosis, suggestions) -> Proposal:
-        current = params.get("bom_build") or "(unset)"
-        return Proposal(
-            "bom_build",
-            build,
-            f"Speed steps on {current} are not improving the score. The last heavy lap "
-            f"in the notes was -5.0% with shaft 0.866 Wh, before BoM mass was on the body. "
-            f"The contact cylinder stays 0.08 m. Switching the body to {build} measures "
-            f"that build instead of fitting the model.",
-            f"A finished {build} lap becomes that build's baseline. It is not compared "
-            f"with {current} as if they were the same robot.",
-            suggestions,
-        )
 
 
 class LlmPicker:

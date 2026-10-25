@@ -260,6 +260,11 @@ class DigitalTwinBridge:
             for key in LOCO_PASSTHROUGH_KEYS:
                 if key in loc:
                     sample[key] = loc.get(key)
+                elif key not in sample and key in sensors:
+                    # Wheel rates are posted on sensors, not locomotion. The
+                    # controller summary copies them; the dashboard log must
+                    # too, or stall hold stays 0 and err_pct drifts.
+                    sample[key] = sensors.get(key)
             lines = list(self._energy_log.observe(sample))
             for line in lines:
                 logger.info(line)
@@ -682,7 +687,6 @@ class DigitalTwinBridge:
                 "telemetry": "POST /api/twin/telemetry",
                 "command": "POST /api/twin/command",
                 "schema": "GET /api/twin/schema",
-                "example": "GET /api/twin/example",
             },
             "telemetry": {
                 "source": "internal | external | webots | pybullet | custom | hardware",

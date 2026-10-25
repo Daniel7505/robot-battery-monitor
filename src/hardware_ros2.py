@@ -33,7 +33,7 @@ Key public attributes (consumed by dashboard / twin control)
 ------------------------------------------------------------
 last_readings, allocation_status, mission_info, prediction_status,
 safety_status, simulation_status, agent_status, twin_status,
-twin_control_status, ros2_status, power_source
+ros2_status, power_source
 """
 
 import threading
@@ -55,7 +55,7 @@ from src.onboard_agent import OnboardAgent
 from src.twin import get_twin_bridge
 from src.cooling_channel import estimate_cooling_draw_w
 from src.mission_forecast import forecast_twin_loop
-from src.twin.control import build_twin_control_status, is_twin_stress_phase
+from src.twin.control import is_twin_stress_phase
 from src.twin.power_feed import PowerFeed
 from src.database import log_power_snapshot
 
@@ -102,7 +102,6 @@ class ROS2BatterySource(RealHardwareSource):
         self.agent_status: dict = {}
         self._twin = get_twin_bridge()
         self.twin_status: dict = {}
-        self.twin_control_status: dict = {}
         # After agent force_task, hold PMS task for N seconds unless twin is driving.
         self._agent_task_hold_remaining: float = 0.0
         # "internal" | "webots" | "custom" — labels power numbers for the UI.
@@ -442,12 +441,6 @@ class ROS2BatterySource(RealHardwareSource):
                 "gait": gait,
                 "source": tel.source,
                 "lane_sensors": {
-                    "nadir_gap_px": sensors.get("nadir_gap_px"),
-                    "nadir_r_gap_px": sensors.get("nadir_r_gap_px"),
-                    "nadir_ahead_px": sensors.get("nadir_ahead_px"),
-                    "nadir_r_ahead_px": sensors.get("nadir_r_ahead_px"),
-                    "nadir_lateral_m": sensors.get("nadir_lateral_m"),
-                    "nadir_r_lateral_m": sensors.get("nadir_r_lateral_m"),
                     "steer": sensors.get("steer"),
                     "error_source": sensors.get("error_source"),
                     "steer_source": sensors.get("steer_source") or loc.get("steer_source"),
@@ -735,7 +728,6 @@ class ROS2BatterySource(RealHardwareSource):
         self.agent_status = self._agent.status_dict(agent_result)
         allocation["agent"] = self.agent_status
         self.allocation_status = allocation
-        self.twin_control_status = build_twin_control_status(self._twin, self)
 
         readings = {}
         throttled_set = set(allocation["throttled_channels"])

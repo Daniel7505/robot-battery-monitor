@@ -41,10 +41,10 @@ Letters match `plan_measure.png`. The test checks A–F against the world within
 | D | bedroom length | 146 | 3.7084 |
 | E | entry hall width, wall to the kitchen cabinets | 44 | 1.1176 |
 | F | kitchen aisle, island to counter | 38 | 0.9652 |
-| G | bedroom doorway (open; the leaf swings toward the kitchen) | 32 | 0.8128 |
-| H | bathroom doorway (closed door) | 32 | 0.8128 |
-| I | front door (closed) | 36 | 0.9144 |
-| J | patio door opening (closed stop; the patio is out of scope) | 32 | 0.8128 |
+| G | bedroom doorway to the main room (open; the leaf swings toward the kitchen) | 32 | 0.8128 |
+| H | bathroom door from the hallway (closed door) | 32 | 0.8128 |
+| I | front door (closed), in the main-room back wall at the entry | 36 | 0.9144 |
+| J | patio door opening (closed stop), shared-wall end of the patio wall | 32 | 0.8128 |
 | K | no dining table | — | — |
 
 There is no rug.
@@ -59,46 +59,53 @@ These were read off the plan's proportions or assumed from the photos. They are 
 |---|---|
 | interior wall thickness | 4 in (0.102 m) |
 | wall height | 96 in / 8 ft (2.438 m) |
-| bathroom | 96 in wide × 72 in deep, under the bedroom's left side. Door H is in that shared wall |
-| walk-in closet | 96 in wide × 48 in deep, under the bathroom. Double bifold toward the hall, modeled as a closed wall |
-| laundry | 96 in wide × 50 in deep, under the closet. Double bifold toward the hall, modeled as a closed wall |
+| bathroom | 96 in wide × 72 in deep, under the bedroom's left side. The bedroom walkway opens into it. Door H is the closed door on the hall |
+| walk-in closet | 96 in wide × 48 in deep, under the bathroom, same place as before. Closed toward the hall |
+| laundry | 96 in wide × 50 in deep, under the closet. The wall on the hall is gone; bifolds are a flush closed panel |
 | hallway length | 178 in. The **width** is measured (E, 44 in). Laminate |
-| hall-to-kitchen opening | 66 in along the hall, a cased opening so the aisle joins the hall. Not a letter on the tape |
+| hall-to-kitchen opening | 56 in along the hall, a cased opening so the entry joins the hall. Not a letter on the tape |
+| bedroom-to-bath walkway | 32 in, open, no door leaf. Centered on the bedroom's inner wall (about x 0.4 to 0.6). Leads into the bath. Not letter H |
+| pantry | 24 in deep into the main room, 30 in door on the hall, closed. Along the hall, past the entry |
+| storage closet | same depth and door as the pantry, the next closed closet along the hall |
+| laundry bifolds | the hall wall is removed. White bifolds are a flush closed panel in that walkway |
+| back counter run | from about u = 0.28 (fridge at the entry end, then the stove) to u = 1 at the far exterior wall |
 | closet and laundry floors | laminate, assumed. The tape names laminate for the main room, kitchen, bathroom, and hallway, and carpet for the bedroom |
 | counter depth | 25 in |
-| fridge | about 30 in wide (Dan) by 30 in deep by 70 in tall. First on the back wall from the entry side |
+| fridge | about 30 in wide (Dan) by 30 in deep by 70 in tall. Stainless. Entry end of the counter run, about u = 0.28 |
 | stove | 30 in wide, same depth as the counter |
 | island | 60 × 36 in, 36 in high, granite top, dark cabinets, sink |
-| carpet lip | 0.5 in (12.7 mm) step where the bedroom carpet meets the hall laminate. Dan described it as slightly raised and roughly flush; the 0.5 in figure is the modeled estimate |
+| carpet lip | 0.5 in (12.7 mm) step where the bedroom carpet meets laminate, at the bedroom door and at the bath walkway. Dan described it as slightly raised and roughly flush; the 0.5 in figure is the modeled estimate |
 
-The bedroom door is an open 32 in passage. The real leaf swings toward the kitchen and is not a solid in the opening, so the clear width stays the measured 32 in. The bathroom door, the front door, the patio stop, and the hall bifolds are closed walls.
+The bedroom door is an open 32 in passage. The real leaf swings toward the kitchen and is not a solid in the opening, so the clear width stays the measured 32 in. A second opening in that same inner wall, near the outer side wall, is the bedroom-to-bath walkway: about 32 in, no door leaf. Door H is the separate closed door where the hallway meets the bathroom. The front door, the patio stop, the pantry door, and the storage door are closed. The laundry bifolds are a flush closed panel, not a thick wall.
 
 ## Furniture
 
-Every size and position is an estimate from Dan's photos. There is no dining table and no rug. The axis-aligned boxes below are the scoring geometry (`X, Y, Z` inches). Metre coordinates are in `eval/apartment_ground_truth.json`.
+Every size and position is an estimate from Dan's photos and his marked-up plan. There is no dining table and no rug. The axis-aligned boxes below are the scoring geometry (`X, Y, Z` inches). Metre coordinates are in `eval/apartment_ground_truth.json`.
+
+Main-room `u` runs from the shared wall to the far exterior wall. `v` runs from the patio wall to the kitchen back wall. Bedroom `x` runs from the outer side wall to the shared wall. Bedroom `y` runs from the patio-side wall to the inner wall.
 
 | piece | size (in) | where |
 |---|---|---|
-| loveseat | 38 × 60 × 40 | dark brown leather recliner along the living room's left wall |
-| end table | 22 × 22 × 24 | between the loveseat and the 3-seat sofa |
-| 3-seat sofa | 84 × 38 × 40 | dark brown leather recliner on the far wall, under the window |
-| side table | 18 × 18 × 24 | right end of the 3-seat sofa |
-| desk | 30 × 60 × 29 | about 60×30 in, right side by the patio door |
-| office chair | 22 × 22 × 40 | black mesh chair on casters, at the desk |
-| trash can | 11 × 11 × 15 | small black can beside the desk |
-| TV / monitor stand | 12 × 24 × 42 | beside the desk (stand plus screen) |
-| fridge | 30 × 30 × 70 | stainless, back wall, entry side |
-| stove | 30 × 25 × 36 | between the fridge and the cabinets |
-| cabinets | rest of the back wall × 25 × 36 | dark bases, granite top. Uppers are visual only and stay inside the base footprint |
+| loveseat | 38 × 72 × 40 | dark brown leather, shared wall near the patio door, about u 0.02–0.23, v 0.05–0.27, facing into the room |
+| end table | 18 × 18 × 24 | loveseat's patio-end inner corner |
+| 3-seat sofa | 36 × 80 × 40 | dark brown leather, far exterior wall near the patio, about u 0.80–1, v 0.05–0.29, facing into the room |
+| end table | 18 × 18 × 24 | 3-seat sofa's kitchen-side end |
+| desk | 30 × 60 × 29 | far exterior wall below the sofa, about 60×30 in, inside u 0.84–1, v 0.34–0.56 |
+| office chair | 22 × 22 × 40 | black mesh chair on casters, in front of the desk |
+| trash can | 11 × 11 × 15 | small black can at the desk's kitchen end |
+| monitor stand | 24 × 12 × 42 | between the desk and the sofa, against the far wall |
+| fridge | 30 × 30 × 70 | stainless, light grey metallic, entry end of the back counter (about u = 0.28) |
+| stove | 30 × 25 × 36 | in the counter run, after the fridge |
+| cabinets | 72 × 25 × 36 | from the stove to the far exterior wall. Uppers are visual only and stay inside the base footprint |
 | island | 60 × 36 × 36 | granite top, dark cabinets, sink |
-| island chair | 18 × 18 × 36 | one wooden spindle-back chair on the living-room side |
-| bed | 60 × 80 × 48 | queen assumed, on the bedroom's far wall. 48 in is the headboard height |
-| nightstand | 24 × 16 × 28 | dark wood, near the bed |
-| coat stand | 16 × 16 × 65 | left corner of the bedroom |
+| island chair | 18 × 18 × 36 | one wooden chair on the living-room side |
+| bed | 80 × 60 × 48 | queen, outer/patio corner, long side along the patio wall, headboard against that wall. About x 0–0.55, y 0.02–0.5. 48 in is the headboard height |
+| dresser | 19 × 25 × 28 | patio-side corner by the shared wall, about x 0.85–0.98, y 0.03–0.2 |
+| coat stand | 14 × 23 × 65 | against the outer side wall, about x 0–0.1, y 0.52–0.68 |
 
-Three pendant lights hang over the island. They are visual only (no collision).
+There are no pendant lights.
 
-A 24 in (0.610 m) clear path must remain from the main room through the bedroom door, the hallway, and the kitchen aisle. The test inflates every non-floor solid by half of that width and checks those four places still connect. G, E, and F are all wider than 24 in (32, 44, and 38).
+A 24 in (0.610 m) clear path must remain from the main room through the bedroom door, the hallway, the kitchen aisle, and the bedroom-to-bath walkway. The test inflates every non-floor solid by half of that width and checks those places still connect. G, E, F, and the walkway are all wider than 24 in.
 
 ## Floors
 
@@ -108,7 +115,7 @@ Each zone is its own floor solid with a `contactMaterial`.
 |---|---|---|
 | living, kitchen, hallway, bathroom | `laminate` | z = 0 |
 | closet, laundry | `laminate` (assumed) | z = 0 |
-| bedroom, and the lip in the bedroom doorway | `carpet` | z = 0.5 in |
+| bedroom, and the lip at the bedroom door and the bath walkway | `carpet` | z = 0.5 in |
 
 Walls are light greige, doors and trim white, laminate a grey-brown wood, carpet a medium pile.
 
@@ -128,22 +135,23 @@ Webots R2025a `ContactProperties` has no rolling-resistance coefficient. `forceD
 +Y is up (patio). +X is to the right. Not to scale. Door letters are the tape; the service rooms are estimates.
 
 ```
-patio / window wall                                          J closed
+patio wall          J closed (shared-wall end)
 +---------------------------+------------------------------------------+
-| BEDROOM   carpet +0.5 in  | LIVING   laminate                        |
-| bed on the far wall       | loveseat  end   3-seat sofa   side       |
-| nightstand     coat stand |                      desk  chair  TV     |
-| H bath door (closed)      |                                          |
+| BEDROOM  carpet +0.5 in   | LIVING  laminate                         |
+| bed (head on patio wall)  | loveseat          3-seat sofa            |
+| coat stand    dresser     | end tables                               |
+| walkway (open)            |           desk chair  monitor            |
 +-------------+-------------+ G bedroom door (open, toward kitchen)    |
-| BATH        | HALL 44 in  |                                          |
-| estimate    | laminate    |                                          |
-+-------------+ bifolds     |                                          |
-| CLOSET      | closed      | KITCHEN  laminate                        |
-| estimate    |             | island + chair on the living side        |
-+-------------+             | aisle 38 in                              |
-| LAUNDRY     |             | fridge | stove | cabinets                |
-| estimate    | I closed    +------------------------------------------+
-+-------------+ front door    back wall
+| BATH        | H closed    |                                          |
+| estimate    | HALL 44 in  |                                          |
++-------------+             | pantry + storage (closed doors on hall)  |
+| WALK-IN     | laminate    |                                          |
+| stays       |             | KITCHEN  laminate                        |
++-------------+ bifold panel| island + one chair                       |
+| LAUNDRY     | (walkway,   | aisle 38 in                              |
+| estimate    |  closed)    | fridge | stove | cabinets to far wall    |
++-------------+-------------+------+ I closed                          |
+ back wall (solid)                 front door in the main room
 ```
 
-The hall's other closed door (toward the kitchen wall, past the cased opening) is drawn as a white panel on a solid wall. It is not a measured doorway.
+Pantry and storage sit on the main-room side of the hall with closed doors. The laundry side of that hall is an opening with the bifolds drawn as a flush closed panel. The walk-in closet is unchanged, between the bath and the laundry.

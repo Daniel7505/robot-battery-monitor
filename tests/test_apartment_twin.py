@@ -132,15 +132,18 @@ def _measured(solids: dict) -> dict[str, float]:
 def _door_widths(solids: dict) -> dict[str, float]:
     bed = _gaps_x(solids, "APT_WALL_BED_SOUTH")
     assert len(bed) == 2, bed
-    # West gap is the bathroom door, east gap is the bedroom door.
+    # West gap is the open bedroom-to-bath walkway. East gap is door G.
     south = _gaps_x(solids, "APT_WALL_SOUTH")
     north = _gaps_x(solids, "APT_WALL_NORTH")
     assert len(south) == 1 and len(north) == 1
+    # Door H is the closed leaf at the north end of the hall, under the bedroom wall.
+    bath_door = _agg(solids, "APT_WALL_BED_SOUTH", "ymin", "min") - solids["APT_WALL_HALL_WEST"]["ymax"]
     return {
-        "H_bathroom_door": bed[0],
-        "G_bedroom_door": bed[1],
+        "H_bathroom_door": bath_door,
+        "G_bedroom_door": bed[-1],
         "I_front_door": south[0],
         "J_patio_door": north[0],
+        "bedroom_bath_walkway": bed[0],
     }
 
 
@@ -182,11 +185,15 @@ def _sample_points(solids: dict, spawn: tuple[float, float]) -> dict[str, tuple[
     bed_wall.sort(key=lambda item: item["xmin"])
     door_x = (bed_wall[-2]["xmax"] + bed_wall[-1]["xmin"]) / 2.0
     door_y = bed_wall[-1]["ymax"] + 0.35
+    # West gap is the open walkway into the bathroom.
+    walk_x = (bed_wall[0]["xmax"] + bed_wall[1]["xmin"]) / 2.0
+    bath_y = bed_wall[0]["ymin"] - 0.40
     return {
         "main_room": spawn,
         "kitchen_aisle": ((island["xmin"] + island["xmax"]) / 2.0, (counter["ymax"] + island["ymin"]) / 2.0),
         "hallway": ((hall["xmin"] + hall["xmax"]) / 2.0, (hall["ymin"] + hall["ymax"]) / 2.0),
         "bedroom": (door_x, door_y),
+        "bathroom": (walk_x, bath_y),
     }
 
 
@@ -319,6 +326,8 @@ def test_doorways_are_at_least_the_measured_widths(solids: dict):
     for key, letter in _DOOR_LETTERS.items():
         expect = _inches(gt, key)
         assert got[key] + 1e-4 >= expect, f"{letter} opening {got[key]:.4f} m is under {expect:.4f} m"
+    walk = float(gt["estimates"]["bedroom_bath_walkway_in"]) * float(gt["inch_to_metre"])
+    assert got["bedroom_bath_walkway"] + 1e-4 >= walk
 
 
 def test_floor_zones_and_carpet_step(solids: dict):
@@ -380,7 +389,7 @@ def test_furniture_boxes_match_scoring_ground_truth(solids: dict):
         assert abs(solid["zmax"] - zmax) <= tol
     assert "APT_FURN_DINING" not in solids
     assert "APT_FURN_RUG" not in solids
-    assert world_text_pendants() == 3
+    assert world_text_pendants() == 0
 
 
 def world_text_pendants() -> int:

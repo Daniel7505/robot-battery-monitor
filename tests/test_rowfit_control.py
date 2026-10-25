@@ -599,3 +599,19 @@ def test_s_track_does_not_regress_with_gate():
     assert res["finished"] and res["max_ct_m"] < 0.085 and res["held_frames"] == 0
     assert res["pivots"] == [] and res["corner_first_seen"] is None
     assert res["max_v"] == pytest.approx(rc.V_STRAIGHT_M_S, abs=0.01)  # straightaway cruise on the straights
+
+
+def test_split_keeps_the_import_path_and_couples_coast_with_curve_speed():
+    import src.rowfit_speed as speed
+    from src.lane_keep import MAX_WHEEL_RAD_S
+
+    assert speed.MAX_WHEEL_RAD_S is MAX_WHEEL_RAD_S
+    assert rc.curve_speed is speed.curve_speed
+    assert rc.MAX_WHEEL_RAD_S is speed.MAX_WHEEL_RAD_S
+    assert rc.RowfitController._approach_tick.__module__ == "src.rowfit_speed"
+    assert rc.RowfitController.coast_summary_fields.__module__ == "src.rowfit_speed"
+    assert rc.RowfitController.on_frame.__module__ == "src.rowfit_lane"
+    assert rc.RowfitController._pivot_tick.__module__ == "src.rowfit_corner"
+    assert rc.RowfitController._gap_tick.__module__ == "src.rowfit_junction"
+    assert rc.RowfitController.step.__module__ == "src.rowfit_control"
+    assert rc.lookahead_bounds_from_coverage.__module__ == "src.rowfit_lane"

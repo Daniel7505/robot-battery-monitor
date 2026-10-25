@@ -19,7 +19,8 @@ DEFAULT_K_STEER = 2.0
 DEFAULT_STEER_SLEW_PER_S = 12.0
 DEFAULT_STEER_RELEASE_PER_S = 4.0
 DEFAULT_TURN_SLOW = 0.24
-MAX_WHEEL_RAD_S = 8.0
+# MAX_WHEEL_RAD_S (8.0) is defined with coast and curve_speed in
+# src.rowfit_speed and bound at the bottom of this module.
 WHEEL_RADIUS_M = 0.08
 WHEEL_Y_LEFT_M = 0.17
 
@@ -123,3 +124,7 @@ def wheels_from_steer(
     left = max(floor, min(MAX_WHEEL_RAD_S, left))
     right = max(floor, min(MAX_WHEEL_RAD_S, right))
     return left, right
+
+
+# After the wheel helpers so this module and rowfit_speed can import each other.
+from src.rowfit_speed import MAX_WHEEL_RAD_S

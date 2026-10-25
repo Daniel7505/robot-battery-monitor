@@ -41,4 +41,4 @@ Short record of control/stop reliability as of **2026-07-29**, git **`9350d44`**
 
 - Energy baseline: `docs/V1_WHEELED_ENERGY_BASELINE.md`
 - PowerFeed path: `docs/TWIN_POWER_BRIDGE.md`
-- Controller: `webots/controllers/butlerbot_controller/butlerbot_controller.py`
+- Controller entry: `webots/controllers/butlerbot_controller/butlerbot_controller.py` (step bodies in `controller_devices.py`, `controller_sensing.py`, `controller_mission.py`, `controller_energy.py`)

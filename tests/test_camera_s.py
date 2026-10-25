@@ -72,7 +72,7 @@ def test_camera_world_refuses_the_track_for_steering():
     for raw in ("1", "true", "yes", "on"):
         assert steer_track_enabled(str(S_WORLD), env={"RBM_NO_TRACK": raw}) is False
     assert steer_track_enabled(None, env={}) is True
-    ctrl = (ROOT / "webots" / "controllers" / "butlerbot_controller" / "butlerbot_controller.py").read_text(
+    ctrl = (ROOT / "webots" / "controllers" / "butlerbot_controller" / "controller_devices.py").read_text(
         encoding="utf-8"
     )
     gate = ctrl[ctrl.index("if rowfit_rt is not None and _steer_track"): ctrl.index("rowfit_rt.ctl.set_track")]
@@ -403,10 +403,11 @@ def test_apply_lane_steer_copies_camera_and_the_finish_override():
 
 def test_controller_stamps_steer_every_step_and_notes_each_frame():
     """875eb13 copied steer_source only inside the finish branch."""
-    ctrl = (
-        ROOT / "webots" / "controllers" / "butlerbot_controller" / "butlerbot_controller.py"
-    ).read_text(encoding="utf-8")
-    lines = ctrl.splitlines()
+    folder = ROOT / "webots" / "controllers" / "butlerbot_controller"
+    mission = (folder / "controller_mission.py").read_text(encoding="utf-8")
+    devices = (folder / "controller_devices.py").read_text(encoding="utf-8")
+    entry = (folder / "butlerbot_controller.py").read_text(encoding="utf-8")
+    lines = mission.splitlines()
     finish = next(i for i, line in enumerate(lines) if line.strip() == "if _crossed or _at_cap:")
     calls = [i for i, line in enumerate(lines) if "apply_lane_steer(lane_eyes, lk)" in line]
     assert calls
@@ -415,11 +416,14 @@ def test_controller_stamps_steer_every_step_and_notes_each_frame():
         indent = len(lines[i]) - len(lines[i].lstrip())
         assert indent <= finish_indent
         assert i > finish
-    assert 'lane_eyes["steer_source"]' not in ctrl
-    assert "controller_energy_log.note_lane_frame(lane_fit_fields)" in ctrl
-    assert "LANE_VISION file=" in ctrl
-    loop = ctrl[ctrl.index("while robot.step"):]
+    assert 'lane_eyes["steer_source"]' not in mission
+    assert "controller_energy_log.note_lane_frame(lane_fit_fields)" in mission
+    assert "LANE_VISION file=" in devices
+    assert "lane_fit_fields: dict = {}" in devices
+    loop = entry[entry.index("while robot.step"):]
     assert "lane_fit_fields = {}" not in loop
+    for path in folder.glob("*.py"):
+        assert "lane_fit_fields = {}" not in path.read_text(encoding="utf-8")
 
 
 def test_camera_steer_accumulates_for_the_whole_lap():

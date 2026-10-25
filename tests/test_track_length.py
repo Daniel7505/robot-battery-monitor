@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORLD = ROOT / "webots" / "worlds" / "butlerbot.wbt"
 CAL = ROOT / "webots" / "worlds" / "track_calibration.json"
 PATH_CSV = ROOT / "webots" / "worlds" / "s_track_path.csv"
-CONTROLLER = ROOT / "webots" / "controllers" / "butlerbot_controller" / "butlerbot_controller.py"
+CONTROLLER = ROOT / "webots" / "controllers" / "butlerbot_controller" / "controller_mission.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import s_track  # noqa: E402

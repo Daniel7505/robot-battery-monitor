@@ -105,7 +105,7 @@ flowchart TB
         TWINPKG["src/twin/*"]
         TELE["src/teleop_agent.py"]
         OBA["src/onboard_agent.py"]
-        WCTRL["webots/.../butlerbot_controller.py"]
+        WCTRL["webots/.../butlerbot_controller/<br/>entry + devices, sensing, mission, energy"]
         CFG["config/config.yaml + hardware profiles"]
     end
 

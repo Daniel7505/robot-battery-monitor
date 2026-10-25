@@ -82,12 +82,16 @@ Full picture with file names: [`docs/ARCHITECTURE.md` §2](../docs/ARCHITECTURE.
 }
 ```
 
-## Controller layout (2026-08-17)
+## Controller layout
 
-`butlerbot_controller.py` is the orchestrator (`_run_loop`). Domain code lives beside it:
+`butlerbot_controller.py` is the Webots entry point (`controller "butlerbot_controller"`). `_run_loop` calls the step modules in order: prepare devices, then each `robot.step` reads sensors, handles the mission, commands the wheels, integrates energy, and posts telemetry. The 2026-08-17 domain modules stay beside those step modules.
 
 | Module | Owns |
 |--------|------|
+| `controller_devices.py` | Device setup, BoM reload, wheel commands |
+| `controller_sensing.py` | IMU, follow camera, GPS / encoder reads |
+| `controller_mission.py` | Route, R-key phases, nadir harvest, mission end |
+| `controller_energy.py` | Pack watt-hours and telemetry POST |
 | `controller_hud.py` | Display gauges + camera overlays |
 | `controller_keys.py` | Legacy debug key input (not a user feature) |
 | `controller_rowfit.py` | Row-fit camera bind, lane log, route |

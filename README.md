@@ -193,7 +193,11 @@ Ports used: **5000** (dashboard) and **5432** (database), both only reachable fr
 | `src/dashboard.py` | The web page, the `/api/twin/*` endpoints and the live push |
 | `src/twin/bridge.py` | The "post office" between Webots and the dashboard |
 | `src/hardware_ros2.py` | The main power loop: budget, safety, agent, database |
-| `webots/controllers/butlerbot_controller/butlerbot_controller.py` | The robot's main loop inside Webots |
+| `webots/controllers/butlerbot_controller/butlerbot_controller.py` | Webots entry point. `_run_loop` calls the step modules below |
+| `webots/controllers/butlerbot_controller/controller_devices.py` | Device setup, BoM reload, wheel commands |
+| `webots/controllers/butlerbot_controller/controller_sensing.py` | IMU, follow camera, GPS / encoder reads |
+| `webots/controllers/butlerbot_controller/controller_mission.py` | Route, R-key phases, nadir harvest, mission end |
+| `webots/controllers/butlerbot_controller/controller_energy.py` | Pack watt-hours and telemetry POST |
 | `src/lane_vision.py`, `src/rowfit_control.py` | How the robot sees the lane and steers |
 | `config/config.yaml` | Most settings |
 

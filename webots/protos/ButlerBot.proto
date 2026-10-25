@@ -12,7 +12,7 @@ PROTO ButlerBot [
   field SFString controller "butlerbot_controller"
   field MFString controllerArgs [ "--dashboard-url=http://127.0.0.1:5000" ]
   field SFFloat bodyMass 3.2
-  field MFFloat bodyInertia [ 0.055 0.062 0.078 0 0 0 ]
+  field MFVec3f bodyInertia [ 0.055 0.062 0.078 0 0 0 ]
 ]
 {
 Robot {

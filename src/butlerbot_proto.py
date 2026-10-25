@@ -165,7 +165,7 @@ def robot_block_to_proto(robot_block: str) -> str:
         '  field SFString controller "butlerbot_controller"\n'
         '  field MFString controllerArgs [ "--dashboard-url=http://127.0.0.1:5000" ]\n'
         "  field SFFloat bodyMass 3.2\n"
-        "  field MFFloat bodyInertia [ 0.055 0.062 0.078 0 0 0 ]\n"
+        "  field MFVec3f bodyInertia [ 0.055 0.062 0.078 0 0 0 ]\n"
         "]\n"
         "{\n"
     )

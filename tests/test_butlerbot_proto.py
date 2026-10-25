@@ -92,3 +92,33 @@ def test_warehouse_and_s_share_devices_mass_physics_and_bounds():
     assert "DEF NADIR_CAM_R Camera" in warehouse
     assert "DEF LEFT_WHEEL_JOINT HingeJoint" in warehouse
     assert "DEF RIGHT_WHEEL_JOINT HingeJoint" in warehouse
+
+
+# Webots R2025a type of the node field on the left of an ``IS`` link.
+# Physics.inertiaMatrix is MFVec3f (two vec3f: diagonal, then products).
+# An MFFloat PROTO field is dropped and the body inertia comes from the
+# collision shapes instead.
+_R2025A_IS_FIELD_TYPE = {
+    "translation": "SFVec3f",
+    "rotation": "SFRotation",
+    "name": "SFString",
+    "controller": "SFString",
+    "controllerArgs": "MFString",
+    "mass": "SFFloat",
+    "inertiaMatrix": "MFVec3f",
+}
+
+
+def test_is_fields_match_r2025a_node_field_types():
+    text = (ROOT / "webots" / "protos" / "ButlerBot.proto").read_text(encoding="utf-8")
+    declared = {name: typ for typ, name in re.findall(r"(?m)^  field\s+(\w+)\s+(\w+)\s", text)}
+    links = re.findall(r"(?m)^[ \t]*(\w+)\s+IS\s+(\w+)\s*$", text)
+    assert links
+    by_proto = {proto: node for node, proto in links}
+    assert by_proto["bodyMass"] == "mass"
+    assert by_proto["bodyInertia"] == "inertiaMatrix"
+    assert declared["bodyMass"] == "SFFloat"
+    assert declared["bodyInertia"] == "MFVec3f"
+    for node_field, proto_field in links:
+        assert node_field in _R2025A_IS_FIELD_TYPE
+        assert declared[proto_field] == _R2025A_IS_FIELD_TYPE[node_field]

@@ -22,27 +22,16 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import argparse
-import json
 import sys
 import time
 import urllib.error
-import urllib.request
+from pathlib import Path
 
-
-def _req(url: str, method: str = "GET", body: dict | None = None, timeout: float = 5.0) -> dict:
-    """Minimal JSON HTTP helper (stdlib only)."""
-    data = None
-    headers = {}
-    if os.environ.get("RBM_API_TOKEN"):
-        headers["X-API-Token"] = os.environ["RBM_API_TOKEN"]
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from dashboard_http import _req  # noqa: E402
 
 
 def snap(base: str) -> dict:

@@ -130,7 +130,14 @@ _PROOF_NUMBER_KEYS = (
 )
 
 
-def _kv_tokens(line: str) -> dict[str, str]:
+def parse_mission_kv(line: str) -> dict[str, str]:
+    """Key=value tokens on a ``MISSION_SUMMARY`` (or similar) line.
+
+    One parser for the dashboard file and the optimizer. Values are the
+    whitespace-delimited token after ``=``, including an empty token
+    (``wh_model=``) and an ISO timestamp. Callers that want a float treat
+    ``""`` and a missing key the same way.
+    """
     out: dict[str, str] = {}
     for token in str(line).split():
         if "=" not in token:
@@ -138,6 +145,10 @@ def _kv_tokens(line: str) -> dict[str, str]:
         key, value = token.split("=", 1)
         out[key] = value
     return out
+
+
+def _kv_tokens(line: str) -> dict[str, str]:
+    return parse_mission_kv(line)
 
 
 def _proof_number(raw: str | None) -> float | None:

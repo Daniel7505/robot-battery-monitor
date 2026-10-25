@@ -22,11 +22,14 @@ Camera tilt calculator: `python scripts/aim_camera.py`.
    In R2025a that call needs the integer device tag; passing the Camera
    object raises `ctypes.ArgumentError`, which is why Dan's 2026-10-01 run fell
    back to the wbt. If that fails too, it tries `getFromDef('NADIR_CAM_L'/'_R')`
-   on the same Supervisor the controller created. If that fails it parses the loaded `.wbt`, then falls
+   on the same Supervisor the controller created. DEF names inside
+   `ButlerBot.proto` are proto-scoped, so the next try is
+   `robot.getSelf().getFromProtoDef`. If that fails it parses the loaded
+   `.wbt` (expanding the PROTO), then falls
    back to the `NADIR_LEFT_POSE` / `NADIR_RIGHT_POSE` constants. The console
    says which one it used (`CAM POSE nadir_left from supervisor: …`), and a
    failed live read prints the real exception text in brackets. The
-   constants are still kept in sync with `butlerbot.wbt` by a test, because
+   constants are still kept in sync with `webots/protos/ButlerBot.proto` by a test, because
    tests, the offline sim and the fallback use them.
    Webots R2025a cameras look along their own +X, with +Y to the left of the
    image and +Z to the top. `rotation 0 1 0 θ` pitches the view down by θ.

@@ -38,7 +38,9 @@ def new_gate():
 
 @pytest.mark.parametrize("world", WORLDS, ids=lambda p: p.name)
 def test_every_butlerbot_world_has_forward_radar(world):
-    text = world.read_text(encoding="utf-8")
+    from src.butlerbot_proto import expand_world_text
+
+    text = expand_world_text(world.read_text(encoding="utf-8"))
     assert f'name "{RADAR_NAME}"' in text
     assert "DEF RADAR_FWD Radar" in text
     # Aimed along +x: rotation 0 1 0 ~pi/2

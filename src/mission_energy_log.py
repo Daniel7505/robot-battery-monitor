@@ -1194,7 +1194,7 @@ class MissionEnergyLog:
         ``MISSION_SUMMARY`` err_pct (``_err_pct``) is drive electrical over
         model drive only, so the two percentages on one lap are different
         on purpose: idle sits in the energy line and not in the summary
-        denominator.
+        denominator. Both totals include the stall hold.
         """
         from src.twin_energy import format_mission_energy_line
 
@@ -1209,6 +1209,7 @@ class MissionEnergyLog:
             heading_change_deg=self._heading_accum_deg,
             wh_accel=self._mission_wh_accel,
             wh_turn=self._mission_wh_turn,
+            wh_hold=self._mission_wh_hold,
         )
 
 

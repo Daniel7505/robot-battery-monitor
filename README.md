@@ -36,7 +36,7 @@ Imagine a small wheeled robot that carries things around a warehouse. Before any
 - **Drive it in a 3D simulator** ([Webots](https://cyberbotics.com/), free). The robot follows yellow painted lanes using two downward-facing cameras, turns at corners and intersections, slows for obstacles, and stops cleanly.
 - **Watch its "fuel gauge" live** in a web page: battery %, how many watts each body part uses (wheels, arms, torso, computer, cooling), safety warnings, and how long the battery should last.
 - **Save the history** in a database so you can look back at past runs.
-- **Test ideas without the simulator**: a fast "offline" lane-following simulator and 867 automated tests.
+- **Test ideas without the simulator**: a fast "offline" lane-following simulator and 880 automated tests.
 - **Start designing real robots**: a small catalog of real, buyable parts and a first-draft "design agent" that suggests the cheapest parts list for a mission.
 
 The long-term goal ([`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)) is an agent that picks real parts, designs the cheapest robot that can finish a mission, tests it in the simulator, and then builds it for real. Today's robot and dashboard are the **test bench** for that goal. The north star may evolve as the project learns; `NORTH_STAR.md` is the current version.
@@ -266,7 +266,7 @@ python -m pytest
 That works with or without a database:
 
 - **No Postgres running:** the 27 tests marked `db` are **skipped**, and everything else runs. One more test skips when the `docker` command is not on PATH. ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
-- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 867 tests.
+- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 880 tests.
 
 The full run takes about 5 minutes. To run just one file: `python -m pytest tests/test_lane_keep.py`.
 
@@ -340,7 +340,7 @@ Other worlds:
 .\scripts\launch_webots_twin.ps1 -World plus          # crossroads
 .\scripts\launch_webots_twin.ps1 -World warehouse     # warehouse
 ```
-Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play.
+Full list: `butlerbot` (the S, default), `corner90`, `corner_mix`, `widen`, `plus`, `t_end`, `gap45`, `warehouse`, `warehouse_obstacles`, `radar_motion`. You can also open Webots yourself and use **File → Open World → `webots/worlds/butlerbot.wbt`**, then press Play. Every world instances the same robot from [`webots/protos/ButlerBot.proto`](webots/protos/ButlerBot.proto).
 
 ✅ **It worked if** the robot starts driving along the yellow lane and the dashboard badge says **TWIN LIVE**.
 
@@ -606,7 +606,7 @@ Not pinned in `requirements.txt`; install manually when using obstacle worlds, `
 | **Parquetry.proto** | `EXTERNPROTO` in all `webots/worlds/butlerbot*.wbt` → [Cyberbotics Webots R2025a](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/Parquetry.proto) | Apache-2.0 (Webots project) | Loaded from GitHub at world load time; not copied into this repo. |
 | **Floor.proto** | same pattern → [Floor.proto](https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/Floor.proto) | Apache-2.0 (Webots project) | same |
 
-All ButlerBot `.wbt` worlds under [`webots/worlds/`](webots/worlds/) reference only these two external PROTOs. Robot geometry, track paint, warehouse layout, and controllers in this repo are **original to this project** (generated or authored here).
+All ButlerBot `.wbt` worlds under [`webots/worlds/`](webots/worlds/) reference only these two external PROTOs, plus the local [`webots/protos/ButlerBot.proto`](webots/protos/ButlerBot.proto). That robot PROTO, the track paint, the warehouse layout, and the controllers in this repo are **original to this project** (generated or authored here).
 
 ### Bundled images and models (in git)
 

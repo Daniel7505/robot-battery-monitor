@@ -40,7 +40,7 @@ Files:
 
 ## The mount
 
-Every world (`butlerbot*.wbt`, identical Robot block) has a visual mast and
+Every world (`butlerbot*.wbt`, the shared `webots/protos/ButlerBot.proto`) has a visual mast and
 bar on the robot's front centre line and two `Camera` nodes:
 
 | | value | why |
@@ -212,7 +212,7 @@ error is well under 2 cm. These are synthetic images, not Webots renders.
 
 ## Radar (moving objects)
 
-Mount (every `butlerbot*.wbt`): `DEF RADAR_FWD Radar` named `radar_fwd` at
+Mount (`webots/protos/ButlerBot.proto`, instanced by every `butlerbot*.wbt`): `DEF RADAR_FWD Radar` named `radar_fwd` at
 translation `(0.16, 0, 0.45)`, rotation `0 1 0 π/2` (Webots Radar looks along
 `-Z`; that rotation aims it along robot `+x`). Ranges 0.15–8 m, HFOV 1.0 rad,
 VFOV 0.7 rad. Solids need `radarCrossSection > 0` to be visible (warehouse

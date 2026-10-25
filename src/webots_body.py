@@ -1,9 +1,11 @@
 """Put the selected BoM build's mass on the Webots robot.
 
-The shipped ``butlerbot*.wbt`` files keep a 3.2 kg body and a 0.08 m drive
-wheel. That 0.08 m is both the drawn mesh and the contact cylinder. The
-controller, odometry (``v = ω · r``), and the calibrated viscous energy bill
-all assume that same 0.08 m.
+The shipped ``butlerbot*.wbt`` files instance ``ButlerBot.proto``, whose
+defaults are a 3.2 kg body and a 0.08 m drive wheel. A BoM build sets
+``bodyMass`` and ``bodyInertia`` on that instance. A pasted ``Robot`` node
+is still patched in place. That 0.08 m is both the drawn mesh and the
+contact cylinder. The controller, odometry (``v = ω · r``), and the
+calibrated viscous energy bill all assume that same 0.08 m.
 
 When ``config.yaml`` sets ``bom_build`` to ``light``, ``heavy``, or
 ``budget``:
@@ -186,12 +188,34 @@ def apply_active_bom_body(text: str) -> str:
 
 
 def apply_bom_body_vrml(text: str, physics: BomBodyPhysics) -> str:
-    """Set body mass and body inertia. The contact cylinder stays 0.08 m."""
+    """Set body mass and body inertia. The contact cylinder stays 0.08 m.
+
+    A world that instances ``ButlerBot`` gets ``bodyMass`` and ``bodyInertia``
+    on that instance. A pasted ``Robot`` node is still patched in place.
+    """
+    from src.butlerbot_proto import patch_instance_body
+
+    patched = patch_instance_body(
+        text,
+        mass_kg=physics.mass_kg,
+        inertia=physics.body_inertia,
+        comment=_bom_mass_comment(physics),
+    )
+    if patched is not None:
+        return patched
     return _patch_body_solid(text, physics)
 
 
 def read_robot_body(text: str) -> RobotBody:
-    """Read the robot solid and the two drive wheels back out of VRML."""
+    """Read the robot solid and the two drive wheels back out of VRML.
+
+    A ``ButlerBot`` instance is expanded from ``webots/protos/ButlerBot.proto``
+    first, so mass fields on the instance and the wheel geometry in the PROTO
+    are both visible.
+    """
+    from src.butlerbot_proto import expand_world_text
+
+    text = expand_world_text(text)
     start, end = _body_span(text)
     if start < 0:
         raise ValueError("robot physics block not found")
@@ -309,19 +333,23 @@ def install_command_radius(radius_m: float) -> None:
             setattr(module, "WHEEL_RADIUS_M", radius)
 
 
+def _bom_mass_comment(physics: BomBodyPhysics) -> str:
+    return (
+        f"BoM {physics.build}: body mass is mass_kg_known {_fmt(physics.mass_kg)} kg "
+        f"(shipped placeholder was {_fmt(BODY_MASS_KG)} kg). "
+        f"Catalog wheel {_fmt(physics.wheel_radius_m)} m; contact cylinder stays "
+        f"{_fmt(physics.contact_radius_m)} m so odometry and the viscous bill match. "
+        f"Body inertia scales with mass/{_fmt(BODY_MASS_KG)}. "
+        f"Wheel solid mass stays {_fmt(WHEEL_SOLID_MASS_KG)} kg."
+    )
+
+
 def _patch_body_solid(text: str, physics: BomBodyPhysics) -> str:
     start, end = _body_span(text)
     if start < 0:
         return text
     block = text[start:end]
-    comment = (
-        f"    # BoM {physics.build}: body mass is mass_kg_known {_fmt(physics.mass_kg)} kg "
-        f"(shipped placeholder was {_fmt(BODY_MASS_KG)} kg). "
-        f"Catalog wheel {_fmt(physics.wheel_radius_m)} m; contact cylinder stays "
-        f"{_fmt(physics.contact_radius_m)} m so odometry and the viscous bill match. "
-        f"Body inertia scales with mass/{_fmt(BODY_MASS_KG)}. "
-        f"Wheel solid mass stays {_fmt(WHEEL_SOLID_MASS_KG)} kg.\n"
-    )
+    comment = "    # " + _bom_mass_comment(physics) + "\n"
     if _COMMENT_BEFORE_MASS.search(block):
         block = _COMMENT_BEFORE_MASS.sub(comment, block, count=1)
     else:

@@ -163,11 +163,11 @@ def test_test_worlds_are_generated_and_keep_the_robot(name):
     text = (WORLDS / NEW_WORLDS[name]).read_text(encoding="utf-8")
     base = (WORLDS / "butlerbot.wbt").read_text(encoding="utf-8")
     assert track_builder.emit_track_vrml(load_track(name)).strip() in text
-    assert text.split("\nRobot {", 1)[1] == base.split("\nRobot {", 1)[1]  # robot, cameras, HUDs identical
+    assert text.split("\nButlerBot {", 1)[1] == base.split("\nButlerBot {", 1)[1]  # same PROTO instance
     assert text.count("{") == text.count("}") and text.count("[") == text.count("]")
     assert re.findall(r"^DEF TRACK Pose \{", text, re.M) == ["DEF TRACK Pose {"]
     assert not re.search(r"^(Transform|Pose) \{", text, re.M)
-    assert "solid" not in text.split("DEF TRACK")[1].split("Robot {")[0]
+    assert "solid" not in text.split("DEF TRACK")[1].split("ButlerBot {")[0]
     assert f"# TRACK_FILE tracks/{name}.json" in text
     assert f'"TRACK (ENU): {name} ' in text
 

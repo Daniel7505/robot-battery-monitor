@@ -36,7 +36,7 @@ The first command writes three files:
 
 The robot starts at **(0, 0) facing +x**, the same spawn as every world.
 That point is 4 m inside receiving door RCV-1, facing into the building.
-The Robot block is byte-identical to `butlerbot.wbt` (a test checks this).
+The `ButlerBot` instance is byte-identical to `butlerbot.wbt` (a test checks this). The robot body is `webots/protos/ButlerBot.proto`.
 
 ## Main 3D view: top-down follow cam
 

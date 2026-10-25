@@ -16,7 +16,7 @@ is not an IndexedFaceSet field in R2025a):
     python scripts/track_builder.py corner90                        # print the TRACK block
     python scripts/track_builder.py corner90 --world webots/worlds/butlerbot_corner90.wbt
         (creates the world from butlerbot.wbt if it does not exist, else replaces its
-         track block; robot, cameras, HUDs and lights stay as in the template)
+         track block; the ButlerBot PROTO instance, lights and floor stay as in the template)
 
 The S in butlerbot.wbt is written by scripts/s_track.py through the same code.
 """
@@ -298,10 +298,18 @@ def emit_track_vrml(geom: TrackGeometry, header: list | None = None, generator: 
 
 
 def replace_track_block(text: str, block: str) -> str:
-    """Swap the generated track block (rule ... DEF TRACK Pose {...}) for ``block``."""
+    """Swap the generated track block (rule ... DEF TRACK Pose {...}) for ``block``.
+
+    The robot is an ``EXTERNPROTO`` ``ButlerBot`` instance, not a pasted
+    ``Robot`` node. A leftover pasted block that still matches the shipped
+    robot is rewritten to that instance first.
+    """
+    from src.butlerbot_proto import use_butlerbot_proto
+
+    text = use_butlerbot_proto(text)
     pose = text.index("\nDEF TRACK Pose {") + 1
     start = text.rindex(BLOCK_RULE, 0, text.rindex(BLOCK_RULE, 0, pose))
-    end = text.index("\nRobot {", pose) + 1
+    end = text.index("\nButlerBot {", pose) + 1
     return text[:start] + block + "\n" + text[end:]
 
 

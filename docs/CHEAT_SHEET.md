@@ -100,7 +100,7 @@ needs 1–3 cm. See `docs/NORTH_STAR.md`.
     `project()` sampler, `FinishReferee` with `crossed()` and `cross_track()`.
   * `scripts/track_builder.py <track> --world <wbt>` writes the floor paint.
     See `docs/TRACKS.md`.
-* **Worlds** (`webots/worlds/`). All share the same Robot block.
+* **Worlds** (`webots/worlds/`). All instance `webots/protos/ButlerBot.proto` (one robot; pose, name, and controller are fields).
   * `butlerbot.wbt`: the 16.5 m S.
   * `butlerbot_corner90.wbt`, `butlerbot_corner_mix.wbt`, `butlerbot_widen.wbt`.
   * `butlerbot_plus.wbt`, `butlerbot_t_end.wbt`, `butlerbot_gap45.wbt`

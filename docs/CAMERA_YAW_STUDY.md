@@ -1,6 +1,6 @@
 # Camera yaw (toe-out) study: box-mounted nadir cameras
 
-**Analysis only.** The cameras in `butlerbot.wbt` are unchanged (pure pitch
+**Analysis only.** The cameras in `webots/protos/ButlerBot.proto` are unchanged (pure pitch
 `rotation 0 1 0 0.9411`, yaw 0). Everything below is predicted with
 `src/lane_vision.CameraModel`, the same pinhole model the controller uses.
 None of it has been seen in Webots yet.

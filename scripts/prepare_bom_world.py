@@ -2,9 +2,10 @@
 """Print the world Webots should open for the selected BoM build.
 
 Unset ``bom_build`` prints the path it was given. ``light``, ``heavy``, or
-``budget`` prints a sibling ``<name>.bom-<build>.wbt`` whose body mass
-matches that build. The contact cylinder and the drawn mesh stay 0.08 m.
-The shipped world file is not modified.
+``budget`` prints a sibling ``<name>.bom-<build>.wbt`` whose ``ButlerBot``
+instance sets ``bodyMass`` and ``bodyInertia`` for that build. The contact
+cylinder and the drawn mesh stay 0.08 m. The shipped world file is not
+modified.
 
     python scripts/prepare_bom_world.py webots/worlds/butlerbot_warehouse.wbt
 """

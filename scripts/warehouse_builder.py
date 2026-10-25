@@ -812,6 +812,9 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None, pr
     template = template or tb.TEMPLATE_WORLD
     with open(template, encoding="utf-8") as fh:
         text = fh.read()
+    from src.butlerbot_proto import use_butlerbot_proto
+
+    text = use_butlerbot_proto(text)
     sp = lay.sp
     cx, cy = (lay.x0 + lay.x1) / 2, (lay.y0 + lay.y1) / 2
     fl0 = text.index("\nFloor {") + 1
@@ -825,11 +828,11 @@ def build_world(lay: Layout, net, staging: list, template: str | None = None, pr
     vp1 = text.index("\n}\n", vp0) + 3
     text = text[:vp0] + follow_viewpoint_vrml(lay) + text[vp1:]
     # Indoors: 6 m racks would throw the aisles into hard shadow; no shadows in this world.
-    head, rest = text.split("\nRobot {", 1)
+    head, rest = text.split("\nButlerBot {", 1)
     head = head.replace("castShadows TRUE", "castShadows FALSE")
     k = head.index("\nDirectionalLight {") + 1
     head = head[:k] + "# Warehouse: no shadows (6 m racks would throw the aisles into hard shadow; indoor light is diffuse).\n" + head[k:]
-    text = head + "\nRobot {" + rest
+    text = head + "\nButlerBot {" + rest
     pose = text.index("\nDEF TRACK Pose {") + 1
     rule2 = text.rindex(tb.BLOCK_RULE, 0, text.rindex(tb.BLOCK_RULE, 0, pose))
     text = text[:rule2] + warehouse_vrml(lay, staging, props) + "\n" + text[rule2:]

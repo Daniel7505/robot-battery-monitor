@@ -277,13 +277,15 @@ def _retry_reason(outcome: RunOutcome) -> str | None:
     A stale or unstamped summary is not a reason to start Webots again.
     That second start is what killed trials 2–6 of run 10 within a minute.
     """
+    from optimizer.bad_lap import has_phrase
+
     if outcome.status != "crash":
         return None
     note = (outcome.note or "").strip()
-    lowered = note.lower()
-    if any(token in lowered for token in ("cached", "too quickly", "too short", "(<")):
+    # PR #27: these bad-lap phrases do not start Webots again.
+    if has_phrase(note, "cached", "too quickly", "too short", "(<"):
         return None
-    if "launcher exited" in lowered:
+    if has_phrase(note, "launcher exited"):
         return note
     head = note.split(":", 1)[0]
     if head.endswith("Error") or head.endswith("Exception"):

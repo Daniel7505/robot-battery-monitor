@@ -1209,6 +1209,7 @@ def format_mission_energy_line(
     heading_change_deg: float = 0.0,
     wh_accel: float = 0.0,
     wh_turn: float | None = None,
+    wh_hold: float = 0.0,
 ) -> str:
     """``MISSION_ENERGY build=...`` line. Model and measured stay separate.
 
@@ -1226,6 +1227,11 @@ def format_mission_energy_line(
     drive in one number, blank drive terms). Measured is hinge drive
     plus channel idle. Those are not the same split, so ``err_pct`` is
     ``na`` instead of a percent.
+
+    ``wh_hold`` is the stall-hold watt-hours the summary already adds to
+    its model. It is reporting only: the drive model in
+    ``bom_run_energy_wh`` is unchanged, and the printed ``wh_model`` /
+    ``err_pct`` include the hold so this line matches that summary.
     """
     from src.config import config
     from src.hardware_profile import active_bom_build
@@ -1242,8 +1248,11 @@ def format_mission_energy_line(
             wh_accel=wh_accel,
             wh_turn=wh_turn,
         )
+    hold = round(max(0.0, float(wh_hold or 0.0)), 3)
     if run is not None:
         wh_model = run["wh_model"]
+        if hold:
+            wh_model = round(float(wh_model) + hold, 3)
     else:
         model = estimate_mission_energy(
             dist_m,
@@ -1269,9 +1278,11 @@ def format_mission_energy_line(
         else:
             err_txt = ""
     build = active_bom_build() or "default"
+    hold_field = f" wh_model_hold={hold:.3f}" if run is not None else ""
     return (
         f"MISSION_ENERGY build={build} dist_m={dist_m} payload_kg={payload_kg} "
         f"wh_model={wh_model} wh_measured={measured_txt} err_pct={err_txt}"
+        f"{hold_field}"
     )
 
 

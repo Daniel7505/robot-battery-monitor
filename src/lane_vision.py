@@ -218,11 +218,15 @@ NADIR_CAMS = {"nadir_left": NADIR_LEFT_CAM, "nadir_right": NADIR_RIGHT_CAM}
 def parse_wbt_cameras(path: str | None = None) -> dict[str, dict]:
     """Read every ``Camera { ... }`` block from a .wbt (fields at block level).
 
-    Camera nodes in butlerbot.wbt are direct children of the Robot, whose
-    origin is the robot frame used here.
+    Camera nodes live in ``webots/protos/ButlerBot.proto`` and are direct
+    children of the Robot. A world that instances ``ButlerBot`` is expanded
+    first. The robot origin is the camera frame used here.
     """
     with open(path or _WBT_DEFAULT, encoding="utf-8") as fh:
         text = fh.read()
+    from src.butlerbot_proto import expand_world_text
+
+    text = expand_world_text(text)
     out: dict[str, dict] = {}
     for m in re.finditer(r"\bCamera\s*\{", text):
         depth = 0
@@ -369,6 +373,17 @@ def find_camera_node(robot, device=None, def_name: str | None = None):
             attempts.append((f"getFromDef({def_name!r})", lambda: robot.getFromDef(def_name)))
         else:
             errors.append("robot has no getFromDef (not a Supervisor?)")
+        # DEF names inside ButlerBot.proto are proto-scoped. getFromDef
+        # searches the world scope; getFromProtoDef reads the robot PROTO.
+        if hasattr(robot, "getSelf"):
+
+            def _from_proto(name=def_name):
+                self_node = robot.getSelf()
+                if self_node is None or not hasattr(self_node, "getFromProtoDef"):
+                    return None
+                return self_node.getFromProtoDef(name)
+
+            attempts.append((f"getFromProtoDef({def_name!r})", _from_proto))
     for how, fn in attempts:
         try:
             node = fn()

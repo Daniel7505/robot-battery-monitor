@@ -11,7 +11,8 @@
 #   ./scripts/start.sh full
 #   .\scripts\start.ps1 -Profile full
 #
-# Webots runs on the host (not in compose) and talks to dashboard:5000.
+# Webots runs on the host (not in compose) and talks to the dashboard.
+# Host and container both use DASHBOARD_PORT (default 5000).
 # =============================================================================
 
 services:
@@ -40,7 +41,7 @@ services:
       retries: 8
       start_period: 5s
 
-  # PMS hub: Flask + SocketIO dashboard, twin API, hardware loop
+  # PMS hub: Flask dashboard, twin API, hardware loop
   # Entrypoint: scripts/docker-entrypoint.sh → run_dashboard.py
   dashboard:
     build:
@@ -48,10 +49,11 @@ services:
       dockerfile: Dockerfile
     container_name: robot-battery-dashboard
     restart: unless-stopped
-    # Published on host loopback only: browser + host-side Webots use
-    # http://127.0.0.1:5000; other machines on the network cannot connect.
+    # Published on host loopback only. The container listens on the same
+    # DASHBOARD_PORT the host publishes (default 5000). config.py maps that
+    # env var onto dashboard.port.
     ports:
-      - "127.0.0.1:${DASHBOARD_PORT:-5000}:5000"
+      - "127.0.0.1:${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}"
     volumes:
       - ./logs:/app/logs
       - ./archives:/app/archives
@@ -74,6 +76,7 @@ services:
       # Inside the container the app must listen on all interfaces so the
       # published port reaches it; the host side is still 127.0.0.1-only.
       DASHBOARD_HOST: 0.0.0.0
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-5000}
       # Optional shared API token (empty = auth off). Read from .env.
       RBM_API_TOKEN: ${RBM_API_TOKEN:-}
     networks:
@@ -82,7 +85,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${DASHBOARD_PORT:-5000}/')"]
       interval: 15s
       timeout: 5s
       retries: 5

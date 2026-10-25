@@ -3,7 +3,7 @@
 import pytest
 
 from src import api_security
-from src.dashboard import app, socketio
+from src.dashboard import app
 
 TOKEN = "test-token-123"
 LAN = {"REMOTE_ADDR": "192.168.1.50"}
@@ -147,13 +147,6 @@ def test_default_cors_origins_are_loopback_only(monkeypatch):
 def test_cors_origins_env_override(monkeypatch):
     monkeypatch.setenv("RBM_CORS_ORIGINS", "http://a.test:5000, http://b.test:5000/")
     assert api_security.allowed_origins() == ["http://a.test:5000", "http://b.test:5000"]
-
-
-def test_socketio_uses_allowlist_not_wildcard():
-    configured = socketio.server.eio.cors_allowed_origins
-    assert configured != "*"
-    assert "http://127.0.0.1:5000" in configured
-    assert "http://localhost:5000" in configured
 
 
 def test_bind_host_defaults_to_loopback(monkeypatch):

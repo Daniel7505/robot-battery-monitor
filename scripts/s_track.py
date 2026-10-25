@@ -81,11 +81,7 @@ def cross_track_m(x: float, y: float) -> float:
 # just its waypoints (tracks/s.json, written by ``--write-track``).
 from track_builder import (  # noqa: E402
     _APPEARANCE,
-    _fmt_mesh,
-    _quad,
-    box_strip,
     emit_track_vrml,
-    strip_prism,
 )
 
 LINE_W_M = 0.06  # painted stripe width
@@ -127,74 +123,6 @@ def lane_line_samples(side: float, step: float = MESH_STEP_X_M):
         h = LINE_W_M / 2.0
         out.append((x, (cx + h * nx, cy + h * ny), (cx - h * nx, cy - h * ny), (cx, cy)))
     return out
-
-
-def _quad(pts, a, b, c, d, want):
-    """Face a-b-c-d, reversed if needed so its normal points along ``want``."""
-    ax, ay, az = pts[a]
-    bx, by, bz = pts[b]
-    cx, cy, cz = pts[c]
-    u = (bx - ax, by - ay, bz - az)
-    v = (cx - ax, cy - ay, cz - az)
-    nrm = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
-    dot = sum(p * q for p, q in zip(nrm, want))
-    return (a, b, c, d) if dot >= 0 else (d, c, b, a)
-
-
-def strip_prism(left_edge, right_edge, z_top: float, height: float, pts: list, faces: list) -> None:
-    """Append a stripe prism (top + both walls + end caps) to pts/faces.
-
-    left_edge/right_edge: [(x, y), ...] matching samples along the stripe.
-    Top faces point +Z (counter-clockwise seen from above), walls outward.
-    """
-    zb = z_top - height
-    base = len(pts)
-    for (lx, ly), (rx, ry) in zip(left_edge, right_edge):
-        pts.extend([(lx, ly, z_top), (rx, ry, z_top), (lx, ly, zb), (rx, ry, zb)])
-    n = len(left_edge)
-    for k in range(n - 1):
-        i, j = base + 4 * k, base + 4 * (k + 1)
-        # outward side normals from the edge geometry
-        lx, ly = left_edge[k]
-        rx, ry = right_edge[k]
-        out_l = (lx - rx, ly - ry, 0.0)
-        faces.append(_quad(pts, i + 1, j + 1, j, i, (0.0, 0.0, 1.0)))  # top
-        faces.append(_quad(pts, i, j, j + 2, i + 2, out_l))  # left wall
-        faces.append(_quad(pts, i + 1, i + 3, j + 3, j + 1, (-out_l[0], -out_l[1], 0.0)))  # right wall
-    # end caps
-    first, last = base, base + 4 * (n - 1)
-    t0 = (left_edge[0][0] - left_edge[1][0], left_edge[0][1] - left_edge[1][1], 0.0)
-    t1 = (left_edge[-1][0] - left_edge[-2][0], left_edge[-1][1] - left_edge[-2][1], 0.0)
-    faces.append(_quad(pts, first, first + 1, first + 3, first + 2, t0))
-    faces.append(_quad(pts, last, last + 1, last + 3, last + 2, t1))
-
-
-def box_strip(cx: float, cy: float, cz: float, yaw: float, sx: float, sy: float, sz: float, pts, faces) -> None:
-    """A legacy Box (centre, yaw, size) as one strip prism."""
-    c, s_ = math.cos(yaw), math.sin(yaw)
-
-    def w(dx, dy):
-        return (cx + dx * c - dy * s_, cy + dx * s_ + dy * c)
-
-    hx, hy = sx / 2.0, sy / 2.0
-    strip_prism([w(-hx, hy), w(hx, hy)], [w(-hx, -hy), w(hx, -hy)], cz + sz / 2.0, sz, pts, faces)
-
-
-def _fmt_mesh(name: str, color: str, pts, faces, comment: str) -> str:
-    def _f(v):
-        t = f"{v:.4f}".rstrip("0").rstrip(".")
-        return "0" if t in ("-0", "") else t
-
-    lines = [f"    # {comment}", f"    DEF {name} Shape {{"]
-    lines += ["      appearance " + _APPEARANCE[color].replace("\n", "\n      ")]
-    lines += ["      geometry IndexedFaceSet {", "        coord Coordinate {", "          point ["]
-    for i in range(0, len(pts), 4):
-        lines.append("            " + ", ".join(" ".join(_f(v) for v in p) for p in pts[i:i + 4]))
-    lines += ["          ]", "        }", "        coordIndex ["]
-    for i in range(0, len(faces), 6):
-        lines.append("          " + " ".join(" ".join(str(k) for k in f) + " -1" for f in faces[i:i + 6]))
-    lines += ["        ]", "        ccw TRUE", "      }", "    }"]
-    return "\n".join(lines) + "\n"
 
 
 def track_dict() -> dict:

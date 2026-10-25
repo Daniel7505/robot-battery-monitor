@@ -14,9 +14,7 @@ KEEP_MARGIN = 0.98
 # Accuracy is not allowed to give up more than this many |err| points for a Wh/m win.
 ERR_REGRESS_POINTS = 2.0
 DIST_DROP = 0.15
-# Held-out repeat on the same build must land near the provisional |err|.
-CONFIRM_ERR_BAND = 3.0
-# A different build only has to finish and stay out of a wild miss.
+# A confirm lap past this |err| is missing data, not a scored fail.
 CONFIRM_ABS_CAP = 40.0
 # A lap this close to the reference did not really change. Score lands on 1.000,
 # which does not beat KEEP_MARGIN, and it is not evidence about the mechanism.
@@ -179,36 +177,6 @@ def decide(
         abs_err,
         wh_per_m,
     )
-
-
-def confirmation_ok(
-    provisional: MissionSummary | None,
-    check: MissionSummary | None,
-    *,
-    same_build: bool,
-) -> tuple[bool, str]:
-    """Held-out check. Same build: a repeat lap. Other build: a sanity cap."""
-    if (
-        check is None
-        or check.err_pct is None
-        or check.dist_m is None
-        or check.dist_m < MIN_DIST_M
-    ):
-        return False, "confirmation lap did not finish with a numeric err_pct"
-    if same_build:
-        if provisional is None or provisional.err_pct is None:
-            return False, "no provisional lap to compare"
-        gap = abs(abs(check.err_pct) - abs(provisional.err_pct))
-        if gap > CONFIRM_ERR_BAND:
-            return False, f"repeat |err| moved by {gap:.1f} points"
-        if provisional.dist_m and check.dist_m < provisional.dist_m * 0.9:
-            return False, "repeat lap was short"
-        return True, "repeat lap stayed within 3 points of the provisional |err|"
-    if abs(check.err_pct) > CONFIRM_ABS_CAP:
-        return False, (
-            f"held-out build |err| {abs(check.err_pct):.1f}% exceeds {CONFIRM_ABS_CAP:.0f}%"
-        )
-    return True, "held-out build finished inside the sanity cap"
 
 
 ConfirmVerdict = str  # pass | fail | missing | missing_turn

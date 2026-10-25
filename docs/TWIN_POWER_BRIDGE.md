@@ -50,7 +50,7 @@ Webots controller
        └─ ROS2BatterySource.apply_power_feed()
             → hardware.last_readings  (immediate)
   → dashboard _build_battery_payload() reads last_readings
-  → SocketIO battery_update / GET APIs
+  → GET /api/live (browser poll) and the other HTTP APIs
 ```
 
 Also every **3s** telemetry tick, `ROS2BatterySource._build_readings()` rebuilds full PMS state (allocator, agent, safety) using twin draws when `external_active`.

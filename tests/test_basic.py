@@ -7,7 +7,6 @@ from src.config import config
 def test_database_creates_table(clean_database):
     """Test that database initializes without errors"""
     init_db()
-    assert True
 
 
 def test_log_channel_reading(clean_database):

@@ -481,6 +481,79 @@ def test_bridge_logs_a_breakdown_from_a_webots_payload(caplog):
     )
 
 
+def test_dashboard_summary_bills_the_same_stall_hold_as_the_controller(caplog):
+    """Wheel rates are on sensors. Both summaries must bill that stall hold.
+
+    The controller JSON copied the rates and reported wh_model_hold. The
+    dashboard log used to ignore them, so hold stayed 0 and err_pct moved.
+    """
+    import logging
+
+    from src.hardware_profile import build_profile_from_bom
+    from src.logger import logger
+    from src.mission_summary_file import sample_from_controller_payload
+    from src.twin.bridge import DigitalTwinBridge
+    from src.twin_energy import stall_hold_electrical_wh
+
+    dt_s = 3.0
+    expected = stall_hold_electrical_wh(dt_s, build_profile_from_bom("light"))
+    assert expected > 0.01
+
+    def payload(ts, event=None):
+        sensors = {"left_wheel_rad_s": 0.0, "right_wheel_rad_s": 0.0}
+        if event:
+            sensors["mission_event"] = event
+        return {
+            "source": "webots",
+            "adapter": "webots",
+            "timestamp": ts.isoformat(),
+            "robot": {
+                "name": "ButlerBot",
+                "main_battery_pct": 90.0,
+                "battery_capacity_wh": 240.0,
+            },
+            "mission": {"task": "idle"},
+            "channel_draws": {
+                "Legs": 0.0, "Arms": 0.0, "Torso": 0.0, "Compute": 8.0, "Cooling": 0.0,
+            },
+            "locomotion": {
+                "gait": "stand",
+                "speed_m_s": 0.0,
+                "phase": "standby",
+                "bom_build": "light",
+                "ctrl_bom_build": "light",
+                "payload_kg": 0.0,
+                "measured_drive_elec_w": 12.0,
+            },
+            "pose": {"x_m": 0.0, "y_m": 0.0, "heading_rad": 0.0},
+            "sensors": sensors,
+        }
+
+    first = payload(_T0)
+    second = payload(_T0 + timedelta(seconds=dt_s), event="complete")
+    assert "left_wheel_rad_s" not in first["locomotion"]
+
+    clog = MissionEnergyLog()
+    clog.observe(sample_from_controller_payload(first))
+    clines = clog.observe(sample_from_controller_payload(second))
+    cfields = _fields(next(line for line in clines if line.startswith("MISSION_SUMMARY")))
+
+    bridge = DigitalTwinBridge()
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        assert bridge.ingest_telemetry(first, adapter="webots")["ok"] is True
+        assert bridge.ingest_telemetry(second, adapter="webots")["ok"] is True
+    dlines = [rec.message for rec in caplog.records if rec.message.startswith("MISSION_SUMMARY")]
+    assert dlines
+    dfields = _fields(dlines[-1])
+
+    # The summary prints hold to 3 decimals, so compare at that precision.
+    assert float(cfields["wh_model_hold"]) == pytest.approx(expected, abs=5e-4)
+    assert float(dfields["wh_model_hold"]) == pytest.approx(float(cfields["wh_model_hold"]), abs=5e-4)
+    assert float(dfields["wh_model_hold"]) > 0.01
+    assert dfields["err_pct"] == cfields["err_pct"]
+    assert dfields["err_pct"] != "na"
+
+
 def test_mission_complete_does_not_wait_forever_on_gps_noise():
     from src.mission_park import mission_should_complete
 

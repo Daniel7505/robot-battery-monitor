@@ -36,7 +36,7 @@ Imagine a small wheeled robot that carries things around a warehouse. Before any
 - **Drive it in a 3D simulator** ([Webots](https://cyberbotics.com/), free). The robot follows yellow painted lanes using two downward-facing cameras, turns at corners and intersections, slows for obstacles, and stops cleanly.
 - **Watch its "fuel gauge" live** in a web page: battery %, how many watts each body part uses (wheels, arms, torso, computer, cooling), safety warnings, and how long the battery should last.
 - **Save the history** in a database so you can look back at past runs.
-- **Test ideas without the simulator**: a fast "offline" lane-following simulator and 868 automated tests.
+- **Test ideas without the simulator**: a fast "offline" lane-following simulator and 867 automated tests.
 - **Start designing real robots**: a small catalog of real, buyable parts and a first-draft "design agent" that suggests the cheapest parts list for a mission.
 
 The long-term goal ([`docs/NORTH_STAR.md`](docs/NORTH_STAR.md)) is an agent that picks real parts, designs the cheapest robot that can finish a mission, tests it in the simulator, and then builds it for real. Today's robot and dashboard are the **test bench** for that goal. The north star may evolve as the project learns; `NORTH_STAR.md` is the current version.
@@ -127,7 +127,7 @@ flowchart TB
 
     subgraph APP["② Dashboard process - run_dashboard.py (Docker 'dashboard' container, or local Python)"]
         direction LR
-        API["Flask + SocketIO<br/>src/dashboard.py"]
+        API["Flask HTTP<br/>src/dashboard.py"]
         BRIDGE["DigitalTwinBridge<br/>src/twin/bridge.py<br/>latest feed · stop_epoch"]
         TICK["PMS tick<br/>src/hardware_ros2.py"]
         PMS["Allocator · safety · LRU<br/>forecast · mission<br/>src/onboard_agent.py"]
@@ -150,7 +150,7 @@ flowchart TB
     TICK -- "write readings" --> DB
     DB -- "history / analytics" --> API
     DB --> CLI
-    API -- "SocketIO battery_update" --> BROWSER
+    API -- "GET /api/live every 500 ms" --> BROWSER
     BROWSER -- "POST /api/twin/command:<br/>drive · drive_stop · battery_reset" --> API
 ```
 
@@ -159,7 +159,7 @@ How to read it:
 1. **Inside Webots** (top): the cameras see the yellow lane, `lane_vision` turns pixels into "where is the lane", `rowfit_control` turns that into steering and speed, and `controller_wheels` drives the motors and handles stopping. The power estimate is computed from what the motors are doing.
 2. **Over HTTP** (middle arrows): about twice a second the robot **POSTs** its readings to the dashboard and **GETs** back any commands (drive, stop, throttle). This is plain web traffic. ROS 2 is not needed for it.
 3. **Inside the dashboard app**: the Twin Bridge keeps the latest robot reading. The PMS tick (Power Management System) uses that reading when it is fresh, or its own built-in simulation when Webots is not running, then runs the budget, safety and agent rules and saves a snapshot to Postgres.
-4. **Out to you**: the browser gets a live push (`battery_update`) and its Drive/Stop buttons send commands back the same way.
+4. **Out to you**: the browser polls `GET /api/live` every 500 ms, and its Drive/Stop buttons send commands back the same way.
 
 More diagrams (stop handshake, per-tick sequence, deployment): [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -266,7 +266,7 @@ python -m pytest
 That works with or without a database:
 
 - **No Postgres running:** the 27 tests marked `db` are **skipped**, and everything else runs. One more test skips when the `docker` command is not on PATH. ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
-- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 868 tests.
+- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 867 tests.
 
 The full run takes about 5 minutes. To run just one file: `python -m pytest tests/test_lane_keep.py`.
 
@@ -561,8 +561,6 @@ Installed by `pip install -r requirements.txt` and the [`Dockerfile`](Dockerfile
 | Package | Version (pinned) | Link | License | Redistribution notes |
 |---------|------------------|------|---------|----------------------|
 | [Flask](https://pypi.org/project/Flask/) | 3.1.0 | https://pypi.org/project/Flask/ | BSD-3-Clause | Retain copyright and license notices. |
-| [Flask-SocketIO](https://pypi.org/project/Flask-SocketIO/) | 5.5.0 | https://pypi.org/project/Flask-SocketIO/ | MIT | Retain copyright and permission notice. |
-| [eventlet](https://pypi.org/project/eventlet/) | 0.37.0 | https://pypi.org/project/eventlet/ | MIT | Retain copyright and permission notice. |
 | [PyYAML](https://pypi.org/project/PyYAML/) | 6.0.2 | https://pyyaml.org/ | MIT | Retain copyright and permission notice. |
 | [matplotlib](https://pypi.org/project/matplotlib/) | 3.10.0 | https://matplotlib.org/ | [PSF / Matplotlib license](https://matplotlib.org/stable/project/license.html) (BSD-style) | Retain the Matplotlib Development Team copyright notice; brief change summary if you distribute a derivative of matplotlib itself. |
 | [psycopg2-binary](https://pypi.org/project/psycopg2-binary/) | 2.9.10 | https://www.psycopg.org/ | **LGPL-3.0-or-later** (library) | **Copyleft (weak).** Shipping the prebuilt wheel (e.g. in a Docker image) triggers LGPL obligations: provide license text, allow relinking/replacement of the library, and document how users can substitute their own build. See the [psycopg2 license](https://www.psycopg.org/license/). |
@@ -638,7 +636,7 @@ Searched the tree for `EXTERNPROTO`, `Copyright`, `SPDX`, `adapted`, `copied`, `
 
 **GPL / strong copyleft in application dependencies:** only **psycopg2-binary (LGPL-3.0)** among pinned Python wheels. No GPL-licensed application code was identified in the repo. **Unlicensed third-party material:** none identified; all bundled assets above are project-authored or generated by project scripts.
 
-**ROS 2:** integration code lives in [`src/ros2_bridge.py`](src/ros2_bridge.py) / [`src/ros2_node.py`](src/ros2_node.py); default runs use `ROS2_MOCK=true` without installing ROS. Optional `osrf/ros` image noted above.
+**ROS 2:** the live hardware path is [`src/hardware_ros2.py`](src/hardware_ros2.py) through [`src/ros2_bridge.py`](src/ros2_bridge.py). Default runs use `ROS2_MOCK=true` without installing ROS. Optional `osrf/ros` image noted above. The old standalone publisher `src/ros2_node.py` is gone; it duplicated the bridge and had no Cooling channel.
 
 ### People and AI tools
 

@@ -45,6 +45,12 @@ def test_docker_compose_structure():
     env = dashboard.get("environment", {})
     assert "DATABASE_URL" in env
     assert env.get("ROS2_MOCK") in ("true", "${ROS2_MOCK:-true}")
+    assert env.get("DASHBOARD_PORT") == "${DASHBOARD_PORT:-5000}"
+    published = dashboard.get("ports") or []
+    assert "127.0.0.1:${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}" in published
+    health = str((dashboard.get("healthcheck") or {}).get("test"))
+    assert "127.0.0.1:${DASHBOARD_PORT:-5000}" in health
+    assert "127.0.0.1:5000/" not in health
 
 
 def test_env_example_documents_core_vars():

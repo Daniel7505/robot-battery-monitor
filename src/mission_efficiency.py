@@ -216,7 +216,7 @@ class MissionEfficiencyTracker:
         return round(max(0.0, delta) * self.capacity_wh / 100.0, 3)
 
     def snapshot(self) -> dict:
-        """JSON-friendly dict for twin_control / SocketIO / tests."""
+        """JSON-friendly dict for the twin status and tests."""
         elapsed = self.elapsed_s
         distance = round(self._distance_m, 3) if self._has_pose else None
         avg_speed = None

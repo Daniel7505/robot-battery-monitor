@@ -137,7 +137,7 @@ Write-Host "Speed trace: RBM_SPEED_TRACE=$(if ($env:RBM_SPEED_TRACE) { $env:RBM_
 $LaneDir = if ($env:RBM_LOG_DIR) { $env:RBM_LOG_DIR } else { Join-Path $env:USERPROFILE "OneDrive\Desktop\Grok Workspace" }
 Write-Host "Lane vision CSV: $(Join-Path $LaneDir 'lane-vision.csv')"
 Write-Host "           Not in the repo logs folder. The summary JSON also records LANE_VISION file=..."
-Write-Host "Pick:      RBM_PICK_SKU=$(if ($env:RBM_PICK_SKU) { $env:RBM_PICK_SKU } else { '(unset: trolley follow only; set demo for one-SKU pretend pick)' })"
+Write-Host "Pick:      RBM_PICK_SKU=$(if ($env:RBM_PICK_SKU) { $env:RBM_PICK_SKU } else { '(unset; set demo for a one-SKU pretend pick)' })"
 Write-Host ""
 
 # Soft check: controller still starts if dashboard is down; twin POSTs will fail until it is up

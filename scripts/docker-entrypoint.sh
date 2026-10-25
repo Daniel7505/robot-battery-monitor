@@ -5,7 +5,7 @@
 # Ordered startup inside the `dashboard` service image:
 #   1. Block until Postgres accepts connections (wait_for_postgres)
 #   2. Create/migrate schema if needed (setup_postgres)
-#   3. Replace this shell with the Flask+SocketIO process (run_dashboard)
+#   3. Replace this shell with the Flask process (run_dashboard)
 # =============================================================================
 set -e
 

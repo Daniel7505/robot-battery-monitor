@@ -79,7 +79,7 @@ flowchart TB
     end
 
     subgraph L1["Level 1 — Primary partitions"]
-        OPS["Operator interface<br/>Flask dashboard + SocketIO"]
+        OPS["Operator interface<br/>Flask dashboard, HTTP poll"]
         PMS["Power Management System<br/>allocate · safety · agent · log"]
         TWIN["Digital twin path<br/>Webots + Twin Bridge HTTP"]
         HW["Hardware abstraction<br/>simulator · ROS2 mock/real"]
@@ -152,7 +152,7 @@ flowchart TB
 
     subgraph APP["② Dashboard process - run_dashboard.py (Docker 'dashboard' container, or local Python)"]
         direction LR
-        API["Flask + SocketIO<br/>src/dashboard.py"]
+        API["Flask HTTP<br/>src/dashboard.py"]
         BRIDGE["DigitalTwinBridge<br/>src/twin/bridge.py<br/>latest feed · stop_epoch"]
         TICK["PMS tick<br/>src/hardware_ros2.py"]
         PMS["Allocator · safety · LRU<br/>forecast · mission<br/>src/onboard_agent.py"]
@@ -175,7 +175,7 @@ flowchart TB
     TICK -- "write readings" --> DB
     DB -- "history / analytics" --> API
     DB --> CLI
-    API -- "SocketIO battery_update" --> BROWSER
+    API -- "GET /api/live every 500 ms" --> BROWSER
     BROWSER -- "POST /api/twin/command:<br/>drive · drive_stop · battery_reset" --> API
 ```
 
@@ -223,7 +223,7 @@ flowchart TB
 - **PMS** is the hub for *budget, safety, logging, and operator-visible state*.
 - **Webots** owns *physics and motor commands*; it does not replace the PMS.
 - **Onboard agent** influences throttle / mission behavior through the PMS path — it does not talk to wheel motors by secret side channel.
-- **Dashboard** is both a *view* (SocketIO) and a *command surface* (REST twin commands).
+- **Dashboard** is both a *view* (the browser polls `GET /api/live`) and a *command surface* (REST twin commands).
 
 ---
 
@@ -250,7 +250,7 @@ sequenceDiagram
     B-->>W: teleop, stop_epoch, throttle, battery override
     H->>B: Pull external power feed if fresh
     H->>H: Allocate · safety · agent · DB write
-    H->>UI: SocketIO battery_update payload
+    H->>UI: browser polls GET /api/live
     UI->>UI: Refresh channels, twin panel, agent banner
 ```
 
@@ -306,7 +306,7 @@ flowchart LR
     DD --> Compose
     DASH --> PG
     WB -->|"HTTP twin API"| DASH
-    BRW -->|"HTTP + SocketIO"| DASH
+    BRW -->|"HTTP GET /api/live"| DASH
 ```
 
 **Boot order (ops):**

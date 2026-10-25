@@ -17,7 +17,7 @@ from optimizer.runner import DryRunRunner, RunOutcome, launch_command, stamp_mis
 from optimizer.lap_launch import LapLaunch
 from optimizer.body_mass import expected_body_mass_kg
 from optimizer.evidence import meaningful_improvement
-from optimizer.score import KEEP_MARGIN, confirmation_ok, decide
+from optimizer.score import KEEP_MARGIN, decide
 from src.controller_limits import ALLOWLIST, KNOBS, AllowlistError, check_param, limits_from_mapping
 from src.lane_keep import DEFAULT_K_STEER
 from src.rowfit_control import (
@@ -187,20 +187,6 @@ def test_score_keeps_a_closer_model_and_rolls_back_a_worse_one():
     assert decide(short, ref).action == "invalid"
     assert decide(missing, ref).action == "invalid"
     assert decide(ref, None).action == "baseline"
-
-
-def test_confirmation_passes_a_sane_other_build_and_fails_a_wild_one():
-    provisional = diagnose(summary_line(err_pct="-18.0")).summary
-    ok = diagnose(summary_line(build="heavy", err_pct="-5.0")).summary
-    wild = diagnose(summary_line(build="heavy", err_pct="-55.0")).summary
-    repeat = diagnose(summary_line(err_pct="-19.0")).summary
-    drift = diagnose(summary_line(err_pct="-30.0")).summary
-    passed, _why = confirmation_ok(provisional, ok, same_build=False)
-    failed, _why = confirmation_ok(provisional, wild, same_build=False)
-    same, _why = confirmation_ok(provisional, repeat, same_build=True)
-    moved, _why = confirmation_ok(provisional, drift, same_build=True)
-    assert passed and same
-    assert not failed and not moved
 
 
 def test_allowlist_rejects_the_energy_model_and_out_of_range_speeds():

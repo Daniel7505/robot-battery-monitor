@@ -5,15 +5,13 @@ Flask serves one page and the twin HTTP API. The browser polls ``GET /api/live``
 every half second. That route reads pose, speed, steer, and mission efficiency
 from the twin bridge, not from the 3 s power-model tick.
 
-There is no browser socket. Flask-SocketIO is still the process server; it
-does not emit snapshots. A blocked ``cdn.socket.io`` script used to freeze
-the page, so that script stays out.
+There is no browser socket. A blocked ``cdn.socket.io`` script used to freeze
+the page, so that script stays out. The process serves HTTP with Flask.
 
 Pause is client-side only. The hardware tick and twin ingest keep running.
 """
 
 from flask import Flask, render_template_string, jsonify
-from flask_socketio import SocketIO
 from datetime import datetime
 import warnings
 import threading
@@ -22,8 +20,6 @@ import time
 from src.config import config
 from src.logger import logger
 from src.database import (
-    get_all_readings,
-    get_latest_allocation,
     log_drive_measurement,
     get_drive_measurements,
 )
@@ -34,15 +30,6 @@ from src import api_security
 
 app = Flask(__name__)
 api_security.init_app(app)
-# threading mode is what socketio.run uses to serve HTTP. The browser does
-# not open a socket. Origins stay on the allowlist.
-socketio = SocketIO(
-    app,
-    cors_allowed_origins=api_security.allowed_origins(),
-    async_mode='threading',
-    logger=False,
-    engineio_logger=False,
-)
 
 
 HTML_TEMPLATE = '''
@@ -435,35 +422,6 @@ def api_simulation(action):
     return jsonify({"error": "Simulation not available for this hardware mode"}), 400
 
 
-# --- Analytics -------------------------------------------------------------
-
-@app.route('/api/analytics')
-def api_analytics():
-    from flask import request
-    from src.analytics import build_report
-    from src.twin import get_twin_bridge
-
-    hours = request.args.get('hours', default=1, type=float)
-    hours = max(0.25, min(hours, 168))
-    report = build_report(hours=hours)
-    report["twin"] = get_twin_bridge().status()
-    return jsonify(report)
-
-
-@app.route('/api/analytics/report')
-def api_analytics_report():
-    from flask import request, Response
-    from src.analytics import build_report, format_report_text
-
-    hours = request.args.get('hours', default=24, type=float)
-    hours = max(0.25, min(hours, 168))
-    fmt = request.args.get('format', default="json")
-    report = build_report(hours=hours)
-    if fmt == "text":
-        return Response(format_report_text(report), mimetype="text/plain")
-    return jsonify(report)
-
-
 # --- Digital twin API (Webots / external simulators) -----------------------
 # Contract summary for first-time readers:
 #
@@ -486,8 +444,9 @@ def api_analytics_report():
 #       stop_epoch: monotonic counter the controller compares so a late poll
 #       still sees a new stop even if wheel cmds already read as zero.
 #
-#   GET  /api/twin/schema | /api/twin/example
-#       Discovery helpers for adapters and demos.
+#   GET  /api/twin/schema
+#       Discovery helper for adapters and demos. The CLI ``--report`` path
+#       still prints analytics; this process does not serve /api/analytics.
 
 @app.route('/api/twin/state')
 def api_twin_state():
@@ -564,17 +523,6 @@ def api_twin_schema():
     return jsonify(get_twin_bridge().schema())
 
 
-@app.route('/api/twin/example')
-def api_twin_example():
-    """Sample ButlerBot flow description + one telemetry step (for demos)."""
-    from src.twin.butlerbot import butlerbot_flow_description, butlerbot_telemetry_step
-
-    return jsonify({
-        "flow": butlerbot_flow_description(),
-        "sample_step": butlerbot_telemetry_step(1),
-    })
-
-
 # --- Lightweight data snapshot --------------------------------------------
 
 @app.route('/api/measurements', methods=['GET'])
@@ -604,44 +552,8 @@ def api_measurements_create():
 
 @app.route('/api/live')
 def api_live():
-    """Same envelope as SocketIO ``battery_update``. HTTP poll fallback."""
+    """Live page payload. The browser polls this every 500 ms."""
     return jsonify(_build_battery_payload())
-
-
-@app.route('/api/data')
-def api_data():
-    """Simple channel + allocation JSON (no SocketIO required)."""
-    entries = get_all_readings(limit=300)
-    main_battery = entries[0]["battery"] if entries else 94
-
-    latest = {}
-    for e in entries:
-        if e["channel"] not in latest:
-            latest[e["channel"]] = e
-
-    channels = []
-    power_channels = config.get('power_channels') or []
-    for ch in power_channels:
-        data = latest.get(ch.get('id', ''), {})
-        channels.append({
-            "draw": data.get("draw", 0),
-            "battery": main_battery
-        })
-
-    allocation = get_latest_allocation()
-    return jsonify({
-        "main_battery": main_battery,
-        "timestamp": datetime.now().strftime("%H:%M:%S"),
-        "channels": channels,
-        "allocation": {
-            "task": allocation.get("task") if allocation else None,
-            "budget_w": allocation.get("budget_w") if allocation else None,
-            "total_allocated_w": allocation.get("total_allocated_w") if allocation else None,
-            "utilization_pct": allocation.get("utilization_pct") if allocation else None,
-            "status": allocation.get("status") if allocation else None,
-            "warnings": allocation.get("warnings") if allocation else [],
-        } if allocation else None,
-    })
 
 
 # ===========================================================================
@@ -666,13 +578,11 @@ def run_dashboard():
     if api_security.api_token() is None:
         api_security._warn_once_no_token()
 
-    # allow_unsafe_werkzeug: with async_mode='threading' the Werkzeug server is
-    # the only server Flask-SocketIO can use, and it refuses to start outside
-    # debug mode without this flag. Acceptable here because it is a single-user
-    # lab tool bound to 127.0.0.1 by default (0.0.0.0 only inside Docker, where
+    # Werkzeug's dev server. Acceptable here because it is a single-user lab
+    # tool bound to 127.0.0.1 by default (0.0.0.0 only inside Docker, where
     # compose publishes the port on 127.0.0.1). Do not expose it to a network
     # as-is; put a real WSGI server / reverse proxy in front first.
-    socketio.run(app, host=host, port=port, debug=False, allow_unsafe_werkzeug=True)
+    app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
     
 
 

@@ -35,7 +35,6 @@ except ImportError:
     logger.error("rclpy not available — run this node inside the ros2-sim container")
     sys.exit(1)
 
-_CHANNEL_ORDER = ["Legs", "Arms", "Torso", "Compute"]
 _MISSION_CYCLE = ["idle", "moving", "high_load", "idle"]
 
 

@@ -319,16 +319,6 @@ def camera_look_angles(cam: CameraModel) -> tuple[float, float]:
     return (math.atan2(-dz, math.hypot(dx, dy)), math.atan2(dy, dx))
 
 
-def describe_camera(cam: CameraModel) -> str:
-    pitch, yaw = camera_look_angles(cam)
-    t = ", ".join(f"{v:.4f}" for v in cam.translation)
-    r = " ".join(f"{v:.6g}" for v in cam.rotation)
-    return (
-        f"t=({t}) rot=({r}) pitch={math.degrees(pitch):.2f}deg yaw={math.degrees(yaw):+.2f}deg "
-        f"{cam.width}x{cam.height} fov={cam.fov_rad:.3f}"
-    )
-
-
 def _node_local_pose(node):
     ft, fr = node.getField("translation"), node.getField("rotation")
     if ft is None or fr is None:

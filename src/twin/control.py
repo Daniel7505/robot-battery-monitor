@@ -218,10 +218,6 @@ def build_twin_control_status(bridge, hardware) -> dict:
             sensors.get("lane_keep")
             or (getattr(bridge, "_webots_teleop", None) or {}).get("lane_keep")
         ),
-        "nadir_gap_px": sensors.get("nadir_gap_px"),
-        "nadir_r_gap_px": sensors.get("nadir_r_gap_px"),
-        "nadir_ahead_px": sensors.get("nadir_ahead_px"),
-        "nadir_r_ahead_px": sensors.get("nadir_r_ahead_px"),
         "error_source": sensors.get("error_source") or "nadir",
         "steer": sensors.get("steer"),
         "steer_source": sensors.get("steer_source"),

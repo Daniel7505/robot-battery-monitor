@@ -459,12 +459,6 @@ See `docs/RUN_HISTORY.md`.
 * **Battery pack.** Blank `bom_build` is the wheeled YAML 480 Wh pack.
   `light` is the BoM 240 Wh pack. Teleop reads `battery_capacity_wh()`
   (see `docs/HARDWARE_PROFILE.md`).
-* **`DASHBOARD_PORT` compose bug.** `docker-compose.yml` maps
-  `127.0.0.1:${DASHBOARD_PORT}:5000`, but the dashboard container also gets
-  `DASHBOARD_PORT` from `env_file: .env`. `src/config.py` maps it to the app
-  port, so any value other than 5000 makes the app listen on a port the
-  mapping does not forward. Fix: map `${DASHBOARD_PORT}:${DASHBOARD_PORT}`,
-  or pin the in-container port.
 * **Dependencies:** review the open Dependabot PRs and alerts, and pin or
   bump `requirements*.txt`.
 * **Repo rename.** "robot-battery-monitor" is leftover from the original

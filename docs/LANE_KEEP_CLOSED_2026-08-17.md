@@ -45,7 +45,7 @@ Clock campaign **closed**. Single-knob accuracy campaign **closed**. No more sco
 
 ## What is actually true about molasses
 
-15 s straight (`scripts/measure_clocks.py`):
+15 s straight (one-off `scripts/measure_clocks.py`, since removed):
 
 - `v_cmd = v_odo = v_gps = 0.440` — soft-grip delivers
 - Integrated realtime factor **~0.17–0.21** (`--mode=realtime` cannot keep 8 ms + 6 cams)
@@ -72,6 +72,6 @@ Remaining tightness is the L/R planner (far-preview, grab/release), **not** anot
 
 ## Measure
 
-- Clocks: `python -u scripts/measure_clocks.py` (needs `control_diag.sim_time_s`)
+- Clocks: the one-off `scripts/measure_clocks.py` was removed. The numbers above are the record. It needed `control_diag.sim_time_s`.
 - The old S scorer `scripts/measure_s_lane_keep.py` was removed. It read choir fields the controller no longer publishes.
 - Integrate rt as Δsim/Δwall. `rt=0` rows are stale twin POST, not stopped physics.

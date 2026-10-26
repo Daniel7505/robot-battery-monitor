@@ -275,7 +275,12 @@ class Explorer:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
             self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
         self._last_clear = (clearance, left_clear, right_clear)
-        if self._view_blind or clearance < 1.5:
+        # A depth hit at 1.5 m is the far side of the room, not a press.
+        # Recovery only when the shell itself is close. An open room was
+        # backing up every few seconds and never leaving the spawn area.
+        shell_gap = self._min_gap if self._min_gap is not None else self._bubble_gap
+        near_shell = self._view_blind or (shell_gap is not None and shell_gap < 0.45)
+        if near_shell:
             if self._close_since is None:
                 self._close_since = self.t_s
         else:

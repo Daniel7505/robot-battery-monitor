@@ -72,6 +72,7 @@ class Explorer:
         self._match_proposal: tuple[float, float, float] | None = None
         self._match_proposal_t = -10.0
         self._close_since: float | None = None
+        self._heading_anchor: tuple[float, float] | None = None
         self._view_blind = False
         self._blind_frames = 0
         self._slip_debt_m = 0.0
@@ -206,7 +207,15 @@ class Explorer:
                 self._close_since = self.t_s
         else:
             self._close_since = None
-        close_held = self._close_since is not None and (self.t_s - self._close_since) >= 0.6
+        close_held = self._close_since is not None and (self.t_s - self._close_since) >= 0.4
+        # Pure pursuit spins in place when the path is behind the nose.
+        # If that spin does not actually change the heading, the body is
+        # wedged and an open view must not hide it. A real turn, which
+        # does change the heading, is left alone.
+        yaw_u = self.odometry.yaw_unwrapped_rad
+        if self._heading_anchor is None or abs(yaw_u - self._heading_anchor[1]) > 0.30:
+            self._heading_anchor = (self.t_s, yaw_u)
+        heading_stuck = (self.t_s - self._heading_anchor[0]) > 3.5
         if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
@@ -215,10 +224,8 @@ class Explorer:
             and not self.done
             and self.t_s >= self._recover_until
             and (self.t_s - self._progress_t) > 3.5
-            and close_held
+            and (close_held or heading_stuck)
         ):
-            # An open view and a heading change is not a stall. One frame
-            # of a jamb crossing the nose during a turn is not either.
             self._start_recovery()
         # Nose only. A jamb in the shoulder cone is a steer (see _go),
         # not a wall to spin away from.

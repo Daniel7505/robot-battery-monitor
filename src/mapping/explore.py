@@ -1110,7 +1110,13 @@ class Explorer:
             # Nearly straight. A hard yaw here swings a tire into the jamb
             # the reverse was supposed to leave.
             return wheel_speeds(-0.12, self._turn * 0.08)
-        if self._goal_expired() or (self._is_stuck() and (self._bubble_gap or 99.0) < 1.2):
+        nose_now = self._last_clear[0]
+        in_opening = 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and nose_now > 0.30
+        # Both shoulders on a frame means the shell is in the opening.
+        # Dropping the goal here is how the bedroom threshold was abandoned.
+        if self._goal_expired() or (
+            not in_opening and self._is_stuck() and (self._bubble_gap or 99.0) < 1.2
+        ):
             # One look at a doorway the map shows off to the side. Banning
             # on the first pause is how a smeared threshold was abandoned
             # for the room beside it. A second pause still drops the goal.
@@ -1197,6 +1203,21 @@ class Explorer:
             # In the opening, or arriving with both jambs beside the nose.
             w = door_w if through else w + door_w
             v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
+        elif 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and self._last_clear[0] > 0.30:
+            # In the frame but not yet the approach case. A pure spin
+            # never crosses. Line up briefly, then creep.
+            if abs(w) > 0.25 and v < 0.06:
+                if self._approach_since is None:
+                    self._approach_since = self.t_s
+                if self.t_s - self._approach_since >= 1.2:
+                    v = DOOR_SPEED_M_S
+                    w = max(-0.28, min(0.28, self._jamb_yaw(left_clear, right_clear)))
+                    approach_kind = "straight"
+                else:
+                    approach_kind = "align"
+            else:
+                self._approach_since = None
+                v = min(v, DOOR_SPEED_M_S)
         elif left_clear < 0.90 and right_clear < 0.90:
             self._approach_since = None
             v = min(v, DOOR_SPEED_M_S)

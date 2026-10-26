@@ -142,22 +142,24 @@ def blind_fraction(cam: DepthCamera, depth_x: np.ndarray, *, stride: int = 1) ->
 
 
 def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
-    """Nearest obstacle range in the centre, left, and right of the robot.
+    """Nearest range in the nose, the left shoulder, and the right shoulder.
 
     A miss (no points) is a large range, so the side with no return is
-    treated as open. Centre is the corridor the body will actually enter
-    (|y| < 0.28 m). That is just wider than the tires (0.195 m) so a jamb
-    the body would clip is in the stop cone, and still narrower than half
-    of a centred 0.81 m door, so the opening itself reads as open.
+    treated as open. The nose is |y| < 0.12 m: a wall the body will meet
+    head-on. The shoulders are 0.12–0.45 m off the centre line, which is
+    where a door jamb sits in an 0.81 m opening. Reporting that jamb as
+    the nose made the drive stop and turn away from a gap it can fit
+    through. The tires reach 0.195 m, so a shoulder that is much closer
+    than the other one is a steer, not a stop.
     """
     if hits_body.size == 0:
         return (99.0, 99.0, 99.0)
     x = hits_body[:, 0]
     y = hits_body[:, 1]
     front = (x > 0.15) & (x < 2.5)
-    centre = front & (np.abs(y) < 0.28)
-    left = front & (y >= 0.05)
-    right = front & (y <= -0.05)
+    centre = front & (np.abs(y) < 0.12)
+    left = front & (y >= 0.12) & (y < 0.45)
+    right = front & (y <= -0.12) & (y > -0.45)
 
     def _min(mask: np.ndarray) -> float:
         if not np.any(mask):

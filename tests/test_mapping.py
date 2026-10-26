@@ -24,7 +24,7 @@ from src.mapping.body import (
     WHEEL_TRACK_M,
     DepthCamera,
 )
-from src.mapping.depth_cloud import body_points
+from src.mapping.depth_cloud import body_points, forward_clearance
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import astar, dilate_disk, frontier_mask, line_up_with_openings, select_goal, traversable
 from src.mapping.scan_match import scan_fit
@@ -387,6 +387,60 @@ def test_dilation_blocks_a_neighbour_cell():
     assert fat[10, 10]
     assert fat[10, 14]  # 4 cells * 0.05 = 0.20 m, inside 0.22
     assert not fat[10, 16]  # 0.30 m
+
+
+def test_a_door_jamb_is_not_the_nose_clearance():
+    # Centred in an 0.81 m opening, 0.6 m before the jambs. The far wall
+    # shows through the gap. The jambs are shoulders, not a wall ahead.
+    hits = np.array(
+        [
+            [0.60, 0.40, 0.5],
+            [0.60, -0.40, 0.5],
+            [2.40, 0.00, 0.5],
+        ]
+    )
+    nose, left, right = forward_clearance(hits)
+    assert nose == pytest_approx(2.40)
+    assert left == pytest_approx(0.60)
+    assert right == pytest_approx(0.60)
+    wall = np.array([[0.65, 0.0, 0.5]])
+    nose, left, right = forward_clearance(wall)
+    assert nose == pytest_approx(0.65)
+    assert left == pytest_approx(99.0)
+    assert right == pytest_approx(99.0)
+
+
+def test_reverse_out_of_a_blind_wall_moves_the_pose():
+    """The backup itself is motion. Only the forward skid is frozen."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    left = right = 0.0
+    dt = 0.05
+    backed = False
+    for _ in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            backed = True
+            left += cmd_l * dt
+            right += cmd_r * dt
+        else:
+            # Forward commands stay a skid: the hubs do not follow them.
+            pass
+    assert backed
+    assert bot.pose()[0] < -0.08
 
 
 def test_contact_mark_survives_a_later_free_ray():

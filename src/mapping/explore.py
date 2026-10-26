@@ -131,16 +131,13 @@ class Explorer:
         if self._view_blind:
             # No return is not an open hallway. The nose is inside minRange.
             clearance = min(clearance, BLIND_CLEARANCE_M)
-        # Contact freezes the whole step, including the reverse. The stop
-        # cone is ordinary braking and still counts: freezing it would leave
-        # the pose a halt short of every wall. Stall, a blind view, and the
-        # backup are the contact.
-        in_contact = (
-            self._view_blind
-            or self.t_s < self._reverse_until
-            or self.t_s < self._recover_until
-            or stalled
-        )
+        # Freeze a forward command the body did not follow, and a forward
+        # command into a view the camera cannot see. A reverse that the
+        # hubs actually follow is the robot leaving the wall, so it counts.
+        # Ordinary braking (a visible wall inside the stop range) still
+        # counts too, or the pose would sit a halt short of every wall.
+        forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
+        in_contact = stalled or (self._view_blind and forward_cmd)
         drop = False
         if depth is not None or self._view_blind or in_contact:
             before = self._motion.events
@@ -193,6 +190,9 @@ class Explorer:
             and (self.t_s - self._progress_t) > 3.5
         ):
             self._start_recovery()
+        # Nose only. A jamb in the shoulder cone is a steer (see _go),
+        # not a wall to spin away from. That spin is what turned the robot
+        # parallel to the bedroom door and the hallway in the real runs.
         blocked = radar_blocked or clearance < STOP_CLEARANCE_M
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
@@ -207,7 +207,7 @@ class Explorer:
         if self.phase == "spin":
             return self._remember(self._spin())
         if self.phase == "go":
-            return self._remember(self._go(blocked, clearance))
+            return self._remember(self._go(blocked, clearance, left_clear, right_clear))
         return self._remember((0.0, 0.0))
 
     def _spin(self) -> tuple[float, float]:
@@ -257,13 +257,17 @@ class Explorer:
         # Tire outer corners. The old point 0.28 m down the centre line
         # sat in the 0.81 m opening and stayed occupied.
         self._reinforce_corners(x, y, yaw)
-        # Back off the contact before turning. A spin in place stays in the pinch.
-        self._reverse_until = self.t_s + 0.8
-        self._avoid_until = self._reverse_until + 0.35
+        if not fresh:
+            return
+        # Long enough to leave the depth camera's minimum (~0.35 m past
+        # the lens). A short hop stayed blind and the next drive went
+        # straight back into the same surface. Then turn, so the next
+        # forward command is not the same heading.
+        self._reverse_until = self.t_s + 2.0
+        self._avoid_until = self._reverse_until + 1.5
         self.path_xy = []
         self._replan_at = self._avoid_until
-        if fresh:
-            self._log("contact, backing up")
+        self._log("contact, backing up")
 
     def _note_slip(self) -> None:
         self.slip_events += 1
@@ -281,8 +285,8 @@ class Explorer:
         # opening and the ban never came back, so the bedroom was abandoned.
         self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
         self._reinforce_corners(x, y, yaw)
-        self._reverse_until = self.t_s + 1.1
-        self._avoid_until = self._reverse_until
+        self._reverse_until = self.t_s + 2.2
+        self._avoid_until = self._reverse_until + 1.4
         self._recover_until = self._reverse_until + 0.4
         self._progress_t = self._recover_until
         self._progress_xy = (x, y)
@@ -307,7 +311,17 @@ class Explorer:
                 return False
         return True
 
-    def _go(self, blocked: bool, clearance: float) -> tuple[float, float]:
+    def _jamb_yaw(self, left_clear: float, right_clear: float) -> float:
+        """Turn away from the nearer door jamb. Equal shoulders stay straight."""
+        if left_clear > 1.1 and right_clear > 1.1:
+            return 0.0
+        if left_clear + 0.05 < right_clear:
+            return -0.55
+        if right_clear + 0.05 < left_clear:
+            return 0.55
+        return 0.0
+
+    def _go(self, blocked: bool, clearance: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
         if self._goal_expired() or self._is_stuck():
@@ -316,7 +330,9 @@ class Explorer:
         if self.phase != "go":
             return 0.0, 0.0
         if self.t_s < self._reverse_until:
-            return wheel_speeds(-0.14, self._turn * 0.35)
+            # Nearly straight. A hard yaw here swings a tire into the jamb
+            # the reverse was supposed to leave.
+            return wheel_speeds(-0.16, self._turn * 0.12)
         if self.t_s < self._avoid_until or blocked:
             return wheel_speeds(0.0, self._turn)
         if self.t_s >= self._replan_at or not self.path_xy:
@@ -324,6 +340,10 @@ class Explorer:
         if self.phase != "go" or self.done or not self.path_xy:
             return 0.0, 0.0
         v, w, arrived = pure_pursuit(self.odometry.pose(), self.path_xy, arrive_m=ARRIVE_M)
+        w += self._jamb_yaw(left_clear, right_clear)
+        near = min(left_clear, right_clear)
+        if near < 0.90:
+            v = min(v, 0.14)
         if clearance < 1.15:
             span = max(0.15, 1.15 - STOP_CLEARANCE_M)
             v *= max(0.30, (clearance - STOP_CLEARANCE_M) / span)

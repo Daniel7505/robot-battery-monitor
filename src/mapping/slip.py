@@ -34,6 +34,15 @@ class MotionCheck:
         wall range to watch. Encoder travel in that state is not motion.
         """
         dt = max(0.0, float(dt_s))
+        # A reverse while the camera is inside its minimum is the body
+        # leaving the wall. Dropping it left the pose in the doorway and
+        # the next forward command drove back into the same jamb.
+        if blind and float(ds_m) < -1e-4:
+            if self.cooldown_s > 0.0:
+                self.cooldown_s = max(0.0, self.cooldown_s - dt)
+            self._reset(None)
+            self._blind = True
+            return False
         if self.cooldown_s > 0.0:
             self.cooldown_s = max(0.0, self.cooldown_s - dt)
             return True

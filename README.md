@@ -318,6 +318,51 @@ Rooms the scorer matched at overlap 0.15 or better. The label is the robot's own
 
 Distinct labels: stock `room_1`–`room_5`, +0.40 `room_1`–`room_3`, −0.35 `room_1` and `room_2`. None of the three maps used the name `hall`. The stock hall is its own region (`room_2`). On +0.40 the hall shares `room_3` with the bath. On −0.35 the hall's overlap is 0.16 with the main-room label.
 
+Eight headless seeds on `69dcb93`, 600 s, fusion + floor + two-look loop. Spawns are in the living room with clearance of at least 0.69 m. The three historical headings are included. The carpet step the casters climb is a ramp; the bedroom floor height is unchanged. Saved room labels are only cells the shell covered.
+
+Heading error in degrees. The +0.40 column is no longer −5° at t = 60 s. Wall yaw applied on that seed is 0 through t = 180 s.
+
+| t (s) | Stock | +0.40 | −0.35 | East | West | SW | North | South |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 60 | −1.41 | −0.24 | +1.59 | +0.63 | +0.37 | −1.16 | −0.14 | +0.24 |
+| 120 | −1.14 | −0.40 | +1.41 | +1.58 | +1.91 | −0.32 | −0.46 | −0.00 |
+| 180 | −0.58 | −4.24 | +2.94 | +0.71 | +3.87 | −0.28 | −2.42 | −0.00 |
+| 240 | +1.26 | −3.85 | −18.54 | +0.47 | +5.25 | −0.54 | −4.08 | −1.07 |
+| 300 | +1.71 | −3.21 | −33.37 | +0.98 | +5.23 | +1.18 | −5.72 | −0.05 |
+| 360 | +2.83 | −3.64 | −42.82 | +1.71 | +4.73 | −1.47 | −5.10 | −1.08 |
+| 420 | +5.06 | −1.23 | −42.87 | +1.58 | +5.80 | −3.61 | −2.38 | −2.26 |
+| 480 | +6.67 | −2.38 | −33.72 | +1.03 | +4.95 | −3.29 | −3.10 | −2.98 |
+| 540 | +7.70 | −1.45 | −30.21 | −0.33 | +5.82 | −2.87 | −4.43 | −2.27 |
+| 600 | +10.15 | −0.39 | −25.49 | −0.26 | +3.83 | −3.17 | −5.10 | −3.43 |
+
+| | Stock | +0.40 | −0.35 | East | West | SW | North | South |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Spawn | (6.10, 4.70) +90° | (6.10, 4.70) +113° | (6.10, 4.70) +70° | (5.40, 3.80) 0° | (6.60, 3.90) 180° | (4.90, 4.50) +40° | (5.80, 5.60) +126° | (6.40, 6.30) −69° |
+| Occupancy IoU | 0.155 | 0.146 | 0.104 | 0.264 | 0.196 | 0.177 | 0.163 | 0.159 |
+| Free-space IoU | 0.652 | 0.625 | 0.575 | 0.686 | 0.625 | 0.610 | 0.629 | 0.628 |
+| Coverage | 97.5% | 96.2% | 87.7% | 92.4% | 89.4% | 89.4% | 92.6% | 93.3% |
+| Wall error | 20.9 cm | 33.6 cm | 39.0 cm | 15.4 cm | 30.2 cm | 27.8 cm | 30.4 cm | 26.9 cm |
+| Final position error | 0.44 m | 1.08 m | 2.99 m | 0.21 m | 1.08 m | 0.84 m | 0.83 m | 0.70 m |
+| Bedroom entry | no | 63 s | 66 s | 27 s | no | 35 s | 143 s | 126 s |
+| Bath entry | 261 s | 261 s | 151 s | 480 s | no | no | no | 247 s |
+| Hall entry | 148 s | no | no | 521 s | 567 s | 369 s | 597 s | 340 s |
+| Longest wall press | 0.76 s | 0 | 2.17 s | 0.21 s | 0 | 2.27 s | 1.63 s | 1.71 s |
+| Wall-contact rows | 131 | 0 | 1442 | 232 | 0 | 1575 | 427 | 338 |
+| Floor slip lines | 30 | 5 | 69 | 2 | 7 | 202 | 1 | 7 |
+| Stopped | time cap | time cap | time cap | time cap | time cap | time cap | time cap | time cap |
+
+Six of the eight bodies entered the bedroom. The east seed is the one under the 0.3 m position bar (0.21 m) and under 2° of heading at the end. The +0.40 end heading is −0.39°. Its early offset is gone: −0.24° at t = 60 s, and the wall-yaw sum is still 0. The later −4.24° at t = 180 s is gyro walk while the body sat on the bedroom threshold, not a startup nudge. The −0.35 seed's heading leaves the band after t = 200 s (wall yaw only −1.4° by t = 240 s; the rest is gyro during a press). Position error above 0.3 m is concentrated in a few stretches, written up on the pull request. Room labels below count only space the shell covered. A doorway split shows up when the bedroom label differs from the living room.
+
+| Floor | Stock | +0.40 | −0.35 | East | West | SW | North | South |
+|---|---|---|---|---|---|---|---|---|
+| Living | room_1 (0.09) | room_1 (0.16) | room_6 (0.16) | room_1 (0.04) | room_1 (0.07) | room_1 (0.30) | room_2 (0.20) | room_3 (0.09) |
+| Kitchen | room_1 (0.03) | — | — | room_1 (0.05) | room_1 (0.17) | room_1 (0.02) | room_2 (0.01) | room_3 (0.08) |
+| Bedroom | room_4 (0.00) | room_1 (0.37) | room_8 (0.19) | room_7 (0.26) | room_1 (0.03) | room_1 (0.19) | room_4 (0.20) | room_3 (0.25) |
+| Bath | room_4 (0.09) | room_1 (0.04) | — | room_6 (0.08) | room_4 (0.02) | — | — | room_1 (0.20) |
+| Hall | room_1 (0.63) | — | — | room_5 (0.41) | room_1 (0.47) | room_1 (0.69) | room_2 (0.46) | room_3 (0.35) |
+
+Overlap under 0.15 is listed anyway so a seen-through cell is not mistaken for a visit. The bedroom is its own region on the −0.35 seed (`room_8`), the east seed (`room_7`), and the north seed (`room_4`). On +0.40, SW, and south it still shares the living-room label. The kitchen aisle is as wide as the kitchen, so a clearance neck does not split it from the living room on these maps. The west seed is the one that used the name `hall`.
+
 Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
 
 ---

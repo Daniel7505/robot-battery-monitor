@@ -31,6 +31,9 @@ HEIGHT_MAX_M = 1.50
 OAK_DEPTH_NOISE = 0.002
 OAK_DEPTH_MAX_M = 8.0
 OAK_DEPTH_MIN_M = 0.35
+# Share of the forward view with no usable range. A surface closer than
+# minRange fills the frame with empty pixels, and that is contact.
+BLIND_VIEW_FRACTION = 0.65
 # Kinematic stand-in for the oak_gyro lookup table: a small bias plus
 # absolute white noise. Webots itself applies the lookup table.
 GYRO_BIAS_RAD_S = 0.001
@@ -46,6 +49,10 @@ ARRIVE_M = 0.28
 # near x = 0.50 m. Stopping inside that hole means the robot never sees
 # the wall it is about to touch.
 STOP_CLEARANCE_M = 0.70
+# Reported clearance when the forward view is inside the camera minimum.
+# It has to sit under STOP_CLEARANCE_M so the drive does not treat "no
+# return" as an open corridor.
+BLIND_CLEARANCE_M = 0.12
 
 
 @dataclass(frozen=True)

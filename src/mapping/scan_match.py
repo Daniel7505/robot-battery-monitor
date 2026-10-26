@@ -51,6 +51,55 @@ def yaw_nudge(
     return max(-0.008, min(0.008, 0.5 * best_off))
 
 
+# Neighbourhood searched when deciding whether the latest scan still
+# belongs at the odometry pose. Radii are metres.
+_SHIFTS = tuple(
+    (radius * math.cos(math.radians(deg)), radius * math.sin(math.radians(deg)))
+    for radius in (0.30, 0.55, 0.80)
+    for deg in range(0, 360, 45)
+)
+
+
+def scan_fit(grid: OccupancyGrid, hits_odom: np.ndarray) -> str:
+    """How the latest scan sits on the map: support, disagree, or unknown.
+
+    The scan is shifted rigidly. Support means the odometry pose already
+    explains it. Disagree means a shift of at least 0.3 m explains it
+    much better, so recent wheel travel should not be allowed to finish
+    the run. Too few returns, or a map with nothing to match, is unknown.
+    """
+    pts = np.asarray(hits_odom, dtype=np.float64).reshape(-1, 2)
+    if pts.shape[0] < 18:
+        return "unknown"
+    step = max(1, pts.shape[0] // 60)
+    pts = pts[::step]
+    labels = grid.labels()
+    if int(np.count_nonzero(labels == 1)) < 8:
+        return "unknown"
+    base = _score_points(grid, labels, pts)
+    best = base
+    best_d = 0.0
+    for dx, dy in _SHIFTS:
+        score = _score_points(grid, labels, pts + (dx, dy))
+        if score > best:
+            best = score
+            best_d = math.hypot(dx, dy)
+    if best_d >= 0.30 and best >= 10 and best >= base * 1.35 + 4.0:
+        return "disagree"
+    if base >= 8 and best < base * 1.35 + 4.0:
+        return "support"
+    return "unknown"
+
+
+def _score_points(grid: OccupancyGrid, labels: np.ndarray, pts: np.ndarray) -> int:
+    cols = np.floor((pts[:, 0] - grid.origin[0]) / grid.res).astype(np.int32)
+    rows = np.floor((pts[:, 1] - grid.origin[1]) / grid.res).astype(np.int32)
+    inside = (rows >= 0) & (cols >= 0) & (rows < grid.n) & (cols < grid.n)
+    if not np.any(inside):
+        return 0
+    return int(np.count_nonzero(labels[rows[inside], cols[inside]] == 1))
+
+
 def _score(
     grid: OccupancyGrid,
     labels: np.ndarray,

@@ -118,6 +118,29 @@ def to_odom(points_body: np.ndarray, pose: tuple[float, float, float]) -> np.nda
     return np.column_stack((x + c * xb - s * yb, y + s * xb + c * yb))
 
 
+def blind_fraction(cam: DepthCamera, depth_x: np.ndarray, *, stride: int = 1) -> float:
+    """Share of the centre view that has no usable range.
+
+    Webots writes a non-finite value both inside ``minRange`` and past
+    ``maxRange``. A wall against the lens fills this window. A floor in
+    view does not, so an open room stays drivable.
+    """
+    image = np.asarray(depth_x, dtype=np.float64)
+    if image.ndim != 2 or image.size == 0:
+        return 0.0
+    height, width = image.shape
+    step = max(1, int(stride))
+    c0 = int(width * 0.28)
+    c1 = max(c0 + 1, int(width * 0.72))
+    r0 = int(height * 0.08)
+    r1 = max(r0 + 1, int(height * 0.92))
+    sampled = image[r0:r1:step, c0:c1:step]
+    if sampled.size == 0:
+        return 0.0
+    usable = np.isfinite(sampled) & (sampled >= cam.min_range_m) & (sampled <= cam.max_range_m)
+    return float(1.0 - np.count_nonzero(usable) / float(sampled.size))
+
+
 def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
     """Nearest obstacle range in the centre, left, and right of the robot.
 

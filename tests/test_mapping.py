@@ -25,7 +25,8 @@ from src.mapping.body import (
 )
 from src.mapping.depth_cloud import body_points
 from src.mapping.drive import pure_pursuit, wheel_speeds
-from src.mapping.frontiers import dilate_disk, frontier_mask, select_goal
+from src.mapping.frontiers import dilate_disk, frontier_mask, line_up_with_openings, select_goal
+from src.mapping.scan_match import scan_fit
 from src.mapping.grid import OccupancyGrid
 from src.mapping.noise import noisy_yaw_rate
 from src.mapping.odometry import WheelGyroOdometry
@@ -113,6 +114,108 @@ def test_static_depth_with_spinning_wheels_is_slip_not_motion():
     assert bot.slip_events >= 1
     assert bot._banned
     assert not bot.done
+
+
+def test_wall_inside_min_range_with_spinning_wheels_is_not_motion():
+    """Pressed against a surface the depth camera cannot see.
+
+    Run 2 sat on the bath wall, inside the 0.35 m minimum, so the range
+    image was empty. The encoders still counted metres. That travel must
+    not move the pose, the drive must stop going forward, and the run
+    must not finish.
+    """
+    from src.mapping.body import CRUISE_M_S
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = CRUISE_M_S / WHEEL_RADIUS_M
+    dt = 0.05
+    late_forward = 0
+    saw_reverse = False
+    for i in range(140):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if i > 10 and (cmd_l + cmd_r) > 1.0:
+            late_forward += 1
+        # Hubs keep turning forward, which is the slip, whatever was asked.
+        left += wheel * dt
+        right += wheel * dt
+    x, y, yaw = bot.pose()
+    assert math.hypot(x, y) < 0.20
+    assert abs(yaw) < math.radians(2.0)
+    assert not bot.done
+    assert bot.slip_events >= 1
+    assert bot._slip_debt_m >= 0.35
+    assert saw_reverse
+    assert late_forward == 0
+
+
+def test_done_rejects_a_scan_that_fits_somewhere_else():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    _fill(bot.grid, 0.85, -0.6, 1.15, 0.6, bot.grid.l_max)
+    ys = np.linspace(-0.45, 0.45, 24)
+    on_wall = np.column_stack((np.full(len(ys), 1.0), ys))
+    bot._scan_xy = on_wall + np.array([0.80, 0.0])
+    bot._scan_at = bot.t_s
+    assert scan_fit(bot.grid, bot._scan_xy) == "disagree"
+    bot._give_up()
+    assert not bot.done
+    bot._scan_xy = on_wall
+    bot._confident_after = 0.0
+    assert scan_fit(bot.grid, bot._scan_xy) == "support"
+    bot._give_up()
+    assert bot.done
+
+
+def test_path_aims_through_the_middle_of_a_doorway():
+    grid = OccupancyGrid()
+    free = grid.l_min
+    wall = grid.l_max
+    # A closed room with one opening. Unknown space is only beyond that gap,
+    # so the frontier is the doorway rather than the whole boundary.
+    _fill(grid, 0.0, -0.85, 1.35, 0.85, free)
+    _fill(grid, -0.25, -1.10, 1.50, -0.85, wall)
+    _fill(grid, -0.25, 0.85, 1.50, 1.10, wall)
+    _fill(grid, -0.25, -1.10, 0.0, 1.10, wall)
+    _fill(grid, 1.05, -0.85, 1.30, -0.42, wall)
+    _fill(grid, 1.05, 0.42, 1.30, 0.85, wall)
+    hugging = [(0.3, 0.32), (0.8, 0.32), (1.15, 0.30), (1.32, 0.28)]
+    lined = line_up_with_openings(grid, hugging)
+    door = [p for p in lined if p[0] > 0.95]
+    assert door
+    assert max(abs(p[1]) for p in door) < 0.15
+    chosen = select_goal(grid, (0.4, 0.30))
+    assert chosen is not None
+    _goal, path = chosen
+    through = [p for p in path if p[0] > 0.9]
+    assert through
+    assert max(abs(p[1]) for p in through) < 0.20
+
+
+def _fill(grid: OccupancyGrid, x0: float, y0: float, x1: float, y1: float, log: float) -> None:
+    corner = grid.cell_of(min(x0, x1), min(y0, y1))
+    far = grid.cell_of(max(x0, x1), max(y0, y1))
+    assert corner is not None and far is not None
+    r0, r1 = sorted((corner[0], far[0]))
+    c0, c1 = sorted((corner[1], far[1]))
+    grid.log[r0 : r1 + 1, c0 : c1 + 1] = log
 
 
 def test_straight_odometry_and_gyro_heading():

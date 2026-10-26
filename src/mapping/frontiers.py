@@ -95,12 +95,59 @@ def clusters(mask: np.ndarray) -> list[list[tuple[int, int]]]:
     return found
 
 
-def viewpoint(free: np.ndarray, cells: list[tuple[int, int]], reach: int = 6) -> tuple[int, int] | None:
+def viewpoint(
+    free: np.ndarray,
+    cells: list[tuple[int, int]],
+    reach: int = 6,
+    occupied: np.ndarray | None = None,
+) -> tuple[int, int] | None:
     """A traversable cell on or just inside a frontier.
 
     The frontier cell itself often sits inside the inflated obstacle, so
     the robot cannot path to it. Standing a few cells back still sees it.
+    When the map has walls, the cell is the one nearest the middle of the
+    cluster with the most room on both sides, so a doorway is aimed at
+    its centre instead of the jamb.
     """
+    nearest = _viewpoint_nearest(free, cells, reach)
+    if occupied is None or not np.any(occupied) or not cells:
+        return nearest
+    h, w = free.shape
+    cy = float(np.mean([p[0] for p in cells]))
+    cx = float(np.mean([p[1] for p in cells]))
+    pad = reach + 2
+    y0 = max(0, int(math.floor(cy)) - pad)
+    y1 = min(h, int(math.floor(cy)) + pad + 1)
+    x0 = max(0, int(math.floor(cx)) - pad)
+    x1 = min(w, int(math.floor(cx)) + pad + 1)
+    if y1 <= y0 or x1 <= x0:
+        return nearest
+    near = np.zeros((h, w), dtype=bool)
+    sample = cells
+    if len(cells) > 40:
+        sample = cells[:: max(1, len(cells) // 40)]
+    for y, x in sample:
+        near[max(0, y - reach) : min(h, y + reach + 1), max(0, x - reach) : min(w, x + reach + 1)] = True
+    cand = free[y0:y1, x0:x1] & near[y0:y1, x0:x1]
+    if not np.any(cand):
+        return nearest
+    cys, cxs = np.nonzero(cand)
+    cys = cys + y0
+    cxs = cxs + x0
+    oys, oxs = np.nonzero(occupied)
+    keep = (oys >= y0 - 16) & (oys < y1 + 16) & (oxs >= x0 - 16) & (oxs < x1 + 16)
+    oys, oxs = oys[keep], oxs[keep]
+    if len(oys) == 0:
+        clear = np.full(len(cys), 16.0)
+    else:
+        d2 = (cys[:, None] - oys[None, :]) ** 2 + (cxs[:, None] - oxs[None, :]) ** 2
+        clear = np.sqrt(np.min(d2, axis=1))
+    dist2 = (cys - cy) ** 2 + (cxs - cx) ** 2
+    i = int(np.argmax(clear * 1000.0 - dist2))
+    return int(cys[i]), int(cxs[i])
+
+
+def _viewpoint_nearest(free: np.ndarray, cells: list[tuple[int, int]], reach: int) -> tuple[int, int] | None:
     h, w = free.shape
     sample = cells
     if len(cells) > 30:
@@ -128,6 +175,89 @@ def viewpoint(free: np.ndarray, cells: list[tuple[int, int]], reach: int = 6) ->
             best_d = dist
             best = (int(ys[i] + y0), int(xs[i] + x0))
     return best
+
+
+def line_up_with_openings(grid: OccupancyGrid, path_xy: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Pull a path onto the centre line of a narrow opening.
+
+    A doorway is occupied on both sides and about a metre wide. The
+    point is moved to the middle of that gap, and a point is placed
+    just before it so the robot turns to face the opening before it
+    enters. Wide rooms are left alone.
+    """
+    if len(path_xy) < 2:
+        return list(path_xy)
+    occupied = grid.labels() == 1
+    if not np.any(occupied):
+        return list(path_xy)
+    lined: list[tuple[float, float]] = [path_xy[0]]
+    i = 1
+    while i < len(path_xy):
+        prev = lined[-1]
+        here = path_xy[i]
+        nxt = path_xy[min(i + 1, len(path_xy) - 1)]
+        center = _opening_center(grid, occupied, prev, here, nxt)
+        if center is None or math.hypot(center[0] - here[0], center[1] - here[1]) < 0.08:
+            lined.append(here)
+            i += 1
+            continue
+        dx, dy = center[0] - prev[0], center[1] - prev[1]
+        dist = math.hypot(dx, dy)
+        if dist > 0.50:
+            lined.append((center[0] - dx / dist * 0.40, center[1] - dy / dist * 0.40))
+        lined.append(center)
+        # Drop later points that belong to the same gap so the path does
+        # not wander back to the jamb.
+        i += 1
+        while i < len(path_xy) and math.hypot(path_xy[i][0] - here[0], path_xy[i][1] - here[1]) <= 0.45:
+            i += 1
+    return lined
+
+
+def _opening_center(
+    grid: OccupancyGrid,
+    occupied: np.ndarray,
+    prev: tuple[float, float],
+    here: tuple[float, float],
+    nxt: tuple[float, float],
+) -> tuple[float, float] | None:
+    tx, ty = nxt[0] - prev[0], nxt[1] - prev[1]
+    if abs(tx) + abs(ty) < 1e-6:
+        tx, ty = here[0] - prev[0], here[1] - prev[1]
+    norm = math.hypot(tx, ty)
+    if norm < 1e-6:
+        return None
+    tx, ty = tx / norm, ty / norm
+    px, py = -ty, tx
+    left = _march(grid, occupied, here[0], here[1], px, py, 1.15)
+    right = _march(grid, occupied, here[0], here[1], -px, -py, 1.15)
+    if left is None or right is None:
+        return None
+    gap = left + right
+    if gap < 0.55 or gap > 1.30:
+        return None
+    shift = 0.5 * (left - right)
+    return (here[0] + px * shift, here[1] + py * shift)
+
+
+def _march(
+    grid: OccupancyGrid,
+    occupied: np.ndarray,
+    x: float,
+    y: float,
+    dx: float,
+    dy: float,
+    limit_m: float,
+) -> float | None:
+    dist = grid.res
+    while dist <= limit_m + 1e-9:
+        cell = grid.cell_of(x + dx * dist, y + dy * dist)
+        if cell is None:
+            return None
+        if occupied[cell]:
+            return dist
+        dist += grid.res
+    return None
 
 
 def traversable(labels: np.ndarray, res: float, radius_m: float = ROBOT_RADIUS_M) -> np.ndarray:
@@ -237,7 +367,7 @@ def select_goal(
             continue
         # Prefer a cell the robot can stand on. The score still uses the
         # whole cluster's length, so a long wall beats a speck.
-        target = viewpoint(free, cells)
+        target = viewpoint(free, cells, occupied=(labels == 1))
         if target is None:
             continue
         path_cells = astar(free, start, target, step_cost=grid.res)
@@ -254,4 +384,7 @@ def select_goal(
             best = (score, goal, pts)
     if best is None:
         return None
-    return best[1], best[2]
+    pts = line_up_with_openings(grid, best[2])
+    if not pts:
+        return None
+    return pts[-1], pts

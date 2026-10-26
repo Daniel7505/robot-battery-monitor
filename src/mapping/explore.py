@@ -16,18 +16,20 @@ import math
 
 from src.mapping.body import (
     ARRIVE_M,
+    BLIND_CLEARANCE_M,
+    BLIND_VIEW_FRACTION,
     OAK_DEPTH,
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
     STOP_CLEARANCE_M,
     DepthCamera,
 )
-from src.mapping.depth_cloud import body_points, forward_clearance, to_odom
+from src.mapping.depth_cloud import blind_fraction, body_points, forward_clearance, to_odom
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
 from src.mapping.odometry import WheelGyroOdometry
-from src.mapping.scan_match import yaw_nudge
+from src.mapping.scan_match import scan_fit, yaw_nudge
 from src.mapping.slip import MotionCheck
 
 
@@ -67,6 +69,12 @@ class Explorer:
         self._confident_after = 0.0
         self._last_spin_t = -100.0
         self._nudge_at = 0.0
+        self._view_blind = False
+        self._blind_frames = 0
+        self._slip_debt_m = 0.0
+        self._agree_at = 0.0
+        self._scan_xy = None
+        self._scan_at = -10.0
         self.slip_events = 0
         self.frontiers_left = 0
 
@@ -102,14 +110,28 @@ class Explorer:
                 stride=self.stride,
             )
             clearance, left_clear, right_clear = forward_clearance(hits)
+            # Two empty frames, not one glitch. Held until a usable frame
+            # arrives, including the steps between depth pictures.
+            if blind_fraction(self.camera, depth, stride=self.stride) >= BLIND_VIEW_FRACTION:
+                self._blind_frames += 1
+            else:
+                self._blind_frames = 0
+                self._view_blind = False
+            if self._blind_frames >= 2:
+                self._view_blind = True
             prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
         else:
             prefer = self._turn
+        if self._view_blind:
+            # No return is not an open hallway. The nose is inside minRange.
+            clearance = min(clearance, BLIND_CLEARANCE_M)
         drop = False
-        if depth is not None:
+        if depth is not None or self._view_blind:
             before = self._motion.events
-            drop = self._motion.observe(dt, ds, clearance)
-            if self._motion.events > before:
+            drop = self._motion.observe(dt, ds, clearance, blind=self._view_blind)
+            if drop:
+                self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
+            if self._motion.events > before and self.phase == "go":
                 self._note_slip()
         self.odometry.update(
             left_wheel_rad,
@@ -125,6 +147,21 @@ class Explorer:
                 self.odometry.nudge_yaw(nudge)
                 self._nudge_at = self.t_s + 0.5
         x, y, yaw = self.odometry.pose()
+        if hits is not None and hits.size and not self._view_blind:
+            scanned = to_odom(hits, (x, y, yaw))
+            self._scan_xy = scanned
+            self._scan_at = self.t_s
+            if not drop and self.t_s >= self._agree_at:
+                fit = scan_fit(self.grid, scanned)
+                if fit == "support":
+                    self._slip_debt_m = max(0.0, self._slip_debt_m - 0.25)
+                elif fit == "disagree":
+                    self._slip_debt_m = min(2.0, self._slip_debt_m + 0.15)
+                else:
+                    # Trusted driving with nothing to contradict it. A flat
+                    # floor often cannot support or disagree.
+                    self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
+                self._agree_at = self.t_s + 0.5
         self.grid.stamp_footprint(x, y)
         if hits is not None and sensor is not None and floors is not None:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
@@ -221,7 +258,17 @@ class Explorer:
         self.done = False
 
     def _confident(self) -> bool:
-        return self.t_s >= self._confident_after
+        # Still against a surface the camera cannot see, or the wheels
+        # recently claimed travel the scan does not support.
+        if self._view_blind or self._slip_debt_m >= 0.35:
+            return False
+        if self.t_s < self._confident_after:
+            return False
+        if self._scan_xy is not None and self.t_s - self._scan_at <= 1.5:
+            if scan_fit(self.grid, self._scan_xy) == "disagree":
+                self._confident_after = max(self._confident_after, self.t_s + 6.0)
+                return False
+        return True
 
     def _go(self, blocked: bool, clearance: float) -> tuple[float, float]:
         if self.done:

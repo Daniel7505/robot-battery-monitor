@@ -138,6 +138,9 @@ class Explorer:
         self.sweep_straight = 0
         self.sweep_stopped = 0
         self._sweep_log_at = -1.0
+        self._commit_until = -1.0
+        self._commit_heading = 0.0
+        self._escape_log_at = -1.0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -464,8 +467,11 @@ class Explorer:
             self._prev_depth_yaw = self.odometry.yaw_unwrapped_rad
         translating = abs(self._commanded[0] + self._commanded[1]) > 0.4
         if not translating:
+            # A sweep stop or a one-step spin is not the end of the
+            # scrub. Wiping the window there dropped the still votes
+            # before the wheels had claimed enough travel to call a pin.
             self._pin_idle_s += self._step_dt
-            if self._pin_idle_s > 0.25:
+            if self._pin_idle_s > 0.80:
                 self._pin.reset()
             return
         self._pin_idle_s = 0.0
@@ -478,9 +484,14 @@ class Explorer:
         if pinned:
             self.odometry.x_m = self._pin.x0
             self.odometry.y_m = self._pin.y0
-            self._pin_until = self.t_s + 0.6
+            self._pin_until = self.t_s + 1.2
             self._log("pinned, depth floor and visual still, wheel translation frozen")
-            self._start_recovery()
+            # A crossing that is already lined up stays the goal. Recovery
+            # would reverse and drop it, which is how a 7 s hall visit ended.
+            if self.t_s < self._commit_until:
+                self._progress_t = self._commit_until
+            else:
+                self._start_recovery()
         self._pin.reset()
 
     def _pressing_side(self, view: BubbleView) -> float:
@@ -609,7 +620,13 @@ class Explorer:
         # opening and the ban never came back, so the bedroom was abandoned.
         self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
         self._reinforce_corners(x, y, yaw)
-        self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.08, reason="backup")
+        tight = self._tight_face()
+        if tight is not None and tight[0] == "rear" and tight[1] < 0.12:
+            # The tail is on the wall. A reverse drives further in.
+            self._reverse_left_m = 0.0
+            self._reverse_needs_gap = False
+        else:
+            self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.08, reason="backup")
         self._recover_until = self.t_s + 0.8
         self._progress_t = self._recover_until
         self._progress_xy = (x, y)
@@ -679,9 +696,48 @@ class Explorer:
         shown = -1.0 if gap is None else float(gap)
         self._log(f"{reason} backup {budget:.2f}m gap={shown:.2f}")
 
+    def _tight_face(self) -> tuple[str, float] | None:
+        """The shell face with the smallest measured gap."""
+        view = self._bubble_view
+        if view is None:
+            return None
+        known = [
+            (name, gap)
+            for name, gap in (
+                ("forward", view.forward),
+                ("rear", view.rear),
+                ("left", view.left),
+                ("right", view.right),
+            )
+            if gap is not None
+        ]
+        if not known:
+            return None
+        return min(known, key=lambda item: item[1])
+
+    def _leave_rear(self) -> tuple[float, float] | None:
+        """Drive forward when the tail is the face on the wall.
+
+        The pivot backup always reversed. With the nose in an open room
+        and the rear sonar on the shared wall, that command held the
+        tires on the wall for minutes and the encoders walked the pose.
+        """
+        tight = self._tight_face()
+        if tight is None or tight[0] != "rear" or tight[1] >= 0.10:
+            return None
+        self._reverse_left_m = 0.0
+        self._reverse_needs_gap = False
+        if self.t_s >= self._escape_log_at:
+            self._log(f"rear contact, driving off the wall gap={tight[1]:.2f}")
+            self._escape_log_at = self.t_s + 0.5
+        return wheel_speeds(0.12, 0.0)
+
     def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
+        leaving = self._leave_rear()
+        if leaving is not None:
+            return leaving
         if self._side_escape_sign != 0.0 and self.t_s <= self._side_escape_until:
             # Yaw away from the jamb while reversing. A straight reverse
             # stays on a frame that is beside the shell.
@@ -696,6 +752,14 @@ class Explorer:
         if self.phase != "go":
             return 0.0, 0.0
         if blocked and not pivot_ready(self._min_gap):
+            # Nose contact backs up. A rear contact was already returned
+            # above. A side gap is the side-escape path, not another reverse
+            # along the wall.
+            tight = self._tight_face()
+            if tight is not None and tight[0] in ("left", "right") and tight[1] < 0.09:
+                if self.t_s > self._side_escape_until:
+                    self._start_side_escape(1.0 if tight[0] == "left" else -1.0, self._bubble_view)
+                return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
             self._arm_reverse(self._min_gap, blind=self._view_blind, reason="pivot")
             if self._reverse_left_m > 0.0:
                 return wheel_speeds(-0.12, self._turn * 0.08)
@@ -739,7 +803,7 @@ class Explorer:
         elif left_clear < 0.90 and right_clear < 0.90:
             v = min(v, DOOR_SPEED_M_S)
         v = min(v, max(0.0, cap))
-        v, w = self._apply_sweep(v, w, approach_kind)
+        v, w = self._apply_sweep(v, w, approach_kind, door_mode)
         return wheel_speeds(v, w)
 
     def _segment_heading(self) -> float:
@@ -774,7 +838,7 @@ class Explorer:
             prev = nxt
         return heading
 
-    def _apply_sweep(self, v: float, w: float, approach_kind: str) -> tuple[float, float]:
+    def _apply_sweep(self, v: float, w: float, approach_kind: str, door_mode: str = "") -> tuple[float, float]:
         """Reject an arc the shell would drive into an occupied cell."""
         pose = self.odometry.pose()
         v2, w2, kind = fit_motion(self.grid, pose, v, w, self._segment_heading())
@@ -802,6 +866,11 @@ class Explorer:
             else:
                 self._log("sweep straight, doorway on the centre line")
             self._sweep_log_at = self.t_s + 0.5
+        # Lined up, and the straight shell misses the map. Stay on this
+        # heading instead of taking the next frontier back through the door.
+        if door_mode in ("approach", "mouth") and kind == "clear" and v2 > 0.05 and abs(w2) < 0.08:
+            self._commit_until = max(self._commit_until, self.t_s + 12.0)
+            self._commit_heading = self._segment_heading()
         return v2, w2
 
     def sweep_summary(self) -> str:
@@ -811,18 +880,38 @@ class Explorer:
             f"straight={self.sweep_straight} stop={self.sweep_stopped}"
         )
 
+    def _forward_preference(self) -> tuple[float, float] | None:
+        if self._commit_until < 0.0 or self.t_s > self._commit_until + 15.0:
+            return None
+        return (math.cos(self._commit_heading), math.sin(self._commit_heading))
+
+    def _hold_goal(self) -> bool:
+        """Keep the current path while it is young or a crossing is committed.
+
+        Replanning every few seconds handed the -0.35 seed a frontier back
+        in the main room seven seconds after it had entered the hall.
+        """
+        if self.goal_xy is None or not self.path_xy:
+            return False
+        if self.t_s < self._commit_until:
+            return True
+        return (self.t_s - self._goal_since) < 8.0
+
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 3.0
         x, y, _yaw = self.odometry.pose()
+        if self._hold_goal():
+            return
         if depth > 6:
             self._no_frontier()
             return
         banned = self._ban_set()
-        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=banned)
+        prefer = self._forward_preference()
+        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=banned, prefer_xy=prefer)
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
             self._banned.clear()
-            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set())
+            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), prefer_xy=prefer)
         if chosen is None:
             self._no_frontier()
             return

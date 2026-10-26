@@ -24,6 +24,9 @@ class PinWatch:
     FLOOR_M = 0.012
     # One floor pixel of noise, or one 8 ms step at a creep. Counted as
     # a sample so a still image is a vote, and not added as travel.
+    # Summing the absolute value of every frame turned a rocking tire
+    # into metres of "motion" and the pin never closed. Samples under
+    # this floor add nothing. The window still needs each sensor.
     QUIET_M = 0.0015
 
     def __init__(self) -> None:

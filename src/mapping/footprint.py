@@ -16,12 +16,17 @@ from src.mapping.odometry import wrap_rad
 
 # A few centimetres outside the 0.39 m shell. This is not the planner's
 # 0.20 m inflation: that disk would refuse a centred 0.81 m doorway.
-FOOTPRINT_MARGIN_M = 0.03
+# One centimetre was not enough to see a corner swing into a jamb, and
+# three centimetres on a 5 cm cell stopped straight passes that only
+# grazed the next cell. Two centimetres leaves the centred 0.81 m door open.
+FOOTPRINT_MARGIN_M = 0.02
 NOSE_M = SHELL_NOSE_M + FOOTPRINT_MARGIN_M
 TAIL_M = SHELL_TAIL_M + FOOTPRINT_MARGIN_M
 HALF_M = SHELL_HALF_M + FOOTPRINT_MARGIN_M
-# About a doorway of travel, and enough of a spin to show the nose swing.
-SWEEP_AHEAD_M = 0.55
+# A half-metre horizon stopped for a wall the next step would have
+# rechecked. One shell length ahead still catches the nose swinging
+# into a jamb, which is the corner cut.
+SWEEP_AHEAD_M = 0.35
 SWEEP_SPIN_RAD = 0.50
 STEP_M = 0.05
 STEP_SPIN_RAD = 0.10

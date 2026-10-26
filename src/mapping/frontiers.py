@@ -402,6 +402,7 @@ def select_goal(
     radius_m: float = ROBOT_RADIUS_M,
     min_frontier_m: float = MIN_FRONTIER_M,
     banned: set[tuple[int, int]] | None = None,
+    prefer_xy: tuple[float, float] | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -440,6 +441,15 @@ def select_goal(
         size_m = len(group) * grid.res
         score = size_m / (length + 0.25)
         goal = grid.cell_center(*target)
+        if prefer_xy is not None:
+            dx = goal[0] - float(pose_xy[0])
+            dy = goal[1] - float(pose_xy[1])
+            norm = math.hypot(dx, dy) or 1.0
+            ahead = (dx * prefer_xy[0] + dy * prefer_xy[1]) / norm
+            # A frontier behind a doorway we just committed to is how the
+            # robot turned around in the hall and came back out.
+            if ahead < 0.2:
+                score *= 0.25
         if best is None or score > best[0]:
             best = (score, goal, pts)
     if best is None:

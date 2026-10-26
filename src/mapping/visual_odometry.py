@@ -157,6 +157,36 @@ def _track(prev: np.ndarray, curr: np.ndarray, row: int, col: int, window: int) 
     return best
 
 
+def _images_still(prev: np.ndarray, curr: np.ndarray) -> bool:
+    """True when the forward view did not shift by more than a couple of pixels.
+
+    A blank frame is not stillness. There is nothing in it to say the
+    body stayed put.
+    """
+    if prev.shape != curr.shape or prev.size < 30:
+        return False
+    height, width = prev.shape
+    r0, r1 = int(0.25 * height), int(0.75 * height)
+    c0, c1 = int(0.20 * width), int(0.80 * width)
+    before = prev[r0:r1, c0:c1]
+    after = curr[r0:r1, c0:c1]
+    if before.size < 30:
+        return False
+    if float(before.std()) < 0.02 and float(after.std()) < 0.02:
+        return False
+    best = float(np.mean(np.abs(before - after)))
+    for shift in (1, 2):
+        best = min(best, float(np.mean(np.abs(before[:, :-shift] - after[:, shift:]))))
+        best = min(best, float(np.mean(np.abs(before[:, shift:] - after[:, :-shift]))))
+    return best < 0.035
+
+
+def _still_sample(depth: np.ndarray, camera: DepthCamera) -> VisualSample:
+    valid = np.isfinite(depth) & (depth >= camera.min_range_m) & (depth <= camera.max_range_m)
+    range_m = float(np.median(depth[valid])) if np.any(valid) else 1.0
+    return VisualSample(0.0, 0.0, 0.0, True, 0.8, np.zeros((0, 2), dtype=np.float64), "still", 0.0, range_m)
+
+
 def rigid_motion(src: np.ndarray, dst: np.ndarray) -> tuple[float, float, float] | None:
     """Robot motion in the previous body frame that takes ``src`` points to ``dst``."""
     if src.shape[0] < 3:
@@ -203,7 +233,14 @@ class VisualOdometry:
         self._prev_gray = gray
         self._prev_depth = image
         self._prev_px = corners
-        if prev_gray is None or prev_depth is None or len(prev_px) < 4:
+        if prev_gray is None or prev_depth is None:
+            return None
+        # A flat wall has no corners to track. An unchanged picture is
+        # still a reading: the body did not translate. A picture that
+        # moved, with nothing to fit, stays "no sample".
+        if len(prev_px) < 4:
+            if _images_still(prev_gray, gray):
+                return _still_sample(image, camera)
             return None
         src: list[np.ndarray] = []
         dst: list[np.ndarray] = []
@@ -223,6 +260,8 @@ class VisualOdometry:
             ranges.append(float(image[found[0], found[1]]))
         empty = np.zeros((0, 2), dtype=np.float64)
         if len(src) < 4:
+            if _images_still(prev_gray, gray):
+                return _still_sample(image, camera)
             return VisualSample(0.0, 0.0, 0.0, False, 0.0, empty, "few_tracks")
         src_a = np.vstack(src)
         dst_a = np.vstack(dst)

@@ -642,10 +642,83 @@ def test_a_yawed_door_approach_lines_up_then_drives_straight():
     w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
     assert abs(v - DOOR_SPEED_M_S) < 1e-6
     assert abs(w) < 0.05
-    pose = bot.pose()
-    assert not footprint_clips(grid, pose, DOOR_SPEED_M_S, 0.0)
+    # Close enough that the shorter horizon still reaches the jamb.
+    near = (0.90, 0.0, 0.0)
+    assert not footprint_clips(grid, near, DOOR_SPEED_M_S, 0.0)
     # A gentle arc reaches the jamb. A spin in place never enters the opening.
-    assert footprint_clips(grid, pose, DOOR_SPEED_M_S, 0.40)
+    assert footprint_clips(grid, near, DOOR_SPEED_M_S, 0.40)
+
+
+def test_a_rear_press_drives_forward_off_the_wall():
+    """The tail is on the wall and the nose sees the room. Reverse digs in."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._bubble_view = BubbleView(1.4, 0.40, 0.40, 0.02, 0.02)
+    bot._bubble_gap = 1.4
+    bot._min_gap = 0.02
+    cmd_l, cmd_r = bot._go(True, 0.0)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+
+
+def test_an_unchanged_view_with_no_corners_is_still():
+    """A flat wall has nothing to track. The picture not moving is the reading."""
+    from src.mapping.visual_odometry import VisualOdometry
+
+    cam = _small_oak(48, 32)
+    depth = np.full((cam.height, cam.width), 1.6)
+    # A smooth gradient has no corner to track. The unchanged frame is the vote.
+    rgb = np.tile(np.linspace(20.0, 220.0, cam.width), (cam.height, 1))
+    vo = VisualOdometry()
+    assert vo.measure(depth, cam, rgb) is None
+    still = vo.measure(depth, cam, rgb)
+    assert still is not None and still.ok and still.reason == "still"
+    assert abs(still.dx_m) < 1e-6 and abs(still.dy_m) < 1e-6
+    shifted = np.roll(rgb, 8, axis=1)
+    moved = vo.measure(depth, cam, shifted)
+    assert moved is None or moved.reason != "still"
+
+
+def test_a_young_goal_survives_a_replan():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.t_s = 10.0
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.5)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.5)]
+    bot._goal_since = 8.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.5)
+    assert bot.path_xy[0] == (1.0, 0.0)
+
+
+def test_a_clear_door_crossing_is_committed():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.4, 0.0), (1.4, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.70, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.40
+    bot._go(False, 0.28, 0.70, 0.70)
+    assert bot._commit_until > bot.t_s
+    bot.t_s = 6.0
+    bot._plan()
+    assert bot.goal_xy == (2.4, 0.0)
 
 
 def test_jamb_steer_only_centres_a_two_sided_gap():

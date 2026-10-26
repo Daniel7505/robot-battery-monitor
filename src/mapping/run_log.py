@@ -92,6 +92,13 @@ class RunLog:
         (self.directory / "map_meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         self._pose.flush()
 
+    def save_rooms(self, labels, names: dict) -> None:
+        if labels is None:
+            return
+        np.save(self.directory / "rooms.npy", np.asarray(labels, dtype=np.int16))
+        payload = {"names": {str(key): value for key, value in names.items()}, "frame": "odometry"}
+        (self.directory / "rooms_meta.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
     def close(self) -> None:
         self._pose.flush()
         self._pose.close()

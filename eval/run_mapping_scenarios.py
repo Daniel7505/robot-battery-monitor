@@ -58,7 +58,8 @@ SCENARIOS = (
     Scenario("door", 90.0, 4.40, 1.778, math.pi, "", 1241),
     Scenario("tail", 45.0, _TAIL_WALL_X + _TAIL_M + 0.05, 4.50, 0.0, "", 1242),
     Scenario("loop", 50.0, 6.1, 4.7, 1.5708, "square", 1243),
-    Scenario("bubble", 25.0, 7.20, 3.60, 0.0, "plunge", 1244),
+    Scenario("bubble", 30.0, 7.20, 3.60, 0.0, "plunge", 1244),
+    Scenario("backup", 30.0, 7.40, 3.60, math.pi, "backup", 1245),
 )
 
 
@@ -170,34 +171,34 @@ def _inside(solids, name: str, x: float, y: float, inset: float = 0.05) -> bool:
 
 
 def _stuck_walk(gt: list[dict[str, float]], pose: list[dict[str, float]], yaw0: float, sx: float, sy: float) -> float:
-    """Extra odometry travel while the true body stays inside a 3 cm box."""
+    """Net odometry drift while the true body stays inside a 3 cm box.
+
+    A pin that snaps the pose back to an anchor makes a sawtooth. The
+    path length of that sawtooth is not travel. The chord from the start
+    of the still interval to the end is.
+    """
     if len(pose) < 2 or not gt:
         return 0.0
     worst = 0.0
-    left = 0
-    for right in range(len(pose)):
-        while pose[right]["t_s"] - pose[left]["t_s"] > 6.0 and left < right:
-            left += 1
+    # Pose logs are 8 ms. A stride keeps this on the order of the run, not its square.
+    step = 5
+    for right in range(0, len(pose), step):
         here = _nearest(gt, pose[right]["t_s"])
         anchor = (here["x_m"], here["y_m"])
         k = right
-        while k > left:
-            earlier = _nearest(gt, pose[k - 1]["t_s"])
+        while k - step >= 0 and pose[right]["t_s"] - pose[k - step]["t_s"] <= 6.0:
+            earlier = _nearest(gt, pose[k - step]["t_s"])
             if math.hypot(earlier["x_m"] - anchor[0], earlier["y_m"] - anchor[1]) > 0.03:
                 break
-            k -= 1
-        travel = 0.0
-        true_travel = 0.0
-        prev_o = _world_xy(pose[k]["x_m"], pose[k]["y_m"], sx, sy, yaw0)
-        prev_g = _nearest(gt, pose[k]["t_s"])
-        for i in range(k + 1, right + 1):
-            nxt = _world_xy(pose[i]["x_m"], pose[i]["y_m"], sx, sy, yaw0)
-            travel += math.hypot(nxt[0] - prev_o[0], nxt[1] - prev_o[1])
-            prev_o = nxt
-            sample = _nearest(gt, pose[i]["t_s"])
-            true_travel += math.hypot(sample["x_m"] - prev_g["x_m"], sample["y_m"] - prev_g["y_m"])
-            prev_g = sample
-        worst = max(worst, travel - true_travel)
+            k -= step
+        if pose[right]["t_s"] - pose[k]["t_s"] < 0.4:
+            continue
+        start_o = _world_xy(pose[k]["x_m"], pose[k]["y_m"], sx, sy, yaw0)
+        end_o = _world_xy(pose[right]["x_m"], pose[right]["y_m"], sx, sy, yaw0)
+        start_g = _nearest(gt, pose[k]["t_s"])
+        net_o = math.hypot(end_o[0] - start_o[0], end_o[1] - start_o[1])
+        net_g = math.hypot(here["x_m"] - start_g["x_m"], here["y_m"] - start_g["y_m"])
+        worst = max(worst, net_o - net_g)
     return worst
 
 
@@ -287,6 +288,17 @@ def judge(name: str, folder: Path, scenario: Scenario) -> tuple[bool, str]:
                 end_speed = math.hypot(gt[-1]["x_m"] - gt[-2]["x_m"], gt[-1]["y_m"] - gt[-2]["y_m"]) / dt
         ok = len(walls) == 0 and speed >= 0.22 and end_speed < 0.08 and 0.01 < air < 0.40
         return ok, common + f" air={air:.3f}m end_speed={end_speed:.3f}"
+    if name == "backup":
+        tail_x = max(row["x_m"] - math.cos(row["yaw_rad"]) * _TAIL_M for row in gt)
+        air = _EAST_WALL_X - tail_x
+        end_speed = 0.0
+        if len(gt) >= 2:
+            dt = gt[-1]["t_s"] - gt[-2]["t_s"]
+            if dt > 1e-4:
+                end_speed = math.hypot(gt[-1]["x_m"] - gt[-2]["x_m"], gt[-1]["y_m"] - gt[-2]["y_m"]) / dt
+        backed = final["x_m"] > scenario.x + 0.15
+        ok = len(walls) == 0 and speed >= 0.10 and end_speed < 0.08 and 0.01 < air < 0.45 and backed
+        return ok, common + f" tail_air={air:.3f}m end_speed={end_speed:.3f} backed={int(backed)}"
     return False, "unknown scenario " + name
 
 

@@ -34,7 +34,9 @@ PIVOT_REVERSE_MAX_M = 0.25
 
 # A few centimetres of air, not the warehouse lane standoff.
 BUBBLE_STANDOFF_M = 0.04
-BUBBLE_LATENCY_S = 0.10
+# Wheel setpoints take a few tenths of a second to show up as body
+# speed. 0.10 s let a full-cruise approach reach the wall still fast.
+BUBBLE_LATENCY_S = 0.30
 BUBBLE_DECEL_M_S2 = 1.4
 
 _FRONT = ("us_front", "us_front_left", "us_front_right")

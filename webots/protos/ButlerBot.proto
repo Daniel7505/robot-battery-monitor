@@ -876,6 +876,30 @@ Robot {
       numberOfRays 3
       aperture 0.3
     }
+    # Rear view for reversing and for a forward picture with no corners.
+    # Yawed 180 degrees so the optical axis is the robot's -X. No
+    # bounding object. Short range, small image, apartment mapper only.
+    RangeFinder {
+      translation -0.16 0 0.28
+      rotation 0 0 1 3.1416
+      name "rear_depth"
+      fieldOfView 1.2
+      width 80
+      height 48
+      near 0.05
+      minRange 0.08
+      maxRange 2.5
+      noise 0.004
+    }
+    Camera {
+      translation -0.16 0 0.28
+      rotation 0 0 1 3.1416
+      name "rear_rgb"
+      fieldOfView 1.2
+      width 80
+      height 48
+      near 0.05
+    }
     Camera {
       translation 0 0 0.04
       rotation 0 1 0 1.5708

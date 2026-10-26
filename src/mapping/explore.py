@@ -22,11 +22,19 @@ from src.mapping.body import (
     OAK_DEPTH,
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
+    REAR_DEPTH,
     STOP_CLEARANCE_M,
     DepthCamera,
 )
 from src.mapping.bubble import BubbleView, assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
-from src.mapping.depth_cloud import blind_fraction, body_points, depth_scene_motion_m, forward_clearance, to_odom
+from src.mapping.depth_cloud import (
+    blind_fraction,
+    body_points,
+    depth_scene_motion_m,
+    forward_clearance,
+    rear_clearance_m,
+    to_odom,
+)
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.footprint import fit_motion
 from src.mapping.frontiers import select_goal
@@ -35,6 +43,7 @@ from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
 from src.mapping.odometry import WheelGyroOdometry, wrap_rad
 from src.mapping.pin import PinWatch
+from src.mapping.rooms import segment_map
 from src.mapping.scan_match import scan_fit
 from src.mapping.scripted import BodyScript, drive_mode
 from src.mapping.slip import MotionCheck
@@ -147,6 +156,12 @@ class Explorer:
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
         self._blocked_since: float | None = None
+        self.room_labels = None
+        self.room_names: dict[int, str] = {}
+        self.room_doors = None
+        self._rear_gap: float | None = None
+        self._prev_rear = None
+        self._prev_rear_yaw = 0.0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -165,6 +180,8 @@ class Explorer:
         proximity: dict | None = None,
         floor=None,
         rgb=None,
+        rear_depth=None,
+        rear_rgb=None,
     ) -> tuple[float, float]:
         dt = max(0.0, float(dt_s))
         self._step_dt = dt
@@ -203,6 +220,15 @@ class Explorer:
             prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
         else:
             prefer = self._turn
+        if rear_depth is not None:
+            rear_hits, _rear_floors, _rear_sensor = body_points(
+                REAR_DEPTH,
+                rear_depth,
+                roll_rad=roll_rad,
+                pitch_rad=pitch_rad,
+                stride=2,
+            )
+            self._rear_gap = rear_clearance_m(rear_hits)
         if self._view_blind:
             # No return is not an open hallway. The nose is inside minRange.
             clearance = min(clearance, BLIND_CLEARANCE_M)
@@ -251,13 +277,16 @@ class Explorer:
                 depth=depth if self.fusion_enabled else None,
                 camera=self.camera,
                 rgb=rgb,
+                rear_depth=rear_depth if self.fusion_enabled else None,
+                rear_camera=REAR_DEPTH,
+                rear_rgb=rear_rgb,
             )
             if fused == "slip":
                 self.slip_events += 1
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
-        self._watch_pin(depth, ds)
+        self._watch_pin(depth, ds, rear_depth)
         corrected = False
         x, y, yaw = self.odometry.pose()
         if (
@@ -294,6 +323,16 @@ class Explorer:
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
                 self._agree_at = self.t_s + 0.5
         view = assess_bubble(clearance, blind=self._view_blind, proximity=proximity)
+        if self._rear_gap is not None:
+            rear = self._rear_gap if view.rear is None else min(view.rear, self._rear_gap)
+            known = [gap for gap in (view.forward, view.left, view.right, rear) if gap is not None]
+            view = BubbleView(
+                view.forward,
+                view.left,
+                view.right,
+                rear,
+                min(known) if known else None,
+            )
         self._bubble_view = view
         self._bubble_gap = view.forward
         self._min_gap = view.minimum
@@ -417,6 +456,7 @@ class Explorer:
                 yaw_unwrapped=self.odometry.yaw_unwrapped_rad,
                 forward_gap_m=view.forward,
                 rear_gap_m=view.rear,
+                dt_s=dt,
             )
             if self._script.done:
                 self.done = True
@@ -483,20 +523,33 @@ class Explorer:
             self._stall_latched = expected >= 0.04 and trans > 0.4 and actual < 0.30 * expected
         return self._stall_latched
 
-    def _watch_pin(self, depth, ds: float) -> None:
+    def _watch_pin(self, depth, ds: float, rear_depth=None) -> None:
         """Freeze wheel translation when depth, floor, and visual odometry are all still.
 
         The forward range can keep changing while the shell yaws against a
         jamb, so the old clearance check never closed. These three measure
         translation. A fast yaw no longer throws their readings away.
+        While the tail leads (reverse or a spin), the rear camera is the
+        depth vote. The forward picture still shows the room behind the motion.
         """
+        cmd_l, cmd_r = self._commanded
+        tail_first = (cmd_l + cmd_r) < -0.3 or (
+            abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0
+        )
         depth_m = None
-        if depth is not None and self._prev_depth is not None:
-            dyaw = self.odometry.yaw_unwrapped_rad - self._prev_depth_yaw
-            depth_m = depth_scene_motion_m(self._prev_depth, depth, self.camera, dyaw)
-        if depth is not None:
-            self._prev_depth = depth
-            self._prev_depth_yaw = self.odometry.yaw_unwrapped_rad
+        if tail_first and rear_depth is not None:
+            if self._prev_rear is not None:
+                dyaw = self.odometry.yaw_unwrapped_rad - self._prev_rear_yaw
+                depth_m = depth_scene_motion_m(self._prev_rear, rear_depth, REAR_DEPTH, dyaw)
+            self._prev_rear = rear_depth
+            self._prev_rear_yaw = self.odometry.yaw_unwrapped_rad
+        else:
+            if depth is not None and self._prev_depth is not None:
+                dyaw = self.odometry.yaw_unwrapped_rad - self._prev_depth_yaw
+                depth_m = depth_scene_motion_m(self._prev_depth, depth, self.camera, dyaw)
+            if depth is not None:
+                self._prev_depth = depth
+                self._prev_depth_yaw = self.odometry.yaw_unwrapped_rad
         translating = abs(self._commanded[0] + self._commanded[1]) > 0.4
         if not translating:
             # A sweep stop or a one-step spin is not the end of the
@@ -977,11 +1030,29 @@ class Explorer:
             return
         banned = self._ban_set()
         prefer = self._forward_preference()
-        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=banned, prefer_xy=prefer)
+        rooms = segment_map(self.grid.labels(), self.grid.res)
+        self.room_labels = rooms["labels"]
+        self.room_names = rooms["names"]
+        self.room_doors = rooms["doors"]
+        chosen = select_goal(
+            self.grid,
+            (x, y),
+            radius_m=ROBOT_RADIUS_M,
+            banned=banned,
+            prefer_xy=prefer,
+            rooms=rooms,
+        )
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
             self._banned.clear()
-            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), prefer_xy=prefer)
+            chosen = select_goal(
+                self.grid,
+                (x, y),
+                radius_m=ROBOT_RADIUS_M,
+                banned=set(),
+                prefer_xy=prefer,
+                rooms=rooms,
+            )
         if chosen is None:
             self._no_frontier()
             return
@@ -1080,11 +1151,15 @@ class Explorer:
             return 0.0, 0.0
         self._settle_check = self.t_s + 0.5
         x, y, _yaw = self.odometry.pose()
-        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set())
+        rooms = segment_map(self.grid.labels(), self.grid.res)
+        self.room_labels = rooms["labels"]
+        self.room_names = rooms["names"]
+        self.room_doors = rooms["doors"]
+        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set(), rooms=rooms)
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
             self._banned.clear()
-            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set())
+            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), rooms=rooms)
         if chosen is not None:
             self._log("frontier open, resuming")
             self._did_final_scan = False

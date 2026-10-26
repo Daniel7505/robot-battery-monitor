@@ -37,6 +37,7 @@ class BodyScript:
         self.leg_m = 0.80
         self.turn_rad = math.pi / 2.0
         self.backup_m_s = 0.18
+        self._stopped_s = 0.0
 
     def command(
         self,
@@ -45,7 +46,9 @@ class BodyScript:
         yaw_unwrapped: float,
         forward_gap_m: float | None,
         rear_gap_m: float | None,
+        dt_s: float = 0.008,
     ) -> tuple[float, float]:
+        self._dt = max(0.0, float(dt_s))
         if self.done:
             return 0.0, 0.0
         yaw = float(yaw_unwrapped)
@@ -91,18 +94,25 @@ class BodyScript:
             return 0.0, 0.0
         return wheel_speeds(speed, 0.0)
 
+    def _hold_stop(self) -> tuple[float, float]:
+        """Stay stopped long enough for the body to finish braking."""
+        self._stopped_s += self._dt
+        if self._stopped_s >= 1.2:
+            self.done = True
+        return 0.0, 0.0
+
     def _along(self, wanted: float, gap_m: float | None) -> tuple[float, float]:
         speed = self._cap(gap_m, wanted)
         if gap_m is not None and speed < 0.02:
-            self.done = True
-            return 0.0, 0.0
+            return self._hold_stop()
+        self._stopped_s = 0.0
         return wheel_speeds(speed, 0.0)
 
     def _backup(self, rear_gap_m: float | None) -> tuple[float, float]:
         speed = self._cap(rear_gap_m, self.backup_m_s)
         if rear_gap_m is not None and speed < 0.02:
-            self.done = True
-            return 0.0, 0.0
+            return self._hold_stop()
+        self._stopped_s = 0.0
         # No rear reading yet: creep, do not dive blind at the cruise speed.
         if rear_gap_m is None:
             speed = min(speed, 0.08)

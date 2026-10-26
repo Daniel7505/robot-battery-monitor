@@ -104,6 +104,20 @@ FLOOR_CAM = DepthCamera(
     max_range_m=2.0,
 )
 
+# Backup camera, yawed 180° so the optical axis is robot -X. Small and
+# short-range: it is only used while reversing or when the forward view
+# has nothing to track. Same numbers as the mappingSensors block.
+REAR_DEPTH = DepthCamera(
+    name="rear_depth",
+    translation=(-0.16, 0.0, 0.28),
+    rotation=(0.0, 0.0, 1.0, math.pi),
+    width=80,
+    height=48,
+    fov_rad=1.2,
+    min_range_m=0.08,
+    max_range_m=2.5,
+)
+
 # 80° HFOV, 320×200, pitched 0.0873 rad (5°) down. Same numbers as the proto.
 OAK_DEPTH = DepthCamera(
     name="oak_depth",

@@ -737,6 +737,34 @@ def test_radar_furniture_does_not_spin_an_open_shell():
     assert v > 0.05
 
 
+def test_visual_translation_does_not_write_yaw():
+    """Corner tracks may move x and y. Heading stays on the gyro."""
+    from src.mapping.fuse import MotionFusion
+
+    fuse = MotionFusion(floor=False, visual=True)
+    odom = WheelGyroOdometry()
+    interval = fuse._visual
+    interval.add(0.02, 0.02, 0.0)
+    note = fuse._apply_shift(
+        odom,
+        interval,
+        0.02,
+        0.004,
+        0.03,
+        ok=True,
+        quality=0.8,
+        kind="visual",
+        var_xy=0.008,
+        var_yaw=0.01,
+        pixel_shift=5.0,
+        expect_px=5.0,
+    )
+    assert note == "visual"
+    assert fuse.visual_applied_yaw == 0.0
+    assert abs(odom.yaw_unwrapped_rad) < 1e-9
+    assert abs(odom.x_m) > 0.0 or abs(odom.y_m) > 0.0
+
+
 def test_a_still_sample_does_not_pull_yaw():
     from src.mapping.fuse import MotionFusion
     from src.mapping.odometry import WheelGyroOdometry
@@ -1079,6 +1107,12 @@ def test_a_plunge_stops_when_the_forward_gap_closes():
     assert not script.done
     left, right = script.command(ds_m=0.01, yaw_unwrapped=0.0, forward_gap_m=0.03, rear_gap_m=None)
     assert left == 0.0 and right == 0.0
+    assert not script.done
+    for _ in range(200):
+        left, right = script.command(
+            ds_m=0.0, yaw_unwrapped=0.0, forward_gap_m=0.03, rear_gap_m=None, dt_s=0.008
+        )
+    assert left == 0.0 and right == 0.0
     assert script.done
 
 
@@ -1101,6 +1135,60 @@ def test_scenario_world_changes_only_the_butlerbot_pose():
     assert "translation 6.1 4.7 0" not in patched
     assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in patched
     assert "apartment_pose_logger" in patched
+
+
+def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
+    from src.mapping.rooms import crossing_bonus, segment_map
+
+    labels = np.full((40, 80), -1, dtype=np.int8)
+    labels[8:32, 4:28] = 0
+    labels[8:32, 36:70] = 0
+    labels[8:32, 28:36] = 1
+    labels[12:26, 28:36] = 0
+    info = segment_map(labels, 0.05)
+    assert info["doors"].any()
+    assert set(info["names"].values()) == {"room_1", "room_2"}
+    # A wide room opening into a walled corridor. The corridor is a metre
+    # wide and three metres long, so it is a hall, and the mouth is a door.
+    hall = np.full((60, 120), -1, dtype=np.int8)
+    hall[4:48, 4:44] = 0
+    hall[14:34, 44:104] = 0
+    hall[13, 44:104] = 1
+    hall[34, 44:104] = 1
+    named = segment_map(hall, 0.05)
+    assert "hall" in named["names"].values()
+    assert any(name.startswith("room_") for name in named["names"].values())
+    assert named["doors"].any()
+    # The apartment hall is only 1.02 m by 1.73 m. Length alone must still
+    # name it, after the mouth cells are cut out of the region.
+    apt = np.full((80, 90), -1, dtype=np.int8)
+    apt[10:70, 40:85] = 0
+    apt[30:50, 5:40] = 0
+    apt[29, 5:40] = 1
+    apt[50, 5:40] = 1
+    apt_named = segment_map(apt, 0.05)
+    assert "hall" in apt_named["names"].values()
+    assert any(name.startswith("room_") for name in apt_named["names"].values())
+    doors = np.zeros((4, 4), dtype=bool)
+    doors[1, 2] = True
+    regions = np.zeros((4, 4), dtype=np.int16)
+    regions[1, 0] = 1
+    regions[1, 3] = 2
+    bonus = crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": regions}, (1, 0))
+    assert bonus >= 3.0
+
+
+def test_the_rear_camera_looks_behind_the_tail():
+    from src.mapping.body import REAR_DEPTH
+    from src.mapping.depth_cloud import body_points, rear_clearance_m
+
+    image = np.full((REAR_DEPTH.height, REAR_DEPTH.width), np.inf)
+    image[REAR_DEPTH.height // 2, REAR_DEPTH.width // 2] = 1.0
+    hits, _floors, _origin = body_points(REAR_DEPTH, image, stride=1)
+    assert hits.shape[0] == 1
+    assert hits[0, 0] < -1.0
+    gap = rear_clearance_m(hits)
+    assert gap is not None and 0.8 < gap < 1.2
 
 
 def test_solids_include_the_closed_doors():

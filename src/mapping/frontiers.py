@@ -16,6 +16,7 @@ import numpy as np
 
 from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M
 from src.mapping.grid import OccupancyGrid
+from src.mapping.rooms import crossing_bonus
 
 _NEIGHBORS = (
     (1, 0, 1.0),
@@ -403,6 +404,7 @@ def select_goal(
     min_frontier_m: float = MIN_FRONTIER_M,
     banned: set[tuple[int, int]] | None = None,
     prefer_xy: tuple[float, float] | None = None,
+    rooms: dict | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -440,6 +442,7 @@ def select_goal(
             length += math.hypot(b[0] - a[0], b[1] - a[1])
         size_m = len(group) * grid.res
         score = size_m / (length + 0.25)
+        score *= crossing_bonus(path_cells, rooms, start)
         goal = grid.cell_center(*target)
         if prefer_xy is not None:
             dx = goal[0] - float(pose_xy[0])

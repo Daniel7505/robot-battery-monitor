@@ -254,6 +254,8 @@ def main() -> None:
         if device is not None:
             prox_devices[name] = device
     rgb = _enable(robot, "oak_rgb", int(_DEPTH_PERIOD_S * 1000))
+    rear_depth_dev = _enable(robot, "rear_depth", int(_DEPTH_PERIOD_S * 1000))
+    rear_rgb_dev = _enable(robot, "rear_rgb", int(_DEPTH_PERIOD_S * 1000))
     floor_cam = _enable(robot, "floor_cam", timestep) if use_floor else None
     rgb_w = int(rgb.getWidth()) if rgb is not None and hasattr(rgb, "getWidth") else OAK_DEPTH.width
     rgb_h = int(rgb.getHeight()) if rgb is not None and hasattr(rgb, "getHeight") else OAK_DEPTH.height
@@ -325,8 +327,18 @@ def main() -> None:
                 )
                 continue
             image = None
+            rear_image = None
+            rear_color = None
             if now + 1e-6 >= next_depth:
                 image = _depth_image(depth, width, height)
+                if rear_depth_dev is not None:
+                    rw = int(rear_depth_dev.getWidth()) if hasattr(rear_depth_dev, "getWidth") else 80
+                    rh = int(rear_depth_dev.getHeight()) if hasattr(rear_depth_dev, "getHeight") else 48
+                    rear_image = _depth_image(rear_depth_dev, rw, rh)
+                if rear_rgb_dev is not None:
+                    cw = int(rear_rgb_dev.getWidth()) if hasattr(rear_rgb_dev, "getWidth") else 80
+                    ch = int(rear_rgb_dev.getHeight()) if hasattr(rear_rgb_dev, "getHeight") else 48
+                    rear_color = _camera_gray(rear_rgb_dev, cw, ch)
                 next_depth = now + _DEPTH_PERIOD_S
             try:
                 rpy = imu.getRollPitchYaw()
@@ -350,6 +362,8 @@ def main() -> None:
                 proximity=_proximity(prox_devices),
                 floor=_camera_gray(floor_cam, floor_w, floor_h),
                 rgb=_camera_gray(rgb, rgb_w, rgb_h) if image is not None else None,
+                rear_depth=rear_image,
+                rear_rgb=rear_color,
             )
             left_motor.setVelocity(left_cmd)
             right_motor.setVelocity(right_cmd)
@@ -385,6 +399,7 @@ def main() -> None:
                 print(f"MAPPING time cap {max_s:.1f}s")
             if explorer.done and not saved:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
+                log.save_rooms(explorer.room_labels, explorer.room_names)
                 saved = True
                 print(
                     f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f}) "
@@ -395,6 +410,7 @@ def main() -> None:
                 _finish(folder, now)
             elif now >= next_save:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
+                log.save_rooms(explorer.room_labels, explorer.room_names)
                 next_save = now + 5.0
             if now >= next_note:
                 nose, left_c, right_c = explorer._last_clear
@@ -415,6 +431,7 @@ def main() -> None:
     finally:
         try:
             log.save_map(explorer.grid.labels(), explorer.grid.meta())
+            log.save_rooms(explorer.room_labels, explorer.room_names)
         except Exception:
             traceback.print_exc()
         log.close()

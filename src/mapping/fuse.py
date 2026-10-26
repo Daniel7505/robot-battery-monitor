@@ -43,6 +43,9 @@ class MotionFusion:
         self.use_visual = bool(visual)
         self.floor = FloorFlow(rng=rng)
         self.visual = VisualOdometry()
+        # Separate tracker. Mixing a rear frame into the forward tracker
+        # looks like a jump across the robot.
+        self.rear_visual = VisualOdometry()
         self.p_xy = 0.01
         self.p_yaw = 0.002
         self.slip_events = 0
@@ -77,6 +80,9 @@ class MotionFusion:
         depth=None,
         camera=None,
         rgb=None,
+        rear_depth=None,
+        rear_camera=None,
+        rear_rgb=None,
     ) -> str:
         """Fold this step into the pose. Returns ``slip``, ``floor``, ``visual``, or ``''``."""
         self.landmarks = None
@@ -96,6 +102,13 @@ class MotionFusion:
                 note = noted
         if self.use_visual and depth is not None and camera is not None:
             sample_v = self.visual.measure(depth, camera, rgb)
+            # A flat forward wall has no corners. The rear camera is the
+            # other view, used when this one cannot track.
+            forward_blind = sample_v is None or (not sample_v.ok and sample_v.reason != "still")
+            if forward_blind and rear_depth is not None and rear_camera is not None:
+                alt = self.rear_visual.measure(rear_depth, rear_camera, rear_rgb)
+                if alt is not None and (alt.ok or alt.reason == "still"):
+                    sample_v = alt
             if sample_v is None:
                 self._visual.clear()
             elif sample_v.reason == "still":
@@ -253,15 +266,13 @@ class MotionFusion:
             return ""
         gain_x = min(0.55, self.p_xy / (self.p_xy + var))
         gain_y = min(0.45, self.p_xy / (self.p_xy + var))
-        gain_w = 0.0 if kind != "visual" else min(0.40, self.p_yaw / (self.p_yaw + float(var_yaw)))
-        applied_w = gain_w * innov_w
-        if kind == "floor":
-            applied_w = 0.0
-        else:
-            self.visual_applied_yaw += applied_w
+        # Heading stays on the gyro. A visual yaw gain of 0.4 added about
+        # 0.005 rad on a 30 s square, which is several degrees over a
+        # 600 s run, and an unchanged wall used to pull the same way.
+        # Translation still comes from the camera and the floor.
+        applied_w = 0.0
         self._add_body(odom, gain_x * innov_x, gain_y * innov_y, applied_w)
         self.p_xy *= max(0.05, 1.0 - gain_x)
-        self.p_yaw *= max(0.05, 1.0 - max(gain_w, 0.0))
         if kind == "floor":
             self.floor_updates += 1
         else:

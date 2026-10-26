@@ -211,3 +211,18 @@ def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
         return float(np.min(x[mask]))
 
     return (_min(centre), _min(left), _min(right))
+
+
+def rear_clearance_m(hits_body: np.ndarray, *, tail_m: float = 0.16, half_m: float = 0.195) -> float | None:
+    """Air from the tail shell to the nearest point behind the robot."""
+    if hits_body is None or hits_body.size == 0:
+        return None
+    pts = np.asarray(hits_body, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[0] == 0:
+        return None
+    x = pts[:, 0]
+    y = pts[:, 1]
+    behind = (x < -float(tail_m)) & (np.abs(y) < float(half_m) + 0.05)
+    if not np.any(behind):
+        return None
+    return float(np.min(-x[behind]) - float(tail_m))

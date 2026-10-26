@@ -201,11 +201,12 @@ def line_up_with_openings(grid: OccupancyGrid, path_xy: list[tuple[float, float]
             lined.append(here)
             i += 1
             continue
-        dx, dy = center[0] - prev[0], center[1] - prev[1]
-        dist = math.hypot(dx, dy)
-        if dist > 0.50:
-            lined.append((center[0] - dx / dist * 0.40, center[1] - dy / dist * 0.40))
-        lined.append(center)
+        cx, cy, tx, ty = center
+        # Square up on the centre line before the nose reaches the jambs.
+        # 0.40 m was inside the turn, so the body was still angled when it
+        # met the 0.81 m opening.
+        lined.append((cx - tx * 0.75, cy - ty * 0.75))
+        lined.append((cx, cy))
         # Drop later points that belong to the same gap so the path does
         # not wander back to the jamb.
         i += 1
@@ -220,7 +221,7 @@ def _opening_center(
     prev: tuple[float, float],
     here: tuple[float, float],
     nxt: tuple[float, float],
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float, float] | None:
     tx, ty = nxt[0] - prev[0], nxt[1] - prev[1]
     if abs(tx) + abs(ty) < 1e-6:
         tx, ty = here[0] - prev[0], here[1] - prev[1]
@@ -237,7 +238,12 @@ def _opening_center(
     if gap < 0.55 or gap > 1.30:
         return None
     shift = 0.5 * (left - right)
-    return (here[0] + px * shift, here[1] + py * shift)
+    cx = here[0] + px * shift
+    cy = here[1] + py * shift
+    # Point the axis through the opening, in the direction of travel.
+    if (nxt[0] - prev[0]) * tx + (nxt[1] - prev[1]) * ty < 0.0:
+        tx, ty = -tx, -ty
+    return (cx, cy, tx, ty)
 
 
 def _march(

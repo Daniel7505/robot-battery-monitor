@@ -84,6 +84,14 @@ def main() -> None:
             f"{now:.4f},{float(pos[0]):.5f},{float(pos[1]):.5f},{float(pos[2]):.5f},{yaw:.6f}\n"
         )
         handle.flush()
+        # The mapper writes this file when it finishes. Only a supervisor
+        # can stop the world, and the mapper is not one.
+        if folder and os.path.isfile(os.path.join(folder, "mapping_done")):
+            handle.flush()
+            handle.close()
+            print(f"POSE LOG mapping finished, quitting t={now:.1f}s")
+            supervisor.simulationQuit(0)
+            return
 
 
 if __name__ == "__main__":

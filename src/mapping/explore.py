@@ -56,7 +56,7 @@ class Explorer:
         self._avoid_until = -1.0
         self._reverse_until = -1.0
         self._turn = SPIN_RAD_S
-        self._banned: set[tuple[int, int]] = set()
+        self._banned: dict[tuple[int, int], float] = {}
         self._fails: dict[tuple[int, int], int] = {}
         self._goal_since = 0.0
         self._stuck_anchor: tuple[float, float, float] | None = None
@@ -75,6 +75,11 @@ class Explorer:
         self._agree_at = 0.0
         self._scan_xy = None
         self._scan_at = -10.0
+        self._spin_then: str | None = None
+        self._did_final_scan = False
+        self._settle_since: float | None = None
+        self._settle_occ: int | None = None
+        self._settle_check = 0.0
         self.slip_events = 0
         self.frontiers_left = 0
 
@@ -95,7 +100,8 @@ class Explorer:
     ) -> tuple[float, float]:
         dt = max(0.0, float(dt_s))
         self.t_s += dt
-        if self._wheels_stalled(left_wheel_rad, right_wheel_rad, dt):
+        stalled = self._wheels_stalled(left_wheel_rad, right_wheel_rad, dt)
+        if stalled:
             self._note_contact()
         self._wheels = (float(left_wheel_rad), float(right_wheel_rad))
         ds = self.odometry.pending_translation(left_wheel_rad, right_wheel_rad)
@@ -125,14 +131,25 @@ class Explorer:
         if self._view_blind:
             # No return is not an open hallway. The nose is inside minRange.
             clearance = min(clearance, BLIND_CLEARANCE_M)
+        # Contact freezes the whole step, including the reverse. The stop
+        # cone is ordinary braking and still counts: freezing it would leave
+        # the pose a halt short of every wall. Stall, a blind view, and the
+        # backup are the contact.
+        in_contact = (
+            self._view_blind
+            or self.t_s < self._reverse_until
+            or self.t_s < self._recover_until
+            or stalled
+        )
         drop = False
-        if depth is not None or self._view_blind:
+        if depth is not None or self._view_blind or in_contact:
             before = self._motion.events
-            drop = self._motion.observe(dt, ds, clearance, blind=self._view_blind)
-            if drop:
+            slip_drop = self._motion.observe(dt, ds, clearance, blind=self._view_blind)
+            if slip_drop:
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
             if self._motion.events > before and self.phase == "go":
                 self._note_slip()
+            drop = slip_drop or in_contact
         self.odometry.update(
             left_wheel_rad,
             right_wheel_rad,
@@ -185,6 +202,8 @@ class Explorer:
                 self.path_xy = []
                 self._replan_at = self.t_s + 0.45
             self._avoid_until = self.t_s + 0.08
+        if self.phase == "settle":
+            return self._remember(self._settle())
         if self.phase == "spin":
             return self._remember(self._spin())
         if self.phase == "go":
@@ -197,11 +216,18 @@ class Explorer:
             self._spin_start = yaw_u
         if abs(yaw_u - self._spin_start) >= 2.0 * math.pi - 0.08:
             self._spin_start = None
+            then = self._spin_then
+            self._spin_then = None
             self.phase = "go"
             self._replan_at = -1.0
             self.goal_xy = None
             self._progress_t = self.t_s
             self._progress_xy = self.odometry.pose()[:2]
+            if then == "settle":
+                self._log("final scan finished")
+                self._plan()
+                if self.phase != "go":
+                    return 0.0, 0.0
             return self._go(False, 99.0)
         return wheel_speeds(0.0, SPIN_RAD_S)
 
@@ -222,14 +248,22 @@ class Explorer:
         actual = 0.5 * (abs(left_rad - self._wheels[0]) + abs(right_rad - self._wheels[1]))
         return actual < 0.30 * expected
 
+    def _log(self, message: str) -> None:
+        print(f"MAPPING t={self.t_s:.1f}s {message}", flush=True)
+
     def _note_contact(self) -> None:
         x, y, yaw = self.odometry.pose()
-        self.grid.mark_contact(x + math.cos(yaw) * 0.28, y + math.sin(yaw) * 0.28)
+        fresh = self.t_s >= self._reverse_until
+        # Tire outer corners. The old point 0.28 m down the centre line
+        # sat in the 0.81 m opening and stayed occupied.
+        self._reinforce_corners(x, y, yaw)
         # Back off the contact before turning. A spin in place stays in the pinch.
         self._reverse_until = self.t_s + 0.8
         self._avoid_until = self._reverse_until + 0.35
         self.path_xy = []
         self._replan_at = self._avoid_until
+        if fresh:
+            self._log("contact, backing up")
 
     def _note_slip(self) -> None:
         self.slip_events += 1
@@ -241,9 +275,12 @@ class Explorer:
         if self.t_s < self._recover_until:
             return
         x, y, yaw = self.odometry.pose()
+        self._log("backup")
         self._ban_current(immediate=True)
-        self._blacklist_xy(x + math.cos(yaw) * 0.50, y + math.sin(yaw) * 0.50, radius=12)
-        self.grid.mark_contact(x + math.cos(yaw) * 0.36, y + math.sin(yaw) * 0.36)
+        # A small, expiring patch on the jamb. Radius 12 sealed the 0.81 m
+        # opening and the ban never came back, so the bedroom was abandoned.
+        self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
+        self._reinforce_corners(x, y, yaw)
         self._reverse_until = self.t_s + 1.1
         self._avoid_until = self._reverse_until
         self._recover_until = self._reverse_until + 0.4
@@ -276,13 +313,15 @@ class Explorer:
         if self._goal_expired() or self._is_stuck():
             self._ban_current()
             self._plan()
+        if self.phase != "go":
+            return 0.0, 0.0
         if self.t_s < self._reverse_until:
             return wheel_speeds(-0.14, self._turn * 0.35)
         if self.t_s < self._avoid_until or blocked:
             return wheel_speeds(0.0, self._turn)
         if self.t_s >= self._replan_at or not self.path_xy:
             self._plan()
-        if self.done or not self.path_xy:
+        if self.phase != "go" or self.done or not self.path_xy:
             return 0.0, 0.0
         v, w, arrived = pure_pursuit(self.odometry.pose(), self.path_xy, arrive_m=ARRIVE_M)
         if clearance < 1.15:
@@ -301,11 +340,16 @@ class Explorer:
         self._replan_at = self.t_s + 1.0
         x, y, _yaw = self.odometry.pose()
         if depth > 6:
-            self._give_up()
+            self._no_frontier()
             return
-        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._banned)
+        banned = self._ban_set()
+        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=banned)
+        if chosen is None and self._banned:
+            self._log("no goal under bans, clearing them")
+            self._banned.clear()
+            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set())
         if chosen is None:
-            self._give_up()
+            self._no_frontier()
             return
         goal, path = chosen
         cell = self.grid.cell_of(goal[0], goal[1])
@@ -333,9 +377,13 @@ class Explorer:
         same = self.goal_xy is not None and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
         self.goal_xy, self.path_xy = goal, path
         self.frontiers_left = 1
+        self.phase = "go"
         if not same:
             self._goal_since = self.t_s
             self._stuck_anchor = (self.t_s, x, y)
+            self._did_final_scan = False
+            self._settle_since = None
+            self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
 
     def _goal_key(self) -> tuple[int, int] | None:
         if self.goal_xy is None:
@@ -343,23 +391,76 @@ class Explorer:
         cell = self.grid.cell_of(self.goal_xy[0], self.goal_xy[1])
         return cell
 
-    def _give_up(self) -> None:
+    def _no_frontier(self) -> None:
+        """No reachable frontier. Done only after a scan and a stopped hold."""
         if not self._confident():
             # A smeared map can hide every frontier. Look again once the
             # pose has stopped slipping instead of declaring the apartment done.
+            self._log("frontiers hidden, pose not trusted, not done")
             self.goal_xy = None
             self.path_xy = []
             self.phase = "go"
             self.done = False
+            self._did_final_scan = False
             self._reverse_until = max(self._reverse_until, self.t_s + 0.8)
             self._replan_at = self.t_s + 1.5
             self._progress_t = self._replan_at
             return
+        if not self._did_final_scan:
+            self._did_final_scan = True
+            self._log("no frontier, final scan")
+            self.goal_xy = None
+            self.path_xy = []
+            self.phase = "spin"
+            self._spin_start = None
+            self._spin_then = "settle"
+            self.done = False
+            return
         self.frontiers_left = 0
         self.goal_xy = None
         self.path_xy = []
-        self.phase = "done"
-        self.done = True
+        self.phase = "settle"
+        self.done = False
+        self._settle_since = self.t_s
+        self._settle_occ = int((self.grid.labels() == 1).sum())
+        self._settle_check = self.t_s
+        self._log("stopped, holding for a stable map")
+
+    def _settle(self) -> tuple[float, float]:
+        if self._settle_since is None:
+            self._settle_since = self.t_s
+            self._settle_occ = int((self.grid.labels() == 1).sum())
+        if self.t_s < self._settle_check:
+            return 0.0, 0.0
+        self._settle_check = self.t_s + 0.5
+        x, y, _yaw = self.odometry.pose()
+        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set())
+        if chosen is None and self._banned:
+            self._log("no goal under bans, clearing them")
+            self._banned.clear()
+            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set())
+        if chosen is not None:
+            self._log("frontier open, resuming")
+            self._did_final_scan = False
+            self.phase = "go"
+            goal, path = chosen
+            self.goal_xy, self.path_xy = goal, path
+            self._goal_since = self.t_s
+            self._stuck_anchor = (self.t_s, x, y)
+            self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
+            return 0.0, 0.0
+        count = int((self.grid.labels() == 1).sum())
+        if self._settle_occ is None or abs(count - self._settle_occ) > 8:
+            self._settle_occ = count
+            self._settle_since = self.t_s
+            self._log("map changed, reset done hold")
+            return 0.0, 0.0
+        if self.t_s - self._settle_since >= 4.0 and self._confident():
+            self.frontiers_left = 0
+            self.phase = "done"
+            self.done = True
+            self._log("done: no reachable frontier after a final scan, map stable while stopped")
+        return 0.0, 0.0
 
     def _ban_current(self, *, immediate: bool = False) -> None:
         key = self._goal_key()
@@ -371,20 +472,37 @@ class Explorer:
         count = self._fails.get(key, 0) + 1
         self._fails[key] = count
         if immediate or count >= 2:
-            # Drop the whole nearby edge, not one cell. A doorway frontier
-            # is dozens of cells and banning them one at a time never leaves.
-            self._blacklist(key, radius=12 if immediate else 4)
+            # A short ban, not a permanent disk. The opening has to be
+            # reachable again after the robot has backed up and looked.
+            self._blacklist(key, radius=5 if immediate else 3, ttl_s=12.0)
 
-    def _blacklist(self, cell: tuple[int, int], *, radius: int) -> None:
+    def _ban_set(self) -> set[tuple[int, int]]:
+        expired = [cell for cell, until in self._banned.items() if self.t_s >= until]
+        for cell in expired:
+            del self._banned[cell]
+        return set(self._banned)
+
+    def _blacklist(self, cell: tuple[int, int], *, radius: int, ttl_s: float = 12.0) -> None:
+        until = self.t_s + float(ttl_s)
+        n = 0
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
                 if dy * dy + dx * dx <= radius * radius:
-                    self._banned.add((cell[0] + dy, cell[1] + dx))
+                    key = (cell[0] + dy, cell[1] + dx)
+                    self._banned[key] = max(self._banned.get(key, 0.0), until)
+                    n += 1
+        self._log(f"blacklist {n} cells for {ttl_s:.0f}s around ({cell[0]},{cell[1]})")
 
-    def _blacklist_xy(self, x: float, y: float, *, radius: int) -> None:
+    def _reinforce_corners(self, x: float, y: float, yaw: float) -> None:
+        """Bump the two front tire corners, not the air in front of the nose."""
+        c, s = math.cos(yaw), math.sin(yaw)
+        for fx, fy in ((0.10, 0.20), (0.10, -0.20)):
+            self.grid.mark_contact(x + c * fx - s * fy, y + s * fx + c * fy)
+
+    def _blacklist_xy(self, x: float, y: float, *, radius: int, ttl_s: float = 12.0) -> None:
         cell = self.grid.cell_of(x, y)
         if cell is not None:
-            self._blacklist(cell, radius=radius)
+            self._blacklist(cell, radius=radius, ttl_s=ttl_s)
 
     def _goal_expired(self) -> bool:
         return self.goal_xy is not None and (self.t_s - self._goal_since) > 40.0

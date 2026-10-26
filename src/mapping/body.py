@@ -18,10 +18,15 @@ WHEEL_TRACK_M = 0.34
 # Software stand-in for a 4096-count encoder. The shared PositionSensors
 # stay at infinite resolution so warehouse energy and ABS are unchanged.
 ENCODER_RESOLUTION_RAD = 0.0015
-# Planning inflation. Hubs are at ±0.17 m. 0.26 m still leaves a centre
-# line through the 0.81 m bedroom door, and keeps the body off a sofa
-# that is only one cell thick in the grid.
-ROBOT_RADIUS_M = 0.26
+# Planning inflation. Hubs sit at ±0.17 m and the tire is 0.05 m wide, so
+# the body is 0.195 m from the centreline to the outside of a tire.
+# 0.26 m of inflation leaves about 0.29 m of traversable width in an
+# 0.81 m opening, and one extra occupied cell on a jamb closes it. That
+# is the bedroom doorway the robot clipped on every Webots run. 0.20 m
+# is the tire plus a centimetre, and still leaves a centre line after
+# that extra cell. Furniture is handled by the stop range, not by sealing
+# the opening.
+ROBOT_RADIUS_M = 0.20
 GRID_RESOLUTION_M = 0.05
 GRID_SIZE_M = 20.0
 MIN_FRONTIER_M = 0.30

@@ -30,9 +30,10 @@ class OccupancyGrid:
         half = 0.5 * self.n * self.res
         self.origin = (-half, -half)
         self.log = np.zeros((self.n, self.n), dtype=np.float32)
-        # Contact marks (a stalled wheel) stay occupied. Depth inside the
-        # camera's minimum range cannot see them, so a later free ray
-        # would otherwise erase the only evidence of the hit.
+        # A contact can reinforce a wall the camera already sees. It does
+        # not invent one: a mark dropped ahead of a side-clip lands in the
+        # doorway, and a permanent cell there closes the opening. Free
+        # rays are allowed to wear a latch back down.
         self.latch = np.zeros((self.n, self.n), dtype=bool)
         self.l_occ = 0.85
         self.l_free = -0.35
@@ -94,11 +95,18 @@ class OccupancyGrid:
                 self.log[r, c] = min(float(self.log[r, c]), self.free_thresh - 0.1)
 
     def mark_contact(self, x: float, y: float) -> None:
-        """Latch the cell where a commanded drive did not move the wheels."""
+        """Reinforce a cell the depth camera has already called a wall.
+
+        Unknown and free cells are left alone. The tire hits the jamb
+        while the point straight ahead is the opening, and latching that
+        point shut the bedroom door on the real runs.
+        """
         cell = self.cell_of(x, y)
         if cell is None:
             return
         r, c = cell
+        if float(self.log[r, c]) < self.occ_thresh:
+            return
         self.log[r, c] = max(float(self.log[r, c]), 3.2)
         self.latch[r, c] = True
 
@@ -112,10 +120,12 @@ class OccupancyGrid:
         self._paint(origin_xy, floors_xy, occupied=False, mark=mark)
         self._paint(origin_xy, hits_xy, occupied=True, mark=mark)
         log = self.log.ravel()
-        latch = self.latch.ravel()
-        log[(mark == 1) & ~latch] += self.l_free
+        # A latched contact decays under a free ray. A real wall is
+        # repainted by the hit, which outvotes the free mark in this frame.
+        log[mark == 1] += self.l_free
         log[mark == 2] += self.l_occ
         np.clip(log, self.l_min, self.l_max, out=log)
+        self.latch[self.log < self.occ_thresh] = False
 
     def _paint(
         self,

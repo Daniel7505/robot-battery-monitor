@@ -177,6 +177,13 @@ def main() -> None:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 saved = True
                 print(f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f})")
+                # This controller cannot stop the world. The pose logger
+                # watches this file and quits.
+                try:
+                    with open(os.path.join(folder, "mapping_done"), "w", encoding="utf-8") as handle:
+                        handle.write(f"{now:.3f}\n")
+                except OSError:
+                    pass
             elif now >= next_save:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 next_save = now + 5.0

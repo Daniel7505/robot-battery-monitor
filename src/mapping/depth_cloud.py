@@ -146,15 +146,16 @@ def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
 
     A miss (no points) is a large range, so the side with no return is
     treated as open. Centre is the corridor the body will actually enter
-    (|y| < 0.20 m), wide enough to see a sofa beside the nose and narrow
-    enough that a centred 0.81 m door still reads as open.
+    (|y| < 0.28 m). That is just wider than the tires (0.195 m) so a jamb
+    the body would clip is in the stop cone, and still narrower than half
+    of a centred 0.81 m door, so the opening itself reads as open.
     """
     if hits_body.size == 0:
         return (99.0, 99.0, 99.0)
     x = hits_body[:, 0]
     y = hits_body[:, 1]
     front = (x > 0.15) & (x < 2.5)
-    centre = front & (np.abs(y) < 0.20)
+    centre = front & (np.abs(y) < 0.28)
     left = front & (y >= 0.05)
     right = front & (y <= -0.05)
 

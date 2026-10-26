@@ -19,13 +19,14 @@ from eval.score_apartment_map import score_labels, warp_to_ground_truth
 from src.mapping.body import (
     ENCODER_RESOLUTION_RAD,
     OAK_DEPTH,
+    ROBOT_RADIUS_M,
     WHEEL_RADIUS_M,
     WHEEL_TRACK_M,
     DepthCamera,
 )
 from src.mapping.depth_cloud import body_points
 from src.mapping.drive import pure_pursuit, wheel_speeds
-from src.mapping.frontiers import dilate_disk, frontier_mask, line_up_with_openings, select_goal
+from src.mapping.frontiers import astar, dilate_disk, frontier_mask, line_up_with_openings, select_goal, traversable
 from src.mapping.scan_match import scan_fit
 from src.mapping.grid import OccupancyGrid
 from src.mapping.noise import noisy_yaw_rate
@@ -175,13 +176,16 @@ def test_done_rejects_a_scan_that_fits_somewhere_else():
     bot._scan_xy = on_wall + np.array([0.80, 0.0])
     bot._scan_at = bot.t_s
     assert scan_fit(bot.grid, bot._scan_xy) == "disagree"
-    bot._give_up()
+    bot._no_frontier()
     assert not bot.done
+    assert bot.phase == "go"
     bot._scan_xy = on_wall
     bot._confident_after = 0.0
+    bot._scan_at = bot.t_s
     assert scan_fit(bot.grid, bot._scan_xy) == "support"
-    bot._give_up()
-    assert bot.done
+    bot._no_frontier()
+    assert not bot.done
+    assert bot.phase == "spin"
 
 
 def test_path_aims_through_the_middle_of_a_doorway():
@@ -207,6 +211,79 @@ def test_path_aims_through_the_middle_of_a_doorway():
     through = [p for p in path if p[0] > 0.9]
     assert through
     assert max(abs(p[1]) for p in through) < 0.20
+
+
+def test_narrow_opening_stays_passable_after_a_thick_jamb():
+    """0.81 m between jambs, each smeared 0.15 m into the opening.
+
+    That is a few contact marks on the frame. 0.26 m of inflation leaves
+    no path. The tire is 0.195 m from the centre, and 0.20 m still has one.
+    """
+
+    def _path(radius: float):
+        grid = OccupancyGrid()
+        _fill(grid, -1.5, -0.2, 1.5, 1.1, grid.l_min)
+        _fill(grid, -0.2, -0.5, 0.3, 0.15, grid.l_max)
+        _fill(grid, -0.2, 0.66, 0.3, 1.4, grid.l_max)
+        free = traversable(grid.labels(), grid.res, radius)
+        start = grid.cell_of(-0.8, 0.40)
+        goal = grid.cell_of(0.8, 0.40)
+        assert start is not None and goal is not None
+        return astar(free, start, goal, step_cost=grid.res)
+
+    assert _path(0.26) is None
+    assert _path(ROBOT_RADIUS_M) is not None
+
+
+def test_a_doorway_ban_expires_and_does_not_finish_the_run():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.2)
+    cell = bot.grid.cell_of(1.1, 0.0)
+    assert cell is not None
+    bot.t_s = 5.0
+    bot._blacklist(cell, radius=2, ttl_s=12.0)
+    assert cell in bot._ban_set()
+    bot.t_s = 17.1
+    assert cell not in bot._ban_set()
+    # A ban that covers the frontier is cleared and the goal comes back.
+    # It must not declare the run finished.
+    bot.t_s = 20.0
+    bot._blacklist(bot.grid.cell_of(0.0, 0.0), radius=40, ttl_s=30.0)
+    bot.phase = "go"
+    bot._confident_after = 0.0
+    bot._plan()
+    assert not bot.done
+    assert bot.goal_xy is not None
+
+
+def test_done_requires_a_stopped_hold_after_the_frontiers_are_gone():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.log[:] = bot.grid.l_min
+    bot.phase = "go"
+    bot._confident_after = 0.0
+    bot._plan()
+    assert not bot.done
+    assert bot.phase == "spin"
+    left = right = 0.0
+    dt = 0.05
+    for _ in range(500):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.70,
+            depth=None,
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        if bot.done:
+            break
+    assert bot.done
+    assert bot.phase == "done"
 
 
 def _fill(grid: OccupancyGrid, x0: float, y0: float, x1: float, y1: float, log: float) -> None:
@@ -314,11 +391,32 @@ def test_dilation_blocks_a_neighbour_cell():
 
 def test_contact_mark_survives_a_later_free_ray():
     grid = OccupancyGrid()
-    grid.mark_contact(0.40, 0.0)
     cell = grid.cell_of(0.40, 0.0)
     assert cell is not None
+    # Only a cell the camera already called a wall can be reinforced.
+    # One free ray does not wipe it. A run of free rays does, so a mark
+    # that landed in an opening cannot stay shut.
+    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
+    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
+    grid.mark_contact(0.40, 0.0)
+    assert grid.labels()[cell] == 1
     grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
     assert grid.labels()[cell] == 1
+    for _ in range(8):
+        grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
+    assert grid.labels()[cell] != 1
+    assert not grid.latch[cell]
+
+
+def test_contact_does_not_invent_a_wall_in_open_space():
+    grid = OccupancyGrid()
+    grid.mark_contact(0.28, 0.0)
+    cell = grid.cell_of(0.28, 0.0)
+    assert cell is not None and grid.labels()[cell] == -1
+    grid.log[cell] = grid.l_min
+    grid.mark_contact(0.28, 0.0)
+    assert grid.labels()[cell] == 0
+    assert not grid.latch[cell]
 
 
 def test_stalled_hubs_turn_away_and_mark_the_contact():
@@ -345,8 +443,9 @@ def test_stalled_hubs_turn_away_and_mark_the_contact():
         depth=None,
     )
     assert left < 0.0 and right < 0.0
-    cell = bot.grid.cell_of(0.28, 0.0)
-    assert cell is not None and bot.grid.labels()[cell] == 1
+    # The stall must not drop a wall down the centre of a doorway.
+    ahead = bot.grid.cell_of(0.28, 0.0)
+    assert ahead is not None and bot.grid.labels()[ahead] != 1
 
 
 def test_pure_pursuit_turns_left_for_a_left_goal():

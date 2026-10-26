@@ -147,9 +147,14 @@ class WheelGyroOdometry:
         Taking it used to drag 0.001 up to 0.009 during a press, and the
         heading then ran away for the rest of the run.
         """
+        # A shove during a press is several times this far from the rest
+        # rate. Reject it after the startup calibration. Ordinary rest
+        # noise stays inside the gate and is still followed quickly: a
+        # slow follow left the bias low after a pause and the shell
+        # clipped the hall wall.
         if self.still_s >= 4.0 and abs(rate_in - self.bias_rad_s) > 0.003:
             return
-        alpha = min(1.0, max(0.0, dt) * (0.8 if self.still_s < 4.0 else 0.2))
+        alpha = min(1.0, max(0.0, dt) * 0.8)
         self.bias_rad_s += alpha * (rate_in - self.bias_rad_s)
         self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
 

@@ -143,10 +143,6 @@ class Explorer:
             )
             clearance, left_clear, right_clear = forward_clearance(hits)
             self._held_clear = (clearance, left_clear, right_clear)
-        elif self._held_clear is not None:
-            # Depth arrives at 10 Hz. Dropping it on the steps in between
-            # made the shell look open and the speed cap ignored the wall.
-            clearance, left_clear, right_clear = self._held_clear
             # Two empty frames, not one glitch. Held until a usable frame
             # arrives, including the steps between depth pictures.
             if blind_fraction(self.camera, depth, stride=self.stride) >= BLIND_VIEW_FRACTION:
@@ -156,6 +152,11 @@ class Explorer:
                 self._view_blind = False
             if self._blind_frames >= 2:
                 self._view_blind = True
+            prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
+        elif self._held_clear is not None:
+            # Depth arrives at 10 Hz. Dropping it on the steps in between
+            # made the shell look open and the speed cap ignored the wall.
+            clearance, left_clear, right_clear = self._held_clear
             prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
         else:
             prefer = self._turn

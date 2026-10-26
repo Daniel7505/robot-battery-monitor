@@ -262,6 +262,62 @@ Door G wall-contact rows are again 0, 0, and 0. The stock contacts are 540 rows 
 
 The success bar was not met. No seed reached the bedroom. The stock seed has wall-press episodes longer than 2 s. Final position error is 1.39 m, 1.24 m, and 0.51 m, all above 0.3 m. End heading is above 5° on the stock and +0.40 seeds. An intermediate revision (`5f5feb4`) had no wall-press episode longer than 2 s (13, 0, and 0 contact rows; longest 0.08 s) and final position error 0.68 m, 0.87 m, and 0.54 m, and the −0.35 seed reached the hall at t = 550 s. It also missed the bedroom and the 0.3 m position bar. The radar change on `146611c` is what brought the 3.69 s press back.
 
+`python3 eval/run_mapping_scenarios.py` runs five headless checks (door crossing, tail escape, closed loop, head-on stop, backup). The robot is not given the spawn. On `c407498` the loop passed (heading +0.46°, position 1.2 cm) and the tail escaped with a 0.03 s press. The bubble quit while the body was still at 0.24 m/s, and the door run never entered the hall. The first tail judge failed at a 0.42 m walk by summing a pin-snap sawtooth; the net chord while the body stayed inside a 3 cm box was 2.3 cm. On `38444db` all five pass. The door run from a lined-up spawn reached x = 1.22 and finished at (1.51, 2.36) on the bedroom side, contacts 0. The closed loop finished at +0.15° and 1.1 cm, with visual yaw held at 0. The head-on stop and the backup both ended at 0 m/s short of the wall.
+
+Heading on the open square was already under half a degree once still-image samples stopped writing yaw. The remaining long-run pull was a visual yaw gain of about 0.4, about +0.005 rad on that square. `38444db` leaves heading on the gyro. A rear depth camera covers reverse, the tail pin, and visual tracking when the forward view has no corners. Frontiers past a doorway the robot segmented itself score higher, and a crossing in front of the robot outranks a larger crossing behind it. The map is labelled `room_1`, `room_2`, … with no prior room count. A passage is named `hall` only when the robot's own grid shows one. The scorer is the only step that compares those labels with the four rooms and the hallway.
+
+Three headless seeds of that stack on `38444db`. Heading error in degrees:
+
+| t (s) | Stock | +0.40 rad | −0.35 rad |
+|---:|---:|---:|---:|
+| 60 | −1.40 | −4.97 | +3.37 |
+| 120 | −1.63 | −4.82 | +4.06 |
+| 180 | −0.23 | −3.88 | +3.81 |
+| 240 | +0.52 | −4.13 | +3.16 |
+| 300 | +0.45 | −4.31 | +3.85 |
+| 360 | −0.12 | −4.17 | +5.86 |
+| 420 | −0.13 | −4.89 | +4.58 |
+| 480 | −1.71 | −4.32 | +5.18 |
+| 540 | −0.30 | −4.10 | +4.12 |
+| 600 | −0.53 | −6.00 | +4.30 |
+
+| | Stock | +0.40 rad | −0.35 rad |
+|---|---:|---:|---:|
+| Occupancy IoU | 0.170 | 0.130 | 0.134 |
+| Free-space IoU | 0.658 | 0.605 | 0.652 |
+| Coverage | 94.4% | 88.1% | 94.6% |
+| Wall error | 22.4 cm | 20.4 cm | 24.6 cm |
+| Final position error | 0.43 m | 0.34 m | 0.60 m |
+| Median position error | 0.34 m | 0.25 m | 0.38 m |
+| Floor slip lines | 101 | 1 | 4 |
+| End heading error | −0.53° | −6.00° | +4.30° |
+| Visual yaw applied | 0 | 0 | 0 |
+| Door G | hall at 568 s, ended in the hall (min x 2.88) | hall at 138 s, ended in the living room (min x 2.63) | hall at 37 s, bath at 122 s, ended in the bath (min x 0.57) |
+| Bedroom | not entered | not entered | not entered |
+| Stopped | time cap | time cap | time cap |
+| Sweep checks | 66595 | 68159 | 53634 |
+| Sweep rejected | 9983 (15.0%) | 3724 (5.5%) | 16643 (31.0%) |
+| Wider arc | 3331 | 1232 | 7481 |
+| Lined up in place | 4133 | 14623 | 2449 |
+| Straightened | 2360 | 1661 | 854 |
+| Stopped by the sweep | 3302 (5.0%) | 776 (1.1%) | 7550 (14.1%) |
+| Wall-contact rows | 27 | 0 | 136 |
+| Longest wall press | 0.39 s | 0 | 0.26 s |
+
+The stock 27 contact rows are one 0.39 s episode at x 4.72–4.77 m, y 1.43–1.48 m. The −0.35 seed's 136 rows are 41 episodes, the longest 0.26 s, at x 1.63–1.64 m, y 2.12 m, inside the bath. No episode is longer than 2 s. The −0.35 seed is the first of these runs to enter the bath. No seed's body entered the bedroom. The success bar was not met: position error is above 0.3 m on every seed, and the +0.40 end heading is 6.0°.
+
+Rooms the scorer matched at overlap 0.15 or better. The label is the robot's own name for the region that covered that floor. Living, kitchen, and the bedroom floor share `room_1` on every seed, and the body never stood in the bedroom, so that overlap is one segment warped across those floors.
+
+| Floor | Stock | +0.40 rad | −0.35 rad |
+|---|---|---|---|
+| Living | room_1 (0.95) | room_1 (0.94) | room_1 (0.97) |
+| Kitchen | room_1 (0.78) | room_1 (0.70) | room_1 (0.86) |
+| Bedroom | room_1 (0.92) | room_1 (0.89) | room_1 (0.81) |
+| Bath | room_5 (0.37) | room_3 (0.36) | room_2 (0.42) |
+| Hall | room_2 (0.57) | room_3 (0.49) | room_1 (0.16) |
+
+Distinct labels: stock `room_1`–`room_5`, +0.40 `room_1`–`room_3`, −0.35 `room_1` and `room_2`. None of the three maps used the name `hall`. The stock hall is its own region (`room_2`). On +0.40 the hall shares `room_3` with the bath. On −0.35 the hall's overlap is 0.16 with the main-room label.
+
 Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
 
 ---

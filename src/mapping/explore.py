@@ -875,7 +875,10 @@ class Explorer:
             self._side_sign = side
             self._side_since = self.t_s
             return
-        if self.t_s - self._side_since >= 0.28:
+        # A third of a second is a brush on the way through a doorway.
+        # The long presses are the shell sitting still, which the
+        # zero-velocity update backs out of.
+        if self.t_s - self._side_since >= 0.45:
             self._start_side_escape(side, view)
 
     def _side_opened(self, view: BubbleView) -> bool:

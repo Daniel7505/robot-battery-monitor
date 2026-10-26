@@ -1247,6 +1247,9 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     regions[1, 3] = 2
     bonus = crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": regions}, (1, 0))
     assert bonus >= 3.0
+    # The same door speck inside one region is not a new place.
+    same = np.ones((4, 4), dtype=np.int16)
+    assert crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": same}, (1, 0)) == 1.0
     # An 0.81 m opening is a thin throat. Once the narrow cells run the
     # full width of the gap, the old 0.80 m length cap called it a corridor.
     wide = np.full((60, 90), -1, dtype=np.int8)
@@ -1257,6 +1260,57 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     split = segment_map(wide, 0.05)
     assert split["doors"].any()
     assert sum(1 for name in split["names"].values() if name.startswith("room_")) >= 2
+
+
+def test_the_opening_ahead_beats_a_long_frontier_beside_it():
+    """A doorway into another region outscores the long unknown edge of this one."""
+    from src.mapping.rooms import segment_map
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.15, -2.0, 3.2, 2.0, grid.l_min)
+    _fill(grid, -0.45, -2.0, -0.15, 2.0, grid.l_max)
+    _fill(grid, -0.45, -0.40, -0.15, 0.40, grid.l_min)
+    _fill(grid, -2.4, -0.45, -0.45, 0.45, grid.l_min)
+    rooms = segment_map(grid.labels(), grid.res)
+    assert len(set(rooms["names"])) >= 2
+    chosen = select_goal(
+        grid,
+        (0.6, 0.0),
+        heading_xy=(-1.0, 0.0),
+        rooms=rooms,
+    )
+    assert chosen is not None
+    goal, _path = chosen
+    assert goal[0] < 0.0
+
+
+def test_a_smeared_threshold_is_still_a_way_into_the_room_beyond():
+    """Free space past a thin occupied smear is a goal, not a wall to route around."""
+    grid = OccupancyGrid()
+    _fill(grid, -0.7, 0.0, 0.7, 1.75, grid.l_min)
+    # What a depth ray through the door actually paints: the opening,
+    # then the room beyond it. The threshold itself is occupied.
+    _fill(grid, -0.40, 2.25, 0.40, 2.90, grid.l_min)
+    _fill(grid, -1.8, 2.90, 1.8, 5.2, grid.l_min)
+    _fill(grid, -1.8, 1.80, -0.45, 2.90, grid.l_max)
+    _fill(grid, 0.45, 1.80, 1.8, 2.90, grid.l_max)
+    _fill(grid, -0.45, 1.85, 0.45, 2.20, grid.l_max)
+    chosen = select_goal(grid, (0.0, 1.1), heading_xy=(0.0, 1.0))
+    assert chosen is not None
+    goal, _path = chosen
+    assert goal[1] > 2.2
+
+
+def test_seen_through_a_doorway_is_not_a_visited_room():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.room_labels = np.zeros((bot.grid.n, bot.grid.n), dtype=np.int16)
+    bot.room_labels[80:140, 80:140] = 1
+    bot.visited[100, 100] = True
+    labels = bot.observed_room_labels()
+    assert labels[100, 100] == 1
+    assert labels[120, 120] == 0
 
 
 def test_the_rear_camera_looks_behind_the_tail():

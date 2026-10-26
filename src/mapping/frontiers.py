@@ -396,6 +396,112 @@ def _nearest_free(free: np.ndarray, row: int, col: int, max_cells: int = 40) -> 
     return int(ys[i]), int(xs[i])
 
 
+def severed_mouths(
+    labels: np.ndarray,
+    res: float,
+    radius_m: float,
+    here: tuple[int, int],
+) -> list[tuple[tuple[int, int], tuple[int, int], float]]:
+    """Free space the shell cannot reach, just past a thin occupied gap.
+
+    Depth through a doorway paints the next room free and then a smear
+    closes the threshold. That room has no frontier, so the planner walks
+    the long way around. Each item is the reachable cell at the mouth,
+    a cell on the far side, and the far side's area in square metres.
+    """
+    trav = traversable(labels, res, radius_m)
+    height, width = labels.shape
+    start = _nearest_free(trav, here[0], here[1], max_cells=30)
+    if start is None:
+        return []
+    reachable = np.zeros_like(trav)
+    stack = [start]
+    reachable[start] = True
+    while stack:
+        y, x = stack.pop()
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if 0 <= ny < height and 0 <= nx < width and trav[ny, nx] and not reachable[ny, nx]:
+                reachable[ny, nx] = True
+                stack.append((ny, nx))
+    limit = 16
+    dist = np.full((height, width), 99, dtype=np.int16)
+    band: list[tuple[int, int]] = []
+    for y, x in zip(*np.nonzero(reachable)):
+        dist[int(y), int(x)] = 0
+        band.append((int(y), int(x)))
+    head = 0
+    while head < len(band):
+        y, x = band[head]
+        head += 1
+        base = int(dist[y, x])
+        if base >= limit:
+            continue
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if ny < 0 or nx < 0 or ny >= height or nx >= width:
+                continue
+            if dist[ny, nx] <= base + 1:
+                continue
+            dist[ny, nx] = base + 1
+            band.append((ny, nx))
+    free = (labels == 0) & ~reachable & (dist > 0) & (dist <= limit)
+    if not np.any(free):
+        return []
+    found: list[tuple[tuple[int, int], tuple[int, int], float]] = []
+    seen = np.zeros(labels.shape, dtype=bool)
+    ys, xs = np.nonzero(free)
+    for y0, x0 in zip(ys.tolist(), xs.tolist()):
+        if seen[y0, x0]:
+            continue
+        pile = [(int(y0), int(x0))]
+        seen[y0, x0] = True
+        cells: list[tuple[int, int]] = []
+        while pile:
+            y, x = pile.pop()
+            cells.append((y, x))
+            for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                if ny < 0 or nx < 0 or ny >= height or nx >= width:
+                    continue
+                if seen[ny, nx] or reachable[ny, nx] or labels[ny, nx] != 0:
+                    continue
+                seen[ny, nx] = True
+                pile.append((ny, nx))
+        area = len(cells) * res * res
+        if area < 1.0:
+            continue
+        dists = [int(dist[y, x]) for y, x in cells]
+        min_d = min(dists)
+        if min_d < 1 or min_d > limit:
+            continue
+        near = [(y, x) for y, x in cells if int(dist[y, x]) <= min_d + 2]
+        if len(near) < 3:
+            continue
+        rows = [p[0] for p in near]
+        cols = [p[1] for p in near]
+        span = max(max(rows) - min(rows), max(cols) - min(cols)) * res
+        # A doorway is about a metre across. The rim of a whole room is longer.
+        if span < 0.45 or span > 1.45:
+            continue
+        mouth = None
+        beyond = None
+        best = 10**9
+        for y, x in near:
+            for dy in range(-(min_d + 1), min_d + 2):
+                for dx in range(-(min_d + 1), min_d + 2):
+                    ny, nx = y + dy, x + dx
+                    if ny < 0 or nx < 0 or ny >= height or nx >= width or not reachable[ny, nx]:
+                        continue
+                    dd = dy * dy + dx * dx
+                    if dd < best:
+                        best = dd
+                        mouth = (ny, nx)
+                        beyond = (y, x)
+        if mouth is None or beyond is None:
+            continue
+        found.append((mouth, beyond, area))
+    found.sort(key=lambda item: item[2], reverse=True)
+    return found[:4]
+
+
 def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     height, width = doors.shape
     step = max(1, len(group) // 8)
@@ -491,6 +597,40 @@ def select_goal(
             # entry) is still in the new room, so only the rear half loses.
             if ahead < -0.05:
                 score *= 0.25
+        if best is None or score > best[0]:
+            best = (score, goal, pts)
+    # A room already painted free, with the threshold smeared shut, is
+    # not a frontier. Score it by its area and aim through the gap.
+    for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
+        if mouth in banned:
+            continue
+        path_cells = astar(free, start, mouth, step_cost=grid.res)
+        if not path_cells:
+            continue
+        pts = [grid.cell_center(*rc) for rc in path_cells]
+        length = 0.0
+        for a, b in zip(pts, pts[1:]):
+            length += math.hypot(b[0] - a[0], b[1] - a[1])
+        far = grid.cell_center(*beyond)
+        length += math.hypot(far[0] - pts[-1][0], far[1] - pts[-1][1])
+        score = area / (length + 0.25) * 6.0
+        goal = far
+        if heading_xy is not None:
+            dx = goal[0] - float(pose_xy[0])
+            dy = goal[1] - float(pose_xy[1])
+            norm = math.hypot(dx, dy) or 1.0
+            hx, hy = float(heading_xy[0]), float(heading_xy[1])
+            hn = math.hypot(hx, hy) or 1.0
+            if (dx * hx + dy * hy) / (norm * hn) > 0.6:
+                score *= 3.0
+        if prefer_xy is not None:
+            dx = goal[0] - float(pose_xy[0])
+            dy = goal[1] - float(pose_xy[1])
+            norm = math.hypot(dx, dy) or 1.0
+            ahead = (dx * prefer_xy[0] + dy * prefer_xy[1]) / norm
+            if ahead < -0.05:
+                score *= 0.25
+        pts = [*pts, far]
         if best is None or score > best[0]:
             best = (score, goal, pts)
     if best is None:

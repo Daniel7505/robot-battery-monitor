@@ -169,6 +169,7 @@ class Explorer:
         self._opening_holds = 0
         self._approach_since: float | None = None
         self._gentle_side = 0
+        self._gap_looks = 0
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
@@ -464,6 +465,7 @@ class Explorer:
             self._progress_t = self.t_s
             self._opening_holds = 0
             self._gentle_side = 0
+            self._gap_looks = 0
         # Both shoulders on a frame, and the nose still looking through
         # it, is a doorway approach. A few seconds of lining up is not a
         # stall, and the recovery used to blacklist the opening. The same
@@ -893,6 +895,77 @@ class Explorer:
             return "yaw"
         return ""
 
+    def _map_gap_heading(self) -> float | None:
+        """Yaw rate toward a short smeared threshold with free space beyond.
+
+        A long wall also has rooms on both sides. The threshold is the
+        short one, about a metre of thin occupied cells. Already facing
+        it returns nothing, so a stall against a real wall still backs out.
+        """
+        x, y, yaw = self.odometry.pose()
+        labels = self.grid.labels()
+        best_dist = 1e9
+        best_heading = None
+        for index in range(16):
+            ang = index * math.pi / 8.0
+            if abs(wrap_rad(ang - yaw)) < 0.5:
+                continue
+            dx, dy = math.cos(ang), math.sin(ang)
+            hit = None
+            for step in range(1, 18):
+                dist = step * self.grid.res
+                cell = self.grid.cell_of(x + dx * dist, y + dy * dist)
+                if cell is None:
+                    break
+                kind = int(labels[cell])
+                if kind == 1 and hit is None and dist >= 0.12:
+                    hit = dist
+                elif hit is not None and kind == 0 and dist <= hit + 0.45:
+                    span = self._thin_opening_span(
+                        labels, x + dx * hit, y + dy * hit, dx, dy, -dy, dx
+                    )
+                    if 0.45 <= span <= 1.45 and hit < best_dist:
+                        best_dist = hit
+                        best_heading = ang
+                    break
+                elif hit is not None and dist > hit + 0.45:
+                    break
+        if best_heading is None:
+            return None
+        turn = wrap_rad(best_heading - yaw)
+        if abs(turn) < 0.4:
+            return None
+        return math.copysign(0.55, turn)
+
+    def _thin_opening_span(
+        self,
+        labels,
+        x: float,
+        y: float,
+        dx: float,
+        dy: float,
+        px: float,
+        py: float,
+    ) -> float:
+        """How far a thin occupied strip runs while free space sits just past it."""
+        res = self.grid.res
+        total = 0.0
+        for sign in (1.0, -1.0):
+            side = 0.0
+            for step in range(0, 36):
+                dist = step * res
+                cx = x + px * sign * dist
+                cy = y + py * sign * dist
+                cell = self.grid.cell_of(cx, cy)
+                if cell is None or int(labels[cell]) != 1:
+                    break
+                far = self.grid.cell_of(cx + dx * 0.30, cy + dy * 0.30)
+                if far is None or int(labels[far]) != 0:
+                    break
+                side = dist
+            total += side
+        return total
+
     def _opening_yaw(self) -> float:
         """Yaw toward the shoulder that looks further. Positive is left."""
         _nose, left, right = self._last_clear
@@ -1028,6 +1101,18 @@ class Explorer:
             # the reverse was supposed to leave.
             return wheel_speeds(-0.12, self._turn * 0.08)
         if self._goal_expired() or (self._is_stuck() and (self._bubble_gap or 99.0) < 1.2):
+            # One look at a doorway the map shows off to the side. Banning
+            # on the first pause is how a smeared threshold was abandoned
+            # for the room beside it. A second pause still drops the goal.
+            gap_yaw = None if self._gap_looks else self._map_gap_heading()
+            if gap_yaw is not None:
+                self._gap_looks += 1
+                x, y, _yaw = self.odometry.pose()
+                self._stuck_anchor = (self.t_s, x, y)
+                self._turn = gap_yaw
+                self._avoid_until = self.t_s + 1.6
+                self._log("turning toward a mapped opening")
+                return wheel_speeds(0.0, gap_yaw)
             self._ban_current()
             self._plan()
         if self.phase != "go":
@@ -1314,6 +1399,7 @@ class Explorer:
         if not same:
             self._goal_since = self.t_s
             self._stuck_anchor = (self.t_s, x, y)
+            self._gap_looks = 0
             self._did_final_scan = False
             self._settle_since = None
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
@@ -1389,6 +1475,7 @@ class Explorer:
             self.goal_xy, self.path_xy = goal, path
             self._goal_since = self.t_s
             self._stuck_anchor = (self.t_s, x, y)
+            self._gap_looks = 0
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
             return 0.0, 0.0
         count = int((self.grid.labels() == 1).sum())

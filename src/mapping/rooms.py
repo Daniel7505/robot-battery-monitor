@@ -202,7 +202,15 @@ def _pinch_doors(labels: np.ndarray, resolution_m: float) -> np.ndarray:
                 door[ny, nx] = True
                 if int(dist[y, x]) < neck:
                     door[y, x] = True
-    return door
+    # The meeting line of two wide regions can wander into the room and
+    # mark a blob a metre across. A doorway is the short throat only.
+    keep = np.zeros(free.shape, dtype=bool)
+    for cells in _components(door):
+        minor, major = _extent_m(cells, res)
+        if minor <= 0.55 and 0.45 <= major <= 1.35:
+            for y, x in cells:
+                keep[y, x] = True
+    return keep
 
 
 def doorway_mask(labels: np.ndarray, resolution_m: float) -> np.ndarray:
@@ -319,32 +327,34 @@ def crossing_bonus(
     rooms: dict | None,
     start_rc: tuple[int, int] | None,
 ) -> float:
-    """Higher when the path crosses a doorway the map already has."""
+    """Higher when the path leaves the region the robot is standing in.
+
+    A door-shaped speck inside that region is not a new place. Scoring
+    every path that touched one made the long frontier in the same room
+    beat the opening the robot was already facing.
+    """
     if not rooms or not path_cells:
         return 1.0
     doors: np.ndarray = rooms["doors"]
     region: np.ndarray = rooms["labels"]
-    bonus = 1.0
     crossed = False
     for y, x in path_cells:
         if 0 <= y < doors.shape[0] and 0 <= x < doors.shape[1] and doors[y, x]:
             crossed = True
             break
-    if crossed:
-        bonus *= 3.0
     if start_rc is None:
-        return bonus
+        return 3.0 if crossed else 1.0
     sy, sx = start_rc
     gy, gx = path_cells[-1]
     if not (0 <= sy < region.shape[0] and 0 <= sx < region.shape[1]):
-        return bonus
+        return 3.0 if crossed else 1.0
     if not (0 <= gy < region.shape[0] and 0 <= gx < region.shape[1]):
-        return bonus
+        return 3.0 if crossed else 1.0
     start_id = int(region[sy, sx])
     goal_id = int(region[gy, gx])
     if start_id > 0 and goal_id > 0 and start_id != goal_id:
-        bonus *= 2.0
-    elif start_id > 0 and goal_id == 0 and crossed:
+        return 6.0
+    if start_id > 0 and goal_id == 0 and crossed:
         # Far side is not a labelled room yet. That is a new place.
-        bonus *= 2.0
-    return bonus
+        return 6.0
+    return 1.0

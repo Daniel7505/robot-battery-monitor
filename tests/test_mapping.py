@@ -48,29 +48,28 @@ def _small_oak(width: int = 64, height: int = 40) -> DepthCamera:
     )
 
 
-def test_straight_driving_learns_the_gyro_bias():
-    """The +0.001 rad/s lookup bias is present while the robot drives.
+def test_a_rest_calibration_holds_the_heading_for_ten_minutes():
+    """The lookup bias is learned with the hubs still, then left alone.
 
-    Rest learning never sees it on a run that keeps moving. Over 600 s
-    that is about 34 degrees. Straight hub motion is enough to learn it.
+    Learning it from moving hubs pulled a good rest estimate off, and
+    the heading walked. After a few seconds stopped, 600 s of driving
+    at +0.001 rad/s stays inside 5 degrees. A gyro spike while the hubs
+    turn is not a new bias.
     """
     odom = WheelGyroOdometry()
     odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(80):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=2e-4)
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(0.5)
     left = 0.0
     step = 0.22 / WHEEL_RADIUS_M * 0.05
-    for _ in range(800):
-        left += step
-        odom.update(left, left, 0.001, 0.05)
-    assert odom.bias_rad_s == pytest_approx(0.001, abs=3e-4)
-    assert abs(odom.yaw_unwrapped_rad) < math.radians(2.0)
-    # Two seconds where the gyro and the hubs disagree by more than a
-    # bias must not be learned. That is scrub, not the lookup offset.
     held = odom.bias_rad_s
     for _ in range(40):
         left += step
         odom.update(left, left, 0.02, 0.05)
-    assert abs(odom.bias_rad_s - held) < 5e-4
-    for _ in range(11000):
+    assert abs(odom.bias_rad_s - held) < 1e-6
+    for _ in range(12000):
         left += step
         odom.update(left, left, 0.001, 0.05)
     assert abs(math.degrees(odom.yaw_unwrapped_rad)) < 5.0

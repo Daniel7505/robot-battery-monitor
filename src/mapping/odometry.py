@@ -41,10 +41,6 @@ class WheelGyroOdometry:
         self.wheel_yaw = 0.0
         self.still_s = 0.0
         self.moving_s = 0.0
-        self._win_t = 0.0
-        self._win_wheel = 0.0
-        self._win_gyro = 0.0
-        self._win_path = 0.0
         self._prev_left: float | None = None
         self._prev_right: float | None = None
 
@@ -113,33 +109,12 @@ class WheelGyroOdometry:
             self.gyro_unbiased_yaw += (rate_in - self.bias_rad_s) * dt
             return self.pose()
         self.moving_s += dt
-        # One encoder tick in an 8 ms step looks like a 0.04 rad/s turn, so
-        # a per-step "straight" test never fires. Average half a second.
-        # The lookup bias is about +0.001 rad/s. A residual of several
-        # thousandths is hub scrub, and learning that is what walked the
-        # heading on the first seed.
-        self._win_t += dt
-        self._win_wheel += wheel_dyaw
-        self._win_gyro += rate_in * dt
-        self._win_path += abs(ds)
-        if self._win_t >= 0.50:
-            wheel_rate = self._win_wheel / self._win_t
-            gyro_rate = self._win_gyro / self._win_t
-            residual = gyro_rate - wheel_rate
-            straight = (
-                self._win_path > 0.04
-                and abs(wheel_rate) < 0.03
-                and abs(gyro_rate) < 0.05
-                and abs(residual) < 0.0035
-            )
-            if straight:
-                alpha = min(1.0, self._win_t * 0.12)
-                self.bias_rad_s += alpha * (residual - self.bias_rad_s)
-                self.bias_rad_s = max(-0.004, min(0.004, self.bias_rad_s))
-            self._win_t = 0.0
-            self._win_wheel = 0.0
-            self._win_gyro = 0.0
-            self._win_path = 0.0
+        # Bias is learned only while the hubs are still (above). A moving
+        # estimate was tried: half a second of "straight" driving still
+        # contained enough hub scrub to pull a good 0.00094 rad/s rest
+        # bias down to 0.00045, and the heading then walked about 13° by
+        # the end of a 600 s run. Wheel yaw is logged for that comparison.
+        # It is not subtracted from the gyro.
         rate = rate_in - self.bias_rad_s
         self.gyro_unbiased_yaw += rate * dt
         if not trust_translation:

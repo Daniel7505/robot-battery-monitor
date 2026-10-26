@@ -208,6 +208,7 @@ class Explorer:
         self._opening_since: float | None = None
         self._opening_holds = 0
         self._approach_since: float | None = None
+        self._approach_gone: float | None = None
         self._gentle_side = 0
         self._gap_looks = 0
         self._rear_gap: float | None = None
@@ -1382,8 +1383,7 @@ class Explorer:
             # restart the spin forever, which is how the hall was abandoned.
             # One align window, then creep even if the error comes back.
             err = wrap_rad(self._segment_heading() - pose[2])
-            if self._approach_since is None:
-                self._approach_since = self.t_s
+            self._mark_approach()
             if abs(err) > 0.12 and self.t_s - self._approach_since < 1.2:
                 v = 0.0
                 w = max(-0.55, min(0.55, math.copysign(0.55, err)))
@@ -1395,6 +1395,7 @@ class Explorer:
                     approach_kind = "straight"
         elif door_mode == "mouth" or through:
             self._approach_since = None
+            self._approach_gone = None
             # In the opening, or arriving with both jambs beside the nose.
             w = door_w if through else w + door_w
             v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
@@ -1422,16 +1423,37 @@ class Explorer:
                     approach_kind = "align"
             else:
                 self._approach_since = None
+                self._approach_gone = None
                 v = min(v, DOOR_SPEED_M_S)
                 w = max(-0.28, min(0.28, self._jamb_yaw(left_clear, right_clear)))
         elif left_clear < 0.90 and right_clear < 0.90:
-            self._approach_since = None
+            self._release_approach()
             v = min(v, DOOR_SPEED_M_S)
         else:
-            self._approach_since = None
+            self._release_approach()
         v = min(v, max(0.0, cap))
         v, w = self._apply_sweep(v, w, approach_kind, door_mode)
         return wheel_speeds(v, w)
+
+    def _mark_approach(self) -> None:
+        self._approach_gone = None
+        if self._approach_since is None:
+            self._approach_since = self.t_s
+
+    def _release_approach(self) -> None:
+        """Forget the align clock after the doorway reading has actually gone.
+
+        One shoulder crossing 1.20 m for a single depth frame used to zero
+        the clock, and the shell spun on the threshold until the goal died.
+        """
+        if self._approach_since is None:
+            self._approach_gone = None
+            return
+        if self._approach_gone is None:
+            self._approach_gone = self.t_s
+        if self.t_s - self._approach_gone >= 0.40:
+            self._approach_since = None
+            self._approach_gone = None
 
     def _segment_heading(self) -> float:
         """Heading of the polyline about 0.35 m ahead.

@@ -952,6 +952,47 @@ def test_a_yawed_door_approach_lines_up_then_drives_straight():
     assert v > 0.05
 
 
+def test_a_flicker_off_the_doorway_band_does_not_restart_the_align():
+    """One depth frame with a shoulder past 1.20 m is not a new approach.
+
+    Resetting the align clock on that frame held the shell spinning on
+    the bedroom threshold until the goal was replaced.
+    """
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+
+    grid = OccupancyGrid()
+    _fill(grid, 1.05, 0.405, 1.25, 1.10, grid.l_max)
+    _fill(grid, 1.05, -1.10, 1.25, -0.405, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    bot._go(False, 0.28, 0.62, 0.70)
+    started = bot._approach_since
+    assert started is not None
+    bot.t_s += 0.2
+    bot._last_clear = (1.6, 0.62, 1.40)
+    bot._go(False, 0.28, 0.62, 1.40)
+    assert bot._approach_since == started
+    bot.t_s += 1.1
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot._last_clear = (1.6, 0.62, 0.70)
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+    assert v <= DOOR_SPEED_M_S + 1e-6
+
+
 def test_a_rear_press_drives_forward_off_the_wall():
     """The tail is on the wall and the nose sees the room. Reverse digs in."""
     from src.mapping.bubble import BubbleView

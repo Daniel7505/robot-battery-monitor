@@ -69,6 +69,9 @@ class Explorer:
         self._confident_after = 0.0
         self._last_spin_t = -100.0
         self._nudge_at = 0.0
+        self._match_proposal: tuple[float, float, float] | None = None
+        self._match_proposal_t = -10.0
+        self._close_since: float | None = None
         self._view_blind = False
         self._blind_frames = 0
         self._slip_debt_m = 0.0
@@ -161,12 +164,22 @@ class Explorer:
             # corrected pose. Contact is skipped: a scan into the lens is
             # not a pose measurement.
             dx, dy, dyaw = pose_correction(self.grid, self.odometry.pose(), hits[:, :2])
-            self._nudge_at = self.t_s + 0.4
-            if dx != 0.0 or dy != 0.0 or dyaw != 0.0:
-                self.odometry.apply_correction(dx, dy, dyaw)
-                corrected = True
-                self._slip_debt_m = max(0.0, self._slip_debt_m - 0.20)
-                self._log(f"match dx={dx:.3f} dy={dy:.3f} dyaw={dyaw:.3f}")
+            self._nudge_at = self.t_s + 0.45
+            # One lucky peak is not a pose. Apply only when the next scan
+            # agrees, so a match cannot walk back and forth along a wall.
+            prev = self._match_proposal
+            prev_t = self._match_proposal_t
+            self._match_proposal = (dx, dy, dyaw)
+            self._match_proposal_t = self.t_s
+            if (dx != 0.0 or dy != 0.0 or dyaw != 0.0) and prev is not None and (self.t_s - prev_t) <= 1.6:
+                dot = prev[0] * dx + prev[1] * dy + 0.4 * prev[2] * dyaw
+                na = math.hypot(dx, dy, 0.4 * dyaw)
+                nb = math.hypot(prev[0], prev[1], 0.4 * prev[2])
+                if na > 1e-3 and nb > 1e-3 and dot >= 0.65 * na * nb:
+                    self.odometry.apply_correction(dx, dy, dyaw)
+                    corrected = True
+                    self._slip_debt_m = max(0.0, self._slip_debt_m - 0.20)
+                    self._log(f"match dx={dx:.3f} dy={dy:.3f} dyaw={dyaw:.3f}")
         x, y, yaw = self.odometry.pose()
         if hits is not None and hits.size and not self._view_blind:
             scanned = to_odom(hits, (x, y, yaw))
@@ -187,6 +200,13 @@ class Explorer:
         if hits is not None and sensor is not None and floors is not None:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
             self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
+        self._last_clear = (clearance, left_clear, right_clear)
+        if self._view_blind or clearance < 1.5:
+            if self._close_since is None:
+                self._close_since = self.t_s
+        else:
+            self._close_since = None
+        close_held = self._close_since is not None and (self.t_s - self._close_since) >= 0.6
         if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
@@ -195,15 +215,14 @@ class Explorer:
             and not self.done
             and self.t_s >= self._recover_until
             and (self.t_s - self._progress_t) > 3.5
-            and (self._view_blind or clearance < 1.5)
+            and close_held
         ):
-            # An open view and a heading change is not a stall. Reversing
-            # there spun the robot off the bedroom door.
+            # An open view and a heading change is not a stall. One frame
+            # of a jamb crossing the nose during a turn is not either.
             self._start_recovery()
         # Nose only. A jamb in the shoulder cone is a steer (see _go),
         # not a wall to spin away from.
         blocked = radar_blocked or clearance < STOP_CLEARANCE_M
-        self._last_clear = (clearance, left_clear, right_clear)
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
         # The path stays: throwing it away on a one-frame block is what

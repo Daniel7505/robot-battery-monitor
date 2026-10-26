@@ -93,12 +93,13 @@ def scan_fit(grid: OccupancyGrid, hits_odom: np.ndarray) -> str:
     return "unknown"
 
 
-# Search window. Drift past this has lost overlap with the map, and a
-# hypothesis on the outer edge is only a step toward the peak, not a fix.
-_YAW_LIM = 0.18
-_XY_LIM = 0.40
-_STEP_M = 0.15
-_STEP_YAW = 0.05
+# Search window. A correction bigger than this belongs to a different
+# wall, not to the pose that built the map. The applied step is smaller
+# still, so one frame cannot jump a cell.
+_YAW_LIM = 0.08
+_XY_LIM = 0.16
+_STEP_M = 0.05
+_STEP_YAW = 0.02
 _MIN_HITS = 20
 _MIN_OCC = 12
 
@@ -129,8 +130,8 @@ def pose_correction(
     yb = np.ascontiguousarray(pts[:, 1])
     base = float(_score_poses(field, grid, x, y, yaw, np.zeros(1), np.zeros(1), np.zeros(1), xb, yb)[0])
 
-    yaws = np.linspace(-_YAW_LIM, _YAW_LIM, 7)
-    offs = np.linspace(-_XY_LIM, _XY_LIM, 9)
+    yaws = np.linspace(-_YAW_LIM, _YAW_LIM, 5)
+    offs = np.linspace(-_XY_LIM, _XY_LIM, 7)
     dyaw_g, dx_g, dy_g = np.meshgrid(yaws, offs, offs, indexing="ij")
     dx_g = dx_g.ravel()
     dy_g = dy_g.ravel()
@@ -146,9 +147,9 @@ def pose_correction(
     if _on_edge(float(dx_g[win]), float(dy_g[win]), float(dyaw_g[win])):
         return (0.0, 0.0, 0.0)
 
-    span_x = np.linspace(float(dx_g[win]) - 0.10, float(dx_g[win]) + 0.10, 5)
-    span_y = np.linspace(float(dy_g[win]) - 0.10, float(dy_g[win]) + 0.10, 5)
-    span_w = np.linspace(float(dyaw_g[win]) - 0.06, float(dyaw_g[win]) + 0.06, 7)
+    span_x = np.linspace(float(dx_g[win]) - 0.05, float(dx_g[win]) + 0.05, 5)
+    span_y = np.linspace(float(dy_g[win]) - 0.05, float(dy_g[win]) + 0.05, 5)
+    span_w = np.linspace(float(dyaw_g[win]) - 0.03, float(dyaw_g[win]) + 0.03, 5)
     dyaw_f, dx_f, dy_f = np.meshgrid(span_w, span_x, span_y, indexing="ij")
     dx_f = dx_f.ravel()
     dy_f = dy_f.ravel()
@@ -190,15 +191,14 @@ def _on_edge(dx: float, dy: float, dyaw: float) -> bool:
 
 
 def _accept(base: float, best: float, dx: float, dy: float, dyaw: float) -> bool:
-    if best < 28.0:
+    # The current pose has to already overlap the map. A search that only
+    # scores well far away is a different surface.
+    if best < 36.0 or base < 24.0:
         return False
     dist = math.hypot(dx, dy)
     yaw = abs(dyaw)
-    # Several returns have to newly land on a wall, and a pose that already
-    # explains the scan needs a gain proportional to that score. A slightly
-    # denser neighbour cell is not a reason to move.
-    need = 16.0 + 50.0 * dist + 90.0 * yaw
-    need = max(need, 0.22 * max(base, 0.0) + 36.0 * dist + 70.0 * yaw)
+    need = 14.0 + 80.0 * dist + 140.0 * yaw
+    need = max(need, 0.18 * base + 40.0 * dist + 80.0 * yaw)
     return best >= base + need
 
 

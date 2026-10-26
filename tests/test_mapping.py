@@ -642,10 +642,16 @@ def _corner_hits() -> np.ndarray:
 def test_pose_correction_recovers_translation_and_yaw():
     hits = _corner_hits()
     grid = _wall_grid(hits)
-    wrong = (0.12, -0.09, 0.05)
+    wrong = (0.06, -0.04, 0.02)
     dx, dy, dyaw = pose_correction(grid, wrong, hits)
-    assert math.hypot(wrong[0] + dx, wrong[1] + dy) < 0.08
-    assert abs(wrong[2] + dyaw) < 0.03
+    before = math.hypot(wrong[0], wrong[1])
+    after = math.hypot(wrong[0] + dx, wrong[1] + dy)
+    assert after < before * 0.75
+    assert after < 0.05
+    assert abs(wrong[2] + dyaw) < 0.02
+    # A shift onto a different wall is outside the search and is refused.
+    far = pose_correction(grid, (0.35, 0.20, 0.0), hits)
+    assert far == (0.0, 0.0, 0.0)
 
 
 def test_pose_correction_rejects_a_weak_or_empty_match():

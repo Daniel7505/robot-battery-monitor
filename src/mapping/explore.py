@@ -726,6 +726,7 @@ class Explorer:
             "lifted": False,
             "backed": False,
             "left_spin": False,
+            "still_hits": 0,
         }
 
     def _watch_zupt(
@@ -757,38 +758,48 @@ class Explorer:
         age = self.t_s - float(anchor["t"])
         if age < 0.20:
             return
-        depth_ok = _picture_still(anchor["depth"], depth, limit=0.04, min_std=0.0)
-        floor_ok = _picture_still(anchor["floor"], floor, limit=8.0, min_std=2.0)
+        depth_ok = _picture_still(anchor["depth"], depth, limit=0.025, min_std=0.0)
+        floor_ok = _picture_still(anchor["floor"], floor, limit=8.0, min_std=4.0)
         if rgb is not None and anchor["rgb"] is not None:
-            vis_ok = _picture_still(anchor["rgb"], rgb, limit=8.0, min_std=2.0) and self._fusion.scene_visual_still
+            vis_ok = _picture_still(anchor["rgb"], rgb, limit=6.0, min_std=4.0) and self._fusion.scene_visual_still
         else:
             vis_ok = self._fusion.scene_visual_still
         if not (depth_ok and floor_ok and vis_ok):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             return
+        # One matching pair is the start of a creep, whose picture has not
+        # moved a pixel yet. Wait until a second picture, a fifth of a
+        # second later, is still the same before touching the pose.
+        anchor["still_hits"] = int(anchor["still_hits"]) + 1
+        if anchor["still_hits"] < 2 or age < 0.40:
+            return
         dl = float(left_rad) - float(anchor["left"])
         dr = float(right_rad) - float(anchor["right"])
         claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
-        if claimed < 0.012 and spun < 0.04:
+        if claimed < 0.02 and spun < 0.08:
             return
         self.odometry.x_m = float(anchor["x"])
         self.odometry.y_m = float(anchor["y"])
         self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
         self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
-        self._zupt_until = self.t_s + 0.30
+        # Only the steps until the next picture. A latch that ran on
+        # after the shell started moving deleted a real turn.
+        self._zupt_until = self.t_s + 0.12
         self.odometry.observe_rest(float(yaw_rate), self._step_dt)
         if not anchor["logged"]:
             anchor["logged"] = True
             self.zupt_events += 1
             self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
         rest = self._pitch_rest
-        pitched = rest is not None and abs(float(pitch) - rest) > 0.05
-        if pitched and (claimed >= 0.012 or spun >= 0.04) and not anchor["lifted"]:
+        # The carpet ramp is about 0.04 rad. A real unload tips past that.
+        pitched = rest is not None and abs(float(pitch) - rest) > 0.12
+        if pitched and (claimed >= 0.02 or spun >= 0.08) and not anchor["lifted"]:
             anchor["lifted"] = True
             self.wheels_lifted += 1
             self._log("wheels lifted, casters holding, drive wheels spinning free")
         commanding = abs(self._commanded[0]) + abs(self._commanded[1]) > 0.4
+        gap = self._min_gap if self._min_gap is not None else 99.0
         if self.phase == "spin" and age >= 0.80 and not anchor["left_spin"]:
             anchor["left_spin"] = True
             self._spin_start = None
@@ -799,8 +810,9 @@ class Explorer:
             self._log("spin did not turn the shell")
         elif (
             self.phase == "go"
-            and age >= 0.35
+            and age >= 0.55
             and commanding
+            and (pitched or gap < 0.40)
             and not anchor["backed"]
             and self.t_s >= self._reverse_until
         ):

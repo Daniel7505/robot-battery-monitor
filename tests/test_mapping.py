@@ -684,7 +684,7 @@ def test_lifted_wheels_are_a_zero_velocity_update():
             left_wheel_rad=left,
             right_wheel_rad=right,
             yaw_rate_rad_s=0.001,
-            pitch_rad=0.10,
+            pitch_rad=0.16,
             depth=depth,
             floor=floor,
             rgb=rgb,

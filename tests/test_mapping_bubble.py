@@ -24,6 +24,42 @@ def test_stop_distance_grows_with_speed():
     assert stop_gap(0.0) == pytest.approx(0.04)
 
 
+def test_the_body_fits_an_81cm_door_with_the_inflation():
+    """0.39 m across the tires, 0.81 m doorway, 0.20 m planner inflation.
+
+    The inflated corridor is still wider than nothing, and a robot held
+    on the centre line keeps air beside each tire.
+    """
+    from src.mapping.body import ROBOT_RADIUS_M
+    from src.mapping.bubble import SHELL_HALF_M
+
+    door = 0.81
+    width = 2.0 * SHELL_HALF_M
+    assert width == pytest.approx(0.39)
+    free = door - 2.0 * ROBOT_RADIUS_M
+    assert free > 0.05
+    air = door / 2.0 - SHELL_HALF_M
+    assert air > 0.15
+    assert SHELL_HALF_M <= ROBOT_RADIUS_M < door / 2.0
+
+
+def test_floor_agreement_does_not_write_yaw():
+    """The downward camera is a translation sensor. An agreeing shift
+    must not turn the heading, even though the fusion also carries yaw.
+    """
+    rng = np.random.default_rng(2)
+    image = rng.normal(40.0, 25.0, size=(32, 32))
+    shifted = np.roll(image, 4, axis=0)
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(floor=True, visual=False)
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image)
+    odom.update(0.30, 0.30, 0.0, 0.05)
+    fuse.observe(odom, ds_raw_m=0.024, ds_applied_m=0.024, dyaw_rad=0.0, floor=shifted)
+    assert fuse.floor_applied_yaw == 0.0
+    assert abs(odom.pose()[2]) < 1e-6
+
+
 def test_a_centred_door_is_passable_and_a_close_side_is_not():
     # 0.81 m opening, tire outer at 0.195 m, about 0.21 m of air each side.
     assert max_speed_for_gap(0.21) > 0.25

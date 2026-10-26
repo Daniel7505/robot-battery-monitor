@@ -48,6 +48,11 @@ class MotionFusion:
         self.slip_events = 0
         self.floor_updates = 0
         self.visual_updates = 0
+        # Yaw the fusion actually wrote, and the yaw the camera measured.
+        # The floor camera is a translation sensor. Its applied yaw stays 0.
+        self.visual_applied_yaw = 0.0
+        self.visual_meas_yaw = 0.0
+        self.floor_applied_yaw = 0.0
         self.landmarks = None
         self.last_slip = ""
         self._floor = _Interval()
@@ -89,6 +94,8 @@ class MotionFusion:
                 self._visual.clear()
             else:
                 self.landmarks = sample_v.landmarks
+                if sample_v.ok:
+                    self.visual_meas_yaw += float(sample_v.dyaw_rad)
                 expect_px = 0.0
                 if camera is not None and sample_v.range_m > 0.2:
                     expect_px = abs(self._visual.raw_m) / sample_v.range_m * float(camera.focal_px)
@@ -228,7 +235,12 @@ class MotionFusion:
         gain_x = min(0.55, self.p_xy / (self.p_xy + var))
         gain_y = min(0.45, self.p_xy / (self.p_xy + var))
         gain_w = 0.0 if kind != "visual" else min(0.40, self.p_yaw / (self.p_yaw + float(var_yaw)))
-        self._add_body(odom, gain_x * innov_x, gain_y * innov_y, gain_w * innov_w)
+        applied_w = gain_w * innov_w
+        if kind == "floor":
+            applied_w = 0.0
+        else:
+            self.visual_applied_yaw += applied_w
+        self._add_body(odom, gain_x * innov_x, gain_y * innov_y, applied_w)
         self.p_xy *= max(0.05, 1.0 - gain_x)
         self.p_yaw *= max(0.05, 1.0 - max(gain_w, 0.0))
         if kind == "floor":

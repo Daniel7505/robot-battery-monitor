@@ -48,6 +48,48 @@ def _small_oak(width: int = 64, height: int = 40) -> DepthCamera:
     )
 
 
+def test_straight_driving_learns_the_gyro_bias():
+    """The +0.001 rad/s lookup bias is present while the robot drives.
+
+    Rest learning never sees it on a run that keeps moving. Over 600 s
+    that is about 34 degrees. Straight hub motion is enough to learn it.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    left = 0.0
+    step = 0.22 / WHEEL_RADIUS_M * 0.05
+    for _ in range(200):
+        left += step
+        odom.update(left, left, 0.001, 0.05)
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=2e-4)
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(1.5)
+    for _ in range(11800):
+        left += step
+        odom.update(left, left, 0.001, 0.05)
+    assert abs(math.degrees(odom.yaw_unwrapped_rad)) < 5.0
+
+
+def test_wall_line_yaw_follows_the_mapped_wall_not_a_compass():
+    """A depth line that is rotated relative to cells the robot already
+    occupied is a heading error. The wall itself can sit at any angle.
+    """
+    from src.mapping.wall_line import wall_yaw_delta
+
+    grid = OccupancyGrid()
+    # A diagonal wall the robot mapped while its heading was still good.
+    for i in range(40):
+        cell = grid.cell_of(1.2 + i * 0.05, 0.4 + i * 0.05)
+        assert cell is not None
+        grid.log[cell] = grid.l_max
+    hits = np.array([[1.2 + i * 0.05, 0.4 + i * 0.05, 0.5] for i in range(40)])
+    aligned = wall_yaw_delta(grid, (0.0, 0.0, 0.0), hits[:, :2])
+    assert abs(aligned) < 0.004
+    # Same points in the body, but the pose yaw is 0.15 rad too far.
+    # The mapped line is still the diagonal, so the correction is negative.
+    wrong = wall_yaw_delta(grid, (0.0, 0.0, 0.15), hits[:, :2])
+    assert wrong < -0.005
+
+
 def test_rest_gyro_bias_does_not_walk_the_heading():
     """oak_gyro reads +0.001 rad/s while the hubs are still.
 

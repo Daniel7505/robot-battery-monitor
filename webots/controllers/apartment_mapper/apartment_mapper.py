@@ -149,6 +149,81 @@ def _hold_upper(robot) -> None:
             continue
 
 
+def _finish(folder: str, now: float) -> None:
+    try:
+        with open(os.path.join(folder, "mapping_done"), "w", encoding="utf-8") as handle:
+            handle.write(f"{now:.3f}\n")
+    except OSError:
+        pass
+
+
+def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: float) -> None:
+    """Drive straight on open floor. Used to measure wheel contact and slip.
+
+    Both hubs get the same speed. The pose logger records true speed and
+    which solids are touching. This does not build a map.
+    """
+    from src.mapping.body import FLOOR_CAM, WHEEL_RADIUS_M
+    from src.mapping.floor_flow import FloorFlow
+
+    left_motor = robot.getDevice("left_wheel")
+    right_motor = robot.getDevice("right_wheel")
+    left_enc = robot.getDevice("left_wheel_sensor")
+    right_enc = robot.getDevice("right_wheel_sensor")
+    gyro = robot.getDevice("oak_gyro")
+    # Same speed on both hubs. 0.22 m/s matches the mapping cruise.
+    omega = 0.22 / WHEEL_RADIUS_M
+    print(f"MAPPING straight probe {seconds:.1f}s omega={omega:.2f}")
+    raw_yaw = 0.0
+    prev_t = None
+    flow = FloorFlow(noise_px=0.0)
+    floor = None
+    try:
+        floor = robot.getDevice("floor_cam")
+    except Exception:
+        floor = None
+    flow_dx = 0.0
+    flow_frames = 0
+    flow_std = 0.0
+    while robot.step(timestep_ms) != -1:
+        now = float(robot.getTime())
+        dt = 0.0 if prev_t is None else now - prev_t
+        prev_t = now
+        try:
+            raw_yaw += float(gyro.getValues()[2]) * dt
+        except Exception:
+            pass
+        driving = 0.4 <= now <= 0.4 + float(seconds)
+        cmd = omega if driving else 0.0
+        left_motor.setVelocity(cmd)
+        right_motor.setVelocity(cmd)
+        log.write_wheels(now, float(left_enc.getValue()), float(right_enc.getValue()), cmd, cmd)
+        if driving and floor is not None and dt > 0.0 and int(now * 8) != int((now - dt) * 8):
+            image = _camera_gray(floor, FLOOR_CAM.width, FLOOR_CAM.height)
+            if image is not None:
+                flow_std = float(np.std(image))
+                sample = flow.measure(image)
+                if sample is not None and sample.ok:
+                    flow_dx += float(sample.dx_m)
+                    flow_frames += 1
+        if now >= 0.4 + float(seconds) + 0.8:
+            note = (
+                f"t={now:.2f} gyro_raw_yaw={raw_yaw:.4f} "
+                f"floor_dx={flow_dx:.3f} floor_frames={flow_frames} floor_std={flow_std:.1f}\n"
+            )
+            print("MAPPING straight probe done " + note.strip())
+            try:
+                with open(os.path.join(folder, "floor_probe.txt"), "w", encoding="utf-8") as handle:
+                    handle.write(note)
+            except OSError:
+                pass
+            _finish(folder, now)
+            left_motor.setVelocity(0.0)
+            right_motor.setVelocity(0.0)
+            log.close()
+            return
+
+
 def main() -> None:
     robot = Robot()
     timestep = int(robot.getBasicTimeStep())
@@ -198,6 +273,10 @@ def main() -> None:
         loop=_flag("RBM_LOOP", True),
     )
     print(f"MAPPING run folder: {folder}")
+    straight_s = _env_float("RBM_STRAIGHT_S")
+    if straight_s is not None and straight_s > 0.0:
+        _straight_probe(robot, timestep, log, folder, straight_s)
+        return
     print(f"MAPPING depth {width}x{height} stride {explorer.stride} period {_DEPTH_PERIOD_S:.3f}s")
     next_depth = _DEPTH_PERIOD_S
     next_save = 5.0
@@ -235,8 +314,31 @@ def main() -> None:
             )
             left_motor.setVelocity(left_cmd)
             right_motor.setVelocity(right_cmd)
+            log.write_wheels(
+                now,
+                float(left_enc.getValue()),
+                float(right_enc.getValue()),
+                left_cmd,
+                right_cmd,
+            )
             x, y, yaw = explorer.pose()
             log.write_pose(now, x, y, yaw)
+            odom = explorer.odometry
+            fuse = explorer._fusion
+            log.write_yaw(
+                now,
+                odom.yaw_unwrapped_rad,
+                odom.gyro_raw_yaw,
+                odom.gyro_unbiased_yaw,
+                odom.wheel_yaw,
+                fuse.visual_meas_yaw,
+                fuse.visual_applied_yaw,
+                fuse.floor_applied_yaw,
+                explorer.wall_applied_yaw,
+                odom.bias_rad_s,
+                odom.still_s,
+                odom.moving_s,
+            )
             timed_out = max_s is not None and now >= max_s
             if timed_out and not explorer.done:
                 explorer.done = True
@@ -248,11 +350,7 @@ def main() -> None:
                 print(f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f})")
                 # This controller cannot stop the world. The pose logger
                 # watches this file and quits.
-                try:
-                    with open(os.path.join(folder, "mapping_done"), "w", encoding="utf-8") as handle:
-                        handle.write(f"{now:.3f}\n")
-                except OSError:
-                    pass
+                _finish(folder, now)
             elif now >= next_save:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 next_save = now + 5.0

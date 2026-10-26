@@ -35,6 +35,7 @@ from src.mapping.loop_close import LoopCloser
 from src.mapping.odometry import WheelGyroOdometry, wrap_rad
 from src.mapping.scan_match import scan_fit
 from src.mapping.slip import MotionCheck
+from src.mapping.wall_line import wall_yaw_delta
 
 
 class Explorer:
@@ -97,6 +98,8 @@ class Explorer:
         self._settle_occ: int | None = None
         self._settle_check = 0.0
         self.slip_events = 0
+        self.wall_applied_yaw = 0.0
+        self._wall_prev = 0.0
         self.frontiers_left = 0
         self._last_clear = (99.0, 99.0, 99.0)
         self._held_clear: tuple[float, float, float] | None = None
@@ -209,6 +212,24 @@ class Explorer:
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
         corrected = False
         x, y, yaw = self.odometry.pose()
+        if (
+            hits is not None
+            and hits.size
+            and not self._view_blind
+            and not drop
+            and abs(dyaw) < 0.04
+            and self.t_s >= self._nudge_at
+        ):
+            # Match the wall in this scan to cells the robot already
+            # painted. Done before this scan is integrated, or the new
+            # points would agree with themselves.
+            delta = wall_yaw_delta(self.grid, (x, y, yaw), hits[:, :2])
+            if abs(delta) >= 0.004 and delta * self._wall_prev > 0.0 and abs(delta - self._wall_prev) < 0.02:
+                self.odometry.nudge_yaw(delta)
+                self.wall_applied_yaw += delta
+                x, y, yaw = self.odometry.pose()
+            self._wall_prev = delta
+            self._nudge_at = self.t_s + 0.2
         if hits is not None and hits.size and not self._view_blind:
             scanned = to_odom(hits, (x, y, yaw))
             self._scan_xy = scanned
@@ -438,11 +459,13 @@ class Explorer:
         """
         if left_clear > 1.3 or right_clear > 1.3:
             return 0.0
-        if left_clear + 0.08 < right_clear:
-            return -0.40
-        if right_clear + 0.08 < left_clear:
-            return 0.40
-        return 0.0
+        # Positive error: more air on the left, so the body is right of
+        # the centre line and should yaw left. A matched pair (a few
+        # centimetres) stays straight instead of hunting.
+        error = float(left_clear) - float(right_clear)
+        if abs(error) < 0.08:
+            return 0.0
+        return max(-0.45, min(0.45, 1.1 * error))
 
     def _speed_cap(self, view) -> float:
         cap = CRUISE_M_S

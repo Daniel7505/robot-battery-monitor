@@ -34,6 +34,13 @@ class WheelGyroOdometry:
         self.yaw_rad = 0.0
         self.yaw_unwrapped_rad = 0.0
         self.bias_rad_s = 0.0
+        # Integrals of the raw sources, for the heading breakdown. These
+        # do not move the pose by themselves.
+        self.gyro_raw_yaw = 0.0
+        self.gyro_unbiased_yaw = 0.0
+        self.wheel_yaw = 0.0
+        self.still_s = 0.0
+        self.moving_s = 0.0
         self._prev_left: float | None = None
         self._prev_right: float | None = None
 
@@ -86,17 +93,36 @@ class WheelGyroOdometry:
         ds = 0.5 * (d_left + d_right) * self.radius_m
         wheel_dyaw = (d_right - d_left) * self.radius_m / self.track_m
         rate_in = float(yaw_rate_rad_s)
+        dt = float(dt_s)
+        self.gyro_raw_yaw += rate_in * dt
+        self.wheel_yaw += wheel_dyaw
         # oak_gyro reads +0.001 rad/s at rest (lookupTable output column).
         # A wedged robot sits for minutes; integrating that bias is the
         # heading walk seen on the first Webots run. Learn it only while
         # the hubs are still and the rate is too small to be a real turn.
         wheels_still = abs(ds) < 1e-4 and abs(wheel_dyaw) < 1e-4
         if wheels_still and abs(rate_in) < 0.02:
-            alpha = min(1.0, max(0.0, float(dt_s)) * 0.8)
+            self.still_s += dt
+            alpha = min(1.0, max(0.0, dt) * 0.8)
             self.bias_rad_s += alpha * (rate_in - self.bias_rad_s)
             self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
+            self.gyro_unbiased_yaw += (rate_in - self.bias_rad_s) * dt
             return self.pose()
+        self.moving_s += dt
+        # The lookup table adds about +0.001 rad/s at every rate, not only
+        # at rest. A moving robot almost never sits still long enough for
+        # the rest learner, so the bias is also taken from straight
+        # driving: when the two hubs agree, their yaw rate is the turn,
+        # and the gyro's extra rate is the bias. A real turn is left
+        # alone, because hub slip and the gyro's rate noise are both
+        # largest there.
+        wheel_rate = wheel_dyaw / dt
+        if abs(ds) >= 1e-4 and abs(wheel_rate) < 0.08:
+            alpha = min(1.0, dt * 0.6)
+            self.bias_rad_s += alpha * ((rate_in - wheel_rate) - self.bias_rad_s)
+            self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
         rate = rate_in - self.bias_rad_s
+        self.gyro_unbiased_yaw += rate * dt
         if not trust_translation:
             ds = 0.0
         mid = self.yaw_unwrapped_rad + 0.5 * rate * float(dt_s)

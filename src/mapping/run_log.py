@@ -33,6 +33,18 @@ class RunLog:
         self.pose_path = self.directory / "pose_log.csv"
         self._pose = self.pose_path.open("w", encoding="utf-8", newline="\n")
         self._pose.write("t_s,x_m,y_m,yaw_rad\n")
+        self.yaw_path = self.directory / "yaw_sources.csv"
+        self._yaw = self.yaw_path.open("w", encoding="utf-8", newline="\n")
+        self._yaw.write(
+            "t_s,fused_yaw,gyro_raw_yaw,gyro_unbiased_yaw,wheel_yaw,"
+            "visual_meas_yaw,visual_applied_yaw,floor_applied_yaw,wall_applied_yaw,"
+            "bias_rad_s,still_s,moving_s\n"
+        )
+        # Encoder angles are the mapper's own sensors. The pose logger's
+        # physics_log.csv has the true body speed for the slip comparison.
+        self.wheel_path = self.directory / "wheel_enc.csv"
+        self._wheel = self.wheel_path.open("w", encoding="utf-8", newline="\n")
+        self._wheel.write("t_s,left_rad,right_rad,left_cmd,right_cmd\n")
         self.rows = 0
 
     def write_pose(self, t_s: float, x_m: float, y_m: float, yaw_rad: float) -> None:
@@ -40,6 +52,40 @@ class RunLog:
         self.rows += 1
         if self.rows % 25 == 0:
             self._pose.flush()
+
+    def write_yaw(
+        self,
+        t_s: float,
+        fused_yaw: float,
+        gyro_raw_yaw: float,
+        gyro_unbiased_yaw: float,
+        wheel_yaw: float,
+        visual_meas_yaw: float,
+        visual_applied_yaw: float,
+        floor_applied_yaw: float,
+        wall_applied_yaw: float,
+        bias_rad_s: float,
+        still_s: float,
+        moving_s: float,
+    ) -> None:
+        self._yaw.write(
+            f"{t_s:.4f},{fused_yaw:.6f},{gyro_raw_yaw:.6f},{gyro_unbiased_yaw:.6f},"
+            f"{wheel_yaw:.6f},{visual_meas_yaw:.6f},{visual_applied_yaw:.6f},"
+            f"{floor_applied_yaw:.6f},{wall_applied_yaw:.6f},{bias_rad_s:.6f},"
+            f"{still_s:.3f},{moving_s:.3f}\n"
+        )
+
+    def write_wheels(
+        self,
+        t_s: float,
+        left_rad: float,
+        right_rad: float,
+        left_cmd: float,
+        right_cmd: float,
+    ) -> None:
+        self._wheel.write(
+            f"{t_s:.4f},{left_rad:.6f},{right_rad:.6f},{left_cmd:.4f},{right_cmd:.4f}\n"
+        )
 
     def save_map(self, labels: np.ndarray, meta: dict) -> None:
         np.save(self.directory / "map.npy", np.asarray(labels, dtype=np.int8))
@@ -49,3 +95,7 @@ class RunLog:
     def close(self) -> None:
         self._pose.flush()
         self._pose.close()
+        self._yaw.flush()
+        self._yaw.close()
+        self._wheel.flush()
+        self._wheel.close()

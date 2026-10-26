@@ -98,6 +98,14 @@ class MotionFusion:
             sample_v = self.visual.measure(depth, camera, rgb)
             if sample_v is None:
                 self._visual.clear()
+            elif sample_v.reason == "still":
+                # An unchanged picture with no corners is a pin vote.
+                # It is not a pose update: writing dyaw 0 here pulled the
+                # heading by several degrees on a flat wall.
+                self.landmarks = sample_v.landmarks
+                self.scene_visual_m = 0.0
+                self._visual.clear()
+                sample_v = None
             else:
                 self.landmarks = sample_v.landmarks
                 if sample_v.ok:

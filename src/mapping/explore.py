@@ -141,6 +141,7 @@ class Explorer:
         self._commit_until = -1.0
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
+        self._blocked_since: float | None = None
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -216,16 +217,21 @@ class Explorer:
             if self._motion.events > before and self.phase == "go":
                 self._note_slip()
             drop = slip_drop or in_contact
+        # A commanded spin should leave the axle where it is. Encoder
+        # translation on that command is one wheel scrubbing, which walked
+        # the pose while the body pivoted in a few centimetres.
+        cmd_l, cmd_r = self._commanded
+        spin_cmd = abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0
         yaw_before = self.odometry.yaw_unwrapped_rad
         self.odometry.update(
             left_wheel_rad,
             right_wheel_rad,
             yaw_rate_rad_s,
             dt,
-            trust_translation=not drop,
+            trust_translation=not drop and not spin_cmd,
         )
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
-        applied = 0.0 if drop else ds
+        applied = 0.0 if drop or spin_cmd else ds
         self._path_m += abs(applied)
         floor_image = floor if self.floor_enabled else None
         self._fusion.scene_floor_m = None
@@ -379,17 +385,25 @@ class Explorer:
         # The bubble is the whole shell. A jamb in the shoulder of the
         # depth view is still a steer (see _go), not a wall by itself.
         cap = self._speed_cap(view)
-        blocked = radar_blocked or cap < 0.04
+        shell_blocked = cap < 0.04
+        # The forward radar reports furniture inside 0.45 m. That is not
+        # the shell touching it. Treating it as a block turned an open
+        # bubble into a spin, and the spin reversed whenever the depth
+        # shoulders swapped, for minutes.
+        if radar_blocked and not shell_blocked:
+            cap = min(cap, 0.12)
+        blocked = shell_blocked
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
-        # The path stays: throwing it away on a one-frame block is what
-        # swapped the doorway goal for a new one every tenth of a second.
         if self.phase == "go" and blocked:
-            if self.t_s >= self._avoid_until:
+            if self._blocked_since is None:
+                self._blocked_since = self.t_s
                 self._turn = prefer
                 if self._replan_at < self.t_s:
                     self._replan_at = self.t_s + 0.45
             self._avoid_until = self.t_s + 0.08
+        elif not blocked:
+            self._blocked_since = None
         if self.phase == "settle":
             return self._remember(self._settle())
         if self.phase == "spin":
@@ -732,6 +746,34 @@ class Explorer:
             self._escape_log_at = self.t_s + 0.5
         return wheel_speeds(0.12, 0.0)
 
+    def _drive_off_block(self) -> tuple[float, float] | None:
+        """Leave a block that a spin has not opened."""
+        view = self._bubble_view
+        if view is None:
+            return None
+
+        def air(gap: float | None) -> float:
+            return 9.0 if gap is None else float(gap)
+
+        faces = {
+            "forward": air(view.forward),
+            "rear": air(view.rear),
+            "left": air(view.left),
+            "right": air(view.right),
+        }
+        open_name = max(faces, key=lambda name: faces[name])
+        if faces[open_name] < 0.20:
+            return None
+        self._reverse_left_m = 0.0
+        self._reverse_needs_gap = False
+        if self.t_s >= self._escape_log_at:
+            self._log(f"blocked spin, driving toward {open_name} gap={faces[open_name]:.2f}")
+            self._escape_log_at = self.t_s + 0.5
+        if open_name == "rear":
+            return wheel_speeds(-0.12, 0.0)
+        yaw = 0.45 if open_name == "left" else (-0.45 if open_name == "right" else 0.0)
+        return wheel_speeds(0.12, yaw)
+
     def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
@@ -763,6 +805,16 @@ class Explorer:
             self._arm_reverse(self._min_gap, blind=self._view_blind, reason="pivot")
             if self._reverse_left_m > 0.0:
                 return wheel_speeds(-0.12, self._turn * 0.08)
+        if (
+            blocked
+            and self._blocked_since is not None
+            and (self.t_s - self._blocked_since) > 1.2
+        ):
+            # A spin that does not open the gap is the scrub that walked
+            # the encoders. Drive toward the open face instead.
+            leaving_block = self._drive_off_block()
+            if leaving_block is not None:
+                return leaving_block
         if self.t_s < self._avoid_until or blocked:
             return wheel_speeds(0.0, self._turn)
         if self.t_s >= self._replan_at or not self.path_xy:
@@ -869,7 +921,7 @@ class Explorer:
         # Lined up, and the straight shell misses the map. Stay on this
         # heading instead of taking the next frontier back through the door.
         if door_mode in ("approach", "mouth") and kind == "clear" and v2 > 0.05 and abs(w2) < 0.08:
-            self._commit_until = max(self._commit_until, self.t_s + 12.0)
+            self._commit_until = max(self._commit_until, self.t_s + 16.0)
             self._commit_heading = self._segment_heading()
         return v2, w2
 
@@ -881,21 +933,21 @@ class Explorer:
         )
 
     def _forward_preference(self) -> tuple[float, float] | None:
-        if self._commit_until < 0.0 or self.t_s > self._commit_until + 15.0:
+        if self._commit_until < 0.0 or self.t_s > self._commit_until + 20.0:
             return None
         return (math.cos(self._commit_heading), math.sin(self._commit_heading))
 
     def _hold_goal(self) -> bool:
-        """Keep the current path while it is young or a crossing is committed.
+        """Keep the path while a lined-up doorway crossing is committed.
 
         Replanning every few seconds handed the -0.35 seed a frontier back
         in the main room seven seconds after it had entered the hall.
+        Holding every young goal did the opposite: the robot kept a
+        frontier it could not reach and spun in place.
         """
         if self.goal_xy is None or not self.path_xy:
             return False
-        if self.t_s < self._commit_until:
-            return True
-        return (self.t_s - self._goal_since) < 8.0
+        return self.t_s < self._commit_until
 
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 3.0

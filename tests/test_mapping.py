@@ -687,18 +687,71 @@ def test_an_unchanged_view_with_no_corners_is_still():
     assert moved is None or moved.reason != "still"
 
 
-def test_a_young_goal_survives_a_replan():
+def test_an_uncommitted_goal_is_not_held():
+    """A young goal can be replaced. Only a lined-up crossing is frozen."""
     from src.mapping.explore import Explorer
 
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
     bot.t_s = 10.0
-    bot.phase = "go"
     bot.goal_xy = (3.0, 0.5)
     bot.path_xy = [(1.0, 0.0), (3.0, 0.5)]
     bot._goal_since = 8.0
-    bot._plan()
-    assert bot.goal_xy == (3.0, 0.5)
-    assert bot.path_xy[0] == (1.0, 0.0)
+    bot._commit_until = -1.0
+    assert bot._hold_goal() is False
+    bot._commit_until = 20.0
+    assert bot._hold_goal() is True
+
+
+def test_a_spin_command_does_not_integrate_translation():
+    """Encoder travel during a commanded spin is scrub, not axle motion."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    bot._commanded = (-1.49, 1.49)
+    bot.step(dt_s=0.008, left_wheel_rad=0.25, right_wheel_rad=0.25, yaw_rate_rad_s=0.0)
+    assert abs(bot.odometry.x_m) < 1e-4
+    assert abs(bot.odometry.y_m) < 1e-4
+
+
+def test_radar_furniture_does_not_spin_an_open_shell():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, radar_blocked=True)
+    cmd_l, cmd_r = bot.step(
+        dt_s=0.008,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.0,
+        radar_blocked=True,
+    )
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+
+
+def test_a_still_sample_does_not_pull_yaw():
+    from src.mapping.fuse import MotionFusion
+    from src.mapping.odometry import WheelGyroOdometry
+
+    cam = _small_oak(48, 32)
+    depth = np.full((cam.height, cam.width), 1.6)
+    rgb = np.tile(np.linspace(20.0, 220.0, cam.width), (cam.height, 1))
+    fuse = MotionFusion(floor=False, visual=True)
+    odom = WheelGyroOdometry()
+    fuse.observe(odom, ds_raw_m=0.02, ds_applied_m=0.02, dyaw_rad=0.0, depth=depth, camera=cam, rgb=rgb)
+    yaw_before = odom.yaw_unwrapped_rad
+    fuse.observe(odom, ds_raw_m=0.02, ds_applied_m=0.02, dyaw_rad=0.01, depth=depth, camera=cam, rgb=rgb)
+    assert fuse.scene_visual_m == 0.0
+    assert abs(odom.yaw_unwrapped_rad - yaw_before) < 1e-9
+    assert fuse.visual_applied_yaw == 0.0
 
 
 def test_a_clear_door_crossing_is_committed():

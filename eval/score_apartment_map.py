@@ -201,11 +201,17 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Comparison PNG (default: <run>/map_vs_ground_truth.png)",
     )
+    parser.add_argument(
+        "--world",
+        type=Path,
+        default=None,
+        help="World file whose ButlerBot yaw is the spawn heading. Default is apartment.wbt.",
+    )
     args = parser.parse_args(argv)
     run = args.run
     labels, meta = load_run(run)
     gt = rasterize(resolution_m=float(meta.get("resolution_m", 0.05)))
-    sx, sy, yaw = spawn_pose()
+    sx, sy, yaw = spawn_pose(world=args.world)
     pred = warp_to_ground_truth(labels, meta, gt, (sx, sy), yaw)
     scores = score_labels(gt, pred)
     text = format_scores(scores)

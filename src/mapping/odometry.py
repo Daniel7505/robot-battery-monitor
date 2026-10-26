@@ -58,6 +58,12 @@ class WheelGyroOdometry:
         self.yaw_unwrapped_rad += float(delta_rad)
         self.yaw_rad = wrap_rad(self.yaw_unwrapped_rad)
 
+    def apply_correction(self, dx_m: float, dy_m: float, dyaw_rad: float) -> None:
+        """Shift the pose in the odometry frame. Used by scan matching."""
+        self.x_m += float(dx_m)
+        self.y_m += float(dy_m)
+        self.nudge_yaw(dyaw_rad)
+
     def update(
         self,
         left_rad: float,

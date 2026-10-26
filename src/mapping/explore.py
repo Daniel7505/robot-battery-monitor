@@ -29,7 +29,7 @@ from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
 from src.mapping.odometry import WheelGyroOdometry
-from src.mapping.scan_match import scan_fit, yaw_nudge
+from src.mapping.scan_match import pose_correction, scan_fit
 from src.mapping.slip import MotionCheck
 
 
@@ -155,12 +155,18 @@ class Explorer:
             dt,
             trust_translation=not drop,
         )
-        if hits is not None and hits.size and self.phase == "go" and not drop and self.t_s >= self._nudge_at:
-            pose_now = self.odometry.pose()
-            nudge = yaw_nudge(self.grid, pose_now, to_odom(hits, pose_now))
-            if nudge != 0.0:
-                self.odometry.nudge_yaw(nudge)
-                self._nudge_at = self.t_s + 0.5
+        corrected = False
+        if hits is not None and hits.size and self.phase in ("go", "spin") and not drop and self.t_s >= self._nudge_at:
+            # Match before the rays are painted, so this frame lands on the
+            # corrected pose. Contact is skipped: a scan into the lens is
+            # not a pose measurement.
+            dx, dy, dyaw = pose_correction(self.grid, self.odometry.pose(), hits[:, :2])
+            self._nudge_at = self.t_s + 0.4
+            if dx != 0.0 or dy != 0.0 or dyaw != 0.0:
+                self.odometry.apply_correction(dx, dy, dyaw)
+                corrected = True
+                self._slip_debt_m = max(0.0, self._slip_debt_m - 0.20)
+                self._log(f"match dx={dx:.3f} dy={dy:.3f} dyaw={dyaw:.3f}")
         x, y, yaw = self.odometry.pose()
         if hits is not None and hits.size and not self._view_blind:
             scanned = to_odom(hits, (x, y, yaw))
@@ -170,9 +176,9 @@ class Explorer:
                 fit = scan_fit(self.grid, scanned)
                 if fit == "support":
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.25)
-                elif fit == "disagree":
+                elif fit == "disagree" and not corrected:
                     self._slip_debt_m = min(2.0, self._slip_debt_m + 0.15)
-                else:
+                elif not corrected:
                     # Trusted driving with nothing to contradict it. A flat
                     # floor often cannot support or disagree.
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
@@ -399,10 +405,16 @@ class Explorer:
         # of unknown next to the robot cannot spin the run forever.
         if cell is not None and math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
             # One look. A second spin on the same door is how the Webots run
-            # sat against the loveseat for minutes.
+            # sat against the loveseat for minutes. An open view is not that
+            # case: reversing there turned the robot off the bedroom door.
             if self.t_s - self._last_spin_t < 25.0:
                 self._ban_current(immediate=True)
-                self._start_recovery()
+                nose = self._last_clear[0]
+                if self._view_blind or nose < 1.5:
+                    self._start_recovery()
+                else:
+                    self._log("goal already under the robot, skipping the reverse")
+                    self._plan(depth + 1)
                 return
             count = self._fails.get(cell, 0) + 1
             self._fails[cell] = count

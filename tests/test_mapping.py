@@ -27,7 +27,7 @@ from src.mapping.body import (
 from src.mapping.depth_cloud import body_points, forward_clearance
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import astar, dilate_disk, frontier_mask, line_up_with_openings, select_goal, traversable
-from src.mapping.scan_match import scan_fit
+from src.mapping.scan_match import pose_correction, scan_fit
 from src.mapping.grid import OccupancyGrid
 from src.mapping.noise import noisy_yaw_rate
 from src.mapping.odometry import WheelGyroOdometry
@@ -623,6 +623,58 @@ def test_spawn_alignment_round_trip_stays_close():
     assert scores["free_iou"] > 0.9
     assert scores["occupancy_iou"] > 0.85
     assert scores["wall_error_cm"] < 12.0
+
+
+def _wall_grid(hits: np.ndarray) -> OccupancyGrid:
+    grid = OccupancyGrid()
+    for _ in range(3):
+        grid.integrate((0.0, 0.0), hits, np.zeros((0, 2)))
+    return grid
+
+
+def _corner_hits() -> np.ndarray:
+    """An L of returns, so a yaw error moves the side wall off the map."""
+    front = np.stack((np.full(24, 1.60), np.linspace(-0.55, 0.55, 24)), axis=1)
+    side = np.stack((np.linspace(0.85, 1.55, 16), np.full(16, 0.70)), axis=1)
+    return np.vstack((front, side))
+
+
+def test_pose_correction_recovers_translation_and_yaw():
+    hits = _corner_hits()
+    grid = _wall_grid(hits)
+    wrong = (0.12, -0.09, 0.05)
+    dx, dy, dyaw = pose_correction(grid, wrong, hits)
+    assert math.hypot(wrong[0] + dx, wrong[1] + dy) < 0.08
+    assert abs(wrong[2] + dyaw) < 0.03
+
+
+def test_pose_correction_rejects_a_weak_or_empty_match():
+    hits = _corner_hits()
+    empty = OccupancyGrid()
+    assert pose_correction(empty, (0.0, 0.0, 0.0), hits[:8]) == (0.0, 0.0, 0.0)
+    assert pose_correction(empty, (0.0, 0.0, 0.0), hits) == (0.0, 0.0, 0.0)
+    # Occupied cells the 0.40 m window cannot reach.
+    far = np.stack((np.full(40, 4.0), np.linspace(-1.0, 1.0, 40)), axis=1)
+    grid = _wall_grid(far)
+    dx, dy, dyaw = pose_correction(grid, (0.0, 0.0, 0.0), hits)
+    assert (dx, dy, dyaw) == (0.0, 0.0, 0.0)
+
+
+def test_pose_correction_leaves_a_pose_that_already_explains_the_scan():
+    hits = _corner_hits()
+    grid = _wall_grid(hits)
+    dx, dy, dyaw = pose_correction(grid, (0.0, 0.0, 0.0), hits)
+    assert math.hypot(dx, dy) < 0.05
+    assert abs(dyaw) < 0.02
+
+
+def test_scan_correction_moves_the_odometry_pose():
+    odom = WheelGyroOdometry()
+    odom.apply_correction(0.10, -0.20, math.pi)
+    x, y, yaw = odom.pose()
+    assert x == pytest_approx(0.10)
+    assert y == pytest_approx(-0.20)
+    assert yaw == pytest_approx(math.pi) or yaw == pytest_approx(-math.pi)
 
 
 def test_solids_include_the_closed_doors():

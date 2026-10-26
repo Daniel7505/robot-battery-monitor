@@ -25,17 +25,22 @@ from src.mapping.body import (
     STOP_CLEARANCE_M,
     DepthCamera,
 )
-from src.mapping.bubble import assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
-from src.mapping.depth_cloud import blind_fraction, body_points, forward_clearance, to_odom
+from src.mapping.bubble import BubbleView, assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
+from src.mapping.depth_cloud import blind_fraction, body_points, depth_scene_motion_m, forward_clearance, to_odom
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import select_goal
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
 from src.mapping.odometry import WheelGyroOdometry, wrap_rad
+from src.mapping.pin import PinWatch
 from src.mapping.scan_match import scan_fit
 from src.mapping.slip import MotionCheck
 from src.mapping.wall_line import wall_yaw_delta
+
+# Through a doorway, not down an open room. Half of cruise, so a jamb
+# correction has time to finish before the tire meets the frame.
+DOOR_SPEED_M_S = 0.12
 
 
 class Explorer:
@@ -108,6 +113,23 @@ class Explorer:
         self._path_m = 0.0
         self._reverse_left_m = 0.0
         self._reverse_release = False
+        self._reverse_needs_gap = False
+        self._bubble_view: BubbleView | None = None
+        self._pin = PinWatch()
+        self._pin_idle_s = 0.0
+        self._pin_until = -1.0
+        self._mark_xy = (0.0, 0.0)
+        self._prev_depth = None
+        self._prev_depth_yaw = 0.0
+        self._side_since: float | None = None
+        self._side_sign = 0.0
+        self._side_escape_sign = 0.0
+        self._side_escape_until = -1.0
+        self._stall_t = 0.0
+        self._stall_exp = 0.0
+        self._stall_act = 0.0
+        self._stall_trans = 0.0
+        self._stall_latched = False
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -128,6 +150,7 @@ class Explorer:
         rgb=None,
     ) -> tuple[float, float]:
         dt = max(0.0, float(dt_s))
+        self._step_dt = dt
         self.t_s += dt
         stalled = self._wheels_stalled(left_wheel_rad, right_wheel_rad, dt)
         if stalled:
@@ -172,7 +195,7 @@ class Explorer:
         # Ordinary braking (a visible wall inside the stop range) still
         # counts too, or the pose would sit a halt short of every wall.
         forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
-        in_contact = stalled or (self._view_blind and forward_cmd)
+        in_contact = stalled or (self._view_blind and forward_cmd) or self.t_s < self._pin_until
         drop = False
         if depth is not None or self._view_blind or in_contact:
             before = self._motion.events
@@ -194,6 +217,8 @@ class Explorer:
         applied = 0.0 if drop else ds
         self._path_m += abs(applied)
         floor_image = floor if self.floor_enabled else None
+        self._fusion.scene_floor_m = None
+        self._fusion.scene_visual_m = None
         if self.fusion_enabled or self.floor_enabled:
             fused = self._fusion.observe(
                 self.odometry,
@@ -210,6 +235,7 @@ class Explorer:
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
+        self._watch_pin(depth, ds)
         corrected = False
         x, y, yaw = self.odometry.pose()
         if (
@@ -246,9 +272,19 @@ class Explorer:
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
                 self._agree_at = self.t_s + 0.5
         view = assess_bubble(clearance, blind=self._view_blind, proximity=proximity)
+        self._bubble_view = view
         self._bubble_gap = view.forward
         self._min_gap = view.minimum
-        if self._reverse_left_m > 0.0:
+        self._watch_side(view)
+        if self._reverse_left_m > 0.0 and self._reverse_needs_gap:
+            # Encoder distance along a jamb spends the budget while the
+            # tire is still on the frame. Wait until that side opens.
+            if self._side_opened(view) or self.t_s > self._reverse_until:
+                self._reverse_left_m = 0.0
+                self._reverse_needs_gap = False
+                self._side_escape_sign = 0.0
+                self._side_since = None
+        elif self._reverse_left_m > 0.0:
             if ds >= -1e-4:
                 # Hubs have not started going backward. A stall would
                 # otherwise burn the timer and the backup would expire
@@ -374,20 +410,158 @@ class Explorer:
 
     def _remember(self, speeds: tuple[float, float]) -> tuple[float, float]:
         self._commanded = (float(speeds[0]), float(speeds[1]))
+        self._mark_xy = self.odometry.pose()[:2]
         return speeds
 
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
-        """A forward command the hubs did not follow. A spin in place is not a stall."""
+        """A translation command the hubs did not follow. A spin in place is not a stall.
+
+        One 8 ms step of a backup is about 0.01 rad. The old per-step floor
+        of 0.02 rad meant a slow command could never count, so a tire
+        scrubbing a door jamb looked like ordinary driving.
+        """
         if self._wheels is None or dt <= 0.0:
-            return False
+            return self._stall_latched
         cmd_l, cmd_r = self._commanded
-        if abs(cmd_l + cmd_r) < 0.5:
-            return False
-        expected = 0.5 * (abs(cmd_l) + abs(cmd_r)) * dt
-        if expected < 0.02:
-            return False
-        actual = 0.5 * (abs(left_rad - self._wheels[0]) + abs(right_rad - self._wheels[1]))
-        return actual < 0.30 * expected
+        self._stall_t += dt
+        self._stall_exp += 0.5 * (abs(cmd_l) + abs(cmd_r)) * dt
+        self._stall_act += 0.5 * (
+            abs(left_rad - self._wheels[0]) + abs(right_rad - self._wheels[1])
+        )
+        self._stall_trans += abs(cmd_l + cmd_r) * dt
+        if self._stall_t >= 0.20:
+            expected = self._stall_exp
+            actual = self._stall_act
+            trans = self._stall_trans / self._stall_t
+            self._stall_t = 0.0
+            self._stall_exp = 0.0
+            self._stall_act = 0.0
+            self._stall_trans = 0.0
+            self._stall_latched = expected >= 0.04 and trans > 0.4 and actual < 0.30 * expected
+        return self._stall_latched
+
+    def _watch_pin(self, depth, ds: float) -> None:
+        """Freeze wheel translation when depth, floor, and visual odometry are all still.
+
+        The forward range can keep changing while the shell yaws against a
+        jamb, so the old clearance check never closed. These three measure
+        translation. A fast yaw no longer throws their readings away.
+        """
+        depth_m = None
+        if depth is not None and self._prev_depth is not None:
+            dyaw = self.odometry.yaw_unwrapped_rad - self._prev_depth_yaw
+            depth_m = depth_scene_motion_m(self._prev_depth, depth, self.camera, dyaw)
+        if depth is not None:
+            self._prev_depth = depth
+            self._prev_depth_yaw = self.odometry.yaw_unwrapped_rad
+        translating = abs(self._commanded[0] + self._commanded[1]) > 0.4
+        if not translating:
+            self._pin_idle_s += self._step_dt
+            if self._pin_idle_s > 0.25:
+                self._pin.reset()
+            return
+        self._pin_idle_s = 0.0
+        if self._pin.wheel_m <= 0.0:
+            self._pin.anchor(self._mark_xy[0], self._mark_xy[1])
+        self._pin.add(ds, depth_m, self._fusion.scene_floor_m, self._fusion.scene_visual_m)
+        if not self._pin.ready():
+            return
+        pinned = self._pin.pinned()
+        if pinned:
+            self.odometry.x_m = self._pin.x0
+            self.odometry.y_m = self._pin.y0
+            self._pin_until = self.t_s + 0.6
+            self._log("pinned, depth floor and visual still, wheel translation frozen")
+            self._start_recovery()
+        self._pin.reset()
+
+    def _pressing_side(self, view: BubbleView) -> float:
+        """+1 when the left shell is on a surface, -1 for the right, else 0."""
+        left = 99.0 if view.left is None else view.left
+        right = 99.0 if view.right is None else view.right
+        if left < 0.09 and left + 0.04 < right:
+            return 1.0
+        if right < 0.09 and right + 0.04 < left:
+            return -1.0
+        return 0.0
+
+    def _watch_side(self, view: BubbleView) -> None:
+        """A side gap that stays shut is a jamb, not a nose contact.
+
+        The bubble's reverse drives along the heading and used to count
+        encoder radians, so a tire skidding on the frame spent the budget
+        and the same doorway was tried again. Hold the press, then yaw
+        off that side and keep reversing until the gap opens.
+        """
+        if self.phase != "go" or self.t_s < self._side_escape_until:
+            return
+        side = self._pressing_side(view)
+        if side == 0.0:
+            self._side_sign = 0.0
+            self._side_since = None
+            return
+        if side != self._side_sign or self._side_since is None:
+            self._side_sign = side
+            self._side_since = self.t_s
+            return
+        if self.t_s - self._side_since >= 0.45:
+            self._start_side_escape(side, view)
+
+    def _side_opened(self, view: BubbleView) -> bool:
+        if self._side_escape_sign > 0.0:
+            return view.left is None or view.left > 0.14
+        if self._side_escape_sign < 0.0:
+            return view.right is None or view.right > 0.14
+        return True
+
+    def _start_side_escape(self, side: float, view: BubbleView) -> None:
+        which = "left" if side > 0.0 else "right"
+        gap = view.left if side > 0.0 else view.right
+        shown = -1.0 if gap is None else float(gap)
+        self._log(f"side contact on the {which}, backing off the frame gap={shown:.2f}")
+        key = self._goal_key()
+        if key is not None:
+            self._fails[key] = self._fails.get(key, 0) + 1
+            self._blacklist(key, radius=3, ttl_s=8.0)
+        self.goal_xy = None
+        self.path_xy = []
+        self._replan_at = self.t_s + 1.2
+        self._side_escape_sign = side
+        self._side_escape_until = self.t_s + 1.3
+        self._reverse_left_m = 0.22
+        self._reverse_until = self._side_escape_until
+        self._reverse_needs_gap = True
+        self._reverse_release = False
+        self._recover_until = max(self._recover_until, self.t_s + 0.8)
+        self._progress_t = self._side_escape_until
+        self._progress_xy = self.odometry.pose()[:2]
+        self._confident_after = max(self._confident_after, self.t_s + 4.0)
+        self._turn = -side * SPIN_RAD_S
+        self.phase = "go"
+        self.done = False
+
+    def _door_yaw(self, left_clear: float, right_clear: float) -> tuple[float, bool]:
+        """Centre on a doorway before the shell is in it, then hold that line.
+
+        Side sonars are the air beside the tires. Depth shoulders are the
+        jambs still ahead of the nose. A press closer than 5 cm is the
+        side-escape case, not a centering command.
+        """
+        view = self._bubble_view
+        left_s = None if view is None else view.left
+        right_s = None if view is None else view.right
+        nose = self._last_clear[0]
+        if (
+            left_s is not None
+            and right_s is not None
+            and 0.05 < left_s < 0.50
+            and 0.05 < right_s < 0.50
+        ):
+            return self._jamb_yaw(left_s, right_s), True
+        nearer = min(float(left_clear), float(right_clear))
+        if left_clear < 1.20 and right_clear < 1.20 and nose > nearer + 0.20:
+            return self._jamb_yaw(left_clear, right_clear), True
+        return 0.0, False
 
     def _log(self, message: str) -> None:
         print(f"MAPPING t={self.t_s:.1f}s {message}", flush=True)
@@ -498,6 +672,10 @@ class Explorer:
     def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
+        if self._side_escape_sign != 0.0 and self.t_s <= self._side_escape_until:
+            # Yaw away from the jamb while reversing. A straight reverse
+            # stays on a frame that is beside the shell.
+            return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
         if self._reverse_left_m > 0.0 and self.t_s <= self._reverse_until:
             # Nearly straight. A hard yaw here swings a tire into the jamb
             # the reverse was supposed to leave.
@@ -518,15 +696,19 @@ class Explorer:
         if self.phase != "go" or self.done or not self.path_xy:
             return 0.0, 0.0
         v, w, arrived = pure_pursuit(self.odometry.pose(), self.path_xy, arrive_m=ARRIVE_M)
-        w += self._jamb_yaw(left_clear, right_clear)
-        if left_clear < 0.90 and right_clear < 0.90:
-            v = min(v, 0.16)
+        door_w, in_door = self._door_yaw(left_clear, right_clear)
+        w += door_w
+        if in_door:
+            v = min(v, DOOR_SPEED_M_S)
+        elif left_clear < 0.90 and right_clear < 0.90:
+            v = min(v, DOOR_SPEED_M_S)
         v = min(v, max(0.0, cap))
         nose_open = self._bubble_gap is None or self._bubble_gap > 0.12
         if arrived and left_clear < 1.05 and right_clear < 1.05 and nose_open:
             # Both jambs are beside us and the nose is clear. Drive through
             # instead of spinning in the opening.
-            return wheel_speeds(0.16, self._jamb_yaw(left_clear, right_clear))
+            through_w, _in_door = self._door_yaw(left_clear, right_clear)
+            return wheel_speeds(DOOR_SPEED_M_S, through_w)
         if arrived:
             self._last_spin_t = self.t_s
             self.phase = "spin"

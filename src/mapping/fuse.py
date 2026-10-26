@@ -55,6 +55,10 @@ class MotionFusion:
         self.floor_applied_yaw = 0.0
         self.landmarks = None
         self.last_slip = ""
+        # Latest scene translation, even when a fast yaw keeps it out of the pose.
+        # None means this step had no reading. A pin needs all three.
+        self.scene_floor_m: float | None = None
+        self.scene_visual_m: float | None = None
         self._floor = _Interval()
         self._visual = _Interval()
         self._visual_still = 0
@@ -77,6 +81,8 @@ class MotionFusion:
         """Fold this step into the pose. Returns ``slip``, ``floor``, ``visual``, or ``''``."""
         self.landmarks = None
         self.last_slip = ""
+        self.scene_floor_m = None
+        self.scene_visual_m = None
         if not self.enabled:
             return ""
         self._floor.add(ds_raw_m, ds_applied_m, dyaw_rad)
@@ -96,6 +102,9 @@ class MotionFusion:
                 self.landmarks = sample_v.landmarks
                 if sample_v.ok:
                     self.visual_meas_yaw += float(sample_v.dyaw_rad)
+                    # The pose update below ignores a fast yaw. The pin
+                    # still needs the translation the corners measured.
+                    self.scene_visual_m = math.hypot(float(sample_v.dx_m), float(sample_v.dy_m))
                 expect_px = 0.0
                 if camera is not None and sample_v.range_m > 0.2:
                     expect_px = abs(self._visual.raw_m) / sample_v.range_m * float(camera.focal_px)
@@ -142,6 +151,8 @@ class MotionFusion:
             if not self._floor.armed:
                 self._reset_floor()
             return ""
+        if sample.ok:
+            self.scene_floor_m = math.hypot(float(sample.dx_m), float(sample.dy_m))
         if not sample.ok or abs(self._floor.yaw_rad) > 0.08:
             if abs(self._floor.raw_m) > 0.05 or abs(self._floor.yaw_rad) > 0.08:
                 self._reset_floor()

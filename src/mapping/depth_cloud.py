@@ -141,6 +141,50 @@ def blind_fraction(cam: DepthCamera, depth_x: np.ndarray, *, stride: int = 1) ->
     return float(1.0 - np.count_nonzero(usable) / float(sampled.size))
 
 
+def depth_scene_motion_m(
+    prev,
+    curr,
+    camera: DepthCamera,
+    dyaw_rad: float,
+) -> float | None:
+    """Translation of the depth scene, in metres, after the gyro yaw is taken out.
+
+    A pure turn slides the image sideways and is not travel. The previous
+    frame is shifted by ``focal * dyaw`` so the residual is the range change
+    a translation would make. ``None`` means there were not enough pixels
+    in both frames: that is not a reading of "still".
+    """
+    if abs(float(dyaw_rad)) > 0.40:
+        return None
+    previous = np.asarray(prev, dtype=np.float64)
+    current = np.asarray(curr, dtype=np.float64)
+    if previous.shape != current.shape or previous.ndim != 2 or previous.size == 0:
+        return None
+    height, width = current.shape
+    shift = int(round(float(camera.focal_px) * float(dyaw_rad)))
+    aligned = np.full_like(previous, np.inf)
+    if shift >= 0:
+        if shift < width:
+            aligned[:, shift:] = previous[:, : width - shift]
+    elif -shift < width:
+        aligned[:, : width + shift] = previous[:, -shift:]
+    r0, r1 = int(height * 0.25), max(int(height * 0.25) + 1, int(height * 0.70))
+    c0, c1 = int(width * 0.20), max(int(width * 0.20) + 1, int(width * 0.80))
+    left = aligned[r0:r1, c0:c1]
+    right = current[r0:r1, c0:c1]
+    usable = (
+        np.isfinite(left)
+        & np.isfinite(right)
+        & (left >= camera.min_range_m)
+        & (right >= camera.min_range_m)
+        & (left <= camera.max_range_m)
+        & (right <= camera.max_range_m)
+    )
+    if int(np.count_nonzero(usable)) < 30:
+        return None
+    return float(np.median(np.abs(left[usable] - right[usable])))
+
+
 def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
     """Nearest range in the nose, the left shoulder, and the right shoulder.
 

@@ -16,6 +16,7 @@ from src.mapping.bubble import (
 from src.mapping.floor_flow import FloorFlow, metres_per_px
 from src.mapping.fuse import MotionFusion
 from src.mapping.loop_close import LoopCloser
+from src.mapping.explore import Explorer
 from src.mapping.odometry import WheelGyroOdometry
 
 
@@ -41,6 +42,40 @@ def test_the_body_fits_an_81cm_door_with_the_inflation():
     air = door / 2.0 - SHELL_HALF_M
     assert air > 0.15
     assert SHELL_HALF_M <= ROBOT_RADIUS_M < door / 2.0
+
+
+def test_three_still_sensors_are_a_pin_and_one_missing_is_not():
+    from src.mapping.pin import PinWatch
+
+    pin = PinWatch()
+    pin.anchor(1.0, 2.0)
+    for _ in range(5):
+        pin.add(0.012, 0.0, 0.0, 0.0)
+    assert pin.pinned()
+    assert pin.x0 == 1.0 and pin.y0 == 2.0
+    moving = PinWatch()
+    for _ in range(5):
+        moving.add(0.012, 0.012, 0.012, 0.012)
+    assert moving.ready()
+    assert not moving.pinned()
+    short_a_sensor = PinWatch()
+    for _ in range(5):
+        short_a_sensor.add(0.012, 0.0, 0.0, None)
+    assert short_a_sensor.ready()
+    assert not short_a_sensor.pinned()
+
+
+def test_a_slow_command_the_hubs_ignore_is_a_stall():
+    """Backup speed is about 1.5 rad/s. One 8 ms step is under the old 0.02 rad floor."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer()
+    bot._wheels = (0.0, 0.0)
+    bot._commanded = (1.5, 1.5)
+    stalled = False
+    for _ in range(40):
+        stalled = bot._wheels_stalled(0.0, 0.0, 0.008)
+    assert stalled
 
 
 def test_floor_agreement_does_not_write_yaw():

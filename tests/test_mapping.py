@@ -460,6 +460,129 @@ def test_a_door_jamb_is_not_the_nose_clearance():
     assert right == pytest_approx(99.0)
 
 
+def test_depth_scene_motion_ignores_a_pure_yaw():
+    """A turn slides the image. The residual after that shift is translation."""
+    from src.mapping.depth_cloud import depth_scene_motion_m
+
+    cam = _small_oak(80, 50)
+    boxes = [Box(1.8, -2.0, 0.0, 1.9, 2.0, 2.2), Box(0.4, 0.35, 0.0, 1.9, 0.55, 2.2)]
+    still = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    yawed = render_xdepth(cam, (0.0, 0.0, 0.10), boxes)
+    forward = render_xdepth(cam, (0.08, 0.0, 0.0), boxes)
+    yaw_motion = depth_scene_motion_m(still, yawed, cam, 0.10)
+    drive_motion = depth_scene_motion_m(still, forward, cam, 0.0)
+    assert yaw_motion is not None and drive_motion is not None
+    assert yaw_motion < 0.03
+    assert drive_motion > 0.05
+
+
+def test_a_still_scene_with_turning_wheels_freezes_translation():
+    """Depth, floor, and visual odometry all still while the hubs are commanded.
+
+    That is the door-G wedge: the tires scrubbed, the forward view still
+    showed the room, and the odometry walked off. The pose goes back to
+    where the stretch started.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._confident_after = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for _ in range(16):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        # Hubs follow a forward command whether or not the planner asked.
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+    assert bot._pin_until > 0.0
+
+
+def test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it():
+    """The left sonar stays on the frame. Reverse has to yaw away from it.
+
+    A straight backup counted wheel radians and the tire never left the
+    jamb. The command here is a reverse with the right hub faster, which
+    is a yaw to the right, off the left wall.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    saw_escape = False
+    for _ in range(20):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            proximity={"us_left": 0.04, "us_right": 0.40},
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        if cmd_l < -0.05 and cmd_r < cmd_l - 0.3:
+            saw_escape = True
+    assert saw_escape
+    assert bot._side_escape_sign > 0.0
+
+
+def test_a_door_is_approached_slowly_on_the_centre_line():
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.5, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.5, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.70, 1.00)
+    # Left sonar closer: the centre line is to the right, so yaw is negative.
+    bot._bubble_view = BubbleView(1.6, 0.22, 0.40, None, 0.22)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.22
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.70, 1.00)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert 0.02 < v <= DOOR_SPEED_M_S + 1e-6
+    assert w < -0.05
+
+
 def test_jamb_steer_only_centres_a_two_sided_gap():
     from src.mapping.explore import Explorer
 

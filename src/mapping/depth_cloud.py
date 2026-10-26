@@ -122,16 +122,16 @@ def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
     """Nearest obstacle range in the centre, left, and right of the robot.
 
     A miss (no points) is a large range, so the side with no return is
-    treated as open. Centre uses |y| < 0.18 m, ahead of the axle.
+    treated as open. Centre is the corridor the body will actually enter
+    (|y| < 0.20 m), wide enough to see a sofa beside the nose and narrow
+    enough that a centred 0.81 m door still reads as open.
     """
     if hits_body.size == 0:
         return (99.0, 99.0, 99.0)
     x = hits_body[:, 0]
     y = hits_body[:, 1]
     front = (x > 0.15) & (x < 2.5)
-    # Narrow cone: a door jamb beside the body is not "in front".
-    # Stopping for it traps the robot in the opening.
-    centre = front & (np.abs(y) < 0.12)
+    centre = front & (np.abs(y) < 0.20)
     left = front & (y >= 0.05)
     right = front & (y <= -0.05)
 

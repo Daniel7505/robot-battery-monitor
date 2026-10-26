@@ -46,6 +46,75 @@ def _small_oak(width: int = 64, height: int = 40) -> DepthCamera:
     )
 
 
+def test_rest_gyro_bias_does_not_walk_the_heading():
+    """oak_gyro reads +0.001 rad/s while the hubs are still.
+
+    Integrating that for the four minutes the robot sat in the doorway
+    was about 14 degrees of false yaw. The bias is learned and not integrated.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(400):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    assert abs(odom.pose()[2]) < math.radians(0.5)
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=3e-4)
+
+
+def test_static_depth_with_spinning_wheels_is_slip_not_motion():
+    """Encoders advance, the gyro stays at its rest bias, the wall does not get closer.
+
+    That is the wheel-slip half of the Webots run: about a metre of false
+    travel and a map warped enough to look finished. The pose must stay put,
+    the failed frontier must be dropped, and the run must not end.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    wall = Box(0.95, -1.2, 0.0, 1.08, 1.2, 2.2)
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [wall])
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    saw_reverse = False
+    dt = 0.05
+    # Wedged: hubs do not turn, gyro sits on its rest bias. Heading must not walk.
+    for _ in range(300):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+    assert abs(bot.pose()[2]) < math.radians(1.0)
+    # Slip: hubs follow the command, the camera does not move.
+    for _ in range(120):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        left += cmd_l * dt
+        right += cmd_r * dt
+    x, y, yaw = bot.pose()
+    assert math.hypot(x, y) < 0.25
+    assert abs(yaw) < math.radians(2.0)
+    assert saw_reverse
+    assert bot.slip_events >= 1
+    assert bot._banned
+    assert not bot.done
+
+
 def test_straight_odometry_and_gyro_heading():
     odom = WheelGyroOdometry()
     ticks = 100  # exact multiple of the 0.0015 rad encoder

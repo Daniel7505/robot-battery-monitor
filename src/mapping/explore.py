@@ -27,6 +27,8 @@ from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
 from src.mapping.odometry import WheelGyroOdometry
+from src.mapping.scan_match import yaw_nudge
+from src.mapping.slip import MotionCheck
 
 
 class Explorer:
@@ -58,6 +60,14 @@ class Explorer:
         self._stuck_anchor: tuple[float, float, float] | None = None
         self._wheels: tuple[float, float] | None = None
         self._commanded = (0.0, 0.0)
+        self._motion = MotionCheck()
+        self._progress_xy = (0.0, 0.0)
+        self._progress_t = 0.0
+        self._recover_until = -1.0
+        self._confident_after = 0.0
+        self._last_spin_t = -100.0
+        self._nudge_at = 0.0
+        self.slip_events = 0
         self.frontiers_left = 0
 
     def pose(self) -> tuple[float, float, float]:
@@ -80,10 +90,9 @@ class Explorer:
         if self._wheels_stalled(left_wheel_rad, right_wheel_rad, dt):
             self._note_contact()
         self._wheels = (float(left_wheel_rad), float(right_wheel_rad))
-        self.odometry.update(left_wheel_rad, right_wheel_rad, yaw_rate_rad_s, dt)
-        x, y, yaw = self.odometry.pose()
-        self.grid.stamp_footprint(x, y)
+        ds = self.odometry.pending_translation(left_wheel_rad, right_wheel_rad)
         clearance = left_clear = right_clear = 99.0
+        hits = floors = sensor = None
         if depth is not None:
             hits, floors, sensor = body_points(
                 self.camera,
@@ -92,12 +101,44 @@ class Explorer:
                 pitch_rad=pitch_rad,
                 stride=self.stride,
             )
-            origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
-            self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
             clearance, left_clear, right_clear = forward_clearance(hits)
             prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
         else:
             prefer = self._turn
+        drop = False
+        if depth is not None:
+            before = self._motion.events
+            drop = self._motion.observe(dt, ds, clearance)
+            if self._motion.events > before:
+                self._note_slip()
+        self.odometry.update(
+            left_wheel_rad,
+            right_wheel_rad,
+            yaw_rate_rad_s,
+            dt,
+            trust_translation=not drop,
+        )
+        if hits is not None and hits.size and self.phase == "go" and not drop and self.t_s >= self._nudge_at:
+            pose_now = self.odometry.pose()
+            nudge = yaw_nudge(self.grid, pose_now, to_odom(hits, pose_now))
+            if nudge != 0.0:
+                self.odometry.nudge_yaw(nudge)
+                self._nudge_at = self.t_s + 0.5
+        x, y, yaw = self.odometry.pose()
+        self.grid.stamp_footprint(x, y)
+        if hits is not None and sensor is not None and floors is not None:
+            origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
+            self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
+        if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
+            self._progress_xy = (x, y)
+            self._progress_t = self.t_s
+        elif (
+            self.phase == "go"
+            and not self.done
+            and self.t_s >= self._recover_until
+            and (self.t_s - self._progress_t) > 3.5
+        ):
+            self._start_recovery()
         blocked = radar_blocked or clearance < STOP_CLEARANCE_M
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
@@ -122,6 +163,8 @@ class Explorer:
             self.phase = "go"
             self._replan_at = -1.0
             self.goal_xy = None
+            self._progress_t = self.t_s
+            self._progress_xy = self.odometry.pose()[:2]
             return self._go(False, 99.0)
         return wheel_speeds(0.0, SPIN_RAD_S)
 
@@ -151,6 +194,35 @@ class Explorer:
         self.path_xy = []
         self._replan_at = self._avoid_until
 
+    def _note_slip(self) -> None:
+        self.slip_events += 1
+        self._confident_after = max(self._confident_after, self.t_s + 6.0)
+        self._start_recovery()
+
+    def _start_recovery(self) -> None:
+        """Reverse, drop the frontier ahead, and refuse to call the run finished."""
+        if self.t_s < self._recover_until:
+            return
+        x, y, yaw = self.odometry.pose()
+        self._ban_current(immediate=True)
+        self._blacklist_xy(x + math.cos(yaw) * 0.50, y + math.sin(yaw) * 0.50, radius=12)
+        self.grid.mark_contact(x + math.cos(yaw) * 0.36, y + math.sin(yaw) * 0.36)
+        self._reverse_until = self.t_s + 1.1
+        self._avoid_until = self._reverse_until
+        self._recover_until = self._reverse_until + 0.4
+        self._progress_t = self._recover_until
+        self._progress_xy = (x, y)
+        self._confident_after = max(self._confident_after, self.t_s + 6.0)
+        self._turn = SPIN_RAD_S if self._turn < 0.0 else -SPIN_RAD_S
+        self.path_xy = []
+        self.goal_xy = None
+        self._replan_at = self._recover_until
+        self.phase = "go"
+        self.done = False
+
+    def _confident(self) -> bool:
+        return self.t_s >= self._confident_after
+
     def _go(self, blocked: bool, clearance: float) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
@@ -170,6 +242,7 @@ class Explorer:
             span = max(0.15, 1.15 - STOP_CLEARANCE_M)
             v *= max(0.30, (clearance - STOP_CLEARANCE_M) / span)
         if arrived:
+            self._last_spin_t = self.t_s
             self.phase = "spin"
             self._spin_start = None
             self.goal_xy = None
@@ -181,28 +254,30 @@ class Explorer:
         self._replan_at = self.t_s + 1.0
         x, y, _yaw = self.odometry.pose()
         if depth > 6:
-            self.phase = "done"
-            self.done = True
+            self._give_up()
             return
         chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._banned)
         if chosen is None:
-            self.frontiers_left = 0
-            self.goal_xy = None
-            self.path_xy = []
-            self.phase = "done"
-            self.done = True
+            self._give_up()
             return
         goal, path = chosen
         cell = self.grid.cell_of(goal[0], goal[1])
         # Already standing on it: look once more, then drop it so a speck
         # of unknown next to the robot cannot spin the run forever.
         if cell is not None and math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
+            # One look. A second spin on the same door is how the Webots run
+            # sat against the loveseat for minutes.
+            if self.t_s - self._last_spin_t < 25.0:
+                self._ban_current(immediate=True)
+                self._start_recovery()
+                return
             count = self._fails.get(cell, 0) + 1
             self._fails[cell] = count
             if count >= 2:
-                self._banned.add(cell)
+                self._blacklist(cell, radius=4)
                 self._plan(depth + 1)
                 return
+            self._last_spin_t = self.t_s
             self.phase = "spin"
             self._spin_start = None
             self.goal_xy = None
@@ -221,7 +296,25 @@ class Explorer:
         cell = self.grid.cell_of(self.goal_xy[0], self.goal_xy[1])
         return cell
 
-    def _ban_current(self) -> None:
+    def _give_up(self) -> None:
+        if not self._confident():
+            # A smeared map can hide every frontier. Look again once the
+            # pose has stopped slipping instead of declaring the apartment done.
+            self.goal_xy = None
+            self.path_xy = []
+            self.phase = "go"
+            self.done = False
+            self._reverse_until = max(self._reverse_until, self.t_s + 0.8)
+            self._replan_at = self.t_s + 1.5
+            self._progress_t = self._replan_at
+            return
+        self.frontiers_left = 0
+        self.goal_xy = None
+        self.path_xy = []
+        self.phase = "done"
+        self.done = True
+
+    def _ban_current(self, *, immediate: bool = False) -> None:
         key = self._goal_key()
         self.goal_xy = None
         self.path_xy = []
@@ -230,14 +323,21 @@ class Explorer:
             return
         count = self._fails.get(key, 0) + 1
         self._fails[key] = count
-        if count >= 2:
+        if immediate or count >= 2:
             # Drop the whole nearby edge, not one cell. A doorway frontier
             # is dozens of cells and banning them one at a time never leaves.
-            radius = 4
-            for dy in range(-radius, radius + 1):
-                for dx in range(-radius, radius + 1):
-                    if dy * dy + dx * dx <= radius * radius:
-                        self._banned.add((key[0] + dy, key[1] + dx))
+            self._blacklist(key, radius=12 if immediate else 4)
+
+    def _blacklist(self, cell: tuple[int, int], *, radius: int) -> None:
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if dy * dy + dx * dx <= radius * radius:
+                    self._banned.add((cell[0] + dy, cell[1] + dx))
+
+    def _blacklist_xy(self, x: float, y: float, *, radius: int) -> None:
+        cell = self.grid.cell_of(x, y)
+        if cell is not None:
+            self._blacklist(cell, radius=radius)
 
     def _goal_expired(self) -> bool:
         return self.goal_xy is not None and (self.t_s - self._goal_since) > 40.0

@@ -18,9 +18,10 @@ WHEEL_TRACK_M = 0.34
 # Software stand-in for a 4096-count encoder. The shared PositionSensors
 # stay at infinite resolution so warehouse energy and ABS are unchanged.
 ENCODER_RESOLUTION_RAD = 0.0015
-# Planning inflation. Hubs are at ±0.17 m. 0.24 m still leaves a centre
-# line through the 0.81 m bedroom door.
-ROBOT_RADIUS_M = 0.24
+# Planning inflation. Hubs are at ±0.17 m. 0.26 m still leaves a centre
+# line through the 0.81 m bedroom door, and keeps the body off a sofa
+# that is only one cell thick in the grid.
+ROBOT_RADIUS_M = 0.26
 GRID_RESOLUTION_M = 0.05
 GRID_SIZE_M = 20.0
 MIN_FRONTIER_M = 0.30
@@ -44,7 +45,7 @@ ARRIVE_M = 0.28
 # ignores returns closer than 0.35 m, so the nearest visible obstacle sits
 # near x = 0.50 m. Stopping inside that hole means the robot never sees
 # the wall it is about to touch.
-STOP_CLEARANCE_M = 0.62
+STOP_CLEARANCE_M = 0.70
 
 
 @dataclass(frozen=True)

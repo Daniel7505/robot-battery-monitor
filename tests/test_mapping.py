@@ -58,12 +58,19 @@ def test_straight_driving_learns_the_gyro_bias():
     odom.update(0.0, 0.0, 0.0, 0.05)
     left = 0.0
     step = 0.22 / WHEEL_RADIUS_M * 0.05
-    for _ in range(200):
+    for _ in range(800):
         left += step
         odom.update(left, left, 0.001, 0.05)
-    assert odom.bias_rad_s == pytest_approx(0.001, abs=2e-4)
-    assert abs(odom.yaw_unwrapped_rad) < math.radians(1.5)
-    for _ in range(11800):
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=3e-4)
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(2.0)
+    # Two seconds where the gyro and the hubs disagree by more than a
+    # bias must not be learned. That is scrub, not the lookup offset.
+    held = odom.bias_rad_s
+    for _ in range(40):
+        left += step
+        odom.update(left, left, 0.02, 0.05)
+    assert abs(odom.bias_rad_s - held) < 5e-4
+    for _ in range(11000):
         left += step
         odom.update(left, left, 0.001, 0.05)
     assert abs(math.degrees(odom.yaw_unwrapped_rad)) < 5.0

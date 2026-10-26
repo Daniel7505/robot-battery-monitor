@@ -41,6 +41,7 @@ class WheelGyroOdometry:
         self.wheel_yaw = 0.0
         self.still_s = 0.0
         self.moving_s = 0.0
+        self._straight_s = 0.0
         self._prev_left: float | None = None
         self._prev_right: float | None = None
 
@@ -111,16 +112,23 @@ class WheelGyroOdometry:
         self.moving_s += dt
         # The lookup table adds about +0.001 rad/s at every rate, not only
         # at rest. A moving robot almost never sits still long enough for
-        # the rest learner, so the bias is also taken from straight
-        # driving: when the two hubs agree, their yaw rate is the turn,
-        # and the gyro's extra rate is the bias. A real turn is left
-        # alone, because hub slip and the gyro's rate noise are both
-        # largest there.
+        # the rest learner. While both hubs agree the body is not turning,
+        # the gyro's extra rate is that same bias. The update is slow and
+        # it ignores a residual big enough to be wheel scrub: a fast
+        # update on the first Webots seed walked the bias to -0.014 rad/s
+        # and the heading with it. A real turn is not used. Hub slip and
+        # the gyro's rate noise are both largest there.
         wheel_rate = wheel_dyaw / dt
-        if abs(ds) >= 1e-4 and abs(wheel_rate) < 0.08:
-            alpha = min(1.0, dt * 0.6)
-            self.bias_rad_s += alpha * ((rate_in - wheel_rate) - self.bias_rad_s)
-            self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
+        residual = rate_in - wheel_rate
+        straight = abs(ds) >= 1e-4 and abs(wheel_rate) < 0.02 and abs(rate_in) < 0.04 and abs(residual) < 0.006
+        if straight:
+            self._straight_s += dt
+            if self._straight_s >= 0.35:
+                alpha = min(1.0, dt * 0.08)
+                self.bias_rad_s += alpha * (residual - self.bias_rad_s)
+                self.bias_rad_s = max(-0.004, min(0.004, self.bias_rad_s))
+        else:
+            self._straight_s = 0.0
         rate = rate_in - self.bias_rad_s
         self.gyro_unbiased_yaw += rate * dt
         if not trust_translation:

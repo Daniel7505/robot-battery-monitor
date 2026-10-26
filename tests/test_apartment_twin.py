@@ -133,7 +133,7 @@ def _measured(solids: dict) -> dict[str, float]:
         - _agg(solids, "APT_WALL_WEST", "xmax", "max"),
         "D_bedroom_length": _agg(solids, "APT_WALL_NORTH", "ymin", "min")
         - _agg(solids, "APT_WALL_BED_SOUTH", "ymax", "max"),
-        # E is the entry clear width from the straight shared wall to the fridge.
+        # E is the entry hall: left-block east face to the fridge, open to the kitchen.
         "E_hallway_width": solids["APT_FURN_FRIDGE"]["xmin"]
         - _agg(solids, "APT_WALL_SHARED", "xmax", "max"),
         "F_kitchen_aisle": solids["APT_FURN_ISLAND"]["ymin"] - solids["APT_FURN_COUNTER"]["ymax"],
@@ -143,13 +143,15 @@ def _measured(solids: dict) -> dict[str, float]:
 def _door_widths(solids: dict) -> dict[str, float]:
     bed = _gaps_x(solids, "APT_WALL_BED_SOUTH")
     assert len(bed) == 1, bed
-    # Door G is the one gap in the shared wall, near the hall end of the bedroom.
+    # Shared wall: lower opening is the west hallway, upper opening is door G.
     shared = _gaps_y(solids, "APT_WALL_SHARED")
-    assert len(shared) == 1, shared
+    assert len(shared) == 2, shared
     shared_segs = sorted(_prefixed(solids, "APT_WALL_SHARED"), key=lambda item: item["ymin"])
-    gap_ymin = shared_segs[0]["ymax"]
+    g_ymin = shared_segs[1]["ymax"]
     bed_ymax = _agg(solids, "APT_WALL_BED_SOUTH", "ymax", "max")
-    assert 0.0 < gap_ymin - bed_ymax <= 0.16
+    assert g_ymin > shared_segs[0]["ymax"]
+    assert 0.0 < g_ymin - bed_ymax <= 0.16
+    assert shared[0] + 1e-4 >= 0.8128
     faces = {(round(seg["xmin"], 4), round(seg["xmax"], 4)) for seg in shared_segs}
     assert faces == {(round(shared_segs[0]["xmin"], 4), round(shared_segs[0]["xmax"], 4))}
     # Walkway is the left end of the bedroom's inner wall, directly above the bath.
@@ -158,23 +160,30 @@ def _door_widths(solids: dict) -> dict[str, float]:
     west = _agg(solids, "APT_WALL_WEST", "xmax", "max")
     bedroom_width = _agg(solids, "APT_WALL_SHARED", "xmin", "min") - west
     assert walk_center < west + 0.35 * bedroom_width
-    # Door H is the open gap in the bath's south wall, into the hall passage.
-    bath = _gaps_x(solids, "APT_WALL_BATH_SOUTH")
-    assert len(bath) == 1, bath
+    # Door H is the lower opening in the bath partition, into the west hallway.
+    # The upper opening is the walk-in door.
+    bath = _gaps_y(solids, "APT_WALL_BATH_EAST")
+    assert len(bath) == 2, bath
+    assert bath[1] + 1e-4 >= 0.8128
+    laundry = _gaps_x(solids, "APT_WALL_LAUNDRY")
+    assert len(laundry) == 1 and laundry[0] + 1e-4 >= 0.9144
     south = _gaps_x(solids, "APT_WALL_SOUTH")
     north = _gaps_x(solids, "APT_WALL_NORTH")
     assert len(south) == 1 and len(north) == 1
     # Closets stay inside the left block. Nothing from that block stands in the main room.
     banned = ("APT_WALL_PANTRY", "APT_WALL_STORAGE", "APT_WALL_HALL_WEST", "APT_DOOR_PANTRY", "APT_DOOR_STORAGE")
     assert not any(name.startswith(banned) for name in solids)
+    fridge = solids["APT_FURN_FRIDGE"]
     island = solids["APT_FURN_ISLAND"]
-    living_mid = (
-        _agg(solids, "APT_WALL_SHARED", "xmax", "max") + _agg(solids, "APT_WALL_EAST", "xmin", "min")
-    ) / 2.0
-    assert (island["xmin"] + island["xmax"]) / 2.0 > living_mid
+    counter = solids["APT_FURN_COUNTER"]
+    east = _agg(solids, "APT_WALL_EAST", "xmin", "min")
+    assert abs(island["xmin"] - fridge["xmin"]) <= 0.02
+    assert 0.05 < east - island["xmax"] <= 0.30
+    assert abs(counter["xmax"] - east) <= 0.02
+    assert abs(counter["ymin"] - fridge["ymin"]) <= 0.02
     return {
         "H_bathroom_door": bath[0],
-        "G_bedroom_door": shared[0],
+        "G_bedroom_door": shared[1],
         "I_front_door": south[0],
         "J_patio_door": north[0],
         "bedroom_bath_walkway": bed[0],
@@ -219,10 +228,19 @@ def _sample_points(solids: dict, spawn: tuple[float, float]) -> dict[str, tuple[
     laundry = solids["APT_FLOOR_LAUNDRY"]
     bed_wall = sorted(_prefixed(solids, "APT_WALL_BED_SOUTH"), key=lambda item: item["xmin"])
     shared = sorted(_prefixed(solids, "APT_WALL_SHARED"), key=lambda item: item["ymin"])
+    south = sorted(_prefixed(solids, "APT_WALL_SOUTH"), key=lambda item: item["xmin"])
     walk_x = (bed_wall[0]["xmax"] + bed_wall[1]["xmin"]) / 2.0
-    g_y = (shared[0]["ymax"] + shared[1]["ymin"]) / 2.0
+    # Door G is the upper shared-wall opening. The lower one is the west hallway.
+    g_y = None
+    best = -1.0
+    for low, high in zip(shared, shared[1:]):
+        if high["ymin"] - low["ymax"] > 0.05 and low["ymax"] > best:
+            best = low["ymax"]
+            g_y = (low["ymax"] + high["ymin"]) / 2.0
+    assert g_y is not None
     return {
         "main_room": spawn,
+        "entry": ((south[0]["xmax"] + south[1]["xmin"]) / 2.0, south[0]["ymax"] + 0.45),
         "kitchen_aisle": ((island["xmin"] + island["xmax"]) / 2.0, (counter["ymax"] + island["ymin"]) / 2.0),
         "hallway": ((hall["xmin"] + hall["xmax"]) / 2.0, (hall["ymin"] + hall["ymax"]) / 2.0),
         "bedroom": (shared[0]["xmin"] - 0.40, g_y),
@@ -459,6 +477,10 @@ def test_spawn_is_in_the_main_room_on_a_24_inch_path(world_text: str, solids: di
     assert x0 < spawn[0] < x1 and y0 < spawn[1] < y1
     # Main room is the right-hand block, not the bedroom.
     assert spawn[0] > _agg(solids, "APT_WALL_SHARED", "xmax", "max")
+    # One connected 24 in path covers every requested walk:
+    # front door -> entry hall -> living room; entry hall -> bedroom via G;
+    # entry hall -> west hallway -> bath; bath -> bedroom via the walkway;
+    # hallway -> laundry; plus the walk-in and the kitchen aisle.
     radius = float(gt["drivable_path_in"]) * float(gt["inch_to_metre"]) / 2.0
     _path_connects(solids, _sample_points(solids, spawn), radius)
 

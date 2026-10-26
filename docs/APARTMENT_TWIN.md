@@ -39,11 +39,11 @@ Letters match `plan_measure.png`. The test checks A–F against the world within
 | B | living plus kitchen length, patio wall to back wall | 328 | 8.3312 |
 | C | bedroom width | 144 | 3.6576 |
 | D | bedroom length | 146 | 3.7084 |
-| E | entry clear width, shared wall to the kitchen cabinets (the fridge) | 44 | 1.1176 |
+| E | entry hall width, left-block wall to the kitchen cabinets (the fridge). Open floor from the front door up to door G, open to the kitchen on the east | 44 | 1.1176 |
 | F | kitchen aisle, island to counter | 38 | 0.9652 |
-| G | bedroom doorway in the shared wall, at the hall end of the bedroom (open; the leaf swings toward the kitchen) | 32 | 0.8128 |
-| H | bathroom doorway from the hall passage into the bath (open; no leaf in the opening) | 32 | 0.8128 |
-| I | front door (closed), in the back wall between the laundry block and the counter run | 36 | 0.9144 |
+| G | bedroom doorway at the top of the entry hall (open; turn west into the bedroom; the leaf swings toward the kitchen) | 32 | 0.8128 |
+| H | bathroom doorway from the west hallway into the bath (open; no leaf in the opening) | 32 | 0.8128 |
+| I | front door (closed), at the bottom of the entry hall | 36 | 0.9144 |
 | J | patio door opening (closed stop), shared-wall end of the patio wall | 32 | 0.8128 |
 | K | no dining table | — | — |
 
@@ -59,23 +59,25 @@ These were read off the plan's proportions or assumed from the photos. They are 
 |---|---|
 | interior wall thickness | 4 in (0.102 m) |
 | wall height | 96 in / 8 ft (2.438 m) |
-| left block | the full bedroom width (C). Bath column on the outer wall, 96 in wide. Middle column, 44 in, against the shared wall. The shared wall is one straight line from the patio wall down to the entry. Nothing from this block sticks into the living room or the kitchen |
-| bathroom | 96 in wide × 86 in deep, directly under the bedroom's outer side. The bedroom walkway opens into its north end. Door H is the open passage in its south wall |
-| walk-in closet | 44 in wide × 46 in deep, directly under the bedroom wall, against the shared wall. A real room. Open 32 in door on its bath side |
-| pantry and storage | side by side under the walk-in, each 20 in wide × 36 in deep. Closed. Solid walls, no leaf in the hall |
-| hall passage | 144 in wide × 36 in deep, between the closets and the laundry, open across to the bath. This is not letter E. E is the entry, from the shared wall to the fridge |
-| laundry | 144 in wide × 48 in deep, the bottom of the left block. Open 36 in doorway up into the hall |
-| bedroom-to-bath walkway | 32 in, open, no door leaf, at the outer end of the bedroom's inner wall (about 8 to 40 in from the outer wall). Directly above the bath. Not letter H |
-| back counter run | fridge, then stove, then cabinets, from the measured entry width (E, 44 in east of the shared wall) to the far exterior wall |
+| left block | the bedroom width (C). West column is the bath, full height down to the back wall, 72 in wide, with a closed linen nook in the top-left corner. Middle column, 68 in, holds the walk-in, two closets, the west hallway, and the laundry. East of that column is the entry hall (measured E), open floor, open to the kitchen |
+| bathroom | 72 in wide × 178 in deep, the full-height west column. The bedroom walkway opens into its north end, just right of the linen nook. Door H is the open passage in its east wall, from the west hallway |
+| linen nook | about 20 × 28 in, closed, top-left corner of the bath under the bedroom wall |
+| walk-in closet | 68 in wide × 42 in deep, top of the middle column, under the bedroom wall. Open 32 in door on its bath side |
+| pantry and storage | side by side under the walk-in, each 32 in wide × 38 in deep. Closed. The south wall is a solid door line, with no leaf in the hallway |
+| west hallway | 68 in wide × 40 in deep, between the closets and the laundry. Opens east into the entry hall and west through door H into the bath. This hallway is not letter E |
+| entry hall | measured E, 44 in, from the left-block wall to the fridge. Open floor from the front door north to door G, and open to the kitchen and living room on the east. No wall on that east side |
+| laundry | 68 in wide × 46 in deep, bottom of the middle column, beside the lower bath. Open 36 in doorway off the west hallway |
+| bedroom-to-bath walkway | 32 in, open, no door leaf, at the left end of the bedroom's inner wall (about 32 to 64 in from the outer wall), just right of the linen nook. Directly above the bath. Not letter H |
+| back counter run | fridge, then stove, then cabinets, from the entry hall's east edge to the far exterior wall |
 | closet, pantry, storage, and laundry floors | laminate, assumed. The tape names laminate for the main room, kitchen, bathroom, and hallway, and carpet for the bedroom |
 | counter depth | 25 in. The fridge is 30 in deep, at the entry end of the run |
 | fridge | about 30 in wide by 30 in deep by 70 in tall. Stainless |
 | stove | 30 in wide, same depth as the counter |
-| island | 60 × 36 in, 36 in high, on the right, 2 in off the far wall, one measured aisle (F) north of the counter. Granite top, dark cabinets, sink. One stool on the living-room side |
-| bath fixtures | tub 36 × 36 in along the bottom-left, toilet 18 × 28 in, vanity 36 × 15 in with a sink on the bedroom wall. White. Placed so the walkway from the bedroom stays clear |
+| island | 132 × 36 in, 36 in high, from the entry hall's east edge to 8 in off the far wall, one measured aisle (F) north of the counter. Granite top, dark cabinets, sink. One stool at the right end |
+| bath fixtures | along the outer wall, top to bottom: vanity 20 × 28 in with a sink, toilet 16 × 30 in, tub 60 × 32 in along the back wall. White. The walk from the bedroom to door H stays clear of them |
 | carpet lip | 0.5 in (12.7 mm) step where the bedroom carpet meets laminate, at door G and at the bath walkway. Dan described it as slightly raised and roughly flush; the 0.5 in figure is the modeled estimate |
 
-Door G is an open 32 in passage in the shared wall, just above the bedroom's inner wall. The real leaf swings toward the kitchen and is not a solid in the opening. The bedroom-to-bath walkway is a separate open 32 in gap at the outer end of that inner wall. Door H is the open 32 in passage from the hall into the bath, with no leaf, so the course can enter. The two small closets are closed. The walk-in and the laundry doorways are open. The front door and the patio stop are closed.
+The front door opens into the entry hall. From the top of that hall, door G is an open 32 in passage west into the bedroom. The real leaf swings toward the kitchen and is not a solid in the opening. A hallway runs west from the entry hall, between the two closed closets and the laundry, through door H into the bath. The laundry door opens off that hallway. From the bath, the bedroom walkway leads north into the bedroom. The walk-in opens off the bath. The two small closets and the linen nook are closed. The front door and the patio stop are closed.
 
 ## Furniture
 
@@ -93,21 +95,21 @@ Main-room `u` runs from the shared wall to the far exterior wall. `v` runs from 
 | office chair | 8 × 16 × 40 | black mesh chair tucked to the desk, 8 in past the desk face |
 | trash can | 11 × 11 × 15 | against the far wall, south of the desk, inside the desk's depth |
 | monitor stand | 12 × 12 × 42 | in the gap between the desk and the sofa, flush to the far wall |
-| fridge | 30 × 30 × 70 | stainless, entry end of the back counter, 44 in (E) east of the shared wall |
+| fridge | 30 × 30 × 70 | stainless, at the entry hall's east edge, start of the back counter |
 | stove | 30 × 25 × 36 | in the counter run, after the fridge |
 | cabinets | 80 × 25 × 36 | from the stove to the far exterior wall. Uppers are visual only and stay inside the base footprint |
-| island | 60 × 36 × 36 | right side of the kitchen, 2 in off the far wall, 38 in (F) north of the counter |
-| island stool | 18 × 18 × 36 | one wooden stool on the living-room side of the island, out of the aisle |
+| island | 132 × 36 × 36 | from the entry hall's east edge to 8 in off the far wall, 38 in (F) north of the counter |
+| island stool | 18 × 18 × 36 | one wooden stool at the island's right end, on the living-room side, out of the aisle |
 | bed | 80 × 60 × 48 | queen, outer/patio corner, long side along the patio wall. 48 in is the headboard height |
 | dresser | 19 × 25 × 28 | patio-side corner by the shared wall |
 | coat stand | 14 × 23 × 65 | against the outer side wall, below the bed, clear of the bath walkway |
-| tub | 36 × 36 × 20 | white, bottom-left of the bath, on the outer wall |
-| toilet | 18 × 28 × 30 | white, south side of the bath |
-| vanity | 36 × 15 × 32 | white, with a sink, on the bath's bedroom wall east of the walkway |
+| tub | 60 × 32 × 20 | white, along the back wall at the bath's outer corner |
+| toilet | 16 × 30 × 30 | white, on the outer wall between the tub and the vanity |
+| vanity | 20 × 28 × 32 | white, with a sink, on the outer wall under the linen nook |
 
 There are no pendant lights.
 
-A 24 in (0.610 m) clear path must remain from the main room through door G into the bedroom, through the bath walkway into the bath, on into the walk-in and the hall, through the hall into the laundry, and through the kitchen aisle. The two small closets stay closed, so the path does not enter them. The test inflates every non-floor solid by half of that width and checks those rooms still connect. G, H, F, and the walkway are all wider than 24 in.
+A 24 in (0.610 m) clear path must remain from the front door through the entry hall into the living room, from the entry hall west through door G into the bedroom, from the entry hall through the west hallway into the bath, from the bath north through the walkway into the bedroom, from the hallway into the laundry, and through the walk-in and the kitchen aisle. The two small closets and the linen nook stay closed, so the path does not enter them. The test inflates every non-floor solid by half of that width and checks those rooms still connect. G, H, F, the entry opening, and the walkway are all wider than 24 in.
 
 ## Floors
 
@@ -137,24 +139,22 @@ Webots R2025a `ContactProperties` has no rolling-resistance coefficient. `forceD
 +Y is up (patio). +X is to the right. Not to scale. Door letters are the tape; the service rooms are estimates.
 
 ```
-patio wall                 J closed (shared-wall end)
-+---------------------------+------------------------------------------+
-| BEDROOM  carpet           | LIVING  laminate                         |
-| bed            dresser    | loveseat                     sofa        |
-| coat                      |                              desk flush  |
-| walkway (open, left)   G >|                                          |
-+---------------+-----------+                                          |
-| BATH          | WALK-IN   |                                          |
-| tub  toilet   | open door |                                          |
-| vanity        +-----------+                                          |
-|            H  | pantry|stor|  (both closed)                          |
-+---------------+-----------+                                          |
-| hall passage (open)       | KITCHEN  laminate                        |
-+---------------------------+        island + stool (right side)       |
-| LAUNDRY                   | aisle 38 in                              |
-|                           | fridge | stove | cabinets to far wall    |
-+---------------------------+--+ I closed                              |
- back wall                        front door between laundry and counter
+patio wall                    J closed (shared-wall end)
++------------------------------+---------------------------------------+
+| BEDROOM  carpet              | LIVING  laminate                      |
+| bed               dresser    | loveseat                  sofa        |
+| coat                         |                           desk flush  |
+| walkway ^                 G >|                                       |
++----+-------------+-----------+                                       |
+|nook| WALK-IN                 |                                       |
+|van | (opens to the bath)     | entry hall (open to the kitchen, E)   |
+|toi +-------------+-----------+                                       |
+|    | closet | closet (closed)|                                       |
+| H >| west hallway -----------+-->                                    |
+|tub +-------------+-----------+ island ========================= stool|
+|    | LAUNDRY (door off hall) | aisle 38 in (F)                       |
++----+-------------------------+ fridge | stove | cabinets to far wall-+
+ back wall                          I closed, bottom of the entry hall
 ```
 
-The right edge of the left block is the shared wall, continued in one line to the entry. Door G is the only gap in that wall. The white closet block that used to stand in the kitchen is gone.
+The entry hall is the open 44 in strip east of the laundry, closets, and walk-in. Its east side has no wall. Door G is the opening at the top of that hall. The lower opening in the same wall is the west hallway.

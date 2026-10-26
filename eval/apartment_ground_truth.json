@@ -25,28 +25,31 @@
   "estimates": {
     "wall_thickness_in": 4.0,
     "wall_height_in": 96.0,
-    "bathroom_width_in": 96.0,
-    "bathroom_depth_in": 86.0,
-    "closet_width_in": 44.0,
-    "closet_depth_in": 46.0,
-    "laundry_width_in": 144.0,
-    "laundry_depth_in": 48.0,
-    "hallway_width_in": 144.0,
-    "hallway_depth_in": 36.0,
-    "pantry_width_in": 20.0,
-    "pantry_depth_in": 36.0,
-    "storage_width_in": 20.0,
-    "storage_depth_in": 36.0,
+    "bathroom_width_in": 72.0,
+    "bathroom_depth_in": 178.0,
+    "closet_width_in": 68.0,
+    "closet_depth_in": 42.0,
+    "laundry_width_in": 68.0,
+    "laundry_depth_in": 46.0,
+    "hallway_width_in": 68.0,
+    "hallway_depth_in": 40.0,
+    "pantry_width_in": 32.0,
+    "pantry_depth_in": 38.0,
+    "storage_width_in": 32.0,
+    "storage_depth_in": 38.0,
+    "linen_width_in": 20.0,
+    "linen_depth_in": 28.0,
     "counter_depth_in": 25.0,
     "fridge_width_in": 30.0,
     "fridge_depth_in": 30.0,
-    "island_width_in": 60.0,
+    "island_width_in": 132.0,
     "island_depth_in": 36.0,
     "carpet_step_in": 0.5,
     "bedroom_bath_walkway_in": 32.0,
     "walk_in_door_in": 32.0,
     "laundry_door_in": 36.0,
-    "note": "The left block is the bedroom width. Bath column on the outer wall; middle column against the shared wall holds the walk-in, then the two closed closets side by side. The hall passage between those closets and the laundry is open and leads into the bath. The shared wall is one straight line down to the entry; nothing from the left block sticks into the kitchen. Door G is the open doorway in that shared wall at the hall end of the bedroom. The bedroom-to-bath walkway is the open gap at the outer end of the bedroom's inner wall. Door H is the open passage from the hall into the bath. The back counter starts one measured entry-width (E) east of the shared wall and runs to the far wall. The island sits on the right, one measured aisle (F) off the counter. Wall thickness, wall height, the service-room sizes, the carpet lip, and every furniture box are estimates. Closet and laundry floors are laminate by assumption. The patio beyond door J is out of scope."
+    "entry_hall_opening_in": 40.0,
+    "note": "The front door opens into an entry hall, the measured 44 in of open floor east of the left block, running north to door G and open to the kitchen on the east. The wall along the east of the laundry, closets, and walk-in is the west side of that hall, with an opening into the west hallway. The bath is the full-height west column, with a closed linen nook in the top-left corner and fixtures along the outer wall: vanity, then toilet, then the tub on the back wall. The middle column, top to bottom, is the walk-in (open to the bath), two closed closets, the west hallway, and the laundry. Door H is the open passage from that hallway into the bath. The laundry door opens off the hallway. The bedroom-to-bath walkway is the open gap at the left end of the bedroom's inner wall, just right of the linen nook. Door G is the open doorway at the top of the entry hall. The back counter starts at the entry hall's east edge and runs to the far wall. The island spans that same edge to near the far wall, one measured aisle (F) off the counter, with a stool at its right end. Wall thickness, wall height, the service-room sizes, the carpet lip, and every furniture box are estimates. Closet and laundry floors are laminate by assumption. The patio beyond door J is out of scope."
   },
   "zones_m": {
     "living": {
@@ -75,32 +78,32 @@
     },
     "hallway": {
       "min_m": [
-        0.0,
-        1.3208,
+        1.9304,
+        1.27,
         -0.02
       ],
       "max_m": [
         3.6576,
-        2.2352,
+        2.286,
         0.0
       ]
     },
     "bathroom": {
       "min_m": [
         0.0,
-        2.3368,
+        0.0,
         -0.02
       ],
       "max_m": [
-        2.4384,
+        1.8288,
         4.5212,
         0.0
       ]
     },
     "closet": {
       "min_m": [
-        2.54,
-        3.3528,
+        1.9304,
+        3.4544,
         -0.02
       ],
       "max_m": [
@@ -111,37 +114,37 @@
     },
     "laundry": {
       "min_m": [
-        0.0,
+        1.9304,
         0.0,
         -0.02
       ],
       "max_m": [
         3.6576,
-        1.2192,
+        1.1684,
         0.0
       ]
     },
     "pantry": {
       "min_m": [
-        2.54,
-        2.3368,
+        1.9304,
+        2.3876,
         -0.02
       ],
       "max_m": [
-        3.048,
-        3.2512,
+        2.7432,
+        3.3528,
         0.0
       ]
     },
     "storage": {
       "min_m": [
-        3.1496,
-        2.3368,
+        2.8448,
+        2.3876,
         -0.02
       ],
       "max_m": [
         3.6576,
-        3.2512,
+        3.3528,
         0.0
       ]
     },
@@ -391,7 +394,7 @@
           1.778
         ]
       },
-      "note": "Stainless fridge at the entry end of the back counter, one measured entry-width off the shared wall. Estimate."
+      "note": "Stainless fridge at the entry hall's east edge, one measured entry-width off the left-block wall. Estimate."
     },
     {
       "id": "stove",
@@ -441,45 +444,45 @@
       "id": "island",
       "estimated": true,
       "size_in": [
-        60,
+        132,
         36,
-        36.0
+        36
       ],
       "aabb_m": {
         "min_m": [
-          6.858,
+          4.8768,
           1.6002,
           0.0
         ],
         "max_m": [
-          8.382,
+          8.2296,
           2.5146,
           0.9144
         ]
       },
-      "note": "Kitchen island on the right, 38 in off the counter, near the far wall. Granite top, dark cabinets, sink. Estimate."
+      "note": "Kitchen island from the entry hall's east edge to near the far wall, 38 in off the counter. Granite top, dark cabinets, sink. Estimate."
     },
     {
       "id": "island_chair",
       "estimated": true,
       "size_in": [
-        18.0,
+        18,
         18,
         36.0
       ],
       "aabb_m": {
         "min_m": [
-          7.3914,
+          7.7724,
           2.5146,
           0.0
         ],
         "max_m": [
-          7.8486,
+          8.2296,
           2.9718,
           0.9144
         ]
       },
-      "note": "One wooden stool on the living-room side of the island, clear of the aisle and the west walkway. Estimate."
+      "note": "One wooden stool at the island's right end, on the living-room side, clear of the aisle. Estimate."
     },
     {
       "id": "bed",
@@ -551,67 +554,67 @@
       "id": "tub",
       "estimated": true,
       "size_in": [
-        36,
-        36,
+        60,
+        32,
         20.0
       ],
       "aabb_m": {
         "min_m": [
           0.0,
-          2.4384,
+          0.0,
           0.0
         ],
         "max_m": [
-          0.9144,
-          3.3528,
+          1.524,
+          0.8128,
           0.508
         ]
       },
-      "note": "White tub along the bottom-left of the bath, on the outer wall. Estimate."
+      "note": "White tub along the back wall at the bath's outer corner. Estimate."
     },
     {
       "id": "toilet",
       "estimated": true,
       "size_in": [
-        18,
-        28,
+        16,
+        30,
         30.0
       ],
       "aabb_m": {
         "min_m": [
-          1.0668,
-          2.54,
+          0.0,
+          2.1336,
           0.0
         ],
         "max_m": [
-          1.524,
-          3.2512,
+          0.4064,
+          2.8956,
           0.762
         ]
       },
-      "note": "White toilet on the south side of the bath, clear of the walkway from the bedroom. Estimate."
+      "note": "White toilet on the outer wall, between the tub and the vanity. Estimate."
     },
     {
       "id": "vanity",
       "estimated": true,
       "size_in": [
-        36,
-        15,
+        20,
+        28,
         32.0
       ],
       "aabb_m": {
         "min_m": [
-          1.1684,
-          4.1402,
+          0.0,
+          2.9972,
           0.0
         ],
         "max_m": [
-          2.0828,
-          4.5212,
+          0.508,
+          3.7084,
           0.8128
         ]
       },
-      "note": "White vanity with a sink on the bath's bedroom wall, east of the walkway. Estimate."
+      "note": "White vanity with a sink on the outer wall, under the linen nook. Estimate."
     }
   ],
   "absent": [

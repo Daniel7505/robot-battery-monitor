@@ -17,21 +17,27 @@
 # Frame: ENU, Z up. +X from the bedroom's left wall toward the living
 # room's right wall. +Y from the kitchen back wall toward the patio wall.
 # Origin: interior corner of the bedroom left wall and the back wall.
-# Bedroom door G is an open doorway in the shared wall, near the hall
-# end of the bedroom. The leaf swings toward the kitchen and is not a
-# solid in the opening. The bedroom-to-bath walkway is open at the
-# bedroom's outer end, above the bath.
-# The left block (bath, walk-in, two closets, laundry) stays west of
-# one straight shared wall down to the entry. Closet doors are closed.
-# The hall between the closets and the laundry is open into the bath.
-# The walk-in opens into the bath. The laundry doorway is open.
+# The front door opens into an entry hall of open floor along the east
+# face of the laundry, closets, and walk-in. That hall runs north to
+# door G and is open to the kitchen and living room on its east side.
+# The wall on the east of the left block is the west side of the entry
+# hall. It has an opening into the west hallway, and door G at the top.
+# Door G is an open doorway. The leaf swings toward the kitchen and is
+# not a solid in the opening. From the bath, an open walkway leads north
+# into the bedroom, just right of a closed linen nook.
+# The bath is the full-height west column. The middle column, top to
+# bottom, is the walk-in, two closed closets, the west hallway, and the
+# laundry. The walk-in opens off the bath. Door H opens from the west
+# hallway into the bath. The laundry door opens off that hallway.
+# Closet doors and the linen nook are closed.
 # Front and patio doors are closed. Patio beyond the stop is out of scope.
 # No dining table. No rug. No pendant lights.
-# Bathroom, closet, laundry, pantry, storage, the hall, wall thickness,
-# wall height, and every furniture size and position are estimates.
-# Carpet lip at the bedroom openings is an estimate. Floor contact
-# materials are laminate and carpet. Energy model is not wired to them.
-# Carpet forceDependentSlip is higher than laminate (rolling-resistance stand-in).
+# Bathroom, closet, laundry, pantry, storage, the linen nook, the halls,
+# wall thickness, wall height, and every furniture size and position are
+# estimates. Carpet lip at the bedroom openings is an estimate. Floor
+# contact materials are laminate and carpet. Energy model is not wired
+# to them. Carpet forceDependentSlip is higher than laminate
+# (rolling-resistance stand-in).
 
 EXTERNPROTO "../protos/ButlerBot.proto"
 
@@ -283,26 +289,42 @@ DEF APT_WALL_SOUTH_B Solid {
     size 3.759200 0.101600 2.438400
   }
 }
-# Shared wall, one straight line from the back wall to the patio. Door G is the only gap.
+# East wall of the left block: west side of the open entry hall. Gaps are the west hallway and door G.
 DEF APT_WALL_SHARED_A Solid {
-  translation 3.708400 2.362200 1.219200
+  translation 3.708400 0.635000 1.219200
   name "apt_wall_shared_a"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 0.101600 4.724400 2.438400
+        size 0.101600 1.270000 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 0.101600 4.724400 2.438400
+    size 0.101600 1.270000 2.438400
   }
 }
 DEF APT_WALL_SHARED_B Solid {
-  translation 3.708400 6.934200 1.219200
+  translation 3.708400 3.505200 1.219200
   name "apt_wall_shared_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.101600 2.438400 2.438400
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.101600 2.438400 2.438400
+  }
+}
+DEF APT_WALL_SHARED_C Solid {
+  translation 3.708400 6.934200 1.219200
+  name "apt_wall_shared_c"
   radarCrossSection 1
   children [
     Shape {
@@ -316,59 +338,108 @@ DEF APT_WALL_SHARED_B Solid {
     size 0.101600 2.794000 2.438400
   }
 }
-# Bedroom inner wall. The open walkway is at the outer end, above the bath.
+# Bedroom inner wall. Open walkway just right of the linen nook, above the bath.
 DEF APT_WALL_BED_SOUTH_A Solid {
-  translation 0.101600 4.572000 1.219200
+  translation 0.406400 4.572000 1.219200
   name "apt_wall_bed_south_a"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 0.203200 0.101600 2.438400
+        size 0.812800 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 0.203200 0.101600 2.438400
+    size 0.812800 0.101600 2.438400
   }
 }
 DEF APT_WALL_BED_SOUTH_B Solid {
-  translation 2.336800 4.572000 1.219200
+  translation 2.641600 4.572000 1.219200
   name "apt_wall_bed_south_b"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 2.641600 0.101600 2.438400
+        size 2.032000 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 2.641600 0.101600 2.438400
+    size 2.032000 0.101600 2.438400
   }
 }
-# Bath south wall. Open doorway into the hall passage.
-DEF APT_WALL_BATH_SOUTH_A Solid {
-  translation 0.812800 2.286000 1.219200
-  name "apt_wall_bath_south_a"
+# Linen nook, closed, top-left corner of the bath under the bedroom wall.
+DEF APT_WALL_LINEN_E Solid {
+  translation 0.558800 4.165600 1.219200
+  name "apt_wall_linen_e"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 1.625600 0.101600 2.438400
+        size 0.101600 0.711200 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 1.625600 0.101600 2.438400
+    size 0.101600 0.711200 2.438400
   }
 }
-DEF APT_WALL_BATH_SOUTH_B Solid {
-  translation 2.489200 2.286000 1.219200
-  name "apt_wall_bath_south_b"
+DEF APT_WALL_LINEN_S Solid {
+  translation 0.304800 3.759200 1.219200
+  name "apt_wall_linen_s"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.609600 0.101600 2.438400
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.609600 0.101600 2.438400
+  }
+}
+# Bath / middle partition. Lower gap is door H into the west hallway. Upper gap is the walk-in.
+DEF APT_WALL_BATH_EAST_A Solid {
+  translation 1.879600 0.685800 1.219200
+  name "apt_wall_bath_east_a"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.101600 1.371600 2.438400
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.101600 1.371600 2.438400
+  }
+}
+DEF APT_WALL_BATH_EAST_B Solid {
+  translation 1.879600 2.895600 1.219200
+  name "apt_wall_bath_east_b"
+  radarCrossSection 1
+  children [
+    Shape {
+      appearance USE APT_APP_WALL
+      geometry Box {
+        size 0.101600 1.422400 2.438400
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.101600 1.422400 2.438400
+  }
+}
+DEF APT_WALL_BATH_EAST_C Solid {
+  translation 1.879600 4.470400 1.219200
+  name "apt_wall_bath_east_c"
   radarCrossSection 1
   children [
     Shape {
@@ -382,119 +453,86 @@ DEF APT_WALL_BATH_SOUTH_B Solid {
     size 0.101600 0.101600 2.438400
   }
 }
-# Bath / middle-column partition. Open door into the walk-in.
-DEF APT_WALL_BATH_EAST_A Solid {
-  translation 2.489200 2.844800 1.219200
-  name "apt_wall_bath_east_a"
-  radarCrossSection 1
-  children [
-    Shape {
-      appearance USE APT_APP_WALL
-      geometry Box {
-        size 0.101600 1.016000 2.438400
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.101600 1.016000 2.438400
-  }
-}
-DEF APT_WALL_BATH_EAST_B Solid {
-  translation 2.489200 4.343400 1.219200
-  name "apt_wall_bath_east_b"
-  radarCrossSection 1
-  children [
-    Shape {
-      appearance USE APT_APP_WALL
-      geometry Box {
-        size 0.101600 0.355600 2.438400
-      }
-    }
-  ]
-  boundingObject Box {
-    size 0.101600 0.355600 2.438400
-  }
-}
-# Two closed closets under the walk-in. Doors are the solid south wall.
+# Two closed closets under the walk-in. The blue door line is the solid south wall.
 DEF APT_WALL_CLOSET_SOUTH Solid {
-  translation 3.098800 2.286000 1.219200
+  translation 2.794000 2.336800 1.219200
   name "apt_wall_closet_south"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 1.117600 0.101600 2.438400
+        size 1.727200 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 1.117600 0.101600 2.438400
+    size 1.727200 0.101600 2.438400
   }
 }
 DEF APT_WALL_CLOSET_DIV Solid {
-  translation 3.098800 2.794000 1.219200
+  translation 2.794000 2.870200 1.219200
   name "apt_wall_closet_div"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 0.101600 0.914400 2.438400
+        size 0.101600 0.965200 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 0.101600 0.914400 2.438400
+    size 0.101600 0.965200 2.438400
   }
 }
 DEF APT_WALL_CLOSET_NORTH Solid {
-  translation 3.098800 3.302000 1.219200
+  translation 2.794000 3.403600 1.219200
   name "apt_wall_closet_north"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 1.117600 0.101600 2.438400
+        size 1.727200 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 1.117600 0.101600 2.438400
+    size 1.727200 0.101600 2.438400
   }
 }
-# Laundry north wall. Open doorway up into the hall passage.
+# Laundry north wall. Door opens off the west hallway.
 DEF APT_WALL_LAUNDRY_N_A Solid {
-  translation 0.685800 1.270000 1.219200
+  translation 2.159000 1.219200 1.219200
   name "apt_wall_laundry_n_a"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 1.371600 0.101600 2.438400
+        size 0.457200 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 1.371600 0.101600 2.438400
+    size 0.457200 0.101600 2.438400
   }
 }
 DEF APT_WALL_LAUNDRY_N_B Solid {
-  translation 2.971800 1.270000 1.219200
+  translation 3.479800 1.219200 1.219200
   name "apt_wall_laundry_n_b"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_WALL
       geometry Box {
-        size 1.371600 0.101600 2.438400
+        size 0.355600 0.101600 2.438400
       }
     }
   ]
   boundingObject Box {
-    size 1.371600 0.101600 2.438400
+    size 0.355600 0.101600 2.438400
   }
 }
 # Closed front door and closed patio stop. Leaves fill the openings.
@@ -579,7 +617,7 @@ DEF APT_FLOOR_KITCHEN Solid {
   }
 }
 DEF APT_FLOOR_HALL Solid {
-  translation 1.828800 1.778000 -0.010000
+  translation 2.794000 1.778000 -0.010000
   name "apt_floor_hall"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -587,16 +625,16 @@ DEF APT_FLOOR_HALL Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 3.657600 0.914400 0.020000
+        size 1.727200 1.016000 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 3.657600 0.914400 0.020000
+    size 1.727200 1.016000 0.020000
   }
 }
 DEF APT_FLOOR_BATH Solid {
-  translation 1.219200 3.429000 -0.010000
+  translation 0.914400 2.260600 -0.010000
   name "apt_floor_bath"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -604,16 +642,16 @@ DEF APT_FLOOR_BATH Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 2.438400 2.184400 0.020000
+        size 1.828800 4.521200 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 2.438400 2.184400 0.020000
+    size 1.828800 4.521200 0.020000
   }
 }
 DEF APT_FLOOR_CLOSET Solid {
-  translation 3.098800 3.937000 -0.010000
+  translation 2.794000 3.987800 -0.010000
   name "apt_floor_closet"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -621,16 +659,16 @@ DEF APT_FLOOR_CLOSET Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 1.117600 1.168400 0.020000
+        size 1.727200 1.066800 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 1.117600 1.168400 0.020000
+    size 1.727200 1.066800 0.020000
   }
 }
 DEF APT_FLOOR_LAUNDRY Solid {
-  translation 1.828800 0.609600 -0.010000
+  translation 2.794000 0.584200 -0.010000
   name "apt_floor_laundry"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -638,16 +676,16 @@ DEF APT_FLOOR_LAUNDRY Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 3.657600 1.219200 0.020000
+        size 1.727200 1.168400 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 3.657600 1.219200 0.020000
+    size 1.727200 1.168400 0.020000
   }
 }
 DEF APT_FLOOR_PANTRY Solid {
-  translation 2.794000 2.794000 -0.010000
+  translation 2.336800 2.870200 -0.010000
   name "apt_floor_pantry"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -655,16 +693,16 @@ DEF APT_FLOOR_PANTRY Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 0.508000 0.914400 0.020000
+        size 0.812800 0.965200 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 0.508000 0.914400 0.020000
+    size 0.812800 0.965200 0.020000
   }
 }
 DEF APT_FLOOR_STORAGE Solid {
-  translation 3.403600 2.794000 -0.010000
+  translation 3.251200 2.870200 -0.010000
   name "apt_floor_storage"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -672,12 +710,12 @@ DEF APT_FLOOR_STORAGE Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 0.508000 0.914400 0.020000
+        size 0.812800 0.965200 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 0.508000 0.914400 0.020000
+    size 0.812800 0.965200 0.020000
   }
 }
 DEF APT_FLOOR_BEDROOM Solid {
@@ -702,7 +740,7 @@ DEF APT_FLOOR_BEDROOM Solid {
   }
 }
 DEF APT_FLOOR_BRIDGE_LAUNDRY Solid {
-  translation 1.828800 1.270000 -0.010000
+  translation 2.844800 1.219200 -0.010000
   name "apt_floor_bridge_laundry"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -719,7 +757,7 @@ DEF APT_FLOOR_BRIDGE_LAUNDRY Solid {
   }
 }
 DEF APT_FLOOR_BRIDGE_BATH Solid {
-  translation 2.032000 2.286000 -0.010000
+  translation 1.879600 1.778000 -0.010000
   name "apt_floor_bridge_bath"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -727,16 +765,16 @@ DEF APT_FLOOR_BRIDGE_BATH Solid {
     Shape {
       appearance USE APT_APP_LAMINATE
       geometry Box {
-        size 0.812800 0.101600 0.020000
+        size 0.101600 0.812800 0.020000
       }
     }
   ]
   boundingObject Box {
-    size 0.812800 0.101600 0.020000
+    size 0.101600 0.812800 0.020000
   }
 }
 DEF APT_FLOOR_BRIDGE_CLOSET Solid {
-  translation 2.489200 3.759200 -0.010000
+  translation 1.879600 4.013200 -0.010000
   name "apt_floor_bridge_closet"
   radarCrossSection 1
   contactMaterial "laminate"
@@ -750,6 +788,23 @@ DEF APT_FLOOR_BRIDGE_CLOSET Solid {
   ]
   boundingObject Box {
     size 0.101600 0.812800 0.020000
+  }
+}
+DEF APT_FLOOR_BRIDGE_ENTRY Solid {
+  translation 3.708400 1.778000 -0.010000
+  name "apt_floor_bridge_entry"
+  radarCrossSection 1
+  contactMaterial "laminate"
+  children [
+    Shape {
+      appearance USE APT_APP_LAMINATE
+      geometry Box {
+        size 0.101600 1.016000 0.020000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.101600 1.016000 0.020000
   }
 }
 DEF APT_FLOOR_CARPET_EDGE Solid {
@@ -770,7 +825,7 @@ DEF APT_FLOOR_CARPET_EDGE Solid {
   }
 }
 DEF APT_FLOOR_CARPET_EDGE_BATH Solid {
-  translation 0.609600 4.572000 0.002700
+  translation 1.219200 4.572000 0.002700
   name "apt_floor_carpet_edge_bath"
   radarCrossSection 1
   contactMaterial "carpet"
@@ -1030,14 +1085,14 @@ DEF APT_FURN_COUNTER Solid {
   }
 }
 DEF APT_FURN_ISLAND Solid {
-  translation 7.620000 2.057400 0.457200
+  translation 6.553200 2.057400 0.457200
   name "apt_furn_island"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_CABINET
       geometry Box {
-        size 1.524000 0.914400 0.914400
+        size 3.352800 0.914400 0.914400
       }
     }
     Pose {
@@ -1046,7 +1101,7 @@ DEF APT_FURN_ISLAND Solid {
         Shape {
           appearance USE APT_APP_GRANITE
           geometry Box {
-            size 1.524000 0.914400 0.030000
+            size 3.352800 0.914400 0.030000
           }
         }
       ]
@@ -1064,11 +1119,11 @@ DEF APT_FURN_ISLAND Solid {
     }
   ]
   boundingObject Box {
-    size 1.524000 0.914400 0.914400
+    size 3.352800 0.914400 0.914400
   }
 }
 DEF APT_FURN_ISLAND_CHAIR Solid {
-  translation 7.620000 2.743200 0.457200
+  translation 8.001000 2.743200 0.457200
   name "apt_furn_island_chair"
   radarCrossSection 1
   children [
@@ -1132,7 +1187,7 @@ DEF APT_FURN_COAT_STAND Solid {
   }
 }
 DEF APT_FURN_TUB Solid {
-  translation 0.457200 2.895600 0.254000
+  translation 0.762000 0.406400 0.254000
   name "apt_furn_tub"
   radarCrossSection 1
   children [
@@ -1143,39 +1198,39 @@ DEF APT_FURN_TUB Solid {
         metalness 0
       }
       geometry Box {
-        size 0.914400 0.914400 0.508000
+        size 1.524000 0.812800 0.508000
       }
     }
   ]
   boundingObject Box {
-    size 0.914400 0.914400 0.508000
+    size 1.524000 0.812800 0.508000
   }
 }
 DEF APT_FURN_TOILET Solid {
-  translation 1.295400 2.895600 0.381000
+  translation 0.203200 2.514600 0.381000
   name "apt_furn_toilet"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_PORCELAIN
       geometry Box {
-        size 0.457200 0.711200 0.762000
+        size 0.406400 0.762000 0.762000
       }
     }
   ]
   boundingObject Box {
-    size 0.457200 0.711200 0.762000
+    size 0.406400 0.762000 0.762000
   }
 }
 DEF APT_FURN_VANITY Solid {
-  translation 1.625600 4.330700 0.406400
+  translation 0.254000 3.352800 0.406400
   name "apt_furn_vanity"
   radarCrossSection 1
   children [
     Shape {
       appearance USE APT_APP_PORCELAIN
       geometry Box {
-        size 0.914400 0.381000 0.812800
+        size 0.508000 0.711200 0.812800
       }
     }
     Pose {
@@ -1193,7 +1248,7 @@ DEF APT_FURN_VANITY Solid {
     }
   ]
   boundingObject Box {
-    size 0.914400 0.381000 0.812800
+    size 0.508000 0.711200 0.812800
   }
 }
 

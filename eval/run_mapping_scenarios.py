@@ -60,6 +60,11 @@ SCENARIOS = (
     Scenario("loop", 50.0, 6.1, 4.7, 1.5708, "square", 1243),
     Scenario("bubble", 30.0, 7.20, 3.60, 0.0, "plunge", 1244),
     Scenario("backup", 30.0, 7.40, 3.60, math.pi, "backup", 1245),
+    # Hall centre, facing the bath door. The bedroom is through that
+    # door and the walkway at the north end of the bath, or back out
+    # and around to the bedroom door. Scoring only; the mapper is not
+    # given this pose.
+    Scenario("bedroom", 120.0, 2.794, 1.778, math.pi, "", 1246),
 )
 
 
@@ -299,6 +304,12 @@ def judge(name: str, folder: Path, scenario: Scenario) -> tuple[bool, str]:
         backed = final["x_m"] > scenario.x + 0.15
         ok = len(walls) == 0 and speed >= 0.10 and end_speed < 0.08 and 0.01 < air < 0.45 and backed
         return ok, common + f" tail_air={air:.3f}m end_speed={end_speed:.3f} backed={int(backed)}"
+    if name == "bedroom":
+        inside = [
+            row for row in gt if _inside(solids, "APT_FLOOR_BEDROOM", row["x_m"], row["y_m"], inset=0.12)
+        ]
+        ok = len(inside) >= 50 and longest <= 2.0
+        return ok, common + f" bedroom_s={len(inside) * 0.008:.2f}"
     return False, "unknown scenario " + name
 
 

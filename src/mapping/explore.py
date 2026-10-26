@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from src.mapping.body import (
     ARRIVE_M,
     BLIND_CLEARANCE_M,
@@ -159,12 +161,48 @@ class Explorer:
         self.room_labels = None
         self.room_names: dict[int, str] = {}
         self.room_doors = None
+        # Cells the shell has actually covered. A depth ray through a
+        # doorway paints the next room free; that is not a visit.
+        self.visited = np.zeros((self.grid.n, self.grid.n), dtype=bool)
+        self._visited_cell: tuple[int, int] | None = None
+        self._opening_since: float | None = None
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
+
+    def observed_room_labels(self):
+        """Room ids on cells the shell has covered. Rays through a door do not count."""
+        if self.room_labels is None:
+            return None
+        labels = np.array(self.room_labels, copy=True)
+        labels[~self.visited] = 0
+        return labels
+
+    def _mark_visited(self) -> None:
+        x, y, _yaw = self.odometry.pose()
+        cell = self.grid.cell_of(x, y)
+        if cell is None or cell == self._visited_cell:
+            return
+        self._visited_cell = cell
+        res = self.grid.res
+        reach = int(math.ceil(ROBOT_RADIUS_M / res))
+        limit = (ROBOT_RADIUS_M / res) ** 2
+        r0, c0 = cell
+        n = self.grid.n
+        vis = self.visited
+        for dr in range(-reach, reach + 1):
+            rr = r0 + dr
+            if rr < 0 or rr >= n:
+                continue
+            for dc in range(-reach, reach + 1):
+                if dr * dr + dc * dc > limit:
+                    continue
+                cc = c0 + dc
+                if 0 <= cc < n:
+                    vis[rr, cc] = True
 
     def step(
         self,
@@ -262,6 +300,7 @@ class Explorer:
             trust_translation=not drop and not spin_cmd,
         )
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
+        self._mark_visited()
         applied = 0.0 if drop or spin_cmd else ds
         self._path_m += abs(applied)
         floor_image = floor if self.floor_enabled else None
@@ -295,6 +334,7 @@ class Explorer:
             and not self._view_blind
             and not drop
             and abs(dyaw) < 0.04
+            and not (dt > 0.0 and abs(dyaw) > 0.18 * dt)
             and self.t_s >= self._nudge_at
         ):
             # Match the wall in this scan to cells the robot already
@@ -419,7 +459,22 @@ class Explorer:
         if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
-        elif (
+        # Both shoulders on a frame, and the nose still looking through
+        # it, is a doorway approach. A few seconds of lining up is not a
+        # stall, and the recovery used to blacklist the opening.
+        in_mouth = (
+            0.12 < left_clear < 0.80
+            and 0.12 < right_clear < 0.80
+            and clearance > 0.16
+        )
+        if in_mouth:
+            if self._opening_since is None:
+                self._opening_since = self.t_s
+            if self.t_s - self._opening_since < 10.0:
+                self._progress_t = self.t_s
+        else:
+            self._opening_since = None
+        if (
             self._script is None
             and self.phase == "go"
             and not self.done
@@ -700,6 +755,19 @@ class Explorer:
         x, y, yaw = self.odometry.pose()
         nose, left_c, right_c = self._last_clear
         self._log(f"backup nose={nose:.2f} left={left_c:.2f} right={right_c:.2f} blind={int(self._view_blind)}")
+        # An open nose is not a wall. Banning the goal paints a disk on the
+        # room beyond the doorway, which is how the bedroom was abandoned.
+        if nose >= 1.50:
+            self._log("stall with an open nose, not painting the opening")
+            self.goal_xy = None
+            self.path_xy = []
+            self._replan_at = self.t_s + 0.4
+            self._recover_until = self.t_s + 0.8
+            self._progress_t = self.t_s + 0.8
+            self._progress_xy = (x, y)
+            self.phase = "go"
+            self.done = False
+            return
         self._ban_current(immediate=True)
         # A small, expiring patch on the jamb. Radius 12 sealed the 0.81 m
         # opening and the ban never came back, so the bedroom was abandoned.
@@ -965,6 +1033,21 @@ class Explorer:
         """Reject an arc the shell would drive into an occupied cell."""
         pose = self.odometry.pose()
         v2, w2, kind = fit_motion(self.grid, pose, v, w, self._segment_heading())
+        nose, left_c, right_c = self._last_clear
+        # Live jambs, matched, and air ahead. The occupancy sweep was
+        # vetoing this with a smeared cell, and the segment heading kept
+        # the body spinning on the threshold instead of driving through.
+        centered = (
+            door_mode in ("approach", "mouth")
+            and 0.18 < left_c < 0.70
+            and 0.18 < right_c < 0.70
+            and abs(left_c - right_c) < 0.12
+            and nose > 0.25
+        )
+        if centered and (kind != "clear" or abs(w) > 0.15 or v < 0.05):
+            v2 = DOOR_SPEED_M_S
+            w2 = 0.0
+            kind = "clear"
         self.sweep_checks += 1
         if kind != "clear":
             self.sweep_rejected += 1
@@ -993,7 +1076,9 @@ class Explorer:
         # heading instead of taking the next frontier back through the door.
         if door_mode in ("approach", "mouth") and kind == "clear" and v2 > 0.05 and abs(w2) < 0.08:
             self._commit_until = max(self._commit_until, self.t_s + 16.0)
-            self._commit_heading = self._segment_heading()
+            # The polyline heading hunts between the jambs. Once the
+            # sonars agree, the way through is the way the shell is facing.
+            self._commit_heading = pose[2] if centered else self._segment_heading()
         return v2, w2
 
     def sweep_summary(self) -> str:

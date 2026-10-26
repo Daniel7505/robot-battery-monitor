@@ -399,7 +399,7 @@ def main() -> None:
                 print(f"MAPPING time cap {max_s:.1f}s")
             if explorer.done and not saved:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
-                log.save_rooms(explorer.room_labels, explorer.room_names)
+                log.save_rooms(explorer.observed_room_labels(), explorer.room_names)
                 saved = True
                 print(
                     f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f}) "
@@ -410,7 +410,7 @@ def main() -> None:
                 _finish(folder, now)
             elif now >= next_save:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
-                log.save_rooms(explorer.room_labels, explorer.room_names)
+                log.save_rooms(explorer.observed_room_labels(), explorer.room_names)
                 next_save = now + 5.0
             if now >= next_note:
                 nose, left_c, right_c = explorer._last_clear
@@ -431,7 +431,7 @@ def main() -> None:
     finally:
         try:
             log.save_map(explorer.grid.labels(), explorer.grid.meta())
-            log.save_rooms(explorer.room_labels, explorer.room_names)
+            log.save_rooms(explorer.observed_room_labels(), explorer.room_names)
         except Exception:
             traceback.print_exc()
         log.close()

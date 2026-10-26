@@ -110,6 +110,15 @@ def wall_yaw_delta(
     map_angle = dominant_line_angle(cells)
     if map_angle is None:
         return 0.0
+    # A handful of cells on a 5 cm lattice can sit a few degrees off the
+    # true line. The opening spin paints exactly that, and three nudges
+    # then bake the error in before a longer wall exists to contradict it.
+    span = max(
+        float(cells[:, 0].max() - cells[:, 0].min()),
+        float(cells[:, 1].max() - cells[:, 1].min()),
+    )
+    if span < 0.90:
+        return 0.0
     error = _fold(map_angle - (yaw + body_angle))
     # Occupied cells sit on a 5 cm lattice, so a true line and the cells
     # under it differ by a couple of degrees. That is not heading error.

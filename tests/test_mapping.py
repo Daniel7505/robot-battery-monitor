@@ -94,6 +94,15 @@ def test_wall_line_yaw_follows_the_mapped_wall_not_a_compass():
     # The mapped line is still the diagonal, so the correction is negative.
     wrong = wall_yaw_delta(grid, (0.0, 0.0, 0.15), hits[:, :2])
     assert wrong < -0.005
+    # A short run of cells is a lattice, not a wall. The opening spin
+    # used to nudge off that.
+    short = OccupancyGrid()
+    for i in range(12):
+        cell = short.cell_of(1.2 + i * 0.04, 0.4)
+        assert cell is not None
+        short.log[cell] = short.l_max
+    short_hits = np.array([[1.2 + i * 0.04, 0.4, 0.5] for i in range(12)])
+    assert wall_yaw_delta(short, (0.0, 0.0, 0.15), short_hits[:, :2]) == 0.0
 
 
 def test_rest_gyro_bias_does_not_walk_the_heading():
@@ -1176,6 +1185,16 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     regions[1, 3] = 2
     bonus = crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": regions}, (1, 0))
     assert bonus >= 3.0
+    # An 0.81 m opening is a thin throat. Once the narrow cells run the
+    # full width of the gap, the old 0.80 m length cap called it a corridor.
+    wide = np.full((60, 90), -1, dtype=np.int8)
+    wide[6:54, 4:36] = 0
+    wide[6:54, 40:86] = 0
+    wide[6:54, 36:40] = 1
+    wide[16:37, 36:40] = 0
+    split = segment_map(wide, 0.05)
+    assert split["doors"].any()
+    assert sum(1 for name in split["names"].values() if name.startswith("room_")) >= 2
 
 
 def test_the_rear_camera_looks_behind_the_tail():

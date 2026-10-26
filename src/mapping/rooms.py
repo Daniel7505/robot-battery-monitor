@@ -1,11 +1,14 @@
 """Split the robot's own map into rooms and doorways.
 
-Nothing here knows how many rooms a building has. A doorway is a short
-narrow gap with occupied cells on both ends. A long narrow strip is a
-hall, not a door. The rest are room_1, room_2, ... in reading order.
+Nothing here knows how many rooms a building has. A doorway is a thin
+throat about a metre across, or a clearance pinch between two wider
+regions. A long narrow strip is a hall, not a door. The rest are
+room_1, room_2, ... in reading order.
 """
 
 from __future__ import annotations
+
+from collections import deque
 
 import numpy as np
 
@@ -126,15 +129,98 @@ def _components(mask: np.ndarray) -> list[list[tuple[int, int]]]:
     return found
 
 
+def _extent_m(cells: list[tuple[int, int]], res: float) -> tuple[float, float]:
+    rows = [c[0] for c in cells]
+    cols = [c[1] for c in cells]
+    height = (max(rows) - min(rows) + 1) * res
+    width = (max(cols) - min(cols) + 1) * res
+    return (height, width) if height <= width else (width, height)
+
+
+def _clearance_cells(free: np.ndarray) -> np.ndarray:
+    """4-connected distance in cells from each free cell to a non-free cell."""
+    height, width = free.shape
+    dist = np.full((height, width), 10**6, dtype=np.int32)
+    queue: deque[tuple[int, int]] = deque()
+    ys, xs = np.nonzero(~free)
+    for y, x in zip(ys.tolist(), xs.tolist()):
+        dist[y, x] = 0
+        queue.append((int(y), int(x)))
+    while queue:
+        y, x = queue.popleft()
+        base = int(dist[y, x])
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if ny < 0 or nx < 0 or ny >= height or nx >= width:
+                continue
+            if dist[ny, nx] <= base + 1:
+                continue
+            dist[ny, nx] = base + 1
+            queue.append((ny, nx))
+    return dist
+
+
+def _pinch_doors(labels: np.ndarray, resolution_m: float) -> np.ndarray:
+    """Where two wider regions meet through a passage narrower than about 0.9 m.
+
+    The axis-aligned gap test misses a throat whose narrow cells run
+    together along the opening and look long. Clearance still dips there:
+    the waves grown from the two regions meet in that dip.
+    """
+    free = labels == 0
+    door = np.zeros(free.shape, dtype=bool)
+    if int(np.count_nonzero(free)) < 8:
+        return door
+    res = float(resolution_m)
+    dist = _clearance_cells(free)
+    neck = max(2, int(round(0.46 / res)))
+    pieces = [cells for cells in _components(free & (dist >= neck)) if len(cells) >= 8]
+    if len(pieces) < 2:
+        return door
+    nearest = np.zeros(free.shape, dtype=np.int16)
+    reach = np.full(free.shape, 9999, dtype=np.int16)
+    queue: deque[tuple[int, int]] = deque()
+    for index, cells in enumerate(pieces, start=1):
+        for y, x in cells:
+            nearest[y, x] = index
+            reach[y, x] = 0
+            queue.append((y, x))
+    height, width = free.shape
+    while queue:
+        y, x = queue.popleft()
+        cid = int(nearest[y, x])
+        base = int(reach[y, x])
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if ny < 0 or nx < 0 or ny >= height or nx >= width or not free[ny, nx]:
+                continue
+            other = int(nearest[ny, nx])
+            step = base + 1
+            if other == 0:
+                nearest[ny, nx] = cid
+                reach[ny, nx] = step
+                queue.append((ny, nx))
+            elif other != cid and int(dist[ny, nx]) < neck:
+                door[ny, nx] = True
+                if int(dist[y, x]) < neck:
+                    door[y, x] = True
+    return door
+
+
 def doorway_mask(labels: np.ndarray, resolution_m: float) -> np.ndarray:
-    """Short gaps between occupied cells. A long corridor is not a door."""
+    """Thin gaps between occupied cells, plus clearance pinches.
+
+    A corridor is narrow for a long run, so its short side is the
+    passage width. A doorway is the opposite: thin along the wall and
+    about a metre across. The 0.80 m cap on the long side rejected an
+    0.81 m opening once the narrow cells ran the full width of the gap.
+    """
     door = np.zeros(labels.shape, dtype=bool)
     res = float(resolution_m)
-    limit = _DOOR_LONG_M / res
     for cells in _passage_components(labels, res, _DOOR_MAX_M):
-        if _span_cells(cells) <= limit:
+        minor, major = _extent_m(cells, res)
+        if minor <= 0.50 and 0.50 <= major <= 1.50:
             for y, x in cells:
                 door[y, x] = True
+    door |= _pinch_doors(labels, res)
     return door
 
 

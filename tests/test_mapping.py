@@ -1045,6 +1045,64 @@ def test_scan_correction_moves_the_odometry_pose():
     assert yaw == pytest_approx(math.pi) or yaw == pytest_approx(-math.pi)
 
 
+def test_a_square_script_closes_after_four_legs():
+    from src.mapping.scripted import BodyScript
+
+    script = BodyScript("square")
+    yaw = 0.0
+    spins = 0
+    for _leg in range(4):
+        saw_forward = False
+        for _step in range(100):
+            left, right = script.command(ds_m=0.02, yaw_unwrapped=yaw, forward_gap_m=2.0, rear_gap_m=2.0)
+            if left * right < 0.0:
+                spins += 1
+                break
+            assert left > 0.0 and right > 0.0
+            saw_forward = True
+        assert saw_forward
+        for _step in range(50):
+            yaw += 0.04
+            script.command(ds_m=0.0, yaw_unwrapped=yaw, forward_gap_m=2.0, rear_gap_m=2.0)
+            if script.done or (script.phase == "drive" and script.leg == _leg + 1):
+                break
+    assert spins == 4
+    assert script.done
+
+
+def test_a_plunge_stops_when_the_forward_gap_closes():
+    from src.mapping.scripted import BodyScript
+
+    script = BodyScript("plunge")
+    left, right = script.command(ds_m=0.01, yaw_unwrapped=0.0, forward_gap_m=2.0, rear_gap_m=None)
+    assert left > 2.0 and right > 2.0
+    assert not script.done
+    left, right = script.command(ds_m=0.01, yaw_unwrapped=0.0, forward_gap_m=0.03, rear_gap_m=None)
+    assert left == 0.0 and right == 0.0
+    assert script.done
+
+
+def test_scripted_drive_starts_the_pattern_instead_of_a_survey_spin():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False, drive="square")
+    left, right = bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    assert left > 1.0 and right > 1.0
+    assert abs(left - right) < 0.2
+
+
+def test_scenario_world_changes_only_the_butlerbot_pose():
+    from eval.run_mapping_scenarios import WORLD, _patch_world
+
+    text = WORLD.read_text(encoding="utf-8")
+    patched = _patch_world(text, 4.4, 1.778, math.pi)
+    assert "translation 4.4000 1.7780 0" in patched
+    assert "rotation 0 0 1 3.141593" in patched
+    assert "translation 6.1 4.7 0" not in patched
+    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in patched
+    assert "apartment_pose_logger" in patched
+
+
 def test_solids_include_the_closed_doors():
     names = {solid.name for solid in load_solids()}
     assert "APT_DOOR_FRONT" in names

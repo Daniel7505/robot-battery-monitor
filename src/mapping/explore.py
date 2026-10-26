@@ -36,6 +36,7 @@ from src.mapping.loop_close import LoopCloser
 from src.mapping.odometry import WheelGyroOdometry, wrap_rad
 from src.mapping.pin import PinWatch
 from src.mapping.scan_match import scan_fit
+from src.mapping.scripted import BodyScript, drive_mode
 from src.mapping.slip import MotionCheck
 from src.mapping.wall_line import wall_yaw_delta
 
@@ -55,6 +56,7 @@ class Explorer:
         fusion: bool = True,
         floor: bool = True,
         loop: bool = True,
+        drive: str | None = None,
     ) -> None:
         self.camera = camera
         self.stride = int(stride)
@@ -63,6 +65,9 @@ class Explorer:
         self.fusion_enabled = bool(fusion)
         self.floor_enabled = bool(floor)
         self.loop_enabled = bool(loop)
+        mode = drive_mode(drive)
+        # A named body-frame pattern. It is not a place in the world.
+        self._script: BodyScript | None = BodyScript(mode) if mode else None
         self._fusion = MotionFusion(floor=self.floor_enabled, visual=self.fusion_enabled)
         self._loop = LoopCloser()
         self.phase = "spin"
@@ -322,7 +327,8 @@ class Explorer:
             ):
                 self._reverse_left_m = 0.0
         if (
-            self.loop_enabled
+            self._script is None
+            and self.loop_enabled
             and self.phase != "spin"
             and abs(dyaw) < 0.08
             and hits is not None
@@ -375,7 +381,8 @@ class Explorer:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
         elif (
-            self.phase == "go"
+            self._script is None
+            and self.phase == "go"
             and not self.done
             and self.t_s >= self._recover_until
             and (self.t_s - self._progress_t) > 3.5
@@ -404,6 +411,17 @@ class Explorer:
             self._avoid_until = self.t_s + 0.08
         elif not blocked:
             self._blocked_since = None
+        if self._script is not None:
+            speeds = self._script.command(
+                ds_m=ds,
+                yaw_unwrapped=self.odometry.yaw_unwrapped_rad,
+                forward_gap_m=view.forward,
+                rear_gap_m=view.rear,
+            )
+            if self._script.done:
+                self.done = True
+                self.phase = "done"
+            return self._remember(speeds)
         if self.phase == "settle":
             return self._remember(self._settle())
         if self.phase == "spin":

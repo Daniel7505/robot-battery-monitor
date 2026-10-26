@@ -86,7 +86,7 @@ Run artifacts (`map.npy`, `map_meta.json`, `pose_log.csv`, and the logger's `gt_
 powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World apartment
 ```
 
-Optional caps, set in the same terminal before launch: `RBM_MAP_MAX_S` (stop after this many seconds), `RBM_MAP_STRIDE` (depth decimation, default 4), `RBM_MAP_DIR` (run folder). `RBM_FUSION`, `RBM_FLOOR`, and `RBM_LOOP` default on. Set any of them to `0` to turn that part off. `RBM_FLOOR=0` is the run without the downward floor sensor.
+Optional caps, set in the same terminal before launch: `RBM_MAP_MAX_S` (stop after this many seconds), `RBM_MAP_STRIDE` (depth decimation, default 4), `RBM_MAP_DIR` (run folder). `RBM_FUSION`, `RBM_FLOOR`, and `RBM_LOOP` default on. Set any of them to `0` to turn that part off. `RBM_FLOOR=0` is the run without the downward floor sensor. `RBM_GYRO_CAL_S` (default 3.5) holds the hubs still at the start so the gyro bias can settle. `RBM_STRAIGHT_S` drives both hubs at 0.22 m/s for that many seconds and then stops. It is the open-floor contact check, not an exploration run.
 
 **Score a run.** The scorer is the only tool that reads the tape and the world. It prints occupancy IoU, free-space IoU, coverage %, and mean wall error in cm, and writes `map_vs_ground_truth.png` next to the map.
 
@@ -131,6 +131,50 @@ Position error is the odometry pose, turned by the spawn heading, against `gt_po
 | Stopped | time cap | time cap | time cap | time cap | time cap | time cap |
 
 The floor sensor is the pair in the middle, same code, `RBM_FLOOR` on or off, loop off. It did not cut the final position error: 1.80 m with the floor camera, 0.23 m without it. The median along the run did drop, from 0.38 m to 0.21 m. With the floor camera the error sat near 0.11–0.19 m from 200 s to 500 s, then the last minute drove back across the main room on a heading that was already about 30° off and the final error went to 1.80 m. Without it the final error was 0.23 m and the wall error was still 33 cm. The two-look loop run did not actually close a loop. Its wall error (22.9 cm) and occupancy IoU (0.211) are the best of these seeds, and the final position error (0.37 m) is under the 0.53 m baseline. It still hit the time cap, the floor sensor rejected a wheel step 2616 times, and the true pose never left the main room. No seed met the whole bar: cross door G, finish on the done gate, and beat both the wall error and the position error.
+
+The 30–40° heading walk is the `oak_gyro` lookup. It adds about +0.001 rad/s at every rate, and 600 s of that is 0.6 rad, about 34°. The rest learner only updates while the hubs are still. Once exploration started they were not, so the bias stayed at 0 and the raw rate was integrated the whole run. Wheel yaw diverges from the gyro in a turn, and subtracting it pulled a good bias off (a half-second "straight" window walked 0.00094 rad/s down to 0.00045, and the heading was about 13° off at 600 s). That window is gone. Wheel yaw is logged and left out of the bias. The floor update writes no yaw: `floor_applied_yaw` is 0 on every step. Depth-corner visual odometry and a match of a depth wall line against occupied cells the robot already painted each moved the heading by a few degrees at most. The line match uses the angle between the two lines. It does not assume the walls sit on a compass direction.
+
+The mapper now holds the motors at 0 for 3.5 s before the first move. The bias settles at 0.00094 rad/s and stays there unless the hubs are still again. Three headless seeds of fusion + floor + two-look loop on `83ba2be` (Webots R2025a, `--mode=fast --no-rendering`, cap 600 s, stock heading and the same world with the start heading shifted by +0.40 rad and −0.35 rad) all ended under 5°. Heading error in degrees, fused yaw against the pose logger, spawn heading removed:
+
+| t (s) | Stock | +0.40 rad | −0.35 rad |
+|---:|---:|---:|---:|
+| 60 | −0.51 | −2.48 | +4.03 |
+| 120 | +0.56 | −2.08 | +3.50 |
+| 180 | +0.69 | −0.44 | +5.57 |
+| 240 | +2.09 | −1.35 | +3.36 |
+| 300 | +2.94 | +0.25 | +3.75 |
+| 360 | +4.23 | +0.97 | +5.90 |
+| 420 | +4.82 | +1.92 | +7.75 |
+| 480 | +3.64 | +3.06 | +7.66 |
+| 540 | +1.10 | +2.40 | +3.39 |
+| 600 | +0.74 | −2.68 | +1.42 |
+
+The −0.35 seed peaked at +7.8° in the middle. That is the gyro's rate noise (about 5% of the reading) during spins, on top of a bias that was already removed. On the +0.40 seed the robot sat against a wall with the encoders frozen and the body still turning, and the rest learner ran again: the bias went from 0.00094 to 0.00195 at 540 s and back to 0.00101 at 600 s. The end error was still −2.68°.
+
+The same three seeds, scored the same way as the table above. Every one printed `MAPPING time cap` and then `MAPPING done` at 600 s. That is the cap, not a stopped hold. Door G is the west wall at about x = 3.71. Crossing means the true pose went below x = 3.70.
+
+| | Stock | +0.40 rad | −0.35 rad |
+|---|---:|---:|---:|
+| Occupancy IoU | 0.170 | 0.170 | 0.081 |
+| Free-space IoU | 0.639 | 0.509 | 0.579 |
+| Coverage | 93.8% | 96.6% | 79.8% |
+| Wall error | 24.8 cm | 31.4 cm | 29.3 cm |
+| Final position error | 0.41 m | 11.00 m | 0.75 m |
+| Median position error | 0.27 m | 1.02 m | 0.42 m |
+| Floor slip lines | 54 | 16 | 52 |
+| End heading error | +0.74° | −2.68° | +1.42° |
+| Door G | stayed east (min x 3.89) | crossed at 267 s | stayed east (min x 3.84) |
+| Stopped | time cap | time cap | time cap |
+
+The stock seed beats the `5574389` baseline on occupancy IoU (0.170 vs 0.162), free-space IoU, coverage, wall error (24.8 cm vs 24.9 cm), and final position error (0.41 m vs 0.53 m). It does not beat the two-look wall error (22.9 cm) or the no-floor position error (0.23 m). The +0.40 seed is the one that crossed door G: first true pose below x = 3.70 at t = 266.7 s (x = 3.698, y = 1.619), then 41663 steps on the west side, ending at (2.95, 2.11). Its odometry ended at (9.17, 0.11). The largest single odometry step was 2.4 cm, so the 11 m is accumulated while the body was pressed into that wall. The bedroom, bath, walk-in, and laundry were not entered on any seed. RTAB-Map is not installed here and the apt cache has no `rtabmap` package, so it was not scored. It is BSD-licensed (Mathieu Labbé and François Michaud) and is not part of this pipeline.
+
+End heading is under 5° on all three seeds. Door G was crossed on the +0.40 seed. None of the three finished through the done gate before the cap.
+
+**Wheel contact.** The 2616 rejected steps on the two-look run are the floor-flow gate (`floor slip, wheel motion rejected`), not tires floating off the floor. A straight drive in the main room (`RBM_STRAIGHT_S`, both hubs 0.22 m/s, Webots R2025a, fast, no main-view rendering) was logged by the pose logger: per-wheel contact points, and true speed from the pose, against encoder speed. The laminate top is at z = 0. The drive-wheel cylinders have radius 0.08 m and their centres sit at z = 0.08 m, so they meet that face. Contact properties for `drive_wheel` on laminate are mu 8, force-dependent slip 0.01, soft CFM 1e-6, soft ERP 0.7. The body mass is 3.2 kg with the centre of mass at z = 0.12 m. `basicTimeStep` is 8 ms. The world and the proto were not changed: the settled contact was already right, and the warehouse robot hash is unchanged. The open-floor slip count is the same before and after the heading work.
+
+Once the start-up pitch had settled (t > 0.52 s, hubs commanded, true speed above 0.15 m/s), 0 of 736 steps had |encoder − true| / encoder above 15%. Mean encoder speed 0.220 m/s, mean true speed 0.220 m/s, largest gap 0.015 m/s. Both tires had two floor contacts on 893 of 899 steps. Wheel centres stayed at z = 0.080 m and the body at z ≈ 0. Wall-contact steps: 0. The other six steps are a 24 ms unload at the start of the push (t = 0.464–0.480) and a 24 ms unload when the motors stop (t = 6.52–6.536). The catch casters are spheres of radius 0.04 m centred at z = 0.044 m, so their bottoms sit 4 mm above the tire contact, and the body leans about 2° (up component 0.9993) until two of them touch. That pitch unloads the tires for those three steps each way. It is the caster clearance already in the proto. Steady driving on open floor does not slip.
+
+During the three exploration seeds, encoder axle speed against body speed along the true heading, with no wheel or caster wall contact, a hub command above 0.4 rad/s, true forward speed above 0.08 m/s, and t > 5 s: stock 1028 of 40182 steps (2.6%, mean encoder − true +0.003 m/s, both tires on the floor 98.8% of those steps), +0.40 rad 1891 of 31332 (6.0%, mean +0.000 m/s, 98.3% in contact), −0.35 rad 959 of 39599 (2.4%, mean +0.004 m/s, 99.0% in contact). The higher +0.40 rate is the long press against the west wall, where contact flickers on and off. Wall-contact rows, separate from that slip count: stock 843, all with x in 4.69–4.80 m and y in 0.73–0.92 m (south side of the main room); +0.40 rad 16415, all with x in 2.91–3.20 m and y in 2.07–2.14 m (the west side of door G); −0.35 rad 957, mostly x 4.7–5.3 m and y near 0.9–1.0 m, plus a smaller cluster near y = 2.5 m. A 4 s straight probe of the floor camera, sampled the way the fusion samples it, measured a shift of −0.34 m against about 0.88 m of true travel (29 frames, texture std 7.4). The disagreement gate drops that update. The same gate is what fired 54, 16, and 52 times on these seeds, down from 2616.
 
 Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
 

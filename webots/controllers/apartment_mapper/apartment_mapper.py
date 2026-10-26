@@ -386,7 +386,10 @@ def main() -> None:
             if explorer.done and not saved:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 saved = True
-                print(f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f})")
+                print(
+                    f"MAPPING done t={now:.1f}s pose=({x:.2f},{y:.2f},{yaw:.2f}) "
+                    f"sweep {explorer.sweep_summary()}"
+                )
                 # This controller cannot stop the world. The pose logger
                 # watches this file and quits.
                 _finish(folder, now)
@@ -401,7 +404,7 @@ def main() -> None:
                 print(
                     f"MAPPING t={now:.1f}s phase={explorer.phase} pose=({x:.2f},{y:.2f}) "
                     f"nose={nose:.2f} L={left_c:.2f} R={right_c:.2f} bubble={gap_txt} "
-                    f"cmd=({cmd_l:.2f},{cmd_r:.2f})"
+                    f"cmd=({cmd_l:.2f},{cmd_r:.2f}) sweep {explorer.sweep_summary()}"
                 )
                 next_note = now + 2.0
             if explorer.done:

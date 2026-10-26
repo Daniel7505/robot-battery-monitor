@@ -28,6 +28,7 @@ from src.mapping.body import (
 from src.mapping.bubble import BubbleView, assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
 from src.mapping.depth_cloud import blind_fraction, body_points, depth_scene_motion_m, forward_clearance, to_odom
 from src.mapping.drive import pure_pursuit, wheel_speeds
+from src.mapping.footprint import fit_motion
 from src.mapping.frontiers import select_goal
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
@@ -130,6 +131,13 @@ class Explorer:
         self._stall_act = 0.0
         self._stall_trans = 0.0
         self._stall_latched = False
+        self.sweep_checks = 0
+        self.sweep_rejected = 0
+        self.sweep_widened = 0
+        self.sweep_aligned = 0
+        self.sweep_straight = 0
+        self.sweep_stopped = 0
+        self._sweep_log_at = -1.0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -540,12 +548,14 @@ class Explorer:
         self.phase = "go"
         self.done = False
 
-    def _door_yaw(self, left_clear: float, right_clear: float) -> tuple[float, bool]:
-        """Centre on a doorway before the shell is in it, then hold that line.
+    def _door_yaw(self, left_clear: float, right_clear: float) -> tuple[float, str]:
+        """Centre on a doorway. The mode is mouth, approach, or empty.
 
-        Side sonars are the air beside the tires. Depth shoulders are the
-        jambs still ahead of the nose. A press closer than 5 cm is the
-        side-escape case, not a centering command.
+        Mouth: both side sonars see the frame, so a small yaw holds the
+        line while the shell is in the opening. Approach: the depth
+        shoulders see a gap the nose has not entered yet, so the drive
+        lines up on that centre line and then goes straight. A press
+        closer than 5 cm is the side-escape case, not a centering command.
         """
         view = self._bubble_view
         left_s = None if view is None else view.left
@@ -557,11 +567,11 @@ class Explorer:
             and 0.05 < left_s < 0.50
             and 0.05 < right_s < 0.50
         ):
-            return self._jamb_yaw(left_s, right_s), True
+            return self._jamb_yaw(left_s, right_s), "mouth"
         nearer = min(float(left_clear), float(right_clear))
         if left_clear < 1.20 and right_clear < 1.20 and nose > nearer + 0.20:
-            return self._jamb_yaw(left_clear, right_clear), True
-        return 0.0, False
+            return self._jamb_yaw(left_clear, right_clear), "approach"
+        return 0.0, ""
 
     def _log(self, message: str) -> None:
         print(f"MAPPING t={self.t_s:.1f}s {message}", flush=True)
@@ -695,28 +705,111 @@ class Explorer:
             self._plan()
         if self.phase != "go" or self.done or not self.path_xy:
             return 0.0, 0.0
-        v, w, arrived = pure_pursuit(self.odometry.pose(), self.path_xy, arrive_m=ARRIVE_M)
-        door_w, in_door = self._door_yaw(left_clear, right_clear)
-        w += door_w
-        if in_door:
-            v = min(v, DOOR_SPEED_M_S)
-        elif left_clear < 0.90 and right_clear < 0.90:
-            v = min(v, DOOR_SPEED_M_S)
-        v = min(v, max(0.0, cap))
+        pose = self.odometry.pose()
+        v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
+        raw_w = w
+        door_w, door_mode = self._door_yaw(left_clear, right_clear)
         nose_open = self._bubble_gap is None or self._bubble_gap > 0.12
-        if arrived and left_clear < 1.05 and right_clear < 1.05 and nose_open:
-            # Both jambs are beside us and the nose is clear. Drive through
-            # instead of spinning in the opening.
-            through_w, _in_door = self._door_yaw(left_clear, right_clear)
-            return wheel_speeds(DOOR_SPEED_M_S, through_w)
-        if arrived:
+        through = arrived and left_clear < 1.05 and right_clear < 1.05 and nose_open
+        if arrived and not through:
             self._last_spin_t = self.t_s
             self.phase = "spin"
             self._spin_start = None
             self.goal_xy = None
             self.path_xy = []
             return wheel_speeds(0.0, SPIN_RAD_S)
+        approach_kind = ""
+        if door_mode == "approach":
+            # Outside the frame: face the centre line, then drive straight.
+            # An arc here is the corner cut that puts a tire on the jamb.
+            err = wrap_rad(self._segment_heading() - pose[2])
+            if abs(err) > 0.12:
+                v = 0.0
+                w = max(-0.55, min(0.55, math.copysign(0.55, err)))
+                approach_kind = "align"
+            else:
+                v = DOOR_SPEED_M_S
+                w = 0.0
+                if abs(raw_w) > 0.15:
+                    approach_kind = "straight"
+        elif door_mode == "mouth" or through:
+            # In the opening, or arriving with both jambs beside the nose.
+            w = door_w if through else w + door_w
+            v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
+        elif left_clear < 0.90 and right_clear < 0.90:
+            v = min(v, DOOR_SPEED_M_S)
+        v = min(v, max(0.0, cap))
+        v, w = self._apply_sweep(v, w, approach_kind)
         return wheel_speeds(v, w)
+
+    def _segment_heading(self) -> float:
+        """Heading of the polyline about 0.35 m ahead.
+
+        That is the next segment, not the chord from the robot to a
+        later corner. The chord is what cuts the doorway.
+        """
+        x, y, yaw = self.odometry.pose()
+        path = self.path_xy
+        if not path:
+            return yaw
+        nearest = min(range(len(path)), key=lambda i: math.hypot(path[i][0] - x, path[i][1] - y))
+        if nearest >= len(path) - 1:
+            dx = path[-1][0] - x
+            dy = path[-1][1] - y
+            if math.hypot(dx, dy) < 0.05:
+                return yaw
+            return math.atan2(dy, dx)
+        travelled = 0.0
+        prev = path[nearest]
+        heading = yaw
+        for nxt in path[nearest + 1 :]:
+            dx = nxt[0] - prev[0]
+            dy = nxt[1] - prev[1]
+            seg = math.hypot(dx, dy)
+            if seg > 1e-6:
+                heading = math.atan2(dy, dx)
+            travelled += seg
+            if travelled >= 0.35:
+                return heading
+            prev = nxt
+        return heading
+
+    def _apply_sweep(self, v: float, w: float, approach_kind: str) -> tuple[float, float]:
+        """Reject an arc the shell would drive into an occupied cell."""
+        pose = self.odometry.pose()
+        v2, w2, kind = fit_motion(self.grid, pose, v, w, self._segment_heading())
+        self.sweep_checks += 1
+        if kind != "clear":
+            self.sweep_rejected += 1
+            if kind == "wider":
+                self.sweep_widened += 1
+            elif kind == "straight":
+                self.sweep_straight += 1
+            elif kind == "align":
+                self.sweep_aligned += 1
+            elif kind == "stop":
+                self.sweep_stopped += 1
+        elif approach_kind == "align":
+            self.sweep_aligned += 1
+        elif approach_kind == "straight":
+            self.sweep_straight += 1
+        modified = kind != "clear" or approach_kind != ""
+        if modified and self.t_s >= self._sweep_log_at:
+            if kind != "clear":
+                self._log(f"sweep {kind}, footprint would clip")
+            elif approach_kind == "align":
+                self._log("sweep align, doorway off the centre line")
+            else:
+                self._log("sweep straight, doorway on the centre line")
+            self._sweep_log_at = self.t_s + 0.5
+        return v2, w2
+
+    def sweep_summary(self) -> str:
+        return (
+            f"checks={self.sweep_checks} rejected={self.sweep_rejected} "
+            f"wide={self.sweep_widened} align={self.sweep_aligned} "
+            f"straight={self.sweep_straight} stop={self.sweep_stopped}"
+        )
 
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 3.0

@@ -583,6 +583,71 @@ def test_a_door_is_approached_slowly_on_the_centre_line():
     assert w < -0.05
 
 
+def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():
+    """A straight pass misses a wall that sits only on the inside of a turn."""
+    from src.mapping.footprint import fit_motion, footprint_clips
+
+    grid = OccupancyGrid()
+    pose = (0.0, 0.0, 0.0)
+    assert not footprint_clips(grid, pose, 0.22, 0.0)
+    assert not footprint_clips(grid, pose, 0.22, 0.35)
+    # Left turn swings the nose to +y. The wall is outside the straight shell.
+    _fill(grid, 0.05, 0.34, 0.70, 0.70, grid.l_max)
+    assert not footprint_clips(grid, pose, 0.18, 0.0)
+    assert footprint_clips(grid, pose, 0.18, 0.9)
+    v, w, kind = fit_motion(grid, pose, 0.18, 0.9, 0.0)
+    assert kind in {"wider", "straight", "align"}
+    assert not footprint_clips(grid, pose, v, w)
+
+
+def test_a_yawed_door_approach_lines_up_then_drives_straight():
+    """Outside a mapped opening, face the centre line before driving through.
+
+    The opening is the robot's own occupied cells. An arc swings the nose
+    into a jamb; the straight centred pass does not.
+    """
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+    from src.mapping.footprint import footprint_clips
+
+    grid = OccupancyGrid()
+    # 0.81 m opening along +x. Jambs start 0.405 m off the centre line.
+    _fill(grid, 1.05, 0.405, 1.25, 1.10, grid.l_max)
+    _fill(grid, 1.05, -1.10, 1.25, -0.405, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.odometry.y_m = 0.0
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert abs(v) < 0.02
+    assert w < -0.40
+    assert bot.sweep_aligned >= 1
+
+    bot.odometry.yaw_rad = 0.0
+    bot.odometry.yaw_unwrapped_rad = 0.0
+    bot.sweep_checks = 0
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert abs(v - DOOR_SPEED_M_S) < 1e-6
+    assert abs(w) < 0.05
+    pose = bot.pose()
+    assert not footprint_clips(grid, pose, DOOR_SPEED_M_S, 0.0)
+    # A gentle arc reaches the jamb. A spin in place never enters the opening.
+    assert footprint_clips(grid, pose, DOOR_SPEED_M_S, 0.40)
+
+
 def test_jamb_steer_only_centres_a_two_sided_gap():
     from src.mapping.explore import Explorer
 

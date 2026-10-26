@@ -282,9 +282,48 @@ def main() -> None:
     next_save = 5.0
     next_note = 2.0
     saved = False
+    # The hubs almost never sit still once exploration starts, and the
+    # gyro bias is a rest reading. Hold for a few seconds so that
+    # reading is learned before it is integrated. Motors stay at zero.
+    # The explorer is not stepped, so its spin timer does not run.
+    calibrate_s = _env_float("RBM_GYRO_CAL_S")
+    if calibrate_s is None:
+        calibrate_s = 3.5
     try:
         while robot.step(timestep) != -1:
             now = float(robot.getTime())
+            if now < calibrate_s:
+                try:
+                    yaw_rate = float(gyro.getValues()[2])
+                except Exception:
+                    yaw_rate = 0.0
+                explorer.odometry.update(
+                    float(left_enc.getValue()),
+                    float(right_enc.getValue()),
+                    yaw_rate,
+                    dt,
+                )
+                left_motor.setVelocity(0.0)
+                right_motor.setVelocity(0.0)
+                log.write_wheels(now, float(left_enc.getValue()), float(right_enc.getValue()), 0.0, 0.0)
+                x, y, yaw = explorer.pose()
+                log.write_pose(now, x, y, yaw)
+                odom = explorer.odometry
+                log.write_yaw(
+                    now,
+                    odom.yaw_unwrapped_rad,
+                    odom.gyro_raw_yaw,
+                    odom.gyro_unbiased_yaw,
+                    odom.wheel_yaw,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    odom.bias_rad_s,
+                    odom.still_s,
+                    odom.moving_s,
+                )
+                continue
             image = None
             if now + 1e-6 >= next_depth:
                 image = _depth_image(depth, width, height)

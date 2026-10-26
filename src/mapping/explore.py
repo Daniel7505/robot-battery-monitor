@@ -250,6 +250,7 @@ class Explorer:
         if (
             self.loop_enabled
             and self.phase != "spin"
+            and abs(dyaw) < 0.08
             and hits is not None
             and hits.size
             and sensor is not None

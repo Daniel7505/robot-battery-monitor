@@ -38,6 +38,8 @@ class LoopCloser:
         self.frames: list[_Frame] = []
         self.closures = 0
         self._sensor_xy = np.zeros(2, dtype=np.float64)
+        self._pending: tuple[int, tuple[float, float, float]] | None = None
+        self._closed_at_path = -10.0
 
     def consider(
         self,
@@ -87,9 +89,19 @@ class LoopCloser:
             elif votes > second:
                 second = votes
         if best_fix is None or best_i < 0:
+            self._pending = None
             return None
         if second >= best_votes:
+            self._pending = None
             return None
+        # One agreeing look is not enough. A repeated doorway voted for the
+        # wrong room about thirty times and wiped the occupancy grid.
+        if float(path_m) - self._closed_at_path < 2.5:
+            return None
+        if not self._confirms(best_i, best_fix):
+            return None
+        self._closed_at_path = float(path_m)
+        self._pending = None
         end = self.frames[-1]
         if math.hypot(end.x - x, end.y - y) > 0.02 or abs(wrap_rad(end.yaw - yaw)) > 0.02:
             self.frames.append(
@@ -110,6 +122,18 @@ class LoopCloser:
             floors = _as_xy(frame.floors, pose)
             grid.integrate(origin, hits, floors)
             grid.stamp_footprint(frame.x, frame.y)
+
+    def _confirms(self, index: int, fix: tuple[float, float, float]) -> bool:
+        prev = self._pending
+        self._pending = (index, fix)
+        if prev is None or prev[0] != index:
+            return False
+        old = prev[1]
+        if math.hypot(fix[0] - old[0], fix[1] - old[1]) > 0.06:
+            return False
+        if abs(wrap_rad(fix[2] - old[2])) > 0.04:
+            return False
+        return True
 
     def _maybe_keyframe(self, pose, path_m, marks, hits_body, floors_body) -> None:
         x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))

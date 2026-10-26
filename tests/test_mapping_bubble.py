@@ -172,6 +172,8 @@ def test_loop_closure_fixes_drift_tolerates_one_change_and_rejects_two_points():
         )
         closer.consider((0.5 * i, 0.02 * i, 0.0), 0.5 * i, other, hits, floors, sensor)
     drifted = (0.30, -0.12, 0.0)
+    # The first look only arms the match. A second agreement applies it.
+    assert closer.consider(drifted, 8.0, home, hits, floors, sensor) is None
     fixed = closer.consider(drifted, 8.0, home, hits, floors, sensor)
     assert fixed is not None
     assert math.hypot(fixed[0], fixed[1]) < 0.08
@@ -192,6 +194,7 @@ def test_loop_closure_fixes_drift_tolerates_one_change_and_rejects_two_points():
             ]
         )
         again.consider((0.45 * i, 0.0, 0.0), 0.45 * i, other, hits, floors, sensor)
+    assert again.consider(drifted, 8.0, changed, hits, floors, sensor) is None
     fixed_one = again.consider(drifted, 8.0, changed, hits, floors, sensor)
     assert fixed_one is not None
     weak = LoopCloser(min_path_m=3.0, keyframe_m=0.5)

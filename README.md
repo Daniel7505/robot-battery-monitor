@@ -176,6 +176,48 @@ Once the start-up pitch had settled (t > 0.52 s, hubs commanded, true speed abov
 
 During the three exploration seeds, encoder axle speed against body speed along the true heading, with no wheel or caster wall contact, a hub command above 0.4 rad/s, true forward speed above 0.08 m/s, and t > 5 s: stock 1028 of 40182 steps (2.6%, mean encoder − true +0.003 m/s, both tires on the floor 98.8% of those steps), +0.40 rad 1891 of 31332 (6.0%, mean +0.000 m/s, 98.3% in contact), −0.35 rad 959 of 39599 (2.4%, mean +0.004 m/s, 99.0% in contact). The higher +0.40 rate is the long press against the west wall, where contact flickers on and off. Wall-contact rows, separate from that slip count: stock 843, all with x in 4.69–4.80 m and y in 0.73–0.92 m (south side of the main room); +0.40 rad 16415, all with x in 2.91–3.20 m and y in 2.07–2.14 m (the west side of door G); −0.35 rad 957, mostly x 4.7–5.3 m and y near 0.9–1.0 m, plus a smaller cluster near y = 2.5 m. A 4 s straight probe of the floor camera, sampled the way the fusion samples it, measured a shift of −0.34 m against about 0.88 m of true travel (29 frames, texture std 7.4). The disagreement gate drops that update. The same gate is what fired 54, 16, and 52 times on these seeds, down from 2616.
 
+The +0.40 wedge was a side press on the door frame. The forward depth still saw the room, a slow hub command never tripped the one-step stall check, and odometry translation kept the progress timer alive. The mapper now freezes wheel translation when the depth scene, the floor flow, and visual odometry are all still while the hubs are commanded, and it backs away from a side that stays inside 9 cm until that sonar gap opens.
+
+Before each pursuit segment it also sweeps the 0.39 m shell plus a 3 cm margin along the next 0.55 m of the commanded arc, including the swing of a turn, and checks those cells against occupied cells on the robot's own grid. Unknown cells are not walls. Cells the shell already covers are ignored. If the sweep clips, the command becomes a wider arc, a straight pass at 0.12 m/s, a spin toward the next path segment, or a stop. Outside a doorway the robot spins onto the centre-line heading and then drives straight. Once both side sonars see the frame, a small centering yaw remains and the sweep can still reject it. Side-escape reverses are not swept. The 2 s note and the `MAPPING done` line print the counts.
+
+Three headless seeds of that stack on `0a2348b` (same worlds, cap, and sensor flags as the table above). Heading error in degrees, fused yaw against the pose logger, spawn heading removed:
+
+| t (s) | Stock | +0.40 rad | −0.35 rad |
+|---:|---:|---:|---:|
+| 60 | +1.38 | −2.11 | +5.38 |
+| 120 | +1.20 | −0.67 | +3.65 |
+| 180 | +0.74 | +1.25 | +1.93 |
+| 240 | −0.59 | +1.24 | +1.36 |
+| 300 | −0.06 | +0.63 | +1.55 |
+| 360 | −0.12 | −1.58 | +1.69 |
+| 420 | +0.14 | −1.07 | +0.94 |
+| 480 | +0.35 | −0.98 | +1.72 |
+| 540 | +1.07 | −1.56 | +3.03 |
+| 600 | +2.84 | −1.25 | −1.15 |
+
+| | Stock | +0.40 rad | −0.35 rad |
+|---|---:|---:|---:|
+| Occupancy IoU | 0.198 | 0.163 | 0.239 |
+| Free-space IoU | 0.600 | 0.625 | 0.556 |
+| Coverage | 85.0% | 88.0% | 95.7% |
+| Wall error | 23.7 cm | 18.1 cm | 39.0 cm |
+| Final position error | 0.31 m | 0.30 m | 2.17 m |
+| Median position error | 0.31 m | 0.25 m | 0.33 m |
+| Floor slip lines | 17 | 1 | 270 |
+| End heading error | +2.84° | −1.25° | −1.15° |
+| Door G | stayed east (min x 3.90) | stayed east (min x 3.80) | crossed at 184 s, back by 191 s |
+| Stopped | time cap | time cap | time cap |
+| Sweep checks | 65369 | 65285 | 51839 |
+| Sweep rejected | 14059 (21.5%) | 15659 (24.0%) | 15682 (30.3%) |
+| Wider arc | 2051 | 1415 | 3807 |
+| Lined up in place | 8577 | 8369 | 1772 |
+| Straightened | 4049 | 4119 | 2128 |
+| Stopped by the sweep | 6891 | 9717 | 8666 |
+
+Door G wall-contact rows are 0, 0, and 0. On `83ba2be` those counts were 843, 16415, and 957, and the +0.40 odometry ended 11 m away while the body sat on the west jamb. On this run the +0.40 final position error is 0.30 m. The −0.35 seed is the one that crossed the opening: first true x below 3.70 at t = 184.1 s (x = 3.700, y = 1.962), 848 steps west of the wall, deepest x = 3.47, back on the east side by t = 190.9 s. It entered the hall and did not reach the bedroom, the bath, the walk-in, or the laundry. Neither did the other two seeds. Every seed printed `MAPPING time cap` at 600 s. That is the cap, not the stopped-hold finish.
+
+The −0.35 seed still collected 11483 wall-contact rows, all at x 3.90–3.97 m and y 4.44–4.76 m, the east face of the north end of the shared wall. That is not the door opening (the opening is y 1.27–2.29). Its odometry ended at (−4.76, 2.83) against a true pose of (3.90, 1.78), which is the 2.17 m final error and the 39 cm wall error. End heading is under 5° on all three seeds. The lineup and straight counts include doorway approaches whose sweep was already clear, so those two plus the wider-arc and stop counts add up to more than the rejected count. A rejected move is one the sweep changed because the shell would have entered an occupied cell.
+
 Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
 
 ---

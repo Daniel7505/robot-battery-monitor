@@ -709,8 +709,15 @@ class Explorer:
         self._log(f"side contact on the {which}, backing off the frame gap={shown:.2f}")
         key = self._goal_key()
         if key is not None:
-            self._fails[key] = self._fails.get(key, 0) + 1
-            self._blacklist(key, radius=3, ttl_s=8.0)
+            count = self._fails.get(key, 0) + 1
+            self._fails[key] = count
+            # The same frontier pulled the robot back into the frame.
+            # A wider, longer ban lets a different opening win.
+            if count >= 3:
+                self._blacklist(key, radius=14, ttl_s=18.0)
+                self._commit_until = -1.0
+            else:
+                self._blacklist(key, radius=3, ttl_s=8.0)
         self.goal_xy = None
         self.path_xy = []
         self._replan_at = self.t_s + 1.2
@@ -1024,10 +1031,17 @@ class Explorer:
             # stays on a frame that is beside the shell.
             return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
         if self._reverse_left_m > 0.0 and self.t_s <= self._reverse_until:
+            # A side press has to keep yawing off the frame for the whole
+            # reverse. A straight backup stays on the wall.
+            if self._reverse_needs_gap and self._side_escape_sign != 0.0:
+                return wheel_speeds(-0.10, -0.45 * self._side_escape_sign)
             # Nearly straight. A hard yaw here swings a tire into the jamb
             # the reverse was supposed to leave.
             return wheel_speeds(-0.12, self._turn * 0.08)
-        if self._goal_expired() or (self._is_stuck() and (self._bubble_gap or 99.0) < 1.2):
+        # An in-place align is not a failed goal. Banning it aborted the
+        # turn before the robot faced the opening.
+        turning = abs(self._commanded[0] + self._commanded[1]) < 0.5 and abs(self._commanded[0] - self._commanded[1]) > 1.2
+        if self._goal_expired() or (self._is_stuck() and not turning and (self._bubble_gap or 99.0) < 1.2):
             self._ban_current()
             self._plan()
         if self.phase != "go":

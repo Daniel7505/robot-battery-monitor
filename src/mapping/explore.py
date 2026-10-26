@@ -166,6 +166,7 @@ class Explorer:
         self.visited = np.zeros((self.grid.n, self.grid.n), dtype=bool)
         self._visited_cell: tuple[int, int] | None = None
         self._opening_since: float | None = None
+        self._opening_holds = 0
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
@@ -459,18 +460,22 @@ class Explorer:
         if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
+            self._opening_holds = 0
         # Both shoulders on a frame, and the nose still looking through
         # it, is a doorway approach. A few seconds of lining up is not a
-        # stall, and the recovery used to blacklist the opening.
+        # stall, and the recovery used to blacklist the opening. The same
+        # window covers a live gap the occupancy sweep is calling a wall.
         in_mouth = (
             0.12 < left_clear < 0.80
             and 0.12 < right_clear < 0.80
             and clearance > 0.16
         )
-        if in_mouth:
+        relief_now = self._gap_ahead()
+        if in_mouth or relief_now:
             if self._opening_since is None:
                 self._opening_since = self.t_s
-            if self.t_s - self._opening_since < 10.0:
+            window = 10.0 if in_mouth else 8.0
+            if self.t_s - self._opening_since < window:
                 self._progress_t = self.t_s
         else:
             self._opening_since = None
@@ -677,6 +682,23 @@ class Explorer:
         which = "left" if side > 0.0 else "right"
         gap = view.left if side > 0.0 else view.right
         shown = -1.0 if gap is None else float(gap)
+        # A jamb beside a gap the nose still looks through. Yaw off that
+        # jamb and keep the goal. Blacklisting here painted the bedroom
+        # shut and the robot never went back.
+        if self._gap_ahead():
+            self._log(f"side contact on the {which} beside an opening, yawing off gap={shown:.2f}")
+            self._side_escape_sign = side
+            self._side_escape_until = self.t_s + 0.8
+            self._reverse_left_m = 0.06
+            self._reverse_until = self._side_escape_until
+            self._reverse_needs_gap = True
+            self._reverse_release = False
+            self._recover_until = max(self._recover_until, self.t_s + 0.5)
+            self._progress_t = self.t_s + 0.5
+            self._turn = -side * SPIN_RAD_S
+            self.phase = "go"
+            self.done = False
+            return
         self._log(f"side contact on the {which}, backing off the frame gap={shown:.2f}")
         key = self._goal_key()
         if key is not None:
@@ -746,15 +768,30 @@ class Explorer:
     def _note_slip(self) -> None:
         self.slip_events += 1
         self._confident_after = max(self._confident_after, self.t_s + 6.0)
-        self._start_recovery()
+        self._start_recovery(keep_opening=False)
 
-    def _start_recovery(self) -> None:
+    def _start_recovery(self, *, keep_opening: bool = True) -> None:
         """Reverse, drop the frontier ahead, and refuse to call the run finished."""
         if self.t_s < self._recover_until:
             return
         x, y, yaw = self.odometry.pose()
         nose, left_c, right_c = self._last_clear
         self._log(f"backup nose={nose:.2f} left={left_c:.2f} right={right_c:.2f} blind={int(self._view_blind)}")
+        # Live depth still shows the gap. The stall is the sweep sitting
+        # on a smeared cell, not a wall. Painting the goal bans the room
+        # on the far side. A wheel slip is not this case: the pose is lying.
+        if keep_opening and self._gap_ahead() and self._opening_holds < 2:
+            self._opening_holds += 1
+            self._log("stall in an opening, not painting it")
+            self._turn = self._opening_yaw() or self._turn
+            if nose < 0.70:
+                self._arm_reverse(self._min_gap, blind=False, force_min_m=0.06, reason="opening")
+            self._recover_until = self.t_s + 0.8
+            self._progress_t = self.t_s + 0.8
+            self._opening_since = self.t_s
+            self.phase = "go"
+            self.done = False
+            return
         # An open nose is not a wall. Banning the goal paints a disk on the
         # room beyond the doorway, which is how the bedroom was abandoned.
         if nose >= 1.50:
@@ -820,6 +857,62 @@ class Explorer:
         if abs(error) < 0.08:
             return 0.0
         return max(-0.45, min(0.45, 1.1 * error))
+
+    def _gap_ahead(self) -> str:
+        """Live sensors see air the occupancy sweep is treating as a wall.
+
+        ``creep``: the nose and the bubble both look past the nearer
+        return, so a slow move is safer than freezing on a smeared cell.
+        ``yaw``: one shoulder is a jamb and the other is the opening, so
+        turn toward it instead of backing out. A flat wall, where the
+        nose and both shoulders agree, is neither.
+        """
+        if self._view_blind:
+            return ""
+        nose, left, right = self._last_clear
+        if nose >= 20.0:
+            return ""
+        nearer = min(left, right)
+        further = max(left, right)
+        bubble = 0.0 if self._bubble_gap is None else float(self._bubble_gap)
+        if nearer < 20.0 and abs(nose - nearer) < 0.18 and abs(further - nearer) < 0.35:
+            return ""
+        open_ahead = nearer >= 20.0 or nose > nearer + 0.18
+        if nose > 0.55 and bubble > 0.38 and open_ahead:
+            if nearer < 0.36:
+                return "yaw"
+            return "creep"
+        if 0.18 < nearer < 1.20 and further > nearer + 0.70 and nose > 0.32:
+            return "yaw"
+        return ""
+
+    def _opening_yaw(self) -> float:
+        """Yaw toward the shoulder that looks further. Positive is left."""
+        _nose, left, right = self._last_clear
+        if abs(left - right) < 0.18:
+            return 0.0
+        return 0.40 if left > right else -0.40
+
+    def _opening_command(self, relief: str) -> tuple[float, float, str]:
+        """Motion that trusts the live gap over a stop from the map."""
+        yaw = self._opening_yaw()
+        _nose, left, right = self._last_clear
+        nearer = min(left, right)
+        if relief == "yaw" or (relief == "creep" and nearer < 0.45 and abs(yaw) > 0.2):
+            if abs(yaw) < 0.2:
+                yaw = 0.40
+            return 0.0, yaw, "align"
+        allowed = DOOR_SPEED_M_S
+        if self._bubble_gap is not None:
+            allowed = min(allowed, max_speed_for_gap(self._bubble_gap))
+        speed = max(0.0, allowed)
+        if speed < 0.04:
+            if abs(yaw) < 0.2:
+                yaw = 0.40
+            return 0.0, yaw, "align"
+        steer = 0.0 if abs(left - right) < 0.22 else max(-0.28, min(0.28, yaw))
+        kind = "clear" if abs(steer) < 0.08 else "straight"
+        return speed, steer, kind
 
     def _speed_cap(self, view) -> float:
         cap = CRUISE_M_S
@@ -1048,6 +1141,15 @@ class Explorer:
             v2 = DOOR_SPEED_M_S
             w2 = 0.0
             kind = "clear"
+        # The sweep stops when a smeared jamb fills the opening. Live
+        # depth that still looks through that gap is the measurement.
+        if kind == "stop":
+            relief = self._gap_ahead()
+            if relief:
+                v2, w2, kind = self._opening_command(relief)
+                if self.t_s >= self._sweep_log_at:
+                    self._log(f"opening {relief}, live gap ahead of the sweep")
+                    self._sweep_log_at = self.t_s + 0.5
         self.sweep_checks += 1
         if kind != "clear":
             self.sweep_rejected += 1
@@ -1074,7 +1176,12 @@ class Explorer:
             self._sweep_log_at = self.t_s + 0.5
         # Lined up, and the straight shell misses the map. Stay on this
         # heading instead of taking the next frontier back through the door.
-        if door_mode in ("approach", "mouth") and kind == "clear" and v2 > 0.05 and abs(w2) < 0.08:
+        if (
+            (door_mode in ("approach", "mouth") or self._gap_ahead() == "creep")
+            and kind == "clear"
+            and v2 > 0.05
+            and abs(w2) < 0.08
+        ):
             self._commit_until = max(self._commit_until, self.t_s + 16.0)
             # The polyline heading hunts between the jambs. Once the
             # sonars agree, the way through is the way the shell is facing.

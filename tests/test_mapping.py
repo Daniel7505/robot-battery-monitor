@@ -811,6 +811,61 @@ def test_a_clear_door_crossing_is_committed():
     assert bot.goal_xy == (2.4, 0.0)
 
 
+def test_a_smeared_opening_is_crept_not_banned():
+    """Occupancy says the shell would clip. The depth nose still looks through.
+
+    That is the bedroom door: a smeared jamb stops the sweep, then the
+    stall paints the room beyond the gap as forbidden. The live gap has
+    to win, and a flat wall at the same nose range still gets banned.
+    """
+    from src.mapping.explore import Explorer
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.28, -0.08, 0.48, 0.08, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot.goal_xy = (2.2, 0.0)
+    bot.path_xy = [(0.5, 0.0), (2.2, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 20.0
+    bot._last_clear = (0.97, 0.58, 1.23)
+    bot._bubble_gap = 0.70
+    bot._min_gap = 0.70
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.58, 1.23)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert bot.goal_xy == (2.2, 0.0)
+    assert not bot._banned
+    bot._start_recovery()
+    assert bot.goal_xy == (2.2, 0.0)
+    assert not bot._banned
+
+    # One jamb and an open shoulder: turn toward the opening, do not ban it.
+    bot._last_clear = (0.55, 1.95, 0.50)
+    bot._bubble_gap = 0.23
+    bot._min_gap = 0.23
+    bot._sweep_log_at = 1.0e9
+    cmd_l, cmd_r = bot._go(False, 0.28, 1.95, 0.50)
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert w > 0.2
+    assert bot.goal_xy == (2.2, 0.0)
+
+    wall = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    wall.phase = "go"
+    wall.t_s = 20.0
+    wall.goal_xy = (2.2, 0.0)
+    wall.path_xy = [(0.5, 0.0), (2.2, 0.0)]
+    wall._replan_at = 1.0e9
+    wall._goal_since = 20.0
+    wall._last_clear = (0.95, 0.94, 0.96)
+    wall._bubble_gap = 0.70
+    wall._min_gap = 0.70
+    assert wall._gap_ahead() == ""
+    wall._start_recovery()
+    assert wall._banned
+
+
 def test_jamb_steer_only_centres_a_two_sided_gap():
     from src.mapping.explore import Explorer
 

@@ -211,6 +211,8 @@ def test_path_aims_through_the_middle_of_a_doorway():
     through = [p for p in path if p[0] > 0.9]
     assert through
     assert max(abs(p[1]) for p in through) < 0.20
+    # The goal is past the opening, so arrival does not spin in the doorway.
+    assert _goal[0] > 1.6
 
 
 def test_narrow_opening_stays_passable_after_a_thick_jamb():

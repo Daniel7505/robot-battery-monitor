@@ -197,22 +197,76 @@ def line_up_with_openings(grid: OccupancyGrid, path_xy: list[tuple[float, float]
         here = path_xy[i]
         nxt = path_xy[min(i + 1, len(path_xy) - 1)]
         center = _opening_center(grid, occupied, prev, here, nxt)
-        if center is None or math.hypot(center[0] - here[0], center[1] - here[1]) < 0.08:
+        if center is None:
             lined.append(here)
             i += 1
             continue
         cx, cy, tx, ty = center
-        # Square up on the centre line before the nose reaches the jambs.
-        # 0.40 m was inside the turn, so the body was still angled when it
-        # met the 0.81 m opening.
-        lined.append((cx - tx * 0.75, cy - ty * 0.75))
-        lined.append((cx, cy))
-        # Drop later points that belong to the same gap so the path does
-        # not wander back to the jamb.
+        # Square up before the jambs, pass the centre, and only then stop.
+        # Ending on the centre made the robot spin in the 0.81 m opening
+        # and back out. A path that is already on the centre line used to
+        # skip this, so the goal stayed on the near side of the jambs.
+        if math.hypot(cx - here[0], cy - here[1]) >= 0.08:
+            lined.append((cx - tx * 0.75, cy - ty * 0.75))
+            lined.append((cx, cy))
+        lined.append((cx + tx * 0.90, cy + ty * 0.90))
+        # Drop points that are still in the gap. The goal has to be the
+        # room beyond, or arrival spins the robot in the opening.
         i += 1
-        while i < len(path_xy) and math.hypot(path_xy[i][0] - here[0], path_xy[i][1] - here[1]) <= 0.45:
+        while i < len(path_xy):
+            px, py = path_xy[i]
+            along = (px - cx) * tx + (py - cy) * ty
+            if along > 0.90:
+                break
             i += 1
-    return lined
+    return _push_past_opening(grid, occupied, lined)
+
+
+def _push_past_opening(
+    grid: OccupancyGrid,
+    occupied: np.ndarray,
+    path_xy: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    """If the path stops at the mouth of a gap, put the goal in the room beyond.
+
+    A* aims at the last free cell in front of the frontier, which sits on
+    the near side of a doorway. Arrival then spins in the opening.
+    """
+    if len(path_xy) < 2:
+        return path_xy
+    x0, y0 = path_xy[-1]
+    # The last cell of A* is often a diagonal step. The approach over
+    # the previous third of a metre is the direction through the gap.
+    px, py = path_xy[0]
+    for cand in path_xy:
+        if math.hypot(x0 - cand[0], y0 - cand[1]) >= 0.35:
+            px, py = cand
+    tx, ty = x0 - px, y0 - py
+    norm = math.hypot(tx, ty)
+    if norm < 1e-6:
+        return path_xy
+    tx, ty = tx / norm, ty / norm
+    # The last step can aim at a jamb. Sweep a fan so a gap just off that
+    # line is still found.
+    headings = [(tx, ty)]
+    for ang in (0.5, -0.5, 1.0, -1.0):
+        c, s = math.cos(ang), math.sin(ang)
+        headings.append((c * tx - s * ty, s * tx + c * ty))
+    for hx_dir, hy_dir in headings:
+        for step in (0.20, 0.40, 0.60, 0.85):
+            hx = x0 + hx_dir * step
+            hy = y0 + hy_dir * step
+            center = _opening_center(grid, occupied, (x0, y0), (hx, hy), (hx + hx_dir, hy + hy_dir))
+            if center is None:
+                continue
+            cx, cy, ax, ay = center
+            if ax * tx + ay * ty < 0.2:
+                continue
+            far = (cx + ax * 0.90, cy + ay * 0.90)
+            if math.hypot(far[0] - x0, far[1] - y0) < 0.35:
+                return path_xy
+            return [*path_xy, (cx - ax * 0.55, cy - ay * 0.55), (cx, cy), far]
+    return path_xy
 
 
 def _opening_center(

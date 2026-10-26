@@ -356,6 +356,10 @@ class Explorer:
         if clearance < 1.15:
             span = max(0.15, 1.15 - STOP_CLEARANCE_M)
             v *= max(0.30, (clearance - STOP_CLEARANCE_M) / span)
+        if arrived and left_clear < 1.05 and right_clear < 1.05 and clearance > STOP_CLEARANCE_M:
+            # Both jambs are beside us and the nose is clear. Drive through
+            # instead of spinning in the opening.
+            return wheel_speeds(0.16, self._jamb_yaw(left_clear, right_clear))
         if arrived:
             self._last_spin_t = self.t_s
             self.phase = "spin"

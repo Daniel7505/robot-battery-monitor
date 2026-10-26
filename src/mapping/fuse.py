@@ -62,6 +62,8 @@ class MotionFusion:
         # None means this step had no reading. A pin needs all three.
         self.scene_floor_m: float | None = None
         self.scene_visual_m: float | None = None
+        # True when this step's picture did not move. None is "no sample".
+        self.scene_visual_still = False
         self._floor = _Interval()
         self._visual = _Interval()
         self._visual_still = 0
@@ -89,6 +91,7 @@ class MotionFusion:
         self.last_slip = ""
         self.scene_floor_m = None
         self.scene_visual_m = None
+        self.scene_visual_still = False
         if not self.enabled:
             return ""
         self._floor.add(ds_raw_m, ds_applied_m, dyaw_rad)
@@ -117,6 +120,7 @@ class MotionFusion:
                 # heading by several degrees on a flat wall.
                 self.landmarks = sample_v.landmarks
                 self.scene_visual_m = 0.0
+                self.scene_visual_still = True
                 self._visual.clear()
                 sample_v = None
             else:
@@ -126,6 +130,9 @@ class MotionFusion:
                     # The pose update below ignores a fast yaw. The pin
                     # still needs the translation the corners measured.
                     self.scene_visual_m = math.hypot(float(sample_v.dx_m), float(sample_v.dy_m))
+                    self.scene_visual_still = (
+                        self.scene_visual_m < 0.004 and abs(float(sample_v.dyaw_rad)) < 0.01
+                    )
                 expect_px = 0.0
                 if camera is not None and sample_v.range_m > 0.2:
                     expect_px = abs(self._visual.raw_m) / sample_v.range_m * float(camera.focal_px)

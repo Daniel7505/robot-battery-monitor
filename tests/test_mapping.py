@@ -119,6 +119,24 @@ def test_rest_gyro_bias_does_not_walk_the_heading():
     assert odom.bias_rad_s == pytest_approx(0.001, abs=3e-4)
 
 
+def test_a_shove_while_the_hubs_are_still_does_not_poison_the_bias():
+    """A press holds the hubs still and the gyro reads the shove.
+
+    That reading is not a new rest bias. Folding it in used to leave
+    the heading running away after the robot started moving again.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(120):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    held = odom.bias_rad_s
+    assert held == pytest_approx(0.001, abs=3e-4)
+    for _ in range(40):
+        odom.update(0.0, 0.0, 0.01, 0.05)
+    assert abs(odom.bias_rad_s - held) < 1e-4
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(0.5)
+
+
 def test_static_depth_with_spinning_wheels_is_slip_not_motion():
     """Encoders advance, the gyro stays at its rest bias, the wall does not get closer.
 
@@ -533,6 +551,156 @@ def test_a_still_scene_with_turning_wheels_freezes_translation():
             right += cmd_r * dt
     assert math.hypot(*bot.pose()[:2]) < 0.08
     assert bot._pin_until > 0.0
+
+
+def test_a_still_scene_freezes_yaw_while_the_wheels_spin():
+    """Depth, floor, and vision unchanged. The gyro still reads its rest offset.
+
+    The hubs are turning, so the old still-hubs rule does not apply, and
+    integrating that offset is the heading walk while the body sits.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for _ in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.008,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events >= 1
+    assert abs(bot.pose()[2]) < math.radians(0.5)
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+
+
+def test_a_moving_floor_is_not_a_zero_velocity_update():
+    """The floor picture shifting is the body moving. Yaw and travel stay."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[22:34, 24:36] = 40.0
+    rng = np.random.default_rng(3)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for i in range(30):
+        shifted = np.roll(floor, i * 3, axis=1)
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=shifted,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events == 0
+
+
+def test_lifted_wheels_are_a_zero_velocity_update():
+    """Casters take the load, the drive wheels spin, the pictures do not move."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(9)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    for _ in range(30):
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            pitch_rad=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+        )
+    assert bot._pitch_rest == pytest_approx(0.0, abs=1e-6)
+    wheel = 0.22 / WHEEL_RADIUS_M
+    saw_reverse = False
+    for _ in range(40):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            pitch_rad=0.10,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.wheels_lifted >= 1
+    assert saw_reverse
+    assert abs(bot.pose()[2]) < math.radians(1.0)
 
 
 def test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it():

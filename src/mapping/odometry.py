@@ -79,6 +79,7 @@ class WheelGyroOdometry:
         dt_s: float,
         *,
         trust_translation: bool = True,
+        trust_yaw: bool = True,
     ) -> tuple[float, float, float]:
         left_q = self.quantize(left_rad)
         right_q = self.quantize(right_rad)
@@ -103,9 +104,7 @@ class WheelGyroOdometry:
         wheels_still = abs(ds) < 1e-4 and abs(wheel_dyaw) < 1e-4
         if wheels_still and abs(rate_in) < 0.02:
             self.still_s += dt
-            alpha = min(1.0, max(0.0, dt) * 0.8)
-            self.bias_rad_s += alpha * (rate_in - self.bias_rad_s)
-            self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
+            self._track_bias(rate_in, dt)
             self.gyro_unbiased_yaw += (rate_in - self.bias_rad_s) * dt
             return self.pose()
         self.moving_s += dt
@@ -117,11 +116,49 @@ class WheelGyroOdometry:
         # It is not subtracted from the gyro.
         rate = rate_in - self.bias_rad_s
         self.gyro_unbiased_yaw += rate * dt
-        if not trust_translation:
+        # A zero-velocity update already decided the shell is not turning.
+        # The bookkeeping above keeps the breakdown; the pose does not take
+        # this sample. Translation is dropped with it: the same pictures
+        # said the body did not move.
+        if not trust_yaw:
+            rate = 0.0
             ds = 0.0
-        mid = self.yaw_unwrapped_rad + 0.5 * rate * float(dt_s)
-        self.yaw_unwrapped_rad += rate * float(dt_s)
+        elif not trust_translation:
+            ds = 0.0
+        if rate == 0.0 and ds == 0.0:
+            return self.pose()
+        mid = self.yaw_unwrapped_rad + 0.5 * rate * dt
+        self.yaw_unwrapped_rad += rate * dt
         self.yaw_rad = wrap_rad(self.yaw_unwrapped_rad)
         self.x_m += ds * math.cos(mid)
         self.y_m += ds * math.sin(mid)
         return self.pose()
+
+    def _track_bias(self, rate_in: float, dt: float) -> None:
+        """Follow the rest rate. Ignore a shove that arrives with the hubs stuck.
+
+        The first few seconds are the calibration: the bias is still near
+        zero and the reading is the lookup offset. After that, a sample
+        more than a few milliradians per second away from the bias is the
+        shell being pushed, or a wheel vibrating, not a new rest rate.
+        Taking it used to drag 0.001 up to 0.009 during a press, and the
+        heading then ran away for the rest of the run.
+        """
+        if self.still_s >= 4.0 and abs(rate_in - self.bias_rad_s) > 0.003:
+            return
+        alpha = min(1.0, max(0.0, dt) * (0.8 if self.still_s < 4.0 else 0.2))
+        self.bias_rad_s += alpha * (rate_in - self.bias_rad_s)
+        self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))
+
+    def observe_rest(self, rate_in: float, dt: float) -> None:
+        """The cameras say the shell is not turning, so this rate is bias.
+
+        Only a reading close to the current bias is folded in. A spike
+        while the body is held still must not become the new rest rate.
+        """
+        rate = float(rate_in)
+        if abs(rate) >= 0.02 or abs(rate - self.bias_rad_s) > 0.003:
+            return
+        alpha = min(1.0, max(0.0, float(dt)) * 0.2)
+        self.bias_rad_s += alpha * (rate - self.bias_rad_s)
+        self.bias_rad_s = max(-0.02, min(0.02, self.bias_rad_s))

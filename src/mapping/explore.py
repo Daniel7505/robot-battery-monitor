@@ -51,6 +51,45 @@ from src.mapping.scripted import BodyScript, drive_mode
 from src.mapping.slip import MotionCheck
 from src.mapping.wall_line import wall_yaw_delta
 
+def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
+    """True when two frames are the same picture, not a shifted one.
+
+    A blank frame is not evidence. A couple of pixels of noise is.
+    Comparing against the frame from the start of the pause, rather than
+    the previous 8 ms, is what separates a creep from a body that is sitting
+    still: door speed moves the floor by many pixels in a fifth of a second.
+    """
+    if prev is None or curr is None:
+        return False
+    before = np.asarray(prev, dtype=np.float64)
+    after = np.asarray(curr, dtype=np.float64)
+    if before.shape != after.shape or before.ndim != 2 or before.size < 16:
+        return False
+    finite = np.isfinite(before) & np.isfinite(after)
+    if int(np.count_nonzero(finite)) < 16:
+        return False
+    if float(np.std(before[finite])) < min_std and float(np.std(after[finite])) < min_std:
+        return False
+    best = float(np.mean(np.abs(before[finite] - after[finite])))
+    width = before.shape[1]
+    for shift in (1, 2):
+        if width <= shift + 2:
+            break
+        left = before[:, :-shift]
+        right = after[:, shift:]
+        usable = np.isfinite(left) & np.isfinite(right)
+        if int(np.count_nonzero(usable)) < 16:
+            continue
+        best = min(best, float(np.mean(np.abs(left[usable] - right[usable]))))
+        left = before[:, shift:]
+        right = after[:, :-shift]
+        usable = np.isfinite(left) & np.isfinite(right)
+        if int(np.count_nonzero(usable)) < 16:
+            continue
+        best = min(best, float(np.mean(np.abs(left[usable] - right[usable]))))
+    return best < limit
+
+
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
@@ -173,6 +212,13 @@ class Explorer:
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
+        # Pose and pictures at the start of a stretch the cameras have not
+        # moved. A zero-velocity update puts the pose back there.
+        self._zupt_anchor: dict | None = None
+        self._zupt_until = -1.0
+        self._pitch_rest: float | None = None
+        self.zupt_events = 0
+        self.wheels_lifted = 0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -296,12 +342,17 @@ class Explorer:
         cmd_l, cmd_r = self._commanded
         spin_cmd = abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0
         yaw_before = self.odometry.yaw_unwrapped_rad
+        # While the cameras still agree the shell is sitting, do not
+        # integrate this step. The latch is refreshed only when a new
+        # picture says the same thing.
+        held_still = self.t_s < self._zupt_until
         self.odometry.update(
             left_wheel_rad,
             right_wheel_rad,
             yaw_rate_rad_s,
             dt,
-            trust_translation=not drop and not spin_cmd,
+            trust_translation=not drop and not spin_cmd and not held_still,
+            trust_yaw=not held_still,
         )
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
         self._mark_visited()
@@ -330,6 +381,15 @@ class Explorer:
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
         self._watch_pin(depth, ds, rear_depth)
+        self._watch_zupt(
+            depth,
+            floor_image,
+            rgb,
+            yaw_rate_rad_s,
+            pitch_rad,
+            left_wheel_rad,
+            right_wheel_rad,
+        )
         corrected = False
         x, y, yaw = self.odometry.pose()
         if (
@@ -340,6 +400,7 @@ class Explorer:
             and abs(dyaw) < 0.04
             and not (dt > 0.0 and abs(dyaw) > 0.18 * dt)
             and self.t_s >= self._nudge_at
+            and self.t_s >= self._zupt_until
         ):
             # Match the wall in this scan to cells the robot already
             # painted. Done before this scan is integrated, or the new
@@ -419,6 +480,7 @@ class Explorer:
             and sensor is not None
             and floors is not None
             and not drop
+            and self.t_s >= self._zupt_until
         ):
             fixed = self._loop.consider(
                 (x, y, yaw),
@@ -649,6 +711,106 @@ class Explorer:
                 self._start_recovery()
         self._pin.reset()
 
+    def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
+        self._zupt_anchor = {
+            "t": self.t_s,
+            "x": self.odometry.x_m,
+            "y": self.odometry.y_m,
+            "yaw": self.odometry.yaw_unwrapped_rad,
+            "depth": np.array(depth, copy=True),
+            "floor": np.array(floor, copy=True),
+            "rgb": None if rgb is None else np.array(rgb, copy=True),
+            "left": float(left_rad),
+            "right": float(right_rad),
+            "logged": False,
+            "lifted": False,
+            "backed": False,
+            "left_spin": False,
+        }
+
+    def _watch_zupt(
+        self,
+        depth,
+        floor,
+        rgb,
+        yaw_rate: float,
+        pitch: float,
+        left_rad: float,
+        right_rad: float,
+    ) -> None:
+        """Freeze translation and yaw when depth, floor, and vision are unchanged.
+
+        The pictures are the measurement. Gyro yaw is not: a false yaw
+        shifts a depth residual until the old pin thinks the room moved,
+        and the pose walks while the shell sits on a threshold. The hubs
+        may be spinning the whole time. That is slip, or the casters
+        holding the body with the drive wheels off the floor.
+        """
+        if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch)) < 0.15:
+            self._pitch_rest = float(pitch)
+        if depth is None or floor is None:
+            return
+        if self._zupt_anchor is None:
+            self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            return
+        anchor = self._zupt_anchor
+        age = self.t_s - float(anchor["t"])
+        if age < 0.20:
+            return
+        depth_ok = _picture_still(anchor["depth"], depth, limit=0.04, min_std=0.0)
+        floor_ok = _picture_still(anchor["floor"], floor, limit=8.0, min_std=2.0)
+        if rgb is not None and anchor["rgb"] is not None:
+            vis_ok = _picture_still(anchor["rgb"], rgb, limit=8.0, min_std=2.0) and self._fusion.scene_visual_still
+        else:
+            vis_ok = self._fusion.scene_visual_still
+        if not (depth_ok and floor_ok and vis_ok):
+            self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            return
+        dl = float(left_rad) - float(anchor["left"])
+        dr = float(right_rad) - float(anchor["right"])
+        claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m
+        spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
+        if claimed < 0.012 and spun < 0.04:
+            return
+        self.odometry.x_m = float(anchor["x"])
+        self.odometry.y_m = float(anchor["y"])
+        self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
+        self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
+        self._zupt_until = self.t_s + 0.30
+        self.odometry.observe_rest(float(yaw_rate), self._step_dt)
+        if not anchor["logged"]:
+            anchor["logged"] = True
+            self.zupt_events += 1
+            self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
+        rest = self._pitch_rest
+        pitched = rest is not None and abs(float(pitch) - rest) > 0.05
+        if pitched and (claimed >= 0.012 or spun >= 0.04) and not anchor["lifted"]:
+            anchor["lifted"] = True
+            self.wheels_lifted += 1
+            self._log("wheels lifted, casters holding, drive wheels spinning free")
+        commanding = abs(self._commanded[0]) + abs(self._commanded[1]) > 0.4
+        if self.phase == "spin" and age >= 0.80 and not anchor["left_spin"]:
+            anchor["left_spin"] = True
+            self._spin_start = None
+            self._spin_then = None
+            self.phase = "go"
+            self._replan_at = self.t_s
+            self._progress_t = self.t_s
+            self._log("spin did not turn the shell")
+        elif (
+            self.phase == "go"
+            and age >= 0.35
+            and commanding
+            and not anchor["backed"]
+            and self.t_s >= self._reverse_until
+        ):
+            anchor["backed"] = True
+            reason = "wheels lifted" if pitched else "still"
+            self._arm_reverse(
+                self._min_gap, blind=self._view_blind, force_min_m=0.16, reason=reason
+            )
+            self._progress_t = self.t_s
+
     def _pressing_side(self, view: BubbleView) -> float:
         """+1 when the left shell is on a surface, -1 for the right, else 0."""
         left = 99.0 if view.left is None else view.left
@@ -678,7 +840,7 @@ class Explorer:
             self._side_sign = side
             self._side_since = self.t_s
             return
-        if self.t_s - self._side_since >= 0.45:
+        if self.t_s - self._side_since >= 0.28:
             self._start_side_escape(side, view)
 
     def _side_opened(self, view: BubbleView) -> bool:

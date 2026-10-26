@@ -188,7 +188,12 @@ def main() -> None:
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 next_save = now + 5.0
             if now >= next_note:
-                print(f"MAPPING t={now:.1f}s phase={explorer.phase} pose=({x:.2f},{y:.2f})")
+                nose, left_c, right_c = explorer._last_clear
+                cmd_l, cmd_r = explorer._commanded
+                print(
+                    f"MAPPING t={now:.1f}s phase={explorer.phase} pose=({x:.2f},{y:.2f}) "
+                    f"nose={nose:.2f} L={left_c:.2f} R={right_c:.2f} cmd=({cmd_l:.2f},{cmd_r:.2f})"
+                )
                 next_note = now + 2.0
             if explorer.done:
                 left_motor.setVelocity(0.0)

@@ -189,7 +189,10 @@ class Explorer:
             and not self.done
             and self.t_s >= self._recover_until
             and (self.t_s - self._progress_t) > 3.5
+            and (self._view_blind or clearance < 1.5)
         ):
+            # An open view and a heading change is not a stall. Reversing
+            # there spun the robot off the bedroom door.
             self._start_recovery()
         # Nose only. A jamb in the shoulder cone is a steer (see _go),
         # not a wall to spin away from.
@@ -334,7 +337,7 @@ class Explorer:
     def _go(self, blocked: bool, clearance: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
-        if self._goal_expired() or self._is_stuck():
+        if self._goal_expired() or (self._is_stuck() and clearance < 1.5):
             self._ban_current()
             self._plan()
         if self.phase != "go":
@@ -370,7 +373,7 @@ class Explorer:
         return wheel_speeds(v, w)
 
     def _plan(self, depth: int = 0) -> None:
-        self._replan_at = self.t_s + 1.0
+        self._replan_at = self.t_s + 3.0
         x, y, _yaw = self.odometry.pose()
         if depth > 6:
             self._no_frontier()
@@ -385,6 +388,12 @@ class Explorer:
             self._no_frontier()
             return
         goal, path = chosen
+        if (
+            self.goal_xy is not None
+            and self.path_xy
+            and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 1.2
+        ):
+            return
         cell = self.grid.cell_of(goal[0], goal[1])
         # Already standing on it: look once more, then drop it so a speck
         # of unknown next to the robot cannot spin the run forever.

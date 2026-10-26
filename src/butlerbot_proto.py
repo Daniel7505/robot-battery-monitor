@@ -20,8 +20,11 @@ from pathlib import Path
 
 PROTO_PATH = Path(__file__).resolve().parent.parent / "webots" / "protos" / "ButlerBot.proto"
 EXTERNPROTO_LINE = 'EXTERNPROTO "../protos/ButlerBot.proto"'
-# The pasted Robot node this PROTO was cut from (no trailing newline).
-SHIPPED_ROBOT_MD5 = "f7e514cd3e70cad39251257e4207c006"
+# md5 of expand_robot() for a default instance (no trailing newline).
+# Moves when ButlerBot.proto changes. The mapping sensors (oak_depth,
+# oak_rgb, oak_gyro, oak_imu) are part of this hash; warehouse worlds
+# still expand to the same node, and their controller does not enable them.
+SHIPPED_ROBOT_MD5 = "80548bfff8795fe72cd0b98407345041"
 
 _FLOOR_EXTERN = (
     'EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/'

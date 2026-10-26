@@ -1254,11 +1254,23 @@ DEF APT_FURN_VANITY Solid {
 
 ButlerBot {
   # Main room, clear of the sofas and the island. Facing the patio wall (+Y).
+  # apartment_mapper explores from sensors. It does not load this file.
   translation 6.1 4.7 0
   rotation 0 0 1 1.5708
   name "ButlerBot"
-  controller "butlerbot_controller"
+  controller "apartment_mapper"
   controllerArgs [
     "--dashboard-url=http://127.0.0.1:5000"
+  ]
+}
+
+# Scores a run after the fact. Not a device the mapper reads.
+# Sits under the floor so it does not land in a room.
+Robot {
+  translation 0 0 -2
+  name "apartment_pose_logger"
+  supervisor TRUE
+  controller "apartment_pose_logger"
+  children [
   ]
 }

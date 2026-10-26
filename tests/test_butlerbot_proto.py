@@ -51,6 +51,10 @@ DEVICE_NAMES = (
     "gps",
     "imu",
     "gyro",
+    "oak_depth",
+    "oak_rgb",
+    "oak_gyro",
+    "oak_imu",
 )
 
 
@@ -122,3 +126,14 @@ def test_is_fields_match_r2025a_node_field_types():
     for node_field, proto_field in links:
         assert node_field in _R2025A_IS_FIELD_TYPE
         assert declared[proto_field] == _R2025A_IS_FIELD_TYPE[node_field]
+
+
+def test_warehouse_gyro_and_wheel_encoders_stay_clean():
+    """Mapping noise lives on oak_* devices. The hubs and the lane gyro do not change."""
+    text = (ROOT / "webots" / "protos" / "ButlerBot.proto").read_text(encoding="utf-8")
+    assert 'Gyro {\n      name "gyro"\n    }' in text
+    assert 'InertialUnit {\n      name "imu"\n    }' in text
+    assert 'PositionSensor {\n          name "left_wheel_sensor"\n        }' in text
+    assert 'PositionSensor {\n          name "right_wheel_sensor"\n        }' in text
+    assert 'name "oak_depth"' in text
+    assert "noise 0.002" in text

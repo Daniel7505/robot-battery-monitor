@@ -14,6 +14,8 @@ This twin is the **evaluation harness** for the north star (parts catalog → de
 | `worlds/butlerbot_radar_motion.wbt` | S track + rolling ball (`WH_MOVING_BALL`) for radar moving-object tests; `# OBSTACLES on` |
 | `worlds/butlerbot_warehouse*.wbt` | Prototype warehouse (+ obstacles props world); inventory cubes and pretend pick; stereo pair + `radar_fwd` are on the PROTO (`docs/SHOPPING_LIST.md`). Stays the regression course |
 | `worlds/apartment.wbt` | Dan's apartment (Halcyon plan A2). No lane paint. Launch with `-World apartment`. Scoring tape is `eval/apartment_ground_truth.json` (`docs/APARTMENT_TWIN.md`) |
+| `controllers/apartment_mapper/` | Frontier explorer for the apartment. Depth, gyro, and wheel encoders only |
+| `controllers/apartment_pose_logger/` | Supervisor pose log for scoring. Not imported by the mapper |
 | `controllers/butlerbot_controller/` | Orchestrator + siblings (hud / keys / eyes / wheels) + twin HTTP publisher |
 | `../scripts/launch_webots_twin.ps1` | Windows launcher (dashboard + Webots) |
 | `../scripts/launch_webots_twin.sh` | Linux/macOS launcher |

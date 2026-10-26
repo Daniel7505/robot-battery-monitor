@@ -74,6 +74,37 @@ You **do not need a real robot**. Everything runs on a normal PC.
 - **Design agent is a first draft.** The parts catalog has about 10 parts, and the suggested designs are **not** yet test-driven in Webots automatically.
 - **Developed and tested on Windows 10/11 only.** Linux/macOS scripts exist but are **untested**.
 
+### Mapping the apartment
+
+Stage 1 explores `webots/worlds/apartment.wbt` with no map and no true pose. `apartment_mapper` reads the depth camera (`oak_depth`), the gyro yaw rate (`oak_gyro`), roll and pitch from `oak_imu`, and the two wheel encoders. It builds a 2D occupancy grid and drives to frontiers until none longer than 0.3 m is reachable. A second controller, `apartment_pose_logger`, is the only process allowed to read the simulator pose. The mapper does not open `eval/apartment_ground_truth.json` or the world file. `tests/test_apartment_twin.py` fails the build if it does.
+
+Run artifacts (`map.npy`, `map_meta.json`, `pose_log.csv`, and the logger's `gt_pose_log.csv`) go under `logs/mapping_runs/<timestamp>/`. That directory is gitignored. `logs/mapping_runs/CURRENT` points at the latest folder.
+
+**Windows (Webots).** From the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World apartment
+```
+
+Optional caps, set in the same terminal before launch: `RBM_MAP_MAX_S` (stop after this many seconds), `RBM_MAP_STRIDE` (depth decimation, default 4), `RBM_MAP_DIR` (run folder).
+
+**Score a run.** The scorer is the only tool that reads the tape and the world. It prints occupancy IoU, free-space IoU, coverage %, and mean wall error in cm, and writes `map_vs_ground_truth.png` next to the map.
+
+```powershell
+python eval\score_apartment_map.py (Get-Content logs\mapping_runs\CURRENT).Trim()
+```
+
+**No Webots.** The same mapper can be driven by a NumPy ray caster (not a Webots render). This is what CI runs:
+
+```powershell
+python eval\kinematic_apartment_map.py --steps 1600 --noise
+python eval\score_apartment_map.py (Get-Content logs\mapping_runs\CURRENT).Trim()
+```
+
+One kinematic run (1600 steps, depth noise on, 64×40 rays) had not finished the frontier search. Honest scores against the tape: occupancy IoU 0.168, free-space IoU 0.673, coverage 91.8%, wall error 17.9 cm. Occupancy IoU stays low because walls are thin and furniture is only partly seen. The VM this was measured on does not have Webots installed, so there is no headless simulator number yet.
+
+Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
+
 ---
 
 ## 4. How it fits together (diagrams)
@@ -532,6 +563,8 @@ The overnight optimizer and reference laps #8–#12 use `light`. A blank `bom_bu
 | `run_dashboard.py` | Starts the dashboard app (database → power loop → web page) |
 | `robot_battery_monitor.py` | Terminal reports from the database (`--summary`, `--history Legs`, `--report`) |
 | `src/` | All the Python logic: dashboard, power loop, safety, agent, lane vision, steering, obstacles, parts catalog |
+| `src/mapping/` | Apartment occupancy grid, odometry, frontiers, and the exploration loop. No ground truth |
+| `eval/` | Apartment scorer and the kinematic depth stand-in. This is the code allowed to read the tape |
 | `src/twin/` | The Webots ↔ dashboard bridge and power model |
 | `webots/` | Simulator worlds and the robot controller ([`webots/README.md`](webots/README.md)) |
 | `tracks/` | Test track definitions (JSON) |
@@ -633,6 +666,7 @@ Searched the tree for `EXTERNPROTO`, `Copyright`, `SPDX`, `adapted`, `copied`, `
 | **`tests/fake_webots/controller.py`** | Original minimal stub for CI; not the Cyberbotics Webots `controller` module. |
 | **`src/lane_vision.py`** | Original; stdlib-only by design. |
 | **`src/rowfit_control.py` / pure pursuit** | Standard geometric path-following algorithm described in docs ([`docs/ROWFIT_LANE_VISION.md`](docs/ROWFIT_LANE_VISION.md)); **implemented in-repo**, not pasted from an external repo. |
+| **`src/mapping/`** | Frontier exploration (Yamauchi, IEEE CIRA 1997), log-odds occupancy (Moravec and Elfes, ICRA 1985; Thrun, Burgard, Fox, *Probabilistic Robotics*, ch. 9), and pure pursuit (Coulter, CMU-RI-TR-92-01, 1992). Implemented in-repo from those descriptions. |
 | **`src/stereo_depth.py`** | Original pipeline; calls OpenCV `StereoSGBM` when available, else an **original** NumPy block matcher (documented in file header). |
 | **Motor / battery constants** | Comments and YAML cite [Pololu](https://www.pololu.com/), [Adafruit](https://www.adafruit.com/), and similar **datasheet URLs** for engineering values — reference only, not copied code. |
 | **Hardware BOM JSON** | `config/bom/bom.json` and profiles link to vendor product pages; no scraped proprietary text committed as code. |

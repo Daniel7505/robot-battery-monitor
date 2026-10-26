@@ -301,9 +301,8 @@ def _path_connects(solids: dict, points: dict[str, tuple[float, float]], radius:
     assert not missing, f"no {radius * 2:.3f} m path from the main room to {missing}"
 
 
-def _loaded_by_controller() -> list[Path]:
-    """Controller package plus every module those files import or load by path."""
-    seeds = [path for path in CONTROLLER_ROOT.rglob("*.py") if path.is_file()]
+def _loaded_from(seeds: list[Path]) -> list[Path]:
+    """Python files reachable from ``seeds`` by import or a path join into ``src``."""
     seen: set[Path] = set()
     queue = list(seeds)
     while queue:
@@ -340,6 +339,28 @@ def _loaded_by_controller() -> list[Path]:
             if cand.is_file():
                 queue.append(cand)
     return sorted(seen)
+
+
+def _loaded_by_controller() -> list[Path]:
+    """Controller package plus every module those files import or load by path."""
+    seeds = [path for path in CONTROLLER_ROOT.rglob("*.py") if path.is_file()]
+    return _loaded_from(seeds)
+
+
+# Tokens that would hand the mapper the apartment or the simulator pose.
+_MAPPER_BANNED = (
+    "apartment_ground_truth",
+    "apartment.wbt",
+    "worlds/apartment",
+    "getPosition",
+    "getFromDef",
+    "getSelf",
+    "getRoot",
+    "getOrientation",
+    "Supervisor",
+    "supervisor",
+    "gps",
+)
 
 
 @pytest.fixture(scope="module")
@@ -498,3 +519,37 @@ def test_controller_does_not_import_or_open_apartment_ground_truth():
     assert hits == []
     # The controller entry is in that set, so an import of the eval file would have shown up.
     assert any(path.name == "butlerbot_controller.py" for path in loaded)
+    assert any(path.name == "apartment_mapper.py" for path in loaded)
+
+
+def test_mapper_has_no_pose_or_map_foresight():
+    """The explorer and everything it imports stay off the scoring files and the true pose.
+
+    The pose logger is a different controller. It may call getPosition. The
+    mapper's import closure must not include it.
+    """
+    mapper = CONTROLLER_ROOT / "apartment_mapper"
+    seeds = [path for path in mapper.rglob("*.py") if path.is_file()]
+    assert seeds, "apartment_mapper controller is missing"
+    loaded = _loaded_from(seeds)
+    names = {path.name for path in loaded}
+    assert "apartment_mapper.py" in names
+    assert "apartment_pose_logger.py" not in names
+    hits = []
+    for path in loaded:
+        text = path.read_text(encoding="utf-8")
+        for token in _MAPPER_BANNED:
+            if token in text or token in text.lower():
+                hits.append(f"{path.relative_to(ROOT)}: {token}")
+    assert hits == []
+
+
+def test_pose_logger_is_separate_and_reads_the_simulator_pose():
+    logger = CONTROLLER_ROOT / "apartment_pose_logger" / "apartment_pose_logger.py"
+    text = logger.read_text(encoding="utf-8")
+    assert "getPosition" in text
+    assert "getFromDef" in text
+    assert GT_NAME not in text
+    assert "apartment.wbt" not in text
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    assert "apartment_pose_logger" not in mapper

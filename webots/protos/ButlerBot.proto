@@ -700,6 +700,58 @@ Robot {
       transmittedPower 10
       minDetectableSignal -90
     }
+    # OAK-D-like depth for apartment mapping. The warehouse controller never
+    # enables these, so warehouse laps do not pay the render and do not see
+    # the noise. RangeFinder.noise is a fraction of maxRange (R2025a): 0.002
+    # gives σ = 1.6 cm at maxRange 8 m, the same centimetre band as an OAK-D
+    # stereo depth error around a couple of metres. Pitch is 5° down
+    # (0.0873 rad). The 20° stereo pair looks at the floor and misses walls
+    # past about 2 m; this beam still meets them. HFOV 1.396 rad is 80°.
+    # Sampling period is set in the mapper (96 ms), not in this node.
+    DEF OAK_DEPTH RangeFinder {
+      translation 0.14 0 0.78
+      rotation 0 1 0 0.0873
+      name "oak_depth"
+      fieldOfView 1.396
+      width 320
+      height 200
+      near 0.2
+      minRange 0.35
+      maxRange 8
+      noise 0.002
+    }
+    # Co-located colour camera for a later RGB-D stage. Left disabled until
+    # then so it does not render.
+    DEF OAK_RGB Camera {
+      translation 0.14 0 0.78
+      rotation 0 1 0 0.0873
+      name "oak_rgb"
+      fieldOfView 1.2
+      width 320
+      height 200
+      near 0.05
+    }
+    # Second gyro and inertial unit, used only by the apartment mapper.
+    # The devices named "gyro" and "imu" above stay noiseless: warehouse
+    # pivots integrate that gyro, and quantizing the wheel sensors would
+    # change the energy trace. Gyro lookupTable columns are input rad/s,
+    # output rad/s, and noise as a fraction of the output (DistanceSensor
+    # convention). A zero-rate reading has no fractional noise, so the
+    # output column carries a +0.001 rad/s bias. The mapper quantizes wheel
+    # angles in software at 0.0015 rad (~4096 counts/rev) instead of setting
+    # PositionSensor.resolution on the shared hubs.
+    Gyro {
+      name "oak_gyro"
+      lookupTable [
+        -20 -19.999 0.05
+        0 0.001 0.05
+        20 20.001 0.05
+      ]
+    }
+    InertialUnit {
+      name "oak_imu"
+      noise 0.01
+    }
     # Shoulder HUDs only.
     DEF HUD_NADIR Display {
       name "hud_nadir"

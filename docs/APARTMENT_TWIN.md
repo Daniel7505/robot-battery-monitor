@@ -158,3 +158,12 @@ patio wall                    J closed (shared-wall end)
 ```
 
 The entry hall is the open 44 in strip east of the laundry, closets, and walk-in. Its east side has no wall. Door G is the opening at the top of that hall. The lower opening in the same wall is the west hallway.
+
+## Mapping run
+
+`apartment.wbt` starts `apartment_mapper` on ButlerBot and `apartment_pose_logger` on a supervisor node under the floor. The mapper builds the grid from `oak_depth`, `oak_gyro`, `oak_imu` roll/pitch, and the wheel encoders. The logger is the only controller that calls the supervisor. How to launch and score, including the Windows command, is in the README section **Mapping the apartment**.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\launch_webots_twin.ps1 -World apartment
+python eval\score_apartment_map.py (Get-Content logs\mapping_runs\CURRENT).Trim()
+```

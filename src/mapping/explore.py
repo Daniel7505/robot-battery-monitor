@@ -1178,25 +1178,20 @@ class Explorer:
         if door_mode == "approach":
             # Outside the frame: face the centre line, then drive straight.
             # An arc here is the corner cut that puts a tire on the jamb.
-            # If that heading keeps moving, a pure spin never enters. After
-            # a short align, creep and steer.
+            # A heading that jitters across the align threshold used to
+            # restart the spin forever, which is how the hall was abandoned.
+            # One align window, then creep even if the error comes back.
             err = wrap_rad(self._segment_heading() - pose[2])
-            if abs(err) > 0.12:
-                if self._approach_since is None:
-                    self._approach_since = self.t_s
-                if self.t_s - self._approach_since < 1.2:
-                    v = 0.0
-                    w = max(-0.55, min(0.55, math.copysign(0.55, err)))
-                    approach_kind = "align"
-                else:
-                    v = DOOR_SPEED_M_S
-                    w = max(-0.35, min(0.35, 1.1 * err))
-                    approach_kind = "straight"
+            if self._approach_since is None:
+                self._approach_since = self.t_s
+            if abs(err) > 0.12 and self.t_s - self._approach_since < 1.2:
+                v = 0.0
+                w = max(-0.55, min(0.55, math.copysign(0.55, err)))
+                approach_kind = "align"
             else:
-                self._approach_since = None
                 v = DOOR_SPEED_M_S
-                w = 0.0
-                if abs(raw_w) > 0.15:
+                w = 0.0 if abs(err) <= 0.12 else max(-0.35, min(0.35, 1.1 * err))
+                if abs(err) > 0.12 or abs(raw_w) > 0.15:
                     approach_kind = "straight"
         elif door_mode == "mouth" or through:
             self._approach_since = None

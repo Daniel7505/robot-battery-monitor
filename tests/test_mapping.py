@@ -663,6 +663,21 @@ def test_a_yawed_door_approach_lines_up_then_drives_straight():
     assert not footprint_clips(grid, near, DOOR_SPEED_M_S, 0.0)
     # A gentle arc reaches the jamb. A spin in place never enters the opening.
     assert footprint_clips(grid, near, DOOR_SPEED_M_S, 0.40)
+    # A heading that crosses the align threshold must not restart the spin.
+    bot._approach_since = None
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot._go(False, 0.28, 0.62, 0.70)
+    bot.t_s += 0.4
+    bot.odometry.yaw_rad = 0.0
+    bot.odometry.yaw_unwrapped_rad = 0.0
+    bot._go(False, 0.28, 0.62, 0.70)
+    bot.t_s += 1.0
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
 
 
 def test_a_rear_press_drives_forward_off_the_wall():

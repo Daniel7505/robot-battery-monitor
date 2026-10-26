@@ -167,6 +167,8 @@ class Explorer:
         self._visited_cell: tuple[int, int] | None = None
         self._opening_since: float | None = None
         self._opening_holds = 0
+        self._approach_since: float | None = None
+        self._gentle_side = 0
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
@@ -461,6 +463,7 @@ class Explorer:
             self._progress_xy = (x, y)
             self._progress_t = self.t_s
             self._opening_holds = 0
+            self._gentle_side = 0
         # Both shoulders on a frame, and the nose still looking through
         # it, is a doorway approach. A few seconds of lining up is not a
         # stall, and the recovery used to blacklist the opening. The same
@@ -685,20 +688,24 @@ class Explorer:
         # A jamb beside a gap the nose still looks through. Yaw off that
         # jamb and keep the goal. Blacklisting here painted the bedroom
         # shut and the robot never went back.
-        if self._gap_ahead():
+        self._gentle_side += 1
+        if self._gap_ahead() and self._gentle_side < 3:
             self._log(f"side contact on the {which} beside an opening, yawing off gap={shown:.2f}")
             self._side_escape_sign = side
-            self._side_escape_until = self.t_s + 0.8
-            self._reverse_left_m = 0.06
+            self._side_escape_until = self.t_s + 1.0
+            # A 6 cm twitch left the tire on the frame and the same goal
+            # was driven into the wall again. Back up far enough to turn.
+            self._reverse_left_m = 0.16
             self._reverse_until = self._side_escape_until
             self._reverse_needs_gap = True
             self._reverse_release = False
-            self._recover_until = max(self._recover_until, self.t_s + 0.5)
-            self._progress_t = self.t_s + 0.5
+            self._recover_until = max(self._recover_until, self.t_s + 0.6)
+            self._progress_t = self.t_s + 0.6
             self._turn = -side * SPIN_RAD_S
             self.phase = "go"
             self.done = False
             return
+        self._gentle_side = 0
         self._log(f"side contact on the {which}, backing off the frame gap={shown:.2f}")
         key = self._goal_key()
         if key is not None:
@@ -1070,22 +1077,36 @@ class Explorer:
         if door_mode == "approach":
             # Outside the frame: face the centre line, then drive straight.
             # An arc here is the corner cut that puts a tire on the jamb.
+            # If that heading keeps moving, a pure spin never enters. After
+            # a short align, creep and steer.
             err = wrap_rad(self._segment_heading() - pose[2])
             if abs(err) > 0.12:
-                v = 0.0
-                w = max(-0.55, min(0.55, math.copysign(0.55, err)))
-                approach_kind = "align"
+                if self._approach_since is None:
+                    self._approach_since = self.t_s
+                if self.t_s - self._approach_since < 1.2:
+                    v = 0.0
+                    w = max(-0.55, min(0.55, math.copysign(0.55, err)))
+                    approach_kind = "align"
+                else:
+                    v = DOOR_SPEED_M_S
+                    w = max(-0.35, min(0.35, 1.1 * err))
+                    approach_kind = "straight"
             else:
+                self._approach_since = None
                 v = DOOR_SPEED_M_S
                 w = 0.0
                 if abs(raw_w) > 0.15:
                     approach_kind = "straight"
         elif door_mode == "mouth" or through:
+            self._approach_since = None
             # In the opening, or arriving with both jambs beside the nose.
             w = door_w if through else w + door_w
             v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
         elif left_clear < 0.90 and right_clear < 0.90:
+            self._approach_since = None
             v = min(v, DOOR_SPEED_M_S)
+        else:
+            self._approach_since = None
         v = min(v, max(0.0, cap))
         v, w = self._apply_sweep(v, w, approach_kind, door_mode)
         return wheel_speeds(v, w)

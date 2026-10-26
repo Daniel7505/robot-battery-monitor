@@ -651,6 +651,13 @@ def test_a_yawed_door_approach_lines_up_then_drives_straight():
     w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
     assert abs(v - DOOR_SPEED_M_S) < 1e-6
     assert abs(w) < 0.05
+    # Still yawed a second and a half later: stop spinning and creep.
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot._approach_since = bot.t_s - 1.5
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
     # Close enough that the shorter horizon still reaches the jamb.
     near = (0.90, 0.0, 0.0)
     assert not footprint_clips(grid, near, DOOR_SPEED_M_S, 0.0)

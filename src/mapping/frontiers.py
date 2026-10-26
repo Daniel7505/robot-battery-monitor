@@ -486,8 +486,10 @@ def select_goal(
             norm = math.hypot(dx, dy) or 1.0
             ahead = (dx * prefer_xy[0] + dy * prefer_xy[1]) / norm
             # A frontier behind a doorway we just committed to is how the
-            # robot turned around in the hall and came back out.
-            if ahead < 0.2:
+            # robot turned around in the hall and came back out. A goal
+            # off to the side (the bath continuing north after a west
+            # entry) is still in the new room, so only the rear half loses.
+            if ahead < -0.05:
                 score *= 0.25
         if best is None or score > best[0]:
             best = (score, goal, pts)

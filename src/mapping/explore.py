@@ -38,6 +38,7 @@ from src.mapping.depth_cloud import (
     to_odom,
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
+from src.mapping.floor_flow import image_shift_px
 from src.mapping.footprint import fit_motion
 from src.mapping.frontiers import select_goal
 from src.mapping.fuse import MotionFusion
@@ -727,6 +728,7 @@ class Explorer:
             "backed": False,
             "left_spin": False,
             "still_hits": 0,
+            "misses": 0,
         }
 
     def _watch_zupt(
@@ -758,15 +760,33 @@ class Explorer:
         age = self.t_s - float(anchor["t"])
         if age < 0.20:
             return
-        depth_ok = _picture_still(anchor["depth"], depth, limit=0.025, min_std=0.0)
-        floor_ok = _picture_still(anchor["floor"], floor, limit=8.0, min_std=4.0)
-        if rgb is not None and anchor["rgb"] is not None:
-            vis_ok = _picture_still(anchor["rgb"], rgb, limit=6.0, min_std=4.0) and self._fusion.scene_visual_still
-        else:
-            vis_ok = self._fusion.scene_visual_still
-        if not (depth_ok and floor_ok and vis_ok):
+        # Floor flow against the anchor, not the previous 8 ms. Door speed
+        # shifts the texture by many pixels in a fifth of a second. A mean
+        # absolute difference on a soft grain still looked still while the
+        # shell was moving, and freezing that yaw deleted a real turn.
+        shift = image_shift_px(anchor["floor"], floor)
+        if shift is None or math.hypot(float(shift[0]), float(shift[1])) > 2.0:
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             return
+        depth_ok = _picture_still(anchor["depth"], depth, limit=0.045, min_std=0.0)
+        vis_ok = bool(self._fusion.scene_visual_still)
+        if rgb is not None and anchor["rgb"] is not None:
+            before = np.asarray(anchor["rgb"], dtype=np.float64)
+            after = np.asarray(rgb, dtype=np.float64)
+            if (
+                before.shape == after.shape
+                and float(np.std(before)) >= 4.0
+                and float(np.std(after)) >= 4.0
+            ):
+                vis_ok = vis_ok and _picture_still(anchor["rgb"], rgb, limit=8.0, min_std=4.0)
+        if not (depth_ok and vis_ok):
+            # One noisy depth frame is not the shell moving. The floor
+            # already agreed. Two misses in a row rearms.
+            anchor["misses"] = int(anchor["misses"]) + 1
+            if int(anchor["misses"]) >= 2:
+                self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            return
+        anchor["misses"] = 0
         # One matching pair is the start of a creep, whose picture has not
         # moved a pixel yet. Wait until a second picture, a fifth of a
         # second later, is still the same before touching the pose.
@@ -777,8 +797,6 @@ class Explorer:
         dr = float(right_rad) - float(anchor["right"])
         claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
-        if claimed < 0.02 and spun < 0.08:
-            return
         self.odometry.x_m = float(anchor["x"])
         self.odometry.y_m = float(anchor["y"])
         self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
@@ -786,10 +804,10 @@ class Explorer:
         # Only the steps until the next picture. A latch that ran on
         # after the shell started moving deleted a real turn.
         self._zupt_until = self.t_s + 0.12
-        self.odometry.observe_rest(float(yaw_rate), self._step_dt)
         if not anchor["logged"]:
             anchor["logged"] = True
             self.zupt_events += 1
+            self.odometry.observe_rest(float(yaw_rate), self._step_dt)
             self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
         rest = self._pitch_rest
         # The carpet ramp is about 0.04 rad. A real unload tips past that.
@@ -798,8 +816,11 @@ class Explorer:
             anchor["lifted"] = True
             self.wheels_lifted += 1
             self._log("wheels lifted, casters holding, drive wheels spinning free")
+        # Hubs that are not claiming motion have nothing to undo and
+        # nothing to back away from. The pose freeze above is the update.
+        if claimed < 0.02 and spun < 0.08:
+            return
         commanding = abs(self._commanded[0]) + abs(self._commanded[1]) > 0.4
-        gap = self._min_gap if self._min_gap is not None else 99.0
         if self.phase == "spin" and age >= 0.80 and not anchor["left_spin"]:
             anchor["left_spin"] = True
             self._spin_start = None
@@ -810,12 +831,14 @@ class Explorer:
             self._log("spin did not turn the shell")
         elif (
             self.phase == "go"
-            and age >= 0.55
+            and age >= 0.70
             and commanding
-            and (pitched or gap < 0.40)
             and not anchor["backed"]
             and self.t_s >= self._reverse_until
         ):
+            # A press the side sonar never sees: the nose looks through
+            # the opening while the tires scrub. Back off before the
+            # contact has lasted two seconds. The goal stays.
             anchor["backed"] = True
             reason = "wheels lifted" if pitched else "still"
             self._arm_reverse(

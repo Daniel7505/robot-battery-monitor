@@ -85,6 +85,24 @@ def _parab(corr: np.ndarray, row: int, col: int, *, axis: int) -> float:
     return max(-0.6, min(0.6, 0.5 * (vm - vp) / den))
 
 
+def image_shift_px(prev, curr) -> tuple[float, float, float] | None:
+    """Pixel shift of ``curr`` relative to ``prev``.
+
+    None means the floor has nothing to track. The row and column are the
+    same peak ``FloorFlow`` integrates; callers that only need "did it
+    move" use the magnitude. A creep of door speed is many pixels across
+    a fifth of a second, and a body that is sitting still stays under a
+    couple of pixels.
+    """
+    before = np.asarray(prev, dtype=np.float64)
+    after = np.asarray(curr, dtype=np.float64)
+    if before.ndim == 3:
+        before = before.mean(axis=2)
+    if after.ndim == 3:
+        after = after.mean(axis=2)
+    return _shift_peak(before, after)
+
+
 def metres_per_px(camera=FLOOR_CAM, height_m: float | None = None) -> float:
     """Ground metres per pixel at the nominal mounting height."""
     height = float(FLOOR_CAM.translation[2] if height_m is None else height_m)

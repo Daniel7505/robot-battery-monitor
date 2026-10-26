@@ -121,6 +121,9 @@ class WheelGyroOdometry:
         # this sample. Translation is dropped with it: the same pictures
         # said the body did not move.
         if not trust_yaw:
+            # The cameras already called this sample rest. A quiet rate
+            # is bias; a shove is not. The pose keeps the value it had.
+            self.observe_rest(rate_in, dt)
             rate = 0.0
             ds = 0.0
         elif not trust_translation:

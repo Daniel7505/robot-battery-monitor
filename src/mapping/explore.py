@@ -1204,9 +1204,19 @@ class Explorer:
             w = door_w if through else w + door_w
             v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
         elif 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and self._last_clear[0] > 0.30:
-            # In the frame but not yet the approach case. A pure spin
-            # never crosses. Line up briefly, then creep.
-            if abs(w) > 0.25 and v < 0.06:
+            # In the frame. Face the goal, then creep. Driving the way the
+            # shell happens to be pointing follows the wall instead of the
+            # opening.
+            err = 0.0
+            if self.goal_xy is not None:
+                err = wrap_rad(
+                    math.atan2(self.goal_xy[1] - pose[1], self.goal_xy[0] - pose[0]) - pose[2]
+                )
+            if abs(err) > 0.45:
+                v = 0.0
+                w = math.copysign(0.50, err)
+                approach_kind = "align"
+            elif abs(w) > 0.25 and v < 0.06:
                 if self._approach_since is None:
                     self._approach_since = self.t_s
                 if self.t_s - self._approach_since >= 1.2:
@@ -1218,6 +1228,7 @@ class Explorer:
             else:
                 self._approach_since = None
                 v = min(v, DOOR_SPEED_M_S)
+                w = max(-0.28, min(0.28, self._jamb_yaw(left_clear, right_clear)))
         elif left_clear < 0.90 and right_clear < 0.90:
             self._approach_since = None
             v = min(v, DOOR_SPEED_M_S)

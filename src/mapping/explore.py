@@ -1204,15 +1204,15 @@ class Explorer:
             w = door_w if through else w + door_w
             v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
         elif 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and self._last_clear[0] > 0.30:
-            # In the frame. Face the goal, then creep. Driving the way the
-            # shell happens to be pointing follows the wall instead of the
-            # opening.
+            # In the frame. A spin here used to follow the wall. If the
+            # command is already stopped, turn toward the goal instead.
+            # Do not take over a drive command: the hall is this narrow too.
             err = 0.0
             if self.goal_xy is not None:
                 err = wrap_rad(
                     math.atan2(self.goal_xy[1] - pose[1], self.goal_xy[0] - pose[0]) - pose[2]
                 )
-            if abs(err) > 0.45:
+            if v < 0.06 and abs(err) > 0.6:
                 v = 0.0
                 w = math.copysign(0.50, err)
                 approach_kind = "align"

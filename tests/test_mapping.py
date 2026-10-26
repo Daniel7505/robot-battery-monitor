@@ -857,6 +857,13 @@ def test_a_smeared_opening_is_crept_not_banned():
     w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
     assert w > 0.2
     assert bot.goal_xy == (2.2, 0.0)
+    # The same view a second later has to drive. A pure spin here is how
+    # the bath run turned away from the bedroom.
+    bot._opening_since = bot.t_s - 1.5
+    cmd_l, cmd_r = bot._go(False, 0.28, 1.95, 0.50)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert bot.goal_xy == (2.2, 0.0)
 
     wall = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
     wall.phase = "go"

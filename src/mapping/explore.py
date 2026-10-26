@@ -479,7 +479,12 @@ class Explorer:
         if in_mouth or relief_now:
             if self._opening_since is None:
                 self._opening_since = self.t_s
-            window = 10.0 if in_mouth else 8.0
+            # A pure yaw at a one-sided wall is not a doorway. Two seconds
+            # is enough to square up; longer than that was a spin in the bath.
+            if relief_now == "yaw" and not in_mouth:
+                window = 2.0
+            else:
+                window = 10.0 if in_mouth else 8.0
             if self.t_s - self._opening_since < window:
                 self._progress_t = self.t_s
         else:
@@ -979,9 +984,14 @@ class Explorer:
         _nose, left, right = self._last_clear
         nearer = min(left, right)
         if relief == "yaw" or (relief == "creep" and nearer < 0.45 and abs(yaw) > 0.2):
-            if abs(yaw) < 0.2:
-                yaw = 0.40
-            return 0.0, yaw, "align"
+            # Square up, then drive. Staying in the pure spin turned the
+            # bath robot off a bedroom goal that was still ahead.
+            held = self._opening_since is not None and (self.t_s - self._opening_since) > 1.2
+            if not held:
+                if abs(yaw) < 0.2:
+                    yaw = 0.40
+                return 0.0, yaw, "align"
+            yaw = max(-0.35, min(0.35, yaw))
         allowed = DOOR_SPEED_M_S
         if self._bubble_gap is not None:
             allowed = min(allowed, max_speed_for_gap(self._bubble_gap))

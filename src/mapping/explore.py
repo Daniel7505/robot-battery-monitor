@@ -99,6 +99,7 @@ class Explorer:
         self.slip_events = 0
         self.frontiers_left = 0
         self._last_clear = (99.0, 99.0, 99.0)
+        self._held_clear: tuple[float, float, float] | None = None
         self._bubble_gap: float | None = None
         self._min_gap: float | None = None
         self._path_m = 0.0
@@ -141,6 +142,11 @@ class Explorer:
                 stride=self.stride,
             )
             clearance, left_clear, right_clear = forward_clearance(hits)
+            self._held_clear = (clearance, left_clear, right_clear)
+        elif self._held_clear is not None:
+            # Depth arrives at 10 Hz. Dropping it on the steps in between
+            # made the shell look open and the speed cap ignored the wall.
+            clearance, left_clear, right_clear = self._held_clear
             # Two empty frames, not one glitch. Held until a usable frame
             # arrives, including the steps between depth pictures.
             if blind_fraction(self.camera, depth, stride=self.stride) >= BLIND_VIEW_FRACTION:

@@ -1022,7 +1022,7 @@ class Explorer:
 
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 3.0
-        x, y, _yaw = self.odometry.pose()
+        x, y, yaw = self.odometry.pose()
         if self._hold_goal():
             return
         if depth > 6:
@@ -1030,6 +1030,7 @@ class Explorer:
             return
         banned = self._ban_set()
         prefer = self._forward_preference()
+        heading_xy = (math.cos(yaw), math.sin(yaw))
         rooms = segment_map(self.grid.labels(), self.grid.res)
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
@@ -1041,6 +1042,7 @@ class Explorer:
             banned=banned,
             prefer_xy=prefer,
             rooms=rooms,
+            heading_xy=heading_xy,
         )
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
@@ -1052,6 +1054,7 @@ class Explorer:
                 banned=set(),
                 prefer_xy=prefer,
                 rooms=rooms,
+                heading_xy=heading_xy,
             )
         if chosen is None:
             self._no_frontier()
@@ -1150,16 +1153,21 @@ class Explorer:
         if self.t_s < self._settle_check:
             return 0.0, 0.0
         self._settle_check = self.t_s + 0.5
-        x, y, _yaw = self.odometry.pose()
+        x, y, yaw = self.odometry.pose()
+        heading_xy = (math.cos(yaw), math.sin(yaw))
         rooms = segment_map(self.grid.labels(), self.grid.res)
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
-        chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set(), rooms=rooms)
+        chosen = select_goal(
+            self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set(), rooms=rooms, heading_xy=heading_xy
+        )
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
             self._banned.clear()
-            chosen = select_goal(self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), rooms=rooms)
+            chosen = select_goal(
+                self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), rooms=rooms, heading_xy=heading_xy
+            )
         if chosen is not None:
             self._log("frontier open, resuming")
             self._did_final_scan = False

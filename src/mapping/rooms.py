@@ -13,6 +13,8 @@ import numpy as np
 _DOOR_MIN_M = 0.55
 _DOOR_MAX_M = 1.40
 _DOOR_LONG_M = 0.80
+# One occupied cell is a depth speck. A jamb is a run of wall.
+_WALL_CELLS = 3
 _MIN_ROOM_M2 = 0.45
 # A hall is a long passage about a metre wide. The apartment hall is
 # 1.02 m by 1.73 m, so the name follows the passage itself: a region
@@ -32,25 +34,39 @@ def _axis_spans(free: np.ndarray, occupied: np.ndarray, horizontal: bool):
     right_occ = np.zeros((height, width), dtype=bool)
     for row in range(height):
         span = 0
-        blocked = False
+        run = 0
+        support = 0
         for col in range(width):
             if free[row, col]:
+                if span == 0:
+                    support = run
                 span += 1
                 left[row, col] = span
-                left_occ[row, col] = blocked
+                left_occ[row, col] = support >= _WALL_CELLS
+                run = 0
+            elif occupied[row, col]:
+                span = 0
+                run += 1
             else:
                 span = 0
-                blocked = bool(occupied[row, col])
+                run = 0
         span = 0
-        blocked = False
+        run = 0
+        support = 0
         for col in range(width - 1, -1, -1):
             if free[row, col]:
+                if span == 0:
+                    support = run
                 span += 1
                 right[row, col] = span
-                right_occ[row, col] = blocked
+                right_occ[row, col] = support >= _WALL_CELLS
+                run = 0
+            elif occupied[row, col]:
+                span = 0
+                run += 1
             else:
                 span = 0
-                blocked = bool(occupied[row, col])
+                run = 0
     if not horizontal:
         return left.T, right.T, left_occ.T, right_occ.T
     return left, right, left_occ, right_occ
@@ -141,8 +157,13 @@ def hall_mask(labels: np.ndarray, resolution_m: float) -> np.ndarray:
     return hall
 
 
-def _mouths(free: np.ndarray, hall: np.ndarray) -> np.ndarray:
-    """Hall cells that open into a wider free region. That opening is a doorway."""
+def _mouths(free: np.ndarray, hall: np.ndarray, resolution_m: float) -> np.ndarray:
+    """Short openings where a passage meets a wider room.
+
+    A hall cell that touches wider free space is a candidate. A run of
+    those cells longer than a doorway is the side of the passage, not a
+    door, and marking it would make every path look like a crossing.
+    """
     if not np.any(hall):
         return np.zeros(hall.shape, dtype=bool)
     touch = np.zeros(hall.shape, dtype=bool)
@@ -150,14 +171,21 @@ def _mouths(free: np.ndarray, hall: np.ndarray) -> np.ndarray:
     touch[:-1, :] |= free[1:, :] & ~hall[1:, :]
     touch[:, 1:] |= free[:, :-1] & ~hall[:, :-1]
     touch[:, :-1] |= free[:, 1:] & ~hall[:, 1:]
-    return hall & touch
+    raw = hall & touch
+    keep = np.zeros(hall.shape, dtype=bool)
+    limit = _DOOR_MAX_M / float(resolution_m)
+    for cells in _components(raw):
+        if _span_cells(cells) <= limit:
+            for y, x in cells:
+                keep[y, x] = True
+    return keep
 
 
 def segment_map(labels: np.ndarray, resolution_m: float) -> dict:
     """Region ids (0 = none) and names. Door cells are removed before the fill."""
     shape = labels.shape
     hall = hall_mask(labels, resolution_m)
-    door = doorway_mask(labels, resolution_m) | _mouths(labels == 0, hall)
+    door = doorway_mask(labels, resolution_m) | _mouths(labels == 0, hall, resolution_m)
     free = (labels == 0) & ~door
     # One cell of doorway is enough to split a 5 cm grid. Dilate so a
     # diagonal leak does not join the two rooms.

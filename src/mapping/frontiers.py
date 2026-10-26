@@ -396,6 +396,18 @@ def _nearest_free(free: np.ndarray, row: int, col: int, max_cells: int = 40) -> 
     return int(ys[i]), int(xs[i])
 
 
+def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
+    height, width = doors.shape
+    step = max(1, len(group) // 8)
+    for y, x in group[::step]:
+        if doors[y, x]:
+            return True
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if 0 <= ny < height and 0 <= nx < width and doors[ny, nx]:
+                return True
+    return False
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -405,6 +417,7 @@ def select_goal(
     banned: set[tuple[int, int]] | None = None,
     prefer_xy: tuple[float, float] | None = None,
     rooms: dict | None = None,
+    heading_xy: tuple[float, float] | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -415,6 +428,18 @@ def select_goal(
     if not groups:
         return None
     groups.sort(key=len, reverse=True)
+    # The longest frontiers are usually the room the robot is already in.
+    # A short frontier just past a doorway still has to be scored, or the
+    # curiosity bonus never sees it.
+    ranked = list(groups[:8])
+    if rooms is not None and rooms.get("doors") is not None:
+        extra = 0
+        for group in groups[8:24]:
+            if extra >= 4:
+                break
+            if _touches_door(group, rooms["doors"]):
+                ranked.append(group)
+                extra += 1
     free = traversable(labels, grid.res, radius_m)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
@@ -424,7 +449,7 @@ def select_goal(
         return None
     banned = banned or set()
     best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
-    for group in groups[:8]:
+    for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
             continue
@@ -442,8 +467,19 @@ def select_goal(
             length += math.hypot(b[0] - a[0], b[1] - a[1])
         size_m = len(group) * grid.res
         score = size_m / (length + 0.25)
-        score *= crossing_bonus(path_cells, rooms, start)
+        bonus = crossing_bonus(path_cells, rooms, start)
+        score *= bonus
         goal = grid.cell_center(*target)
+        if heading_xy is not None and bonus > 1.0:
+            # Two doorways can both be new. The one in front of the robot
+            # is the crossing it is already lined up with.
+            dx = goal[0] - float(pose_xy[0])
+            dy = goal[1] - float(pose_xy[1])
+            norm = math.hypot(dx, dy) or 1.0
+            hx, hy = float(heading_xy[0]), float(heading_xy[1])
+            hn = math.hypot(hx, hy) or 1.0
+            if (dx * hx + dy * hy) / (norm * hn) > 0.6:
+                score *= 3.0
         if prefer_xy is not None:
             dx = goal[0] - float(pose_xy[0])
             dy = goal[1] - float(pose_xy[1])

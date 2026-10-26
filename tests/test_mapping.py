@@ -1153,8 +1153,8 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     hall = np.full((60, 120), -1, dtype=np.int8)
     hall[4:48, 4:44] = 0
     hall[14:34, 44:104] = 0
-    hall[13, 44:104] = 1
-    hall[34, 44:104] = 1
+    hall[10:14, 44:104] = 1
+    hall[34:38, 44:104] = 1
     named = segment_map(hall, 0.05)
     assert "hall" in named["names"].values()
     assert any(name.startswith("room_") for name in named["names"].values())
@@ -1164,8 +1164,8 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     apt = np.full((80, 90), -1, dtype=np.int8)
     apt[10:70, 40:85] = 0
     apt[30:50, 5:40] = 0
-    apt[29, 5:40] = 1
-    apt[50, 5:40] = 1
+    apt[26:30, 5:40] = 1
+    apt[50:54, 5:40] = 1
     apt_named = segment_map(apt, 0.05)
     assert "hall" in apt_named["names"].values()
     assert any(name.startswith("room_") for name in apt_named["names"].values())

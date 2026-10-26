@@ -410,6 +410,19 @@ def test_a_door_jamb_is_not_the_nose_clearance():
     assert right == pytest_approx(99.0)
 
 
+def test_jamb_steer_only_centres_a_two_sided_gap():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    # A wall on the left and open space on the right is not a doorway.
+    assert bot._jamb_yaw(0.40, 99.0) == 0.0
+    # Both jambs close, left one nearer: turn right, away from it.
+    assert bot._jamb_yaw(0.40, 0.80) < 0.0
+    assert bot._jamb_yaw(0.80, 0.40) > 0.0
+    # Centred in the opening: no extra yaw.
+    assert bot._jamb_yaw(0.55, 0.58) == 0.0
+
+
 def test_reverse_out_of_a_blind_wall_moves_the_pose():
     """The backup itself is motion. Only the forward skid is frozen."""
     from src.mapping.explore import Explorer

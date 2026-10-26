@@ -82,6 +82,7 @@ class Explorer:
         self._settle_check = 0.0
         self.slip_events = 0
         self.frontiers_left = 0
+        self._last_clear = (99.0, 99.0, 99.0)
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -191,16 +192,18 @@ class Explorer:
         ):
             self._start_recovery()
         # Nose only. A jamb in the shoulder cone is a steer (see _go),
-        # not a wall to spin away from. That spin is what turned the robot
-        # parallel to the bedroom door and the hallway in the real runs.
+        # not a wall to spin away from.
         blocked = radar_blocked or clearance < STOP_CLEARANCE_M
+        self._last_clear = (clearance, left_clear, right_clear)
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
+        # The path stays: throwing it away on a one-frame block is what
+        # swapped the doorway goal for a new one every tenth of a second.
         if self.phase == "go" and blocked:
             if self.t_s >= self._avoid_until:
                 self._turn = prefer
-                self.path_xy = []
-                self._replan_at = self.t_s + 0.45
+                if self._replan_at < self.t_s:
+                    self._replan_at = self.t_s + 0.45
             self._avoid_until = self.t_s + 0.08
         if self.phase == "settle":
             return self._remember(self._settle())
@@ -267,7 +270,8 @@ class Explorer:
         self._avoid_until = self._reverse_until + 1.5
         self.path_xy = []
         self._replan_at = self._avoid_until
-        self._log("contact, backing up")
+        nose, left_c, right_c = self._last_clear
+        self._log(f"contact, backing up nose={nose:.2f} left={left_c:.2f} right={right_c:.2f}")
 
     def _note_slip(self) -> None:
         self.slip_events += 1
@@ -279,7 +283,8 @@ class Explorer:
         if self.t_s < self._recover_until:
             return
         x, y, yaw = self.odometry.pose()
-        self._log("backup")
+        nose, left_c, right_c = self._last_clear
+        self._log(f"backup nose={nose:.2f} left={left_c:.2f} right={right_c:.2f} blind={int(self._view_blind)}")
         self._ban_current(immediate=True)
         # A small, expiring patch on the jamb. Radius 12 sealed the 0.81 m
         # opening and the ban never came back, so the bedroom was abandoned.
@@ -312,13 +317,18 @@ class Explorer:
         return True
 
     def _jamb_yaw(self, left_clear: float, right_clear: float) -> float:
-        """Turn away from the nearer door jamb. Equal shoulders stay straight."""
-        if left_clear > 1.1 and right_clear > 1.1:
+        """Centre in a gap. A wall on only one side is not a doorway.
+
+        Yawing at every nearby shoulder turned the robot parallel to the
+        bedroom wall and held it there. Both shoulders have to be close
+        before this adds a turn, and a matched pair stays straight.
+        """
+        if left_clear > 1.3 or right_clear > 1.3:
             return 0.0
-        if left_clear + 0.05 < right_clear:
-            return -0.55
-        if right_clear + 0.05 < left_clear:
-            return 0.55
+        if left_clear + 0.08 < right_clear:
+            return -0.40
+        if right_clear + 0.08 < left_clear:
+            return 0.40
         return 0.0
 
     def _go(self, blocked: bool, clearance: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
@@ -341,9 +351,8 @@ class Explorer:
             return 0.0, 0.0
         v, w, arrived = pure_pursuit(self.odometry.pose(), self.path_xy, arrive_m=ARRIVE_M)
         w += self._jamb_yaw(left_clear, right_clear)
-        near = min(left_clear, right_clear)
-        if near < 0.90:
-            v = min(v, 0.14)
+        if left_clear < 0.90 and right_clear < 0.90:
+            v = min(v, 0.16)
         if clearance < 1.15:
             span = max(0.15, 1.15 - STOP_CLEARANCE_M)
             v *= max(0.30, (clearance - STOP_CLEARANCE_M) / span)

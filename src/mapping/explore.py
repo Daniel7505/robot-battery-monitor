@@ -213,7 +213,9 @@ class Explorer:
         # wedged and an open view must not hide it. A real turn, which
         # does change the heading, is left alone.
         yaw_u = self.odometry.yaw_unwrapped_rad
-        if self._heading_anchor is None or abs(yaw_u - self._heading_anchor[1]) > 0.30:
+        # A few degrees resets the timer. Only a heading that is not
+        # turning at all counts as wedged. A slow alignment is a real turn.
+        if self._heading_anchor is None or abs(yaw_u - self._heading_anchor[1]) > 0.08:
             self._heading_anchor = (self.t_s, yaw_u)
         heading_stuck = (self.t_s - self._heading_anchor[0]) > 3.5
         if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:

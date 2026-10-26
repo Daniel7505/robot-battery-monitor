@@ -64,6 +64,43 @@ def _brace_body(text: str, open_idx: int) -> str:
     raise ValueError("unbalanced brace")
 
 
+def _solid_bounds(body: str, cx: float, cy: float, cz: float) -> tuple[float, float, float, float, float, float] | None:
+    """World AABB of a box or a ramp mesh. The visual shape is ignored."""
+    box = re.search(
+        r"boundingObject\s+Box\s*\{\s*size\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        body,
+    )
+    if box:
+        sx, sy, sz = (float(v) for v in box.groups())
+        return (
+            cx - sx / 2.0,
+            cx + sx / 2.0,
+            cy - sy / 2.0,
+            cy + sy / 2.0,
+            cz - sz / 2.0,
+            cz + sz / 2.0,
+        )
+    mesh = re.search(
+        r"boundingObject\s+IndexedFaceSet\s*\{.*?point\s*\[([^\]]*)\]",
+        body,
+        re.S,
+    )
+    if not mesh:
+        return None
+    nums = [float(v) for v in mesh.group(1).split()]
+    if len(nums) < 12 or len(nums) % 3:
+        return None
+    xs, ys, zs = nums[0::3], nums[1::3], nums[2::3]
+    return (
+        cx + min(xs),
+        cx + max(xs),
+        cy + min(ys),
+        cy + max(ys),
+        cz + min(zs),
+        cz + max(zs),
+    )
+
+
 def load_solids(path: Path | None = None) -> list[Solid]:
     raw = _strip_comments((path or WORLD).read_text(encoding="utf-8"))
     solids: list[Solid] = []
@@ -73,25 +110,13 @@ def load_solids(path: Path | None = None) -> list[Solid]:
             r"translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
             body,
         )
-        box = re.search(
-            r"boundingObject\s+Box\s*\{\s*size\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
-            body,
-        )
-        if not trans or not box:
+        if not trans:
             continue
         cx, cy, cz = (float(v) for v in trans.groups())
-        sx, sy, sz = (float(v) for v in box.groups())
-        solids.append(
-            Solid(
-                match.group(1),
-                cx - sx / 2.0,
-                cx + sx / 2.0,
-                cy - sy / 2.0,
-                cy + sy / 2.0,
-                cz - sz / 2.0,
-                cz + sz / 2.0,
-            )
-        )
+        bounds = _solid_bounds(body, cx, cy, cz)
+        if bounds is None:
+            continue
+        solids.append(Solid(match.group(1), *bounds))
     return solids
 
 

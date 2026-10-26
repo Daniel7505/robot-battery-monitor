@@ -6,7 +6,7 @@
 # Exports TWIN_DASHBOARD_URL for the controller's twin_publisher HTTP client.
 #
 # Usage: ./scripts/launch_webots_twin.sh [dashboard_url] [world]
-#   world: butlerbot (default), camera_s (camera-only S; track does not steer), corner90, corner_mix, widen, plus, t_end, gap45, warehouse, warehouse_obstacles, radar_motion, or a .wbt path (RBM_WORLD too)
+#   world: butlerbot (default), camera_s (camera-only S; track does not steer), corner90, corner_mix, widen, plus, t_end, gap45, warehouse, warehouse_obstacles, radar_motion, apartment, or a .wbt path (RBM_WORLD too)
 # Camera proof: RBM_MISSION_LAPS=1 ./scripts/launch_webots_twin.sh http://127.0.0.1:5000 camera_s
 #   RBM_TRACK is set from the world's # TRACK_FILE tag.
 # The controller lane-keeps on its own (rowfit); the agent drives via the twin API.

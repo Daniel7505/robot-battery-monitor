@@ -1,0 +1,625 @@
+{
+  "purpose": "Scoring ground truth only. The ButlerBot controller must not import or open this file. The robot has its own sensors and must build its own map. Room dimensions, furniture positions, and this floor plan are not controller inputs.",
+  "inch_to_metre": 0.0254,
+  "tolerance_m": 0.01,
+  "drivable_path_in": 24,
+  "frame": {
+    "coordinate_system": "ENU",
+    "up": "+Z",
+    "plus_x": "from the bedroom left wall toward the living room right wall",
+    "plus_y": "from the kitchen back wall toward the patio / window wall",
+    "origin": "interior corner of the bedroom left wall and the back wall"
+  },
+  "measured_in": {
+    "A_living_width": 184.0,
+    "B_living_kitchen_length": 328.0,
+    "C_bedroom_width": 144.0,
+    "D_bedroom_length": 146.0,
+    "E_hallway_width": 44.0,
+    "F_kitchen_aisle": 38.0,
+    "G_bedroom_door": 32.0,
+    "H_bathroom_door": 32.0,
+    "I_front_door": 36.0,
+    "J_patio_door": 32.0
+  },
+  "estimates": {
+    "wall_thickness_in": 4.0,
+    "wall_height_in": 96.0,
+    "bathroom_width_in": 72.0,
+    "bathroom_depth_in": 178.0,
+    "closet_width_in": 68.0,
+    "closet_depth_in": 42.0,
+    "laundry_width_in": 68.0,
+    "laundry_depth_in": 46.0,
+    "hallway_width_in": 68.0,
+    "hallway_depth_in": 40.0,
+    "pantry_width_in": 32.0,
+    "pantry_depth_in": 38.0,
+    "storage_width_in": 32.0,
+    "storage_depth_in": 38.0,
+    "linen_width_in": 20.0,
+    "linen_depth_in": 28.0,
+    "counter_depth_in": 25.0,
+    "fridge_width_in": 30.0,
+    "fridge_depth_in": 30.0,
+    "island_width_in": 132.0,
+    "island_depth_in": 36.0,
+    "carpet_step_in": 0.5,
+    "bedroom_bath_walkway_in": 32.0,
+    "walk_in_door_in": 32.0,
+    "laundry_door_in": 36.0,
+    "entry_hall_opening_in": 40.0,
+    "note": "The front door opens into an entry hall, the measured 44 in of open floor east of the left block, running north to door G and open to the kitchen on the east. The wall along the east of the laundry, closets, and walk-in is the west side of that hall, with an opening into the west hallway. The bath is the full-height west column, with a closed linen nook in the top-left corner and fixtures along the outer wall: vanity, then toilet, then the tub on the back wall. The middle column, top to bottom, is the walk-in (open to the bath), two closed closets, the west hallway, and the laundry. Door H is the open passage from that hallway into the bath. The laundry door opens off the hallway. The bedroom-to-bath walkway is the open gap at the left end of the bedroom's inner wall, just right of the linen nook. Door G is the open doorway at the top of the entry hall. The back counter starts at the entry hall's east edge and runs to the far wall. The island spans that same edge to near the far wall, one measured aisle (F) off the counter, with a stool at its right end. Wall thickness, wall height, the service-room sizes, the carpet lip, and every furniture box are estimates. Closet and laundry floors are laminate by assumption. The patio beyond door J is out of scope."
+  },
+  "zones_m": {
+    "living": {
+      "min_m": [
+        3.7592,
+        2.5146,
+        -0.02
+      ],
+      "max_m": [
+        8.4328,
+        8.3312,
+        0.0
+      ]
+    },
+    "kitchen": {
+      "min_m": [
+        3.7592,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        8.4328,
+        2.5146,
+        0.0
+      ]
+    },
+    "hallway": {
+      "min_m": [
+        1.9304,
+        1.27,
+        -0.02
+      ],
+      "max_m": [
+        3.6576,
+        2.286,
+        0.0
+      ]
+    },
+    "bathroom": {
+      "min_m": [
+        0.0,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        1.8288,
+        4.5212,
+        0.0
+      ]
+    },
+    "closet": {
+      "min_m": [
+        1.9304,
+        3.4544,
+        -0.02
+      ],
+      "max_m": [
+        3.6576,
+        4.5212,
+        0.0
+      ]
+    },
+    "laundry": {
+      "min_m": [
+        1.9304,
+        0.0,
+        -0.02
+      ],
+      "max_m": [
+        3.6576,
+        1.1684,
+        0.0
+      ]
+    },
+    "pantry": {
+      "min_m": [
+        1.9304,
+        2.3876,
+        -0.02
+      ],
+      "max_m": [
+        2.7432,
+        3.3528,
+        0.0
+      ]
+    },
+    "storage": {
+      "min_m": [
+        2.8448,
+        2.3876,
+        -0.02
+      ],
+      "max_m": [
+        3.6576,
+        3.3528,
+        0.0
+      ]
+    },
+    "bedroom": {
+      "min_m": [
+        0.0,
+        4.6228,
+        -0.0073
+      ],
+      "max_m": [
+        3.6576,
+        8.3312,
+        0.0127
+      ]
+    }
+  },
+  "floors": {
+    "laminate_contact_material": "laminate",
+    "carpet_contact_material": "carpet",
+    "laminate_zones": [
+      "living",
+      "kitchen",
+      "hallway",
+      "bathroom",
+      "closet",
+      "laundry",
+      "pantry",
+      "storage"
+    ],
+    "carpet_zones": [
+      "bedroom"
+    ],
+    "documented_crr": {
+      "laminate": 0.012,
+      "carpet": 0.05
+    },
+    "contact_force_dependent_slip": {
+      "drive_wheel_laminate": 0.01,
+      "drive_wheel_carpet": 0.04
+    },
+    "energy_model_wired": false,
+    "crr_note": "Webots R2025a ContactProperties has no Crr field. forceDependentSlip is the stand-in (ODE v = k*F). These Crr values are not read by the energy model."
+  },
+  "spawn": {
+    "room": "living",
+    "translation_m": [
+      6.1,
+      4.7,
+      0.0
+    ],
+    "facing": "+Y toward the patio wall"
+  },
+  "furniture": [
+    {
+      "id": "loveseat",
+      "estimated": true,
+      "size_in": [
+        38,
+        72,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          3.7592,
+          6.2992,
+          0.0
+        ],
+        "max_m": [
+          4.7244,
+          8.128,
+          1.016
+        ]
+      },
+      "note": "Dark brown leather loveseat along the shared wall, near the patio door. 38 in deep, 72 in long. Estimate."
+    },
+    {
+      "id": "sofa",
+      "estimated": true,
+      "size_in": [
+        36,
+        80,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.5184,
+          6.096,
+          0.0
+        ],
+        "max_m": [
+          8.4328,
+          8.128,
+          1.016
+        ]
+      },
+      "note": "Dark brown leather 3-seat sofa along the far exterior wall, near the patio. 36 in deep, 80 in long. Estimate."
+    },
+    {
+      "id": "end_table_loveseat",
+      "estimated": true,
+      "size_in": [
+        18,
+        18,
+        24.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.7244,
+          7.6708,
+          0.0
+        ],
+        "max_m": [
+          5.1816,
+          8.128,
+          0.6096
+        ]
+      },
+      "note": "Small end table at the loveseat's patio-end inner corner. Estimate."
+    },
+    {
+      "id": "end_table_sofa",
+      "estimated": true,
+      "size_in": [
+        18,
+        18,
+        24.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.0612,
+          5.6388,
+          0.0
+        ],
+        "max_m": [
+          7.5184,
+          6.096,
+          0.6096
+        ]
+      },
+      "note": "Small end table at the 3-seat sofa's kitchen-side end. Estimate."
+    },
+    {
+      "id": "desk",
+      "estimated": true,
+      "size_in": [
+        24,
+        42,
+        29.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.8232,
+          4.2672,
+          0.0
+        ],
+        "max_m": [
+          8.4328,
+          5.334,
+          0.7366
+        ]
+      },
+      "note": "Compact desk, 24 in deep by 42 in, flush to the far exterior wall below the sofa. Estimate."
+    },
+    {
+      "id": "office_chair",
+      "estimated": true,
+      "size_in": [
+        8,
+        16,
+        40.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.62,
+          4.5974,
+          0.0
+        ],
+        "max_m": [
+          7.8232,
+          5.0038,
+          1.016
+        ]
+      },
+      "note": "Black mesh chair tucked against the desk, extending 8 in past the desk face. Estimate."
+    },
+    {
+      "id": "trash",
+      "estimated": true,
+      "size_in": [
+        11,
+        11,
+        15.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          8.1534,
+          3.9878,
+          0.0
+        ],
+        "max_m": [
+          8.4328,
+          4.2672,
+          0.381
+        ]
+      },
+      "note": "Small black trash can against the far wall, south of the desk, inside the desk's depth. Estimate."
+    },
+    {
+      "id": "tv_stand",
+      "estimated": true,
+      "size_in": [
+        12,
+        12,
+        42.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          8.128,
+          5.334,
+          0.0
+        ],
+        "max_m": [
+          8.4328,
+          5.6388,
+          1.0668
+        ]
+      },
+      "note": "Monitor on a stand in the gap between the desk and the sofa, flush to the far wall. Estimate."
+    },
+    {
+      "id": "fridge",
+      "estimated": true,
+      "size_in": [
+        30,
+        30,
+        70.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.8768,
+          0.0,
+          0.0
+        ],
+        "max_m": [
+          5.6388,
+          0.762,
+          1.778
+        ]
+      },
+      "note": "Stainless fridge at the entry hall's east edge, one measured entry-width off the left-block wall. Estimate."
+    },
+    {
+      "id": "stove",
+      "estimated": true,
+      "size_in": [
+        30,
+        25,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          5.6388,
+          0.0,
+          0.0
+        ],
+        "max_m": [
+          6.4008,
+          0.635,
+          0.9144
+        ]
+      },
+      "note": "Stove in the back-counter run, between the fridge and the cabinets. Estimate."
+    },
+    {
+      "id": "counter",
+      "estimated": true,
+      "size_in": [
+        80,
+        25,
+        36
+      ],
+      "aabb_m": {
+        "min_m": [
+          6.4008,
+          0.0,
+          0.0
+        ],
+        "max_m": [
+          8.4328,
+          0.635,
+          0.9144
+        ]
+      },
+      "note": "Dark cabinets and granite top from the stove to the far exterior wall. Estimate."
+    },
+    {
+      "id": "island",
+      "estimated": true,
+      "size_in": [
+        132,
+        36,
+        36
+      ],
+      "aabb_m": {
+        "min_m": [
+          4.8768,
+          1.6002,
+          0.0
+        ],
+        "max_m": [
+          8.2296,
+          2.5146,
+          0.9144
+        ]
+      },
+      "note": "Kitchen island from the entry hall's east edge to near the far wall, 38 in off the counter. Granite top, dark cabinets, sink. Estimate."
+    },
+    {
+      "id": "island_chair",
+      "estimated": true,
+      "size_in": [
+        18,
+        18,
+        36.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          7.7724,
+          2.5146,
+          0.0
+        ],
+        "max_m": [
+          8.2296,
+          2.9718,
+          0.9144
+        ]
+      },
+      "note": "One wooden stool at the island's right end, on the living-room side, clear of the aisle. Estimate."
+    },
+    {
+      "id": "bed",
+      "estimated": true,
+      "size_in": [
+        80,
+        60,
+        48.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.0,
+          6.8072,
+          0.0127
+        ],
+        "max_m": [
+          2.032,
+          8.3312,
+          1.2319
+        ]
+      },
+      "note": "Queen bed, 80 in along the patio wall and 60 in toward the bath, headboard against the patio-side wall. Estimate."
+    },
+    {
+      "id": "nightstand",
+      "estimated": true,
+      "size_in": [
+        19,
+        25,
+        28.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          3.175,
+          7.6962,
+          0.0127
+        ],
+        "max_m": [
+          3.6576,
+          8.3312,
+          0.7239
+        ]
+      },
+      "note": "Dark wood dresser in the bedroom's patio-side corner by the shared wall. Estimate."
+    },
+    {
+      "id": "coat_stand",
+      "estimated": true,
+      "size_in": [
+        14,
+        23,
+        65.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.0,
+          5.8166,
+          0.0127
+        ],
+        "max_m": [
+          0.3556,
+          6.4008,
+          1.6637
+        ]
+      },
+      "note": "Coat stand against the bedroom's outer side wall, below the bed and clear of the bath walkway. Estimate."
+    },
+    {
+      "id": "tub",
+      "estimated": true,
+      "size_in": [
+        60,
+        32,
+        20.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_m": [
+          1.524,
+          0.8128,
+          0.508
+        ]
+      },
+      "note": "White tub along the back wall at the bath's outer corner. Estimate."
+    },
+    {
+      "id": "toilet",
+      "estimated": true,
+      "size_in": [
+        16,
+        30,
+        30.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.0,
+          2.1336,
+          0.0
+        ],
+        "max_m": [
+          0.4064,
+          2.8956,
+          0.762
+        ]
+      },
+      "note": "White toilet on the outer wall, between the tub and the vanity. Estimate."
+    },
+    {
+      "id": "vanity",
+      "estimated": true,
+      "size_in": [
+        20,
+        28,
+        32.0
+      ],
+      "aabb_m": {
+        "min_m": [
+          0.0,
+          2.9972,
+          0.0
+        ],
+        "max_m": [
+          0.508,
+          3.7084,
+          0.8128
+        ]
+      },
+      "note": "White vanity with a sink on the outer wall, under the linen nook. Estimate."
+    }
+  ],
+  "absent": [
+    "dining_table",
+    "rug",
+    "pendant_lights"
+  ]
+}

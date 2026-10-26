@@ -8,7 +8,7 @@
 # Usage: .\scripts\launch_webots_twin.ps1 [-World corner90] [-DashboardUrl "http://127.0.0.1:5000"]
 #   -World: butlerbot (default, the S), camera_s (camera-only S; track does not steer),
 #   corner90, corner_mix, widen, plus, t_end,
-#   gap45, warehouse, warehouse_obstacles, radar_motion, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
+#   gap45, warehouse, warehouse_obstacles, radar_motion, apartment, a world file name (butlerbot_corner90.wbt) or a path. RBM_WORLD sets
 #   the same default.
 # Camera proof (dashboard already running), from the repo root:
 #   set RBM_MISSION_LAPS=1

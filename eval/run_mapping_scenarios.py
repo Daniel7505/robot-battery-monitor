@@ -62,9 +62,10 @@ SCENARIOS = (
     Scenario("backup", 30.0, 7.40, 3.60, math.pi, "backup", 1245),
     # Hall centre, facing the bath door. The bedroom is through that
     # door and the walkway at the north end of the bath, or back out
-    # and around to the bedroom door. Scoring only; the mapper is not
-    # given this pose.
-    Scenario("bedroom", 120.0, 2.794, 1.778, math.pi, "", 1246),
+    # and around to the bedroom door. The long way reaches the
+    # threshold late, so the cap leaves time to roll up the carpet
+    # step. Scoring only; the mapper is not given this pose.
+    Scenario("bedroom", 150.0, 2.794, 1.778, math.pi, "", 1246),
 )
 
 

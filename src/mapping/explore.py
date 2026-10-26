@@ -1024,10 +1024,6 @@ class Explorer:
             # stays on a frame that is beside the shell.
             return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
         if self._reverse_left_m > 0.0 and self.t_s <= self._reverse_until:
-            # A side press has to keep yawing off the frame for the whole
-            # reverse. A straight backup stays on the wall.
-            if self._reverse_needs_gap and self._side_escape_sign != 0.0:
-                return wheel_speeds(-0.10, -0.45 * self._side_escape_sign)
             # Nearly straight. A hard yaw here swings a tire into the jamb
             # the reverse was supposed to leave.
             return wheel_speeds(-0.12, self._turn * 0.08)

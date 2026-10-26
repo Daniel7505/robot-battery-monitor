@@ -993,6 +993,35 @@ def test_a_flicker_off_the_doorway_band_does_not_restart_the_align():
     assert v <= DOOR_SPEED_M_S + 1e-6
 
 
+def test_a_smeared_door_still_creeps_after_the_align_window():
+    """Occupied cells in the opening do not keep the shell spinning.
+
+    After the align window, both shoulders still show the gap and the
+    nose is open. The command is the slow straight creep.
+    """
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.85, -0.08, 1.05, 0.08, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 8.0
+    bot.odometry.x_m = 0.40
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (1.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 8.0
+    bot._approach_since = 6.0
+    bot._last_clear = (0.90, 0.50, 1.05)
+    bot._bubble_gap = 0.90
+    bot._min_gap = 0.50
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.50, 1.05)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert abs(v - DOOR_SPEED_M_S) < 1e-6
+    assert abs(w) < 0.30
+
+
 def test_a_rear_press_drives_forward_off_the_wall():
     """The tail is on the wall and the nose sees the room. Reverse digs in."""
     from src.mapping.bubble import BubbleView

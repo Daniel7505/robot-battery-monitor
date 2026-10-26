@@ -1502,9 +1502,21 @@ class Explorer:
             and abs(left_c - right_c) < 0.12
             and nose > 0.25
         )
-        if centered and (kind != "clear" or abs(w) > 0.15 or v < 0.05):
+        # The align window already finished. Live depth still shows the
+        # opening, and a smeared cell is what the sweep is refusing.
+        # Waiting for the shoulders to match left the shell spinning
+        # outside the bedroom door until the goal was dropped.
+        held = (
+            door_mode == "approach"
+            and self._approach_since is not None
+            and self.t_s - float(self._approach_since) >= 1.2
+            and 0.18 < left_c < 1.20
+            and 0.18 < right_c < 1.20
+            and nose > 0.30
+        )
+        if (centered or held) and (kind != "clear" or abs(w) > 0.15 or v < 0.05):
             v2 = DOOR_SPEED_M_S
-            w2 = 0.0
+            w2 = 0.0 if centered else max(-0.28, min(0.28, self._jamb_yaw(left_c, right_c)))
             kind = "clear"
         # The sweep stops when a smeared jamb fills the opening. Live
         # depth that still looks through that gap is the measurement.

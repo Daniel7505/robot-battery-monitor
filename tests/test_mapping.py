@@ -1257,6 +1257,11 @@ def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
     # The same door speck inside one region is not a new place.
     same = np.ones((4, 4), dtype=np.int16)
     assert crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": same}, (1, 0)) == 1.0
+    # Standing on the cut-out threshold still counts as leaving that room.
+    gap = np.zeros((4, 4), dtype=np.int16)
+    gap[0, 0] = 1
+    gap[1, 3] = 2
+    assert crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": gap}, (1, 0)) >= 3.0
     # An 0.81 m opening is a thin throat. Once the narrow cells run the
     # full width of the gap, the old 0.80 m length cap called it a corridor.
     wide = np.full((60, 90), -1, dtype=np.int8)

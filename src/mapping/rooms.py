@@ -350,11 +350,32 @@ def crossing_bonus(
         return 3.0 if crossed else 1.0
     if not (0 <= gy < region.shape[0] and 0 <= gx < region.shape[1]):
         return 3.0 if crossed else 1.0
-    start_id = int(region[sy, sx])
-    goal_id = int(region[gy, gx])
+    # Door cells are cut out of the regions, so the robot often stands
+    # on an unlabeled cell in the threshold. The room it just left is the
+    # nearest labelled cell, not "no room".
+    start_id = _nearby_region(region, sy, sx)
+    goal_id = _nearby_region(region, gy, gx)
     if start_id > 0 and goal_id > 0 and start_id != goal_id:
         return 6.0
     if start_id > 0 and goal_id == 0 and crossed:
         # Far side is not a labelled room yet. That is a new place.
         return 6.0
     return 1.0
+
+
+def _nearby_region(region: np.ndarray, row: int, col: int) -> int:
+    """Region id at this cell, or the closest labelled cell within 0.25 m."""
+    height, width = region.shape
+    if not (0 <= row < height and 0 <= col < width):
+        return 0
+    if int(region[row, col]) > 0:
+        return int(region[row, col])
+    for radius in range(1, 6):
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if max(abs(dy), abs(dx)) != radius:
+                    continue
+                ny, nx = row + dy, col + dx
+                if 0 <= ny < height and 0 <= nx < width and int(region[ny, nx]) > 0:
+                    return int(region[ny, nx])
+    return 0

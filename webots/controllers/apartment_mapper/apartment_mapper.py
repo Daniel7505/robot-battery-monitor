@@ -1,9 +1,10 @@
 """Explore the apartment and build a 2D occupancy grid.
 
-Sensors: oak_depth, oak_gyro, oak_imu roll/pitch, and the two wheel
-position sensors. Wheel angles are quantized in the odometry module.
-The inertial unit's yaw is not used for heading. A separate controller
-records the simulator pose for scoring; this process does not.
+Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, the two wheel
+position sensors, a ring of short-range sonars, and a downward floor
+camera. Wheel angles are quantized in the odometry module. The inertial
+unit's yaw is not used for heading. A separate controller records the
+simulator pose for scoring; this process does not.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
@@ -22,7 +23,8 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from src.mapping.body import OAK_DEPTH
+from src.mapping.body import FLOOR_CAM, OAK_DEPTH
+from src.mapping.bubble import _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
 from src.mapping.run_log import RunLog, default_run_dir, publish_current
 
@@ -80,6 +82,58 @@ def _radar_blocked(radar) -> bool:
     return False
 
 
+_PROXIMITY = _FRONT + _LEFT + _REAR + _RIGHT
+
+
+def _flag(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _enable(robot, name: str, period: int):
+    try:
+        device = robot.getDevice(name)
+    except Exception:
+        return None
+    if device is None:
+        return None
+    try:
+        device.enable(period)
+    except Exception:
+        return None
+    return device
+
+
+def _camera_gray(device, width: int, height: int):
+    if device is None:
+        return None
+    try:
+        raw = device.getImage()
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    flat = np.frombuffer(raw, dtype=np.uint8)
+    if flat.size < width * height * 4:
+        return None
+    bgra = flat[: width * height * 4].reshape(height, width, 4)
+    return bgra[:, :, :3].mean(axis=2)
+
+
+def _proximity(devices: dict) -> dict:
+    ranges = {}
+    for name, device in devices.items():
+        try:
+            value = float(device.getValue())
+        except Exception:
+            continue
+        if value == value and 0.0 < value < 1.15:
+            ranges[name] = value
+    return ranges
+
+
 def _hold_upper(robot) -> None:
     for name in _UPPER:
         try:
@@ -117,12 +171,19 @@ def main() -> None:
     depth.enable(int(_DEPTH_PERIOD_S * 1000))
     width = int(depth.getWidth()) if hasattr(depth, "getWidth") else OAK_DEPTH.width
     height = int(depth.getHeight()) if hasattr(depth, "getHeight") else OAK_DEPTH.height
-    radar = None
-    try:
-        radar = robot.getDevice("radar_fwd")
-        radar.enable(timestep)
-    except Exception:
-        radar = None
+    radar = _enable(robot, "radar_fwd", timestep)
+    use_floor = _flag("RBM_FLOOR", True)
+    prox_devices = {}
+    for name in dict.fromkeys(_PROXIMITY):
+        device = _enable(robot, name, timestep)
+        if device is not None:
+            prox_devices[name] = device
+    rgb = _enable(robot, "oak_rgb", int(_DEPTH_PERIOD_S * 1000))
+    floor_cam = _enable(robot, "floor_cam", timestep) if use_floor else None
+    rgb_w = int(rgb.getWidth()) if rgb is not None and hasattr(rgb, "getWidth") else OAK_DEPTH.width
+    rgb_h = int(rgb.getHeight()) if rgb is not None and hasattr(rgb, "getHeight") else OAK_DEPTH.height
+    floor_w = int(floor_cam.getWidth()) if floor_cam is not None and hasattr(floor_cam, "getWidth") else FLOOR_CAM.width
+    floor_h = int(floor_cam.getHeight()) if floor_cam is not None and hasattr(floor_cam, "getHeight") else FLOOR_CAM.height
 
     stride = int(_env_float("RBM_MAP_STRIDE") or 4)
     max_s = _env_float("RBM_MAP_MAX_S")
@@ -130,7 +191,12 @@ def main() -> None:
     folder = run_dir if run_dir else default_run_dir(_PROJECT_ROOT)
     publish_current(_PROJECT_ROOT, folder)
     log = RunLog(folder)
-    explorer = Explorer(stride=max(1, stride))
+    explorer = Explorer(
+        stride=max(1, stride),
+        fusion=_flag("RBM_FUSION", True),
+        floor=use_floor,
+        loop=_flag("RBM_LOOP", True),
+    )
     print(f"MAPPING run folder: {folder}")
     print(f"MAPPING depth {width}x{height} stride {explorer.stride} period {_DEPTH_PERIOD_S:.3f}s")
     next_depth = _DEPTH_PERIOD_S
@@ -163,6 +229,9 @@ def main() -> None:
                 pitch_rad=pitch,
                 depth=image,
                 radar_blocked=_radar_blocked(radar),
+                proximity=_proximity(prox_devices),
+                floor=_camera_gray(floor_cam, floor_w, floor_h),
+                rgb=_camera_gray(rgb, rgb_w, rgb_h) if image is not None else None,
             )
             left_motor.setVelocity(left_cmd)
             right_motor.setVelocity(right_cmd)
@@ -190,9 +259,12 @@ def main() -> None:
             if now >= next_note:
                 nose, left_c, right_c = explorer._last_clear
                 cmd_l, cmd_r = explorer._commanded
+                gap = explorer._bubble_gap
+                gap_txt = "nan" if gap is None else f"{gap:.2f}"
                 print(
                     f"MAPPING t={now:.1f}s phase={explorer.phase} pose=({x:.2f},{y:.2f}) "
-                    f"nose={nose:.2f} L={left_c:.2f} R={right_c:.2f} cmd=({cmd_l:.2f},{cmd_r:.2f})"
+                    f"nose={nose:.2f} L={left_c:.2f} R={right_c:.2f} bubble={gap_txt} "
+                    f"cmd=({cmd_l:.2f},{cmd_r:.2f})"
                 )
                 next_note = now + 2.0
             if explorer.done:

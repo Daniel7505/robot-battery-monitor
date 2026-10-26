@@ -18,18 +18,22 @@ from src.mapping.body import (
     ARRIVE_M,
     BLIND_CLEARANCE_M,
     BLIND_VIEW_FRACTION,
+    CRUISE_M_S,
     OAK_DEPTH,
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
     STOP_CLEARANCE_M,
     DepthCamera,
 )
+from src.mapping.bubble import assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
 from src.mapping.depth_cloud import blind_fraction, body_points, forward_clearance, to_odom
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.frontiers import select_goal
+from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
-from src.mapping.odometry import WheelGyroOdometry
-from src.mapping.scan_match import pose_correction, scan_fit
+from src.mapping.loop_close import LoopCloser
+from src.mapping.odometry import WheelGyroOdometry, wrap_rad
+from src.mapping.scan_match import scan_fit
 from src.mapping.slip import MotionCheck
 
 
@@ -41,11 +45,19 @@ class Explorer:
         stride: int = 4,
         grid: OccupancyGrid | None = None,
         odometry: WheelGyroOdometry | None = None,
+        fusion: bool = True,
+        floor: bool = True,
+        loop: bool = True,
     ) -> None:
         self.camera = camera
         self.stride = int(stride)
         self.grid = grid if grid is not None else OccupancyGrid()
         self.odometry = odometry if odometry is not None else WheelGyroOdometry()
+        self.fusion_enabled = bool(fusion)
+        self.floor_enabled = bool(floor)
+        self.loop_enabled = bool(loop)
+        self._fusion = MotionFusion(floor=self.floor_enabled, visual=self.fusion_enabled)
+        self._loop = LoopCloser()
         self.phase = "spin"
         self.done = False
         self.t_s = 0.0
@@ -87,6 +99,11 @@ class Explorer:
         self.slip_events = 0
         self.frontiers_left = 0
         self._last_clear = (99.0, 99.0, 99.0)
+        self._bubble_gap: float | None = None
+        self._min_gap: float | None = None
+        self._path_m = 0.0
+        self._reverse_left_m = 0.0
+        self._reverse_release = False
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
@@ -102,6 +119,9 @@ class Explorer:
         pitch_rad: float = 0.0,
         depth=None,
         radar_blocked: bool = False,
+        proximity: dict | None = None,
+        floor=None,
+        rgb=None,
     ) -> tuple[float, float]:
         dt = max(0.0, float(dt_s))
         self.t_s += dt
@@ -152,6 +172,7 @@ class Explorer:
             if self._motion.events > before and self.phase == "go":
                 self._note_slip()
             drop = slip_drop or in_contact
+        yaw_before = self.odometry.yaw_unwrapped_rad
         self.odometry.update(
             left_wheel_rad,
             right_wheel_rad,
@@ -159,28 +180,27 @@ class Explorer:
             dt,
             trust_translation=not drop,
         )
+        dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
+        applied = 0.0 if drop else ds
+        self._path_m += abs(applied)
+        floor_image = floor if self.floor_enabled else None
+        if self.fusion_enabled or self.floor_enabled:
+            fused = self._fusion.observe(
+                self.odometry,
+                ds_raw_m=ds,
+                ds_applied_m=applied,
+                dyaw_rad=dyaw,
+                floor=floor_image,
+                depth=depth if self.fusion_enabled else None,
+                camera=self.camera,
+                rgb=rgb,
+            )
+            if fused == "slip":
+                self.slip_events += 1
+                self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
+                self._confident_after = max(self._confident_after, self.t_s + 4.0)
+                self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
         corrected = False
-        if hits is not None and hits.size and self.phase in ("go", "spin") and not drop and self.t_s >= self._nudge_at:
-            # Match before the rays are painted, so this frame lands on the
-            # corrected pose. Contact is skipped: a scan into the lens is
-            # not a pose measurement.
-            dx, dy, dyaw = pose_correction(self.grid, self.odometry.pose(), hits[:, :2])
-            self._nudge_at = self.t_s + 0.45
-            # One lucky peak is not a pose. Apply only when the next scan
-            # agrees, so a match cannot walk back and forth along a wall.
-            prev = self._match_proposal
-            prev_t = self._match_proposal_t
-            self._match_proposal = (dx, dy, dyaw)
-            self._match_proposal_t = self.t_s
-            if (dx != 0.0 or dy != 0.0 or dyaw != 0.0) and prev is not None and (self.t_s - prev_t) <= 1.6:
-                dot = prev[0] * dx + prev[1] * dy + 0.4 * prev[2] * dyaw
-                na = math.hypot(dx, dy, 0.4 * dyaw)
-                nb = math.hypot(prev[0], prev[1], 0.4 * prev[2])
-                if na > 1e-3 and nb > 1e-3 and dot >= 0.65 * na * nb:
-                    self.odometry.apply_correction(dx, dy, dyaw)
-                    corrected = True
-                    self._slip_debt_m = max(0.0, self._slip_debt_m - 0.20)
-                    self._log(f"match dx={dx:.3f} dy={dy:.3f} dyaw={dyaw:.3f}")
         x, y, yaw = self.odometry.pose()
         if hits is not None and hits.size and not self._view_blind:
             scanned = to_odom(hits, (x, y, yaw))
@@ -197,6 +217,52 @@ class Explorer:
                     # floor often cannot support or disagree.
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
                 self._agree_at = self.t_s + 0.5
+        view = assess_bubble(clearance, blind=self._view_blind, proximity=proximity)
+        self._bubble_gap = view.forward
+        self._min_gap = view.minimum
+        if self._reverse_left_m > 0.0:
+            if ds >= -1e-4:
+                # Hubs have not started going backward. A stall would
+                # otherwise burn the timer and the backup would expire
+                # before the wheels ever moved.
+                self._reverse_until = max(
+                    self._reverse_until, self.t_s + self._reverse_left_m / 0.12 + 0.35
+                )
+            if ds < 0.0:
+                self._reverse_left_m = max(0.0, self._reverse_left_m + ds)
+            if self._reverse_left_m <= 0.0 or self.t_s > self._reverse_until:
+                self._reverse_left_m = 0.0
+            elif (
+                self._reverse_release
+                and ds < -0.002
+                and view.minimum is not None
+                and pivot_ready(view.minimum)
+                and not self._view_blind
+            ):
+                self._reverse_left_m = 0.0
+        if (
+            self.loop_enabled
+            and self.phase != "spin"
+            and hits is not None
+            and hits.size
+            and sensor is not None
+            and floors is not None
+            and not drop
+        ):
+            fixed = self._loop.consider(
+                (x, y, yaw),
+                self._path_m,
+                self._fusion.landmarks,
+                hits[:, :2],
+                floors[:, :2],
+                sensor[:2],
+            )
+            if fixed is not None:
+                self.odometry.x_m, self.odometry.y_m = fixed[0], fixed[1]
+                self.odometry.nudge_yaw(wrap_rad(fixed[2] - self.odometry.yaw_rad))
+                self._loop.rebuild(self.grid)
+                x, y, yaw = self.odometry.pose()
+                self._log(f"loop closure pose=({x:.2f},{y:.2f},{yaw:.2f})")
         self.grid.stamp_footprint(x, y)
         if hits is not None and sensor is not None and floors is not None:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
@@ -229,9 +295,10 @@ class Explorer:
             and (close_held or heading_stuck)
         ):
             self._start_recovery()
-        # Nose only. A jamb in the shoulder cone is a steer (see _go),
-        # not a wall to spin away from.
-        blocked = radar_blocked or clearance < STOP_CLEARANCE_M
+        # The bubble is the whole shell. A jamb in the shoulder of the
+        # depth view is still a steer (see _go), not a wall by itself.
+        cap = self._speed_cap(view)
+        blocked = radar_blocked or cap < 0.04
         # One direction for the whole blocked episode. Picking again
         # every frame wags the robot between the two sides of a jamb.
         # The path stays: throwing it away on a one-frame block is what
@@ -247,7 +314,7 @@ class Explorer:
         if self.phase == "spin":
             return self._remember(self._spin())
         if self.phase == "go":
-            return self._remember(self._go(blocked, clearance, left_clear, right_clear))
+            return self._remember(self._go(blocked, cap, left_clear, right_clear))
         return self._remember((0.0, 0.0))
 
     def _spin(self) -> tuple[float, float]:
@@ -299,12 +366,9 @@ class Explorer:
         self._reinforce_corners(x, y, yaw)
         if not fresh:
             return
-        # Long enough to leave the depth camera's minimum (~0.35 m past
-        # the lens). A short hop stayed blind and the next drive went
-        # straight back into the same surface. Then turn, so the next
-        # forward command is not the same heading.
-        self._reverse_until = self.t_s + 2.0
-        self._avoid_until = self._reverse_until + 1.5
+        # Only as far as the pivot disk needs. A fixed two-second reverse
+        # yanked the robot off a doorway it had already lined up with.
+        self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.14, reason="contact")
         self.path_xy = []
         self._replan_at = self._avoid_until
         nose, left_c, right_c = self._last_clear
@@ -327,9 +391,8 @@ class Explorer:
         # opening and the ban never came back, so the bedroom was abandoned.
         self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
         self._reinforce_corners(x, y, yaw)
-        self._reverse_until = self.t_s + 2.2
-        self._avoid_until = self._reverse_until + 1.4
-        self._recover_until = self._reverse_until + 0.4
+        self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.08, reason="backup")
+        self._recover_until = self.t_s + 0.8
         self._progress_t = self._recover_until
         self._progress_xy = (x, y)
         self._confident_after = max(self._confident_after, self.t_s + 6.0)
@@ -368,18 +431,50 @@ class Explorer:
             return 0.40
         return 0.0
 
-    def _go(self, blocked: bool, clearance: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
+    def _speed_cap(self, view) -> float:
+        cap = CRUISE_M_S
+        for gap in (view.forward, view.left, view.right, view.rear):
+            if gap is None:
+                continue
+            cap = min(cap, max_speed_for_gap(gap))
+        return cap
+
+    def _arm_reverse(
+        self,
+        gap: float | None,
+        *,
+        blind: bool,
+        force_min_m: float = 0.0,
+        reason: str,
+    ) -> None:
+        budget = reverse_budget_m(gap, blind=blind, force_min_m=force_min_m)
+        if budget < 0.03:
+            return
+        if self._reverse_left_m >= budget * 0.8 and self.t_s < self._reverse_until:
+            return
+        self._reverse_left_m = max(self._reverse_left_m, budget)
+        self._reverse_release = gap is not None and not pivot_ready(gap)
+        self._reverse_until = self.t_s + budget / 0.12 + 0.35
+        self._avoid_until = max(self._avoid_until, self._reverse_until + 0.3)
+        shown = -1.0 if gap is None else float(gap)
+        self._log(f"{reason} backup {budget:.2f}m gap={shown:.2f}")
+
+    def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         if self.done:
             return 0.0, 0.0
-        if self._goal_expired() or (self._is_stuck() and clearance < 1.5):
+        if self._reverse_left_m > 0.0 and self.t_s <= self._reverse_until:
+            # Nearly straight. A hard yaw here swings a tire into the jamb
+            # the reverse was supposed to leave.
+            return wheel_speeds(-0.12, self._turn * 0.08)
+        if self._goal_expired() or (self._is_stuck() and (self._bubble_gap or 99.0) < 1.2):
             self._ban_current()
             self._plan()
         if self.phase != "go":
             return 0.0, 0.0
-        if self.t_s < self._reverse_until:
-            # Nearly straight. A hard yaw here swings a tire into the jamb
-            # the reverse was supposed to leave.
-            return wheel_speeds(-0.16, self._turn * 0.12)
+        if blocked and not pivot_ready(self._min_gap):
+            self._arm_reverse(self._min_gap, blind=self._view_blind, reason="pivot")
+            if self._reverse_left_m > 0.0:
+                return wheel_speeds(-0.12, self._turn * 0.08)
         if self.t_s < self._avoid_until or blocked:
             return wheel_speeds(0.0, self._turn)
         if self.t_s >= self._replan_at or not self.path_xy:
@@ -390,10 +485,9 @@ class Explorer:
         w += self._jamb_yaw(left_clear, right_clear)
         if left_clear < 0.90 and right_clear < 0.90:
             v = min(v, 0.16)
-        if clearance < 1.15:
-            span = max(0.15, 1.15 - STOP_CLEARANCE_M)
-            v *= max(0.30, (clearance - STOP_CLEARANCE_M) / span)
-        if arrived and left_clear < 1.05 and right_clear < 1.05 and clearance > STOP_CLEARANCE_M:
+        v = min(v, max(0.0, cap))
+        nose_open = self._bubble_gap is None or self._bubble_gap > 0.12
+        if arrived and left_clear < 1.05 and right_clear < 1.05 and nose_open:
             # Both jambs are beside us and the nose is clear. Drive through
             # instead of spinning in the opening.
             return wheel_speeds(0.16, self._jamb_yaw(left_clear, right_clear))

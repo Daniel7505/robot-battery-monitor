@@ -587,6 +587,16 @@ DEF APT_FLOOR_LIVING Solid {
     Shape {
       appearance DEF APT_APP_LAMINATE PBRAppearance {
         baseColor 0.45 0.38 0.30
+        baseColorMap ImageTexture {
+          url [
+            "textures/laminate_grain.png"
+          ]
+          repeatS TRUE
+          repeatT TRUE
+        }
+        textureTransform TextureTransform {
+          scale 36 36
+        }
         roughness 0.55
         metalness 0
       }
@@ -727,6 +737,16 @@ DEF APT_FLOOR_BEDROOM Solid {
     Shape {
       appearance DEF APT_APP_CARPET PBRAppearance {
         baseColor 0.52 0.48 0.42
+        baseColorMap ImageTexture {
+          url [
+            "textures/carpet_pile.png"
+          ]
+          repeatS TRUE
+          repeatT TRUE
+        }
+        textureTransform TextureTransform {
+          scale 48 48
+        }
         roughness 0.95
         metalness 0
       }
@@ -1262,6 +1282,7 @@ ButlerBot {
   controllerArgs [
     "--dashboard-url=http://127.0.0.1:5000"
   ]
+  mappingSensors TRUE
 }
 
 # Scores a run after the fact. Not a device the mapper reads.

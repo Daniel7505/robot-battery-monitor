@@ -42,6 +42,11 @@ class OccupancyGrid:
         self.occ_thresh = 1.20
         self.free_thresh = -0.50
 
+    def reset(self) -> None:
+        """Drop every ray. A loop closure replays keyframes into an empty grid."""
+        self.log.fill(0.0)
+        self.latch.fill(False)
+
     def meta(self) -> dict:
         return {
             "resolution_m": self.res,

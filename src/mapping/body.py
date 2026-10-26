@@ -58,6 +58,11 @@ STOP_CLEARANCE_M = 0.70
 # It has to sit under STOP_CLEARANCE_M so the drive does not treat "no
 # return" as an open corridor.
 BLIND_CLEARANCE_M = 0.12
+# Downward floor camera, a few centimetres above the laminate. The scale
+# starts 3% high on purpose: the metres-per-pixel factor is this nominal
+# height, and a thicker carpet is not known ahead of time.
+FLOOR_SCALE_ERROR = 1.03
+FLOOR_NOISE_PX = 0.35
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,19 @@ class DepthCamera:
     def cy(self) -> float:
         return (self.height - 1) / 2.0
 
+
+# Looks down: rotation about +Y by π/2 sends the optical axis to -Z.
+# 32×32 is the same order as a mouse-sensor window, not a scene camera.
+FLOOR_CAM = DepthCamera(
+    name="floor_cam",
+    translation=(0.0, 0.0, 0.04),
+    rotation=(0.0, 1.0, 0.0, 1.5708),
+    width=32,
+    height=32,
+    fov_rad=0.90,
+    min_range_m=0.01,
+    max_range_m=2.0,
+)
 
 # 80° HFOV, 320×200, pitched 0.0873 rad (5°) down. Same numbers as the proto.
 OAK_DEPTH = DepthCamera(

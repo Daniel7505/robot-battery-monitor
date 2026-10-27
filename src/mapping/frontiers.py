@@ -514,6 +514,20 @@ def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     return False
 
 
+def _region_factor(goal: tuple[float, float], avoid: list[tuple[float, float, float]]) -> float:
+    """Scale a score down near a recently attempted region. The frontier stays reachable."""
+    factor = 1.0
+    for item in avoid:
+        weight = float(item[2])
+        if weight <= 0.0:
+            continue
+        dist = math.hypot(float(goal[0]) - float(item[0]), float(goal[1]) - float(item[1]))
+        if dist >= 0.60:
+            continue
+        factor *= math.exp(-weight * (1.0 - dist / 0.60))
+    return factor
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -524,6 +538,8 @@ def select_goal(
     prefer_xy: tuple[float, float] | None = None,
     rooms: dict | None = None,
     heading_xy: tuple[float, float] | None = None,
+    avoid: list[tuple[float, float, float]] | None = None,
+    report: dict | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -554,7 +570,17 @@ def select_goal(
     if start is None:
         return None
     banned = banned or set()
+    avoid = list(avoid or [])
     best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
+    ranked_scores: list[tuple[float, tuple[float, float]]] = []
+
+    def _keep(score: float, goal: tuple[float, float], pts: list[tuple[float, float]]) -> None:
+        nonlocal best
+        adjusted = score * _region_factor(goal, avoid)
+        ranked_scores.append((adjusted, goal))
+        if best is None or adjusted > best[0]:
+            best = (adjusted, goal, pts)
+
     for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
@@ -597,8 +623,7 @@ def select_goal(
             # entry) is still in the new room, so only the rear half loses.
             if ahead < -0.05:
                 score *= 0.25
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     # A room already painted free, with the threshold smeared shut, is
     # not a frontier. Score it by its area and aim through the gap.
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
@@ -631,11 +656,21 @@ def select_goal(
             if ahead < -0.05:
                 score *= 0.25
         pts = [*pts, far]
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])
     if not pts:
         return None
+    if report is not None:
+        report["score"] = best[0]
+        report["runner_up"] = None
+        report["runner_score"] = None
+        ranked_scores.sort(key=lambda item: item[0], reverse=True)
+        for scored, goal in ranked_scores:
+            if math.hypot(goal[0] - best[1][0], goal[1] - best[1][1]) < 0.25:
+                continue
+            report["runner_up"] = goal
+            report["runner_score"] = scored
+            break
     return pts[-1], pts

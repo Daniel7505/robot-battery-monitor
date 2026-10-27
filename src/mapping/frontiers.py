@@ -502,25 +502,6 @@ def severed_mouths(
     return found[:4]
 
 
-# A banned goal is a point. The next plan was picking a cell a few
-# centimetres along the same frontier. This is how far that retry counts
-# as the same attempt. It is not a map dimension.
-BAN_REGION_M = 0.55
-
-
-def _near_banned(cell: tuple[int, int], banned: set[tuple[int, int]], res: float) -> bool:
-    if not banned:
-        return False
-    if cell in banned:
-        return True
-    limit = (BAN_REGION_M / res) ** 2
-    row, col = cell
-    for banned_row, banned_col in banned:
-        if (banned_row - row) ** 2 + (banned_col - col) ** 2 <= limit:
-            return True
-    return False
-
-
 def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     height, width = doors.shape
     step = max(1, len(group) // 8)
@@ -574,9 +555,6 @@ def select_goal(
         return None
     banned = banned or set()
     best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
-    # Same frontier as a goal we just dropped. Kept only if nothing else
-    # is reachable, so a point ban cannot shuffle the goal by one cell.
-    repeat: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
     for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
@@ -619,15 +597,13 @@ def select_goal(
             # entry) is still in the new room, so only the rear half loses.
             if ahead < -0.05:
                 score *= 0.25
-        if _near_banned(target, banned, grid.res):
-            if repeat is None or score > repeat[0]:
-                repeat = (score, goal, pts)
-            continue
         if best is None or score > best[0]:
             best = (score, goal, pts)
     # A room already painted free, with the threshold smeared shut, is
     # not a frontier. Score it by its area and aim through the gap.
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
+        if mouth in banned:
+            continue
         path_cells = astar(free, start, mouth, step_cost=grid.res)
         if not path_cells:
             continue
@@ -655,14 +631,8 @@ def select_goal(
             if ahead < -0.05:
                 score *= 0.25
         pts = [*pts, far]
-        if _near_banned(mouth, banned, grid.res):
-            if repeat is None or score > repeat[0]:
-                repeat = (score, goal, pts)
-            continue
         if best is None or score > best[0]:
             best = (score, goal, pts)
-    if best is None:
-        best = repeat
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])

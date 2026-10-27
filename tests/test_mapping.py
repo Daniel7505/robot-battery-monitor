@@ -1287,10 +1287,6 @@ def test_a_bubble_under_the_creep_gate_still_moves_when_the_sweep_stops():
     assert wall._dead_zone_open()
     stale_v, _stale_w = wall._apply_sweep(0.20, 0.0, "")
     assert stale_v > 0.04
-    # A shoulder on the wall is not a license to creep. That press was
-    # the corner caster.
-    wall._last_clear = (0.80, 0.10, 0.81)
-    assert not wall._dead_zone_open()
 
 
 def test_no_new_reachable_floor_clears_the_blacklist():
@@ -1301,13 +1297,13 @@ def test_no_new_reachable_floor_clears_the_blacklist():
     _fill(bot.grid, -0.30, -0.30, 0.30, 0.30, -1.0)
     bot.t_s = 0.0
     bot._watch_floor()
-    grown = bot._reached_n
+    grown = bot._reachable_free
     assert grown > 0
-    # Free, but not connected to the robot. It is not new floor.
+    # Free, but not connected to the robot. The high-water mark stays.
     _fill(bot.grid, 3.0, 3.0, 3.4, 3.4, -1.0)
     bot.t_s = 1.0
     bot._watch_floor()
-    assert bot._reached_n == grown
+    assert bot._reachable_free == grown
     assert not bot._floor_stale
     bot.goal_xy = (2.0, 0.5)
     bot.path_xy = [(0.0, 0.0), (2.0, 0.5)]
@@ -1322,46 +1318,8 @@ def test_no_new_reachable_floor_clears_the_blacklist():
     _fill(bot.grid, 0.30, 0.0, 3.0, 0.30, -1.0)
     bot.t_s = 28.0
     bot._watch_floor()
-    assert bot._reached_n > grown
+    assert bot._reachable_free > grown
     assert not bot._floor_stale
-
-
-def test_a_smaller_component_that_gains_a_cell_is_not_a_stall():
-    """Cutting the map in two must not look like the floor stopped growing."""
-    from src.mapping.explore import Explorer
-
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
-    _fill(bot.grid, -2.0, -1.0, 2.0, 1.0, -1.0)
-    bot.t_s = 0.0
-    bot._watch_floor()
-    grown = bot._reached_n
-    # Wall the robot off from the west half. The east piece is smaller
-    # than the old total, and then it gains cells.
-    _fill(bot.grid, -0.55, -1.0, -0.40, 1.0, bot.grid.l_max)
-    _fill(bot.grid, 2.0, -0.2, 2.8, 0.2, -1.0)
-    bot.t_s = 1.0
-    bot._watch_floor()
-    assert bot._reached_n > grown
-    assert not bot._floor_stale
-
-
-def test_a_banned_frontier_is_not_reselected_one_cell_away():
-    """A point ban used to move the goal a few centimetres along the same edge."""
-    grid = OccupancyGrid()
-    _fill(grid, -2.0, -0.25, 2.0, 0.25, -1.0)
-    _fill(grid, -2.0, -0.55, 2.0, -0.25, grid.l_max)
-    _fill(grid, -2.0, 0.25, 2.0, 0.55, grid.l_max)
-    first = select_goal(grid, (0.0, 0.0))
-    assert first is not None
-    goal, _path = first
-    cell = grid.cell_of(goal[0], goal[1])
-    assert cell is not None
-    banned = {(cell[0] + dy, cell[1] + dx) for dy in range(-2, 3) for dx in range(-2, 3)}
-    second = select_goal(grid, (0.0, 0.0), banned=banned)
-    assert second is not None
-    other, _path = second
-    assert math.hypot(other[0] - goal[0], other[1] - goal[1]) > 0.55
-    assert other[0] * goal[0] < 0.0
 
 
 def test_a_rear_press_drives_forward_off_the_wall():

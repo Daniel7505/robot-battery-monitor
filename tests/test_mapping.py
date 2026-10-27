@@ -804,6 +804,54 @@ def test_a_pivot_about_the_floor_camera_does_not_rewind_yaw():
     assert abs(bot.pose()[2]) > 0.5
 
 
+def test_a_pure_pivot_with_a_still_floor_freezes_translation_only():
+    """The floor image does not move about the spin axis. The gyro does.
+
+    Depth and the forward view stay still too, which used to rewind yaw
+    on every sample. The turn never reached the old 0.12 rad release, so
+    the heading stayed put. Translation is the part that freezes.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(11)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    dt = 0.05
+    # Above the 0.02 rad/s rest gate, and slow enough that 0.4 s of yaw
+    # stays under the old 0.12 rad rewind release.
+    rate = 0.15
+    for _ in range(50):
+        left -= rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        right += rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    assert bot.zupt_events >= 1
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.05
+    assert abs(bot.pose()[2]) > 0.20
+
+
 def test_a_real_spin_is_not_stuck_when_the_floor_picture_stays():
     """The survey rotates about the downward camera, so that picture barely translates.
 

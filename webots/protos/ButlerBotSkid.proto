@@ -1,0 +1,932 @@
+#VRML_SIM R2025a utf8
+
+# ButlerBotSkid, a four-wheel skid-steer with no casters.
+# ButlerBot.proto is the baseline and is not modified. This copy keeps
+# that body, the sensors, and the rear hub names. The four caster balls
+# are replaced by a driven front axle on the same 0.34 m track.
+# Pose, name, controller, bodyMass, bodyInertia, and mappingSensors
+# are the same fields, so a world that instances ButlerBot is unchanged.
+PROTO ButlerBotSkid [
+  field SFVec3f translation 0 0 0
+  field SFRotation rotation 0 0 1 0
+  field SFString name "ButlerBot"
+  field SFString controller "butlerbot_controller"
+  field MFString controllerArgs [ "--dashboard-url=http://127.0.0.1:5000" ]
+  field SFFloat bodyMass 3.2
+  field MFVec3f bodyInertia [ 0.055 0.062 0.078 0 0 0 ]
+  field SFBool mappingSensors FALSE
+]
+{
+Robot {
+  # Spawn ON the start line (x=0), lane center y=0, facing +x (toward finish)
+  translation IS translation
+  rotation IS rotation
+  name IS name
+  # Supervisor enables soft grip coupling (body vel ↔ wheel odo) for tire fidelity
+  supervisor TRUE
+  controller IS controller
+  controllerArgs IS controllerArgs
+  customData "ButlerBotSkid — four driven wheels, no casters"
+  children [
+    DEF PELVIS_VIS Transform {
+      translation 0 0 0.20
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.14 0.15 0.18
+            roughness 0.45
+            metalness 0.25
+          }
+          geometry Box {
+            size 0.18 0.11 0.07
+          }
+        }
+      ]
+    }
+    # Four driven hubs. No casters. Rear axle keeps the baseline motor
+    # names, so the mapper's track stays 0.34 m (y = ±0.17). Front axle
+    # is the same track at x = ±0.11 and is slaved to the same side.
+    # Centre z = 0.08 and radius 0.08, so the tread meets the floor at z = 0.
+    DEF LEFT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.11 0.17 0.08
+        dampingConstant 0.15
+      }
+      device [
+        RotationalMotor {
+          name "left_wheel"
+          maxVelocity 15
+          maxTorque 2.5
+        }
+        PositionSensor {
+          name "left_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "left_wheel_solid"
+        translation -0.11 0.17 0.08
+        contactMaterial "drive_wheel"
+        children [
+          Pose {
+            rotation 1 0 0 1.5708
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.08 0.08 0.1
+                }
+                geometry Cylinder {
+                  height 0.05
+                  radius 0.08
+                }
+              }
+            ]
+          }
+        ]
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. The same 90°
+        # about X is on the visual and on the bounding object, so the tire
+        # rolls. Rotating the Shape only leaves a vertical puck in contact.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.085
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            1.4e-04 2.7e-04 1.4e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF RIGHT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.11 -0.17 0.08
+        dampingConstant 0.15
+      }
+      device [
+        RotationalMotor {
+          name "right_wheel"
+          maxVelocity 15
+          maxTorque 2.5
+        }
+        PositionSensor {
+          name "right_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "right_wheel_solid"
+        translation -0.11 -0.17 0.08
+        contactMaterial "drive_wheel"
+        children [
+          Pose {
+            rotation 1 0 0 1.5708
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.08 0.08 0.1
+                }
+                geometry Cylinder {
+                  height 0.05
+                  radius 0.08
+                }
+              }
+            ]
+          }
+        ]
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. The same 90°
+        # about X is on the visual and on the bounding object, so the tire
+        # rolls. Rotating the Shape only leaves a vertical puck in contact.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.085
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            1.4e-04 2.7e-04 1.4e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF FRONT_LEFT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor 0.11 0.17 0.08
+        dampingConstant 0.15
+      }
+      device [
+        RotationalMotor {
+          name "front_left_wheel"
+          maxVelocity 15
+          maxTorque 2.5
+        }
+        PositionSensor {
+          name "front_left_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "front_left_wheel_solid"
+        translation 0.11 0.17 0.08
+        contactMaterial "drive_wheel"
+        children [
+          Pose {
+            rotation 1 0 0 1.5708
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.08 0.08 0.1
+                }
+                geometry Cylinder {
+                  height 0.05
+                  radius 0.08
+                }
+              }
+            ]
+          }
+        ]
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. The same 90°
+        # about X is on the visual and on the bounding object, so the tire
+        # rolls. Rotating the Shape only leaves a vertical puck in contact.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.085
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            1.4e-04 2.7e-04 1.4e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF FRONT_RIGHT_WHEEL_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor 0.11 -0.17 0.08
+        dampingConstant 0.15
+      }
+      device [
+        RotationalMotor {
+          name "front_right_wheel"
+          maxVelocity 15
+          maxTorque 2.5
+        }
+        PositionSensor {
+          name "front_right_wheel_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "front_right_wheel_solid"
+        translation 0.11 -0.17 0.08
+        contactMaterial "drive_wheel"
+        children [
+          Pose {
+            rotation 1 0 0 1.5708
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.08 0.08 0.1
+                }
+                geometry Cylinder {
+                  height 0.05
+                  radius 0.08
+                }
+              }
+            ]
+          }
+        ]
+        # ENU Cylinder stands on Z (can / puck). Hinge is Y. The same 90°
+        # about X is on the visual and on the bounding object, so the tire
+        # rolls. Rotating the Shape only leaves a vertical puck in contact.
+        boundingObject Pose {
+          rotation 1 0 0 1.5708
+          children [
+            Cylinder {
+              height 0.05
+              radius 0.08
+            }
+          ]
+        }
+        physics Physics {
+          density -1
+          mass 0.085
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            1.4e-04 2.7e-04 1.4e-04
+            0 0 0
+          ]
+        }
+      }
+    }
+
+    DEF TORSO_JOINT HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor 0 0 0.24
+        dampingConstant 18.0
+      }
+      device [
+        RotationalMotor {
+          name "torso_joint"
+          maxVelocity 0.7
+          maxTorque 6.0
+        }
+        PositionSensor {
+          name "torso_sensor"
+        }
+      ]
+      endPoint Solid {
+        name "torso_solid"
+        translation 0 0 0.24
+        children [
+          Shape {
+            appearance PBRAppearance {
+              baseColor 0.2 0.34 0.48
+              roughness 0.5
+              metalness 0.15
+            }
+            geometry Box {
+              size 0.17 0.14 0.34
+            }
+          }
+          Transform {
+            translation 0 0.12 0.08
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.38 0.39 0.42
+                }
+                geometry Box {
+                  size 0.05 0.05 0.04
+                }
+              }
+            ]
+          }
+          Transform {
+            translation 0 -0.12 0.08
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.38 0.39 0.42
+                }
+                geometry Box {
+                  size 0.05 0.05 0.04
+                }
+              }
+            ]
+          }
+          DEF NECK_VIS Transform {
+            translation 0 0 0.20
+            children [
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.18 0.2 0.24
+                }
+                geometry Cylinder {
+                  height 0.06
+                  radius 0.035
+                }
+              }
+            ]
+          }
+          DEF HEAD_VIS Transform {
+            translation 0 0 0.38
+            children [
+              GPS {
+                name "gps_head"
+                accuracy 0
+                resolution -1
+              }
+              Shape {
+                appearance PBRAppearance {
+                  baseColor 0.16 0.18 0.22
+                  roughness 0.35
+                  metalness 0.2
+                }
+                geometry Sphere {
+                  radius 0.065
+                }
+              }
+              Transform {
+                translation 0 0.065 0.01
+                rotation 0 0 1 0
+                children [
+                  Shape {
+                    appearance PBRAppearance {
+                      baseColor 0.05 0.55 0.75
+                      emissiveColor 0.02 0.15 0.22
+                    }
+                    geometry Box {
+                      size 0.025 0.07 0.03
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+          DEF LEFT_ARM_JOINT HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 0.11 0.10
+              dampingConstant 10.0
+            }
+            device [
+              RotationalMotor {
+                name "left_arm"
+                maxVelocity 1.0
+                maxTorque 4.0
+              }
+              PositionSensor {
+                name "left_arm_sensor"
+              }
+            ]
+            endPoint Solid {
+              name "left_arm_solid"
+              translation 0 0.11 0.10
+              children [
+                Transform {
+                  translation 0 0 -0.13
+                  children [
+                    Shape {
+                      appearance PBRAppearance {
+                        baseColor 0.42 0.43 0.45
+                      }
+                      geometry Box {
+                        size 0.05 0.05 0.26
+                      }
+                    }
+                  ]
+                }
+              ]
+              boundingObject Transform {
+                translation 0 0 -0.13
+                children [
+                  Box {
+                    size 0.05 0.05 0.26
+                  }
+                ]
+              }
+              physics Physics {
+                density -1
+                mass 0.12
+                centerOfMass [
+                  0 0 -0.13
+                ]
+                inertiaMatrix [
+                  9.0e-04 9.0e-04 1.2e-04
+                  0 0 0
+                ]
+              }
+            }
+          }
+          DEF RIGHT_ARM_JOINT HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 -0.11 0.10
+              dampingConstant 10.0
+            }
+            device [
+              RotationalMotor {
+                name "right_arm"
+                maxVelocity 1.0
+                maxTorque 4.0
+              }
+              PositionSensor {
+                name "right_arm_sensor"
+              }
+            ]
+            endPoint Solid {
+              name "right_arm_solid"
+              translation 0 -0.11 0.10
+              children [
+                Transform {
+                  translation 0 0 -0.13
+                  children [
+                    Shape {
+                      appearance PBRAppearance {
+                        baseColor 0.42 0.43 0.45
+                      }
+                      geometry Box {
+                        size 0.05 0.05 0.26
+                      }
+                    }
+                  ]
+                }
+              ]
+              boundingObject Transform {
+                translation 0 0 -0.13
+                children [
+                  Box {
+                    size 0.05 0.05 0.26
+                  }
+                ]
+              }
+              physics Physics {
+                density -1
+                mass 0.12
+                centerOfMass [
+                  0 0 -0.13
+                ]
+                inertiaMatrix [
+                  9.0e-04 9.0e-04 1.2e-04
+                  0 0 0
+                ]
+              }
+            }
+          }
+        ]
+        boundingObject Box {
+          size 0.17 0.14 0.34
+        }
+        physics Physics {
+          density -1
+          mass 0.75
+          centerOfMass [
+            0 0 0.04
+          ]
+          inertiaMatrix [
+            7.0e-03 7.5e-03 3.5e-03
+            0 0 0
+          ]
+        }
+      }
+    }
+    # Shoulder nadirs only. LINE / SIDE / FINISH / Z/W and aim pucks
+    # archived at archives/butlerbot_choir_2026-09-02.wbt.
+    # Left shoulder. Boom + box from Daniel's 2026-08-25 framing (DUMP_CAM,
+    # VIEWPOINT COPY position 0.01042 0.41808 0.72919). Since 2026-10-01
+    # NADIR_CAM_L sits in this box (front-bottom edge), see the Camera node.
+    DEF NADIR_BOOM_L Transform {
+      translation 0.00521 0.26904 0.57460
+      rotation 1 0 0 -0.767
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.43
+            radius 0.012
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF NADIR_BOX_L Transform {
+      translation 0.01042 0.41808 0.72919
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.05 0.05 0.05
+          }
+        }
+      ]
+    }
+    DEF NADIR_CAM_L Camera {
+      # Lens on the front-bottom edge of NADIR_BOX_L (box centre
+      # 0.01042 0.41808 0.72919, 0.05 m cube): the box is behind/above the
+      # lens, so no ray can see its inside. Pure pitch 0 1 0 0.9411 rad
+      # (53.9 deg down) from scripts/aim_camera.py: top row -> 1.96 m ahead
+      # of the axle (same reach as the old z 1.31 mount), bottom row
+      # ~0.06 m ahead. Controller reads this pose live (Supervisor).
+      # Keep a direct Robot child. Do not File-Save.
+      translation 0.03542 0.41808 0.70419
+      rotation 0 1 0 0.9411
+      name "nadir_left"
+      width 128
+      height 128
+      fieldOfView 1.2
+      near 0.03
+    }
+    # Right shoulder: Y-mirror of the left boom/box/camera.
+    DEF NADIR_BOOM_R Transform {
+      translation 0.00521 -0.26904 0.57460
+      rotation 1 0 0 0.767
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.43
+            radius 0.012
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF NADIR_BOX_R Transform {
+      translation 0.01042 -0.41808 0.72919
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.05 0.05 0.05
+          }
+        }
+      ]
+    }
+    DEF NADIR_CAM_R Camera {
+      # True Y-mirror of NADIR_CAM_L: translation y negated, same pure
+      # pitch (0 1 0 theta is mirror-symmetric). Front-bottom edge of NADIR_BOX_R.
+      translation 0.03542 -0.41808 0.70419
+      rotation 0 1 0 0.9411
+      name "nadir_right"
+      width 128
+      height 128
+      fieldOfView 1.2
+      near 0.03
+    }
+    # Forward STEREO pair for obstacles (docs/OBSTACLES.md). Mast and bar are
+    # visuals only (no boundingObject, no mass: physics unchanged). Lenses on the
+    # front face of STEREO_BAR: baseline 0.10 m (y +-0.05), z 0.78 m,
+    # pure pitch 0 1 0 0.3469 (19.9 deg down) from src/stereo_depth.py
+    # stereo_pitch_for_top(): the top row reaches 1.0 m height 1.0 m ahead of the
+    # lenses, the floor is seen from 0.75 m ahead of the axle. Identical rotations,
+    # baseline along the camera y axis = already rectified. Direct Robot children
+    # (the torso hinge does not tilt them). The controller reads the live pose
+    # (Supervisor) and only enables them when RBM_OBSTACLES is on. Do not File-Save.
+    DEF STEREO_MAST Transform {
+      translation 0.115 0 0.49
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.08 0.08 0.1
+            roughness 0.45
+          }
+          geometry Cylinder {
+            height 0.56
+            radius 0.01
+            subdivision 8
+          }
+        }
+      ]
+    }
+    DEF STEREO_BAR Transform {
+      translation 0.12 0 0.78
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.12 0.12 0.14
+            roughness 0.4
+          }
+          geometry Box {
+            size 0.03 0.16 0.03
+          }
+        }
+      ]
+    }
+    DEF STEREO_CAM_L Camera {
+      translation 0.14 0.05 0.78
+      rotation 0 1 0 0.3469
+      name "stereo_left"
+      width 320
+      height 240
+      fieldOfView 1.4
+      near 0.05
+    }
+    # Right lens: Y-mirror of STEREO_CAM_L (same pure pitch).
+    DEF STEREO_CAM_R Camera {
+      translation 0.14 -0.05 0.78
+      rotation 0 1 0 0.3469
+      name "stereo_right"
+      width 320
+      height 240
+      fieldOfView 1.4
+      near 0.05
+    }
+    # Forward radar (docs/OBSTACLES.md): moving objects in the lane corridor.
+    # Looks along -Z; rotation 0 1 0 pi/2 aims it along robot +x. Height 0.45 m
+    # (bumper / cart-radar height) so a rolling ball and a pallet face both return.
+    # Ranges / FOV sized for the stereo corridor (~±0.54 m half-width out to 8 m).
+    DEF RADAR_FWD Radar {
+      translation 0.16 0 0.45
+      rotation 0 1 0 1.5708
+      name "radar_fwd"
+      minRange 0.15
+      maxRange 8
+      horizontalFieldOfView 1.0
+      verticalFieldOfView 0.7
+      minAbsoluteRadialSpeed 0
+      minRadialSpeed 0
+      maxRadialSpeed 0
+      occlusion TRUE
+      antennaGain 20
+      frequency 77
+      transmittedPower 10
+      minDetectableSignal -90
+    }
+    # OAK-D-like depth for apartment mapping. The warehouse controller never
+    # enables these, so warehouse laps do not pay the render and do not see
+    # the noise. RangeFinder.noise is a fraction of maxRange (R2025a): 0.002
+    # gives σ = 1.6 cm at maxRange 8 m, the same centimetre band as an OAK-D
+    # stereo depth error around a couple of metres. Pitch is 5° down
+    # (0.0873 rad). The 20° stereo pair looks at the floor and misses walls
+    # past about 2 m; this beam still meets them. HFOV 1.396 rad is 80°.
+    # Sampling period is set in the mapper (96 ms), not in this node.
+    DEF OAK_DEPTH RangeFinder {
+      translation 0.14 0 0.78
+      rotation 0 1 0 0.0873
+      name "oak_depth"
+      fieldOfView 1.396
+      width 320
+      height 200
+      near 0.2
+      minRange 0.35
+      maxRange 8
+      noise 0.002
+    }
+    # Co-located colour camera for a later RGB-D stage. Left disabled until
+    # then so it does not render.
+    DEF OAK_RGB Camera {
+      translation 0.14 0 0.78
+      rotation 0 1 0 0.0873
+      name "oak_rgb"
+      fieldOfView 1.2
+      width 320
+      height 200
+      near 0.05
+    }
+    # Second gyro and inertial unit, used only by the apartment mapper.
+    # The devices named "gyro" and "imu" above stay noiseless: warehouse
+    # pivots integrate that gyro, and quantizing the wheel sensors would
+    # change the energy trace. Gyro lookupTable columns are input rad/s,
+    # output rad/s, and noise as a fraction of the output (DistanceSensor
+    # convention). A zero-rate reading has no fractional noise, so the
+    # output column carries a +0.001 rad/s bias. The mapper quantizes wheel
+    # angles in software at 0.0015 rad (~4096 counts/rev) instead of setting
+    # PositionSensor.resolution on the shared hubs.
+    Gyro {
+      name "oak_gyro"
+      lookupTable [
+        -20 -19.999 0.05
+        0 0.001 0.05
+        20 20.001 0.05
+      ]
+    }
+    InertialUnit {
+      name "oak_imu"
+      noise 0.01
+    }
+    # Shoulder HUDs only.
+    DEF HUD_NADIR Display {
+      name "hud_nadir"
+      width 256
+      height 256
+    }
+    DEF HUD_NADIR_R Display {
+      name "hud_nadir_r"
+      width 256
+      height 256
+    }
+    GPS {
+      name "gps"
+      accuracy 0
+      resolution -1
+    }
+    InertialUnit {
+      name "imu"
+    }
+    Gyro {
+      name "gyro"
+    }
+%< if (fields.mappingSensors.value) { >%
+    # Apartment mapper only. Warehouse instances leave mappingSensors
+    # FALSE, so these devices are not part of that robot. No bounding
+    # object: they do not change contact. The eight sonars sit on the
+    # shell and cover the depth camera's blind hole inside 0.35 m.
+    # floor_cam looks down from 4 cm; the mapper estimates the shift.
+    DistanceSensor {
+      translation 0.18 0 0.12
+      name "us_front"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation 0.14 0.16 0.12
+      rotation 0 0 1 0.7854
+      name "us_front_left"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation 0 0.22 0.12
+      rotation 0 0 1 1.5708
+      name "us_left"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation -0.12 0.16 0.12
+      rotation 0 0 1 2.3562
+      name "us_rear_left"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation -0.18 0 0.12
+      rotation 0 0 1 3.1416
+      name "us_rear"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation -0.12 -0.16 0.12
+      rotation 0 0 1 -2.3562
+      name "us_rear_right"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation 0 -0.22 0.12
+      rotation 0 0 1 -1.5708
+      name "us_right"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    DistanceSensor {
+      translation 0.14 -0.16 0.12
+      rotation 0 0 1 -0.7854
+      name "us_front_right"
+      lookupTable [
+        0.02 0.02 0.01
+        1.2 1.2 0.02
+      ]
+      type "sonar"
+      numberOfRays 3
+      aperture 0.3
+    }
+    # Rear view for reversing and for a forward picture with no corners.
+    # Yawed 180 degrees so the optical axis is the robot's -X. No
+    # bounding object. Short range, small image, apartment mapper only.
+    RangeFinder {
+      translation -0.16 0 0.28
+      rotation 0 0 1 3.1416
+      name "rear_depth"
+      fieldOfView 1.2
+      width 80
+      height 48
+      near 0.05
+      minRange 0.08
+      maxRange 2.5
+      noise 0.004
+    }
+    Camera {
+      translation -0.16 0 0.28
+      rotation 0 0 1 3.1416
+      name "rear_rgb"
+      fieldOfView 1.2
+      width 80
+      height 48
+      near 0.05
+    }
+    Camera {
+      translation 0 0 0.04
+      rotation 0 1 0 1.5708
+      name "floor_cam"
+      fieldOfView 0.9
+      width 32
+      height 32
+      near 0.01
+      far 2
+    }
+%< } >%
+  ]
+  # Physics with no boundingObject is ignored by Webots. Pelvis box sits
+  # above the tires so it does not fight the floor.
+  boundingObject Pose {
+    translation 0 0 0.20
+    children [
+      Box {
+        size 0.18 0.11 0.07
+      }
+    ]
+  }
+  physics Physics {
+    density -1
+    # Chassis class mass from hardware profile (geometry.chassis_mass_kg ≈ 3.2)
+    mass IS bodyMass
+    centerOfMass [
+      0 0 0.12
+    ]
+    inertiaMatrix IS bodyInertia
+  }
+}
+}

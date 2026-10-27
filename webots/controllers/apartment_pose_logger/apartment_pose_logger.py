@@ -76,6 +76,14 @@ def _endpoint(robot, def_name: str):
         return None
 
 
+def _prefer(robot, first: str, second: str):
+    """Caster on the baseline robot, front tire on the skid-steer proto."""
+    solid = _endpoint(robot, first)
+    if solid is not None:
+        return solid
+    return _endpoint(robot, second)
+
+
 def _partner_name(supervisor, node_id: int, cache: dict) -> str:
     if node_id in cache:
         return cache[node_id]
@@ -124,6 +132,7 @@ def main() -> None:
     physics = None
     walls = None
     parts = None
+    fronts: dict = {}
     cache: dict = {}
     folder = ""
     next_try = 0.0
@@ -139,12 +148,16 @@ def main() -> None:
             parts = {
                 "left": _endpoint(robot, "LEFT_WHEEL_JOINT"),
                 "right": _endpoint(robot, "RIGHT_WHEEL_JOINT"),
-                "fl": _endpoint(robot, "FRONT_LEFT_CASTER"),
-                "fr": _endpoint(robot, "FRONT_RIGHT_CASTER"),
+                "fl": _prefer(robot, "FRONT_LEFT_CASTER", "FRONT_LEFT_WHEEL_JOINT"),
+                "fr": _prefer(robot, "FRONT_RIGHT_CASTER", "FRONT_RIGHT_WHEEL_JOINT"),
                 "rl": _endpoint(robot, "REAR_LEFT_CASTER"),
                 "rr": _endpoint(robot, "REAR_RIGHT_CASTER"),
             }
-            for solid in parts.values():
+            fronts = {
+                "front_left": _endpoint(robot, "FRONT_LEFT_WHEEL_JOINT"),
+                "front_right": _endpoint(robot, "FRONT_RIGHT_WHEEL_JOINT"),
+            }
+            for solid in (*parts.values(), *fronts.values()):
                 if solid is None:
                     continue
                 try:
@@ -170,7 +183,9 @@ def main() -> None:
             physics.write(
                 "t_s,x_m,y_m,z_m,yaw_rad,speed_m_s,up_z,"
                 "left_floor,right_floor,caster_floor,left_wall,right_wall,caster_wall,"
-                "left_z,right_z,contact_z\n"
+                "left_z,right_z,contact_z,"
+                "front_left_z,front_right_z,front_left_floor,front_right_floor,"
+                "front_left_wall,front_right_wall\n"
             )
             walls = open(os.path.join(folder, "wall_contacts.csv"), "w", encoding="utf-8", newline="\n")
             walls.write("t_s,x_m,y_m,z_m,yaw_rad,left_wall,right_wall,caster_wall\n")
@@ -200,12 +215,26 @@ def main() -> None:
             left_z = float(parts["left"].getPosition()[2])
         if parts and parts["right"] is not None:
             right_z = float(parts["right"].getPosition()[2])
-        lows = [value for value in (left_cz, right_cz) if value == value]
+        front_z = {}
+        front_f = {}
+        front_w = {}
+        front_cz = {}
+        for key, solid in (fronts or {}).items():
+            count_f, count_w, low = _contact_summary(supervisor, solid, cache)
+            front_f[key] = count_f
+            front_w[key] = count_w
+            front_cz[key] = low
+            front_z[key] = float("nan") if solid is None else float(solid.getPosition()[2])
+        lows = [value for value in (left_cz, right_cz, *front_cz.values()) if value == value]
         contact_z = min(lows) if lows else float("nan")
         physics.write(
             f"{now:.4f},{x:.5f},{y:.5f},{z:.5f},{yaw:.6f},{speed:.5f},{_up_z(robot):.5f},"
             f"{left_f},{right_f},{caster_f},{left_w},{right_w},{caster_w},"
-            f"{left_z:.5f},{right_z:.5f},{contact_z:.5f}\n"
+            f"{left_z:.5f},{right_z:.5f},{contact_z:.5f},"
+            f"{front_z.get('front_left', float('nan')):.5f},"
+            f"{front_z.get('front_right', float('nan')):.5f},"
+            f"{front_f.get('front_left', 0)},{front_f.get('front_right', 0)},"
+            f"{front_w.get('front_left', 0)},{front_w.get('front_right', 0)}\n"
         )
         if left_w or right_w or caster_w:
             wall_events += 1

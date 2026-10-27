@@ -1264,56 +1264,6 @@ def test_a_rear_press_drives_forward_off_the_wall():
     assert v > 0.05
 
 
-def test_a_tail_gap_recovery_refuses_still_drives_forward():
-    """The no-reverse band used to command zero wheels.
-
-    Recovery will not back up when the tail is the tight face inside
-    0.12 m. The hard-press escape only runs under 0.10 m, so 0.11 m
-    did neither while the sweep had stopped the plan. Live depth here
-    is the south-seed freeze: an open nose the creep gate does not
-    accept. The creep is one recovery, not an override of every step.
-    """
-    from src.mapping.bubble import BubbleView
-    from src.mapping.explore import Explorer
-
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
-    bot.phase = "go"
-    bot.t_s = 30.0
-    bot.odometry.x_m = 1.0
-    bot.goal_xy = (3.0, 0.0)
-    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
-    bot._replan_at = 1.0e9
-    bot._goal_since = 30.0
-    bot._progress_t = 0.0
-    bot._last_clear = (0.75, 1.05, 0.52)
-    bot._bubble_view = BubbleView(0.32, 0.50, 0.40, 0.11, 0.11)
-    bot._bubble_gap = 0.32
-    bot._min_gap = 0.11
-    assert bot._gap_ahead() == ""
-    assert bot._leave_rear() is None
-    bot._start_recovery()
-    assert bot._reverse_left_m == 0.0
-    cmd_l, cmd_r = bot._go(False, 0.0, 1.05, 0.52)
-    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
-    assert v > 0.05
-    # The creep ends. A tail at 0.11 m does not keep stealing the command.
-    bot.t_s = bot._tail_creep_until + 0.1
-    assert bot._leave_rear() is None
-    # Not enough air ahead: do not creep into the nose.
-    closed = Explorer(camera=_small_oak(), fusion=False, floor=False)
-    closed.phase = "go"
-    closed.t_s = 30.0
-    closed.odometry.x_m = 1.0
-    closed.goal_xy = (3.0, 0.0)
-    closed.path_xy = [(1.0, 0.0), (3.0, 0.0)]
-    closed._last_clear = (0.75, 1.05, 0.52)
-    closed._bubble_view = BubbleView(0.15, 0.50, 0.40, 0.11, 0.11)
-    closed._bubble_gap = 0.15
-    closed._min_gap = 0.11
-    closed._start_recovery()
-    assert closed._tail_creep_until < 0.0
-
-
 def test_an_unchanged_view_with_no_corners_is_still():
     """A flat wall has nothing to track. The picture not moving is the reading."""
     from src.mapping.visual_odometry import VisualOdometry

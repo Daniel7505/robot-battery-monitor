@@ -671,10 +671,13 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
     left = right = 0.0
     wheel = 0.22 / WHEEL_RADIUS_M
     dt = 0.05
-    saw_reverse = False
+    saw_reverse_at = None
+    saw_stop_at = None
     # Pitch of the carpet ramp. The casters are not unloaded.
-    # Stuck is a few seconds of command without odometry displacement.
-    for _ in range(80):
+    # The hubs spin and the gyro does not turn. The body does not move.
+    # That mismatch is declared inside half a second, then the short
+    # pause, then the reverse. The old gate waited 2.2 s.
+    for i in range(40):
         cmd_l, cmd_r = bot.step(
             dt_s=dt,
             left_wheel_rad=left,
@@ -686,8 +689,10 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
             rgb=rgb,
             proximity={"us_left": 1.5, "us_right": 1.5},
         )
-        if cmd_l < -0.05 and cmd_r < -0.05:
-            saw_reverse = True
+        if saw_stop_at is None and abs(cmd_l) < 0.05 and abs(cmd_r) < 0.05 and i > 2:
+            saw_stop_at = (i + 1) * dt
+        if saw_reverse_at is None and cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse_at = (i + 1) * dt
         if cmd_l + cmd_r > 0.4:
             left += wheel * dt
             right += wheel * dt
@@ -696,7 +701,8 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
             right += cmd_r * dt
     assert bot.zupt_events >= 1
     assert bot.wheels_lifted == 0
-    assert saw_reverse
+    assert saw_stop_at is not None and saw_stop_at <= 0.55
+    assert saw_reverse_at is not None and saw_reverse_at < 1.05
     assert abs(bot.pose()[2]) < math.radians(1.0)
     assert math.hypot(*bot.pose()[:2]) < 0.08
 
@@ -1045,6 +1051,62 @@ def test_a_door_is_approached_slowly_on_the_centre_line():
     w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
     assert 0.02 < v <= DOOR_SPEED_M_S + 1e-6
     assert w < -0.05
+
+
+def test_a_turn_away_from_a_mapped_wall_swings_the_rear_corner():
+    """Pivot is about the centre. Turning away drives the rear corner into the wall.
+
+    The nose camera is not consulted. The wall is only on the robot's own grid.
+    """
+    from src.mapping.footprint import swing_out
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    # Beside the rear-left corner. A straight pass leaves it. A right turn does not.
+    _fill(grid, -0.45, 0.28, 0.05, 0.55, grid.l_max)
+    pose = (0.0, 0.0, 0.0)
+    assert swing_out(grid, pose, 0.12, 0.0) is None
+    hit = swing_out(grid, pose, 0.10, -0.75)
+    assert hit is not None and "rear-left" in hit
+    choice = choose_motion(
+        view=None,
+        pursuit_v=0.12,
+        pursuit_w=-0.6,
+        heading_err=-0.6,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert choice.maneuver is not None
+    assert choice.maneuver["wall"] == "left"
+    assert choice.maneuver["away_w"] < 0.0
+    assert any(str(item["sensor"]).startswith("swing:") for item in choice.vetoes)
+
+
+def test_side_sonar_vetoes_the_swing_and_a_matched_gyro_is_not_a_rub():
+    """A close left range drops the hard turn away. A gyro that follows a turn is not stuck."""
+    from src.mapping.explore import Explorer
+    from src.mapping.footprint import swing_out
+
+    assert swing_out(None, (0.0, 0.0, 0.0), 0.10, -0.75, left_m=0.03) is not None
+    assert swing_out(None, (0.0, 0.0, 0.0), 0.10, 0.0, left_m=0.03) is None
+
+    def _rub(rate: float) -> str | None:
+        bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+        bot.phase = "go"
+        bot._body_v = 0.10
+        bot._body_w = -0.75
+        bot._step_dt = 0.05
+        for _ in range(10):
+            bot.t_s += 0.05
+            bot._rub_ds = 0.10 * 0.05
+            bot._rub_rate = rate
+            bot._watch_motion()
+        return bot._relief
+
+    assert _rub(-0.75) is None
+    assert _rub(0.0) == "wait"
 
 
 def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():

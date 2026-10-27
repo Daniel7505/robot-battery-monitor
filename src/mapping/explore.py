@@ -2,9 +2,12 @@
 
 The robot spins once to fill the depth camera's blind sides, then picks
 a frontier every few seconds and drives the motion live range still
-allows. Sweep, doorway, and footprint checks are costs. A command that
-does not move the odometry waits once, reverses once, and tries the
-next goal. Depth closer than the stop distance is the only veto.
+allows. A swept corner that would swing into a mapped wall or a sonar
+plane is dropped. When no forward motion can turn away from that wall,
+the tick runs a short three-point turn. A command the wheel odometry
+and the gyro do not follow waits once, reverses once, and tries the
+next goal. The penalty lands on the place of the rub, not on a goal
+several metres away. Depth closer than the stop distance is a veto too.
 
 This module does not know the apartment. Pose is whatever the odometry
 object reports.
@@ -40,7 +43,7 @@ from src.mapping.depth_cloud import (
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
 from src.mapping.frontiers import select_goal
-from src.mapping.tick import choose_motion, log_decision
+from src.mapping.tick import ThreePoint, choose_motion, log_decision
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
@@ -181,7 +184,15 @@ class Explorer:
         self.sweep_straight = 0
         self.sweep_stopped = 0
         self._attempts: list[tuple[float, float, float, float]] = []
-        self._motion_anchor: tuple[float, float, float, float] | None = None
+        self._rub_sig: tuple[bool, bool, bool, bool] | None = None
+        self._rub_dt = 0.0
+        self._rub_trans = 0.0
+        self._rub_yaw = 0.0
+        self._rub_exp_v = 0.0
+        self._rub_exp_w = 0.0
+        self._rub_ds = 0.0
+        self._rub_rate = 0.0
+        self._three = ThreePoint()
         self._relief: str | None = None
         self._relief_until = -1.0
         self._relief_w = 0.0
@@ -329,6 +340,9 @@ class Explorer:
         cmd_l, cmd_r = self._commanded
         spin_cmd = abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0
         yaw_before = self.odometry.yaw_unwrapped_rad
+        rub_x = self.odometry.x_m
+        rub_y = self.odometry.y_m
+        rub_yaw = self.odometry.yaw_rad
         # While the cameras still agree the shell is sitting, do not
         # integrate this step. The latch is refreshed only when a new
         # picture says the same thing.
@@ -466,6 +480,13 @@ class Explorer:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
             self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
         self._last_clear = (clearance, left_clear, right_clear)
+        # Body-forward metres this step actually kept. A slip rewind and a
+        # still-floor freeze put the pose back, so hub radians that kept
+        # spinning are not motion. The gyro rate is the yaw measurement.
+        kept_dx = self.odometry.x_m - rub_x
+        kept_dy = self.odometry.y_m - rub_y
+        self._rub_ds = math.cos(rub_yaw) * kept_dx + math.sin(rub_yaw) * kept_dy
+        self._rub_rate = float(yaw_rate_rad_s)
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -787,29 +808,57 @@ class Explorer:
     def _remember_attempt(self, x: float, y: float, weight: float = 2.0) -> None:
         self._attempts.append((float(x), float(y), self.t_s, float(weight)))
 
+    def _clear_rub(self) -> None:
+        self._rub_sig = None
+        self._rub_dt = 0.0
+        self._rub_trans = 0.0
+        self._rub_yaw = 0.0
+        self._rub_exp_v = 0.0
+        self._rub_exp_w = 0.0
+
     def _watch_motion(self) -> None:
-        """Stuck and contact are the same fact: a command the odometry did not follow."""
-        if self._relief is not None or self.phase != "go" or self.done:
+        """A rub is a command the body and the gyro did not follow.
+
+        The window is 0.45 s, under half a second. Translation is the
+        pose change that survived slip and the still-floor freeze, not
+        the hub radians, which keep spinning on a rub. Yaw is the gyro.
+        A tight arc the gyro is actually making is not a stall when the
+        floor picture has frozen the translation.
+        """
+        if self._relief is not None or self._three.active() or self.phase != "go" or self.done:
+            self._clear_rub()
             return
-        translating = abs(self._body_v) > 0.03
-        spinning = abs(self._body_w) > 0.12 and not translating
-        if not translating and not spinning:
-            self._motion_anchor = None
+        v = float(self._body_v)
+        w = float(self._body_w)
+        sig = (v > 0.03, v < -0.03, w > 0.12, w < -0.12)
+        if sig == (False, False, False, False):
+            self._clear_rub()
             return
-        x, y, yaw = self.odometry.pose()
-        if self._motion_anchor is None:
-            self._motion_anchor = (self.t_s, x, y, yaw)
+        dt = float(self._step_dt)
+        if self._rub_sig != sig:
+            self._clear_rub()
+            self._rub_sig = sig
+        self._rub_dt += dt
+        self._rub_trans += float(self._rub_ds)
+        self._rub_yaw += abs(float(self._rub_rate)) * dt
+        self._rub_exp_v += v * dt
+        self._rub_exp_w += abs(w) * dt
+        if self._rub_dt < 0.45:
             return
-        t0, x0, y0, yaw0 = self._motion_anchor
-        moved = math.hypot(x - x0, y - y0)
-        turned = abs(wrap_rad(yaw - yaw0))
-        if translating and moved >= 0.04:
-            self._motion_anchor = (self.t_s, x, y, yaw)
-            return
-        if spinning and turned >= 0.12:
-            self._motion_anchor = (self.t_s, x, y, yaw)
-            return
-        if self.t_s - t0 < 2.2:
+        wheel_m = self._rub_trans
+        gyro_rad = self._rub_yaw
+        yaw_commanded = self._rub_exp_w > 0.06
+        yaw_ok = (not yaw_commanded) or gyro_rad >= 0.35 * self._rub_exp_w
+        # A carpet creep is slower than cruise and still moving. A rub is
+        # the body failing to take the command, not a slower legal speed.
+        trans_bad = abs(self._rub_exp_v) > 0.015 and (
+            wheel_m * self._rub_exp_v <= 0.0 or abs(wheel_m) < 0.20 * abs(self._rub_exp_v)
+        )
+        # A turn the gyro is actually making is not a rub, even when a
+        # still floor picture has frozen the translation.
+        followed = yaw_ok if yaw_commanded else (yaw_ok and not trans_bad)
+        self._clear_rub()
+        if followed:
             return
         self._relief = "wait"
         self._relief_until = self.t_s + 0.40
@@ -819,7 +868,8 @@ class Explorer:
                 "t": round(self.t_s, 2),
                 "kind": "stuck",
                 "response": "wait",
-                "disp_m": round(moved, 3),
+                "wheel_m": round(wheel_m, 3),
+                "gyro_rad": round(gyro_rad, 3),
             }
         )
 
@@ -872,15 +922,17 @@ class Explorer:
 
     def _finish_relief(self) -> None:
         x, y, _yaw = self.odometry.pose()
-        if self.goal_xy is not None:
-            self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
-        else:
-            self._remember_attempt(x, y, 2.2)
+        # The rub happened here. A bedroom frontier several metres away
+        # was not the attempt; penalising that goal is how those rooms
+        # were dropped after a scrub in the living room.
+        self._remember_attempt(x, y, 1.6)
+        if self.goal_xy is not None and math.hypot(self.goal_xy[0] - x, self.goal_xy[1] - y) <= 1.0:
+            self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.2)
         self.goal_xy = None
         self.path_xy = []
         self._replan_at = self.t_s
         self._relief = None
-        self._motion_anchor = None
+        self._clear_rub()
         self._body_v, self._body_w = 0.0, 0.0
         self._log("stuck, next goal")
 
@@ -912,6 +964,21 @@ class Explorer:
         return heading
 
     def _note_motion(self, choice) -> None:
+        if choice.maneuver is not None:
+            self._last_motion = "three_point"
+            self._motion_log_at = self.t_s + 1.0
+            swing = [item for item in choice.vetoes if str(item.get("sensor", "")).startswith("swing:")]
+            log_decision(
+                {
+                    "t": round(self.t_s, 2),
+                    "kind": "three_point",
+                    "wall": choice.maneuver["wall"],
+                    "away_w": choice.maneuver["away_w"],
+                    "phases": "slow,stop,reverse,forward",
+                    "vetoes": swing[:8],
+                }
+            )
+            return
         if choice.name == self._last_motion and self.t_s < self._motion_log_at:
             return
         self._last_motion = choice.name
@@ -935,6 +1002,11 @@ class Explorer:
         if self.done:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
+        if self._three.active():
+            command = self._three.poll(self.t_s)
+            if command is not None:
+                self._body_v, self._body_w = command
+                return wheel_speeds(*command)
         relief = self._relief_command()
         if relief is not None:
             return relief
@@ -985,6 +1057,12 @@ class Explorer:
             radar_blocked=self._radar_blocked,
         )
         self._note_motion(choice)
+        if choice.maneuver is not None:
+            self._three.start(self.t_s, choice.maneuver["wall"], choice.maneuver["away_w"])
+            command = self._three.poll(self.t_s)
+            if command is not None:
+                self._body_v, self._body_w = command
+                return wheel_speeds(*command)
         self._body_v, self._body_w = choice.v, choice.w
         return wheel_speeds(choice.v, choice.w)
 
@@ -1062,7 +1140,7 @@ class Explorer:
         self.done = False
         if not same:
             self._goal_since = self.t_s
-            self._motion_anchor = None
+            self._clear_rub()
             self._log_goal(goal, report)
 
     def _no_frontier(self) -> None:
@@ -1123,7 +1201,7 @@ class Explorer:
             goal, path = chosen
             self.goal_xy, self.path_xy = goal, path
             self._goal_since = self.t_s
-            self._motion_anchor = None
+            self._clear_rub()
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
             return 0.0, 0.0
         count = int((self.grid.labels() == 1).sum())

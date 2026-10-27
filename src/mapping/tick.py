@@ -1,9 +1,12 @@
-"""One control tick: live range vetoes, everything else is a cost.
+"""One control tick: live range and swing-out vetoes, everything else is a cost.
 
 Candidates are a handful of forward, arc, spin, and reverse speeds.
-A motion is dropped only when a live range says that speed would meet
-the shell. Sweep, doorway centring, and a close side are costs, so an
-open bubble still produces a command. Ground truth is not read.
+A motion is dropped when live range says that speed would meet the shell,
+or when the swept corners would swing into a wall the robot has mapped
+or that side/rear sonar already sees. Doorway centring and a close side
+are costs. If no forward motion can turn away from a wall without that
+swing, a short three-point maneuver runs inside this tick. Ground truth
+is not read.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from src.mapping.bubble import (
     pivot_ready,
     stop_gap,
 )
-from src.mapping.footprint import footprint_clips
+from src.mapping.footprint import rear_swing_m, swing_out
 
 # Half of cruise. A doorway correction has to finish before the tire meets the frame.
 DOOR_CREEP_M_S = 0.12
@@ -140,21 +143,30 @@ def _desired(
     return v, w
 
 
+def _near_wall(view: BubbleView | None) -> tuple[str, float] | None:
+    """The closer side when the robot is running parallel to one wall."""
+    if view is None:
+        return None
+    left = view.left
+    right = view.right
+    if left is not None and left < 0.30 and (right is None or left + 0.08 < right):
+        return ("left", float(left))
+    if right is not None and right < 0.30 and (left is None or right + 0.08 < left):
+        return ("right", float(right))
+    return None
+
+
 def _costs(
     v: float,
     w: float,
     v_des: float,
     w_des: float,
-    clips: bool,
     view: BubbleView | None,
     left_clear: float,
     right_clear: float,
     radar_blocked: bool,
 ) -> dict[str, float]:
     pursuit = 4.0 * (v - v_des) ** 2 + (w - w_des) ** 2
-    # Enough to prefer a clear arc over a clipped one, and not enough to
-    # turn an open nose into a spin or a reverse.
-    footprint = 0.25 if clips else 0.0
     door = 0.0
     if 0.12 < left_clear < 1.20 and 0.12 < right_clear < 1.20 and v > 0.16:
         door += 0.8
@@ -184,12 +196,23 @@ def _costs(
             door += 0.40
         if v < -0.02:
             door += 0.50
-    total = pursuit + footprint + door + side
+    # Room for the rear corner to come around on the turn this heading
+    # will probably ask for. A straight pass inside that radius keeps the
+    # tire on the wall; a legal turn away does not pay it.
+    swing = 0.0
+    near = _near_wall(view)
+    if near is not None and v > 0.02:
+        side_name, gap = near
+        need = max(rear_swing_m(0.50), rear_swing_m(abs(w) * 0.75))
+        away = -1.0 if side_name == "left" else 1.0
+        if gap < need + 0.01 and w * away > -0.05:
+            swing += 1.1
+    total = pursuit + door + side + swing
     return {
         "pursuit": round(pursuit, 3),
-        "footprint": round(footprint, 3),
         "door": round(door, 3),
         "side": round(side, 3),
+        "swing": round(swing, 3),
         "total": round(total, 3),
     }
 
@@ -217,12 +240,23 @@ def _fallback(view: BubbleView | None) -> tuple[str, float, float] | None:
 
 
 class MotionChoice:
-    def __init__(self, name: str, v: float, w: float, costs: dict[str, float], vetoes: list[dict]) -> None:
+    def __init__(
+        self,
+        name: str,
+        v: float,
+        w: float,
+        costs: dict[str, float],
+        vetoes: list[dict],
+        maneuver: dict | None = None,
+    ) -> None:
         self.name = name
         self.v = float(v)
         self.w = float(w)
         self.costs = costs
         self.vetoes = vetoes
+        # Set when the tick should run slow → stop → reverse away → forward
+        # instead of the scored command. None on an ordinary choice.
+        self.maneuver = maneuver
 
     def why(self) -> str:
         parts = [
@@ -249,6 +283,9 @@ def choose_motion(
     v_des, w_des = _desired(
         pursuit_v, pursuit_w, heading_err, view, left_clear, right_clear, radar_blocked
     )
+    left_m = None if view is None else view.left
+    right_m = None if view is None else view.right
+    rear_m = None if view is None else view.rear
     vetoes: list[dict] = []
     best_name = ""
     best_v = 0.0
@@ -256,19 +293,130 @@ def choose_motion(
     best_costs: dict[str, float] | None = None
     for name, v, w in CANDIDATES:
         reason = live_veto(v, w, view)
+        if reason is None:
+            reason = swing_out(
+                grid, pose, v, w, left_m=left_m, right_m=right_m, rear_m=rear_m
+            )
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
             continue
-        clips = False
-        if grid is not None and (abs(v) > 1e-4 or abs(w) > 1e-4):
-            clips = footprint_clips(grid, pose, v, w)
-        costs = _costs(v, w, v_des, w_des, clips, view, left_clear, right_clear, radar_blocked)
+        costs = _costs(v, w, v_des, w_des, view, left_clear, right_clear, radar_blocked)
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
+    maneuver = _three_point(view, vetoes, best_v, best_w)
+    if maneuver is not None and best_costs is not None:
+        return MotionChoice("three_point", 0.06, 0.0, best_costs, vetoes, maneuver)
     if best_costs is not None:
         return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
     fallen = _fallback(view)
-    if fallen is None:
-        return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)
-    name, v, w = fallen
-    return MotionChoice(name, v, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+    if fallen is not None:
+        name, v, w = fallen
+        blocked = live_veto(v, w, view) or swing_out(
+            grid, pose, v, w, left_m=left_m, right_m=right_m, rear_m=rear_m
+        )
+        if blocked is None:
+            return MotionChoice(name, v, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)
+
+
+def _steers_away(v: float, w: float, wall: str) -> bool:
+    if v <= 0.02:
+        return False
+    if wall == "left":
+        return w < -0.12
+    return w > 0.12
+
+
+def _three_point(
+    view: BubbleView | None,
+    vetoes: list[dict],
+    best_v: float,
+    best_w: float,
+) -> dict | None:
+    """Start a three-point turn when every forward steer-away swings into the wall.
+
+    The winner has to be a forward command that does not turn away. A
+    reverse that already yaws off the wall is left alone.
+    """
+    wall = _near_wall(view)
+    side = None if wall is None else wall[0]
+    if side is None:
+        for item in vetoes:
+            sensor = str(item.get("sensor", ""))
+            if not sensor.startswith("swing:"):
+                continue
+            if sensor.endswith("left"):
+                side = "left"
+                break
+            if sensor.endswith("right"):
+                side = "right"
+                break
+    if side is None or best_v <= 0.02:
+        return None
+    if _steers_away(best_v, best_w, side):
+        return None
+    saw_swing = False
+    blocked = {str(item["motion"]): str(item["sensor"]) for item in vetoes}
+    for name, v, w in CANDIDATES:
+        if not _steers_away(v, w, side):
+            continue
+        sensor = blocked.get(name)
+        if sensor is None:
+            return None
+        if sensor.startswith("swing:"):
+            saw_swing = True
+    if not saw_swing:
+        return None
+    away_w = -0.28 if side == "left" else 0.28
+    return {"wall": side, "away_w": away_w}
+
+
+# slow, stop, reverse at a slight angle away from the wall, forward on
+# the heading that reverse just made. Durations are seconds.
+_THREE_POINT = (
+    ("slow", 0.20, 0.06, 0.0),
+    ("stop", 0.15, 0.0, 0.0),
+    ("reverse", 0.55, -0.10, None),
+    ("forward", 0.40, 0.12, 0.0),
+)
+
+
+class ThreePoint:
+    """The steer-away maneuver. Inactive until ``start``."""
+
+    def __init__(self) -> None:
+        self.phase: str | None = None
+        self.until = 0.0
+        self.away_w = 0.0
+        self.wall = ""
+        self._index = 0
+
+    def active(self) -> bool:
+        return self.phase is not None
+
+    def start(self, t: float, wall: str, away_w: float) -> None:
+        self.wall = wall
+        self.away_w = float(away_w)
+        self._index = 0
+        self.phase = _THREE_POINT[0][0]
+        self.until = float(t) + _THREE_POINT[0][1]
+
+    def poll(self, t: float) -> tuple[float, float] | None:
+        if self.phase is None:
+            return None
+        if float(t) + 1e-9 < self.until:
+            return self._command()
+        self._index += 1
+        if self._index >= len(_THREE_POINT):
+            self.phase = None
+            return None
+        name, dur, _v, _w = _THREE_POINT[self._index]
+        self.phase = name
+        self.until = float(t) + dur
+        return self._command()
+
+    def _command(self) -> tuple[float, float]:
+        _name, _dur, v, w = _THREE_POINT[self._index]
+        if w is None:
+            w = self.away_w
+        return float(v), float(w)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from src.mapping.floor_flow import FloorFlow
+from src.mapping.floor_flow import FloorFlow, ShortFloorTrack
 from src.mapping.odometry import WheelGyroOdometry
 from src.mapping.visual_odometry import VisualOdometry
 
@@ -70,6 +70,8 @@ class MotionFusion:
         self._floor_dx = 0.0
         self._floor_dy = 0.0
         self._floor_q = 0.0
+        # Short steps. A single correlation across 2 cm wraps on this camera.
+        self._floor_track = ShortFloorTrack()
 
     def observe(
         self,
@@ -85,6 +87,7 @@ class MotionFusion:
         rear_depth=None,
         rear_camera=None,
         rear_rgb=None,
+        dt_s: float = 0.0,
     ) -> str:
         """Fold this step into the pose. Returns ``slip``, ``floor``, ``visual``, or ``''``."""
         self.landmarks = None
@@ -100,7 +103,7 @@ class MotionFusion:
         self.p_yaw += 5e-4 * abs(float(dyaw_rad)) + 1e-7
         note = ""
         if self.use_floor and floor is not None:
-            noted = self._observe_floor(odom, floor)
+            noted = self._observe_floor(odom, floor, dt_s=dt_s, wheel_m=ds_raw_m)
             if noted:
                 note = noted
         if self.use_visual and depth is not None and camera is not None:
@@ -164,22 +167,30 @@ class MotionFusion:
         self._floor_dx = 0.0
         self._floor_dy = 0.0
         self._floor_q = 0.0
+        self._floor_track.reset()
 
-    def _observe_floor(self, odom: WheelGyroOdometry, floor) -> str:
+    def _observe_floor(self, odom: WheelGyroOdometry, floor, dt_s: float = 0.0, wheel_m: float = 0.0) -> str:
         """Integrate the downward camera until the wheels have moved enough to judge.
 
         The apartment world steps at 8 ms. One frame at cruise is a couple
-        of millimetres, under the stall threshold, so a per-frame check
-        never flags slip. The shift is summed until the hubs claim about
-        2 cm, then compared once. Yaw does not throw that comparison
-        away: on the lip the shell was turning while the wheels spun, and
-        dropping the window left that travel in the pose. A fast yaw still
-        does not accept a floor correction, only a stall.
+        of millimetres, and a correlation across the whole 2 cm window
+        wraps: this camera's 32 px is about 3.9 cm of floor, so one period
+        comes back as a still picture. The stall is the sum of shorter
+        steps, each about 1.2 cm. Yaw does not throw that comparison away.
+        On the lip the shell was turning while the wheels spun, and dropping
+        the window left that travel in the pose. A fast yaw still does not
+        accept a floor correction, only a stall.
         """
+        self._floor_track.push(floor, dt_s, wheel_m)
         sample = self.floor.measure(floor)
         if sample is None:
             if not self._floor.armed:
-                self._reset_floor()
+                # First frame only arms the previous image. Keep the tracker's
+                # baseline; it armed on this same frame.
+                self._floor.clear()
+                self._floor_dx = 0.0
+                self._floor_dy = 0.0
+                self._floor_q = 0.0
             return ""
         if not sample.ok:
             # The lip face is a flat frame. It is not "the floor moved".
@@ -197,22 +208,40 @@ class MotionFusion:
         self._floor_q = float(sample.quality)
         if abs(self._floor.raw_m) < 0.02:
             return ""
-        return self._judge_floor(odom)
+        if self._floor_track.confident_still() or self._floor_track.motion_samples > 0:
+            return self._judge_floor(odom)
+        # Wheels have claimed 2 cm and the picture has not said either way
+        # (a blank lip, or a peak too weak to be a match). Give it a little
+        # more, then drop the window. That is not a stall.
+        if abs(self._floor.raw_m) > 0.06:
+            self._reset_floor()
+        return ""
 
     def _judge_floor(self, odom: WheelGyroOdometry) -> str:
+        """Stall only when short floor steps themselves did not move.
+
+        The summed metres under-read a moving pile (the scale is nominal,
+        and a rejected frame adds nothing). Comparing that sum with 30% of
+        the wheel claim called a real 0.12 m/s drive a stall and the
+        bedroom run never left the hall. A long correlation does the same
+        thing for a different reason: 32 px is one period, and a shift of
+        one period is a zero. The short-step sum is the measurement.
+        """
+        stalled = self._floor_track.confident_still()
         raw_m = self._floor.raw_m
         measured = self._floor_dx
         note = self._apply_shift(
             odom,
             self._floor,
-            self._floor_dx,
-            self._floor_dy,
+            0.0 if stalled else self._floor_dx,
+            0.0 if stalled else self._floor_dy,
             0.0,
             ok=True,
-            quality=self._floor_q,
+            quality=0.8 if stalled else self._floor_q,
             kind="floor",
             var_xy=0.004 if self._floor_q > 0.4 else 0.05,
             var_yaw=10.0,
+            skip_stall=not stalled,
         )
         if note != "slip":
             self.floor.learn_scale(raw_m, measured)
@@ -236,6 +265,7 @@ class MotionFusion:
         var_yaw: float,
         pixel_shift: float = 0.0,
         expect_px: float = 0.0,
+        skip_stall: bool = False,
     ) -> str:
         if not ok or quality < 0.12:
             return ""
@@ -252,7 +282,13 @@ class MotionFusion:
         # A forward camera only counts when that travel should have moved
         # the tracked pixels by several pixels and they stayed put.
         visible_stall = kind != "visual" or (expect_px >= 3.0 and pixel_shift < 0.75)
-        if visible_stall and abs(raw) > 0.012 and scene < 0.30 * abs(raw) and abs(float(dyaw_rad)) < 0.05:
+        if (
+            not skip_stall
+            and visible_stall
+            and abs(raw) > 0.012
+            and scene < 0.30 * abs(raw)
+            and abs(float(dyaw_rad)) < 0.05
+        ):
             # One missed track looks like a still scene. The floor sensor is
             # a direct ground measurement, so it counts immediately. The
             # forward camera has to say so twice.

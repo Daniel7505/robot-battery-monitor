@@ -13,7 +13,7 @@ from src.mapping.bubble import (
     reverse_budget_m,
     stop_gap,
 )
-from src.mapping.floor_flow import FloorFlow, metres_per_px
+from src.mapping.floor_flow import FloorFlow, ShortFloorTrack, metres_per_px
 from src.mapping.fuse import MotionFusion
 from src.mapping.loop_close import LoopCloser
 from src.mapping.explore import Explorer
@@ -187,6 +187,80 @@ def test_a_yaw_on_a_still_floor_is_still_a_stall():
     assert saw
     assert abs(odom.x_m) < 0.008
     assert fuse.floor_updates == 0
+
+
+def test_a_moving_floor_is_not_a_stall_when_the_metres_under_read():
+    """The nominal scale reads about half of a real step.
+
+    A 30% ratio on that sum called a 0.12 m/s drive a stall. The picture
+    has moved by more than a couple of pixels, so the wheels stand.
+    """
+    image = np.random.default_rng(6).normal(40.0, 8.0, size=(32, 32))
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(visual=False, floor=True, rng=np.random.default_rng(2))
+    fuse.floor.noise_px = 0.0
+    assert fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image) == ""
+    note = ""
+    for i in range(1, 8):
+        odom.x_m += 0.01
+        noted = fuse.observe(
+            odom,
+            ds_raw_m=0.01,
+            ds_applied_m=0.01,
+            dyaw_rad=0.0,
+            floor=np.roll(image, i * 3, axis=1),
+        )
+        if noted:
+            note = noted
+    assert note != "slip"
+    assert odom.x_m > 0.05
+
+
+def test_short_steps_do_not_stall_when_a_long_baseline_would_wrap():
+    """32 px is one period of this camera, about 3.9 cm, and correlates as zero.
+
+    Nine steps of 4 px is more than a period against the first frame. Each
+    step is only 4 px, so the floor moved and the wheels stand.
+    """
+    image = np.random.default_rng(7).normal(40.0, 8.0, size=(32, 32))
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(visual=False, floor=True, rng=np.random.default_rng(2))
+    fuse.floor.noise_px = 0.0
+    assert fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image) == ""
+    note = ""
+    for i in range(1, 10):
+        odom.x_m += 0.005
+        noted = fuse.observe(
+            odom,
+            ds_raw_m=0.005,
+            ds_applied_m=0.005,
+            dyaw_rad=0.0,
+            floor=np.roll(image, i * 4, axis=1),
+        )
+        if noted:
+            note = noted
+    assert note != "slip"
+    assert odom.x_m > 0.03
+
+
+def test_a_fixed_shadow_is_not_a_still_floor_and_a_match_is():
+    """A blob that stays in the camera can peak at zero while the pile slides.
+
+    That peak is a weak one. A frame that actually matches is near 1, and
+    that is the stall.
+    """
+    tex = np.random.default_rng(8).normal(40.0, 12.0, size=(32, 32))
+    blob = np.zeros((32, 32))
+    blob[8:24, 10:26] = 80.0
+    moving = ShortFloorTrack()
+    assert moving.push(tex + blob, 0.0, 0.0) == "pending"
+    status = moving.push(np.roll(tex, 8, axis=1) + blob, 0.0, 0.02)
+    assert status != "still"
+    assert not moving.confident_still()
+    still = ShortFloorTrack()
+    assert still.push(tex, 0.0, 0.0) == "pending"
+    assert still.push(tex, 0.0, 0.03) == "still"
+    assert still.confident_still()
 
 
 def test_scale_error_shrinks_when_the_wheels_agree():

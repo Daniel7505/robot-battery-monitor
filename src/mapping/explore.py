@@ -38,7 +38,7 @@ from src.mapping.depth_cloud import (
     to_odom,
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
-from src.mapping.floor_flow import image_shift_px
+from src.mapping.floor_flow import ShortFloorTrack
 from src.mapping.footprint import fit_motion
 from src.mapping.frontiers import select_goal
 from src.mapping.fuse import MotionFusion
@@ -221,6 +221,8 @@ class Explorer:
         # Translation hold from the floor sensor alone. Yaw stays on the
         # gyro until depth and vision agree as well.
         self._zupt_trans_until = -1.0
+        self._floor_track = ShortFloorTrack()
+        self._zupt_wheels: tuple[float, float] | None = None
         self._pitch_rest: float | None = None
         self.zupt_events = 0
         self.wheels_lifted = 0
@@ -373,6 +375,7 @@ class Explorer:
                 ds_raw_m=ds,
                 ds_applied_m=applied,
                 dyaw_rad=dyaw,
+                dt_s=dt,
                 floor=floor_image,
                 depth=depth if self.fusion_enabled else None,
                 camera=self.camera,
@@ -739,6 +742,22 @@ class Explorer:
             "misses": 0,
         }
 
+    def _zupt_travel(self, left_rad: float, right_rad: float) -> float:
+        """Wheel travel since the previous floor step, in metres.
+
+        Translation plus spin, so a scrub that nets zero forward still
+        closes a floor step. The first sample only arms the baseline.
+        """
+        prev = self._zupt_wheels
+        self._zupt_wheels = (float(left_rad), float(right_rad))
+        if prev is None:
+            return 0.0
+        dl = float(left_rad) - prev[0]
+        dr = float(right_rad) - prev[1]
+        radius = self.odometry.radius_m
+        track = max(self.odometry.track_m, 1e-6)
+        return abs(0.5 * (dl + dr)) * radius + abs(dr - dl) * radius / track
+
     def _watch_zupt(
         self,
         depth,
@@ -751,15 +770,19 @@ class Explorer:
     ) -> None:
         """Freeze translation when the floor image has not moved.
 
-        The downward camera is the stuck signal. Depth and the forward
-        view used to have to agree before a still floor counted, and a
-        yaw against the jamb changed those pictures while the pile under
-        the shell did not. Yaw is frozen only when those pictures agree
-        too: a real turn whose floor peak sits near zero must keep the gyro.
+        The downward camera is the stuck signal. A correlation against an
+        anchor from a fifth of a second ago wraps: 32 px is about 3.9 cm,
+        and one period comes back as a still picture, which reversed a
+        real 0.12 m/s doorway crossing. The stall is a run of short steps,
+        each about 1.2 cm, all matching. Depth and the forward view used
+        to have to agree before a still floor counted, and a yaw against
+        the jamb changed those pictures while the pile under the shell did
+        not. Yaw is frozen only when those pictures agree too.
         The hubs may be spinning the whole time.
         """
         if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch)) < 0.15:
             self._pitch_rest = float(pitch)
+        travel = self._zupt_travel(left_rad, right_rad)
         if floor is None:
             return
         if self._zupt_anchor is None:
@@ -769,18 +792,19 @@ class Explorer:
             if depth is None:
                 return
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            self._floor_track.reset()
             return
         anchor = self._zupt_anchor
         age = self.t_s - float(anchor["t"])
-        if age < 0.20:
-            return
-        # Floor flow against the anchor, not the previous 8 ms. Door speed
-        # shifts the texture by many pixels in a fifth of a second. A mean
-        # absolute difference on a soft grain still looked still while the
-        # shell was moving, and freezing that yaw deleted a real turn.
-        shift = image_shift_px(anchor["floor"], floor)
-        if shift is None or math.hypot(float(shift[0]), float(shift[1])) > 2.0:
+        status = self._floor_track.push(floor, self._step_dt, travel)
+        # "pending" is a step that has not closed yet. A blank face and a
+        # real slide both restart the pose anchor, so a weak zero cannot
+        # sit on an old pose and delete the crossing.
+        if status in ("moving", "blank"):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            self._floor_track.reset()
+            return
+        if not self._floor_track.confident_still() or age < 0.40:
             return
         depth_ok = False
         if depth is not None and anchor.get("depth") is not None:
@@ -796,12 +820,6 @@ class Explorer:
             ):
                 vis_ok = vis_ok and _picture_still(anchor["rgb"], rgb, limit=8.0, min_std=4.0)
         pictures = bool(depth_ok and vis_ok)
-        # One matching pair is the start of a creep, whose picture has not
-        # moved a pixel yet. Wait until a second picture, a fifth of a
-        # second later, is still the same before touching the pose.
-        anchor["still_hits"] = int(anchor["still_hits"]) + 1
-        if anchor["still_hits"] < 2 or age < 0.40:
-            return
         dl = float(left_rad) - float(anchor["left"])
         dr = float(right_rad) - float(anchor["right"])
         claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m

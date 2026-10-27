@@ -98,6 +98,11 @@ def image_shift_px(prev, curr) -> tuple[float, float, float] | None:
     move" use the magnitude. A creep of door speed is many pixels across
     a fifth of a second, and a body that is sitting still stays under a
     couple of pixels.
+
+    The peak is cyclic with the image width. On this 32 px camera one
+    period is about 3.9 cm of floor, and a shift of one period comes back
+    as a high-quality zero. Callers that decide "stuck" must not compare
+    across more than half of that.
     """
     before = np.asarray(prev, dtype=np.float64)
     after = np.asarray(curr, dtype=np.float64)
@@ -106,6 +111,147 @@ def image_shift_px(prev, curr) -> tuple[float, float, float] | None:
     if after.ndim == 3:
         after = after.mean(axis=2)
     return _shift_peak(before, after)
+
+
+def _as_gray(image) -> np.ndarray | None:
+    if image is None:
+        return None
+    gray = np.asarray(image, dtype=np.float64)
+    if gray.ndim == 3:
+        gray = gray.mean(axis=2)
+    if gray.ndim != 2 or gray.size < 16:
+        return None
+    return gray
+
+
+# Half of the 32 px window is about 1.9 cm of floor. The old stall compared
+# a 2 cm wheel window in one shot, which lands on that cliff, and a full
+# period correlates as (0, 0). Each step below closes around 1.2 cm
+# (about 10 px), where a real slide is still the peak.
+_STEP_WHEEL_M = 0.012
+_STEP_MAX_S = 0.12
+_STILL_PX = 2.0
+# Identical frames correlate near 1. A peak that merely fell near zero
+# (a shadow fixed in the camera, or a shift past half a period) is well
+# under this. Only the sharp match is "the floor did not move".
+_STILL_QUALITY = 0.70
+_AMBIGUOUS_PX = 12.0
+
+
+class ShortFloorTrack:
+    """Sum of phase-correlation steps that stay inside one image period.
+
+    A still floor is a high-quality match after the wheels have claimed
+    about 2 cm. A moving floor shows up in a step of about 1.2 cm, before
+    the correlation can wrap around to zero. A flat lip face is not a
+    zero: there is nothing to track, so it is not evidence of a stall.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._base: np.ndarray | None = None
+        self._wheel = 0.0
+        self._age = 0.0
+        self.sum_row = 0.0
+        self.sum_col = 0.0
+        self.sum_wheel_m = 0.0
+        self.still_samples = 0
+        self.motion_samples = 0
+        self.blank_s = 0.0
+
+    @property
+    def moved_px(self) -> float:
+        return math.hypot(self.sum_row, self.sum_col)
+
+    def confident_still(self) -> bool:
+        """Wheels claimed 2 cm and every closed step matched the floor."""
+        return (
+            self.motion_samples == 0
+            and self.still_samples >= 1
+            and self.sum_wheel_m >= 0.02
+            and self.moved_px <= _STILL_PX
+        )
+
+    def push(self, image, dt: float, wheel_m: float) -> str:
+        """Fold one frame in. Returns pending, blank, moving, or still.
+
+        ``dt <= 0`` closes on this call once the hubs have claimed any
+        travel. The unit tests pass one sample per call that way. The
+        simulator steps at 8 ms and passes ``dt``, so a step waits until
+        about 1.2 cm of wheel travel or 0.12 s, whichever comes first.
+        """
+        gray = _as_gray(image)
+        if gray is None:
+            return "blank"
+        if float(gray.std()) < 2.0:
+            self.blank_s += max(0.0, float(dt))
+            self._base = None
+            self._wheel = 0.0
+            self._age = 0.0
+            return "blank"
+        self.blank_s = 0.0
+        if self._base is None:
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
+            return "pending"
+        step_wheel = abs(float(wheel_m))
+        step_dt = max(0.0, float(dt))
+        self._wheel += step_wheel
+        self._age += step_dt
+        # A caller that does not pass time is handing over one finished sample.
+        close = self._wheel >= _STEP_WHEEL_M or self._age >= _STEP_MAX_S
+        if step_dt <= 0.0 and step_wheel > 0.0:
+            close = True
+        if not close:
+            return "pending"
+        shift = _shift_peak(self._base, gray)
+        closed_wheel = self._wheel
+        closed_age = self._age
+        if shift is None:
+            # Nothing to track in this pair. Drop it and start from this frame.
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
+            return "blank"
+        row, col, quality = shift
+        mag = math.hypot(float(row), float(col))
+        if mag > _AMBIGUOUS_PX:
+            # Too close to one period to trust the sign. Not a still floor.
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
+            return "blank"
+        if mag > _STILL_PX:
+            self.sum_row += float(row)
+            self.sum_col += float(col)
+            self.motion_samples += 1
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
+            return "moving"
+        # Same buffer twice, before the texture could have slid. The camera
+        # has not produced a new frame yet. Keep the earlier baseline.
+        if (
+            step_dt > 0.0
+            and quality >= 0.95
+            and closed_wheel < _STEP_WHEEL_M
+            and closed_age < 0.10
+        ):
+            return "pending"
+        if quality < _STILL_QUALITY:
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
+            return "blank"
+        self.still_samples += 1
+        self.sum_wheel_m += closed_wheel
+        self._base = np.array(gray, copy=True)
+        self._wheel = 0.0
+        self._age = 0.0
+        return "still"
 
 
 def metres_per_px(camera=FLOOR_CAM, height_m: float | None = None) -> float:

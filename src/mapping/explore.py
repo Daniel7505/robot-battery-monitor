@@ -99,6 +99,12 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
+# Tail gap that is too close to reverse into. The forward escape uses
+# the same limit. Stopping that escape at 0.10 m left the band between
+# the two commanding zero wheels: recovery cleared the reverse, the
+# escape did not run, and the occupancy sweep had already rejected the
+# planned arc. The shell then sat still with an open nose.
+_REAR_WALL_M = 0.12
 
 
 class Explorer:
@@ -1108,8 +1114,10 @@ class Explorer:
         self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
         self._reinforce_corners(x, y, yaw)
         tight = self._tight_face()
-        if tight is not None and tight[0] == "rear" and tight[1] < 0.12:
+        if tight is not None and tight[0] == "rear" and tight[1] < _REAR_WALL_M:
             # The tail is on the wall. A reverse drives further in.
+            # _leave_rear covers this same gap, so the next command
+            # drives off the wall instead of stopping.
             self._reverse_left_m = 0.0
             self._reverse_needs_gap = False
         else:
@@ -1340,9 +1348,10 @@ class Explorer:
         The pivot backup always reversed. With the nose in an open room
         and the rear sonar on the shared wall, that command held the
         tires on the wall for minutes and the encoders walked the pose.
+        The cutoff is the same gap recovery refuses to reverse into.
         """
         tight = self._tight_face()
-        if tight is None or tight[0] != "rear" or tight[1] >= 0.10:
+        if tight is None or tight[0] != "rear" or tight[1] >= _REAR_WALL_M:
             return None
         self._reverse_left_m = 0.0
         self._reverse_needs_gap = False

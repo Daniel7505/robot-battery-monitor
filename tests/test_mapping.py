@@ -1264,6 +1264,41 @@ def test_a_rear_press_drives_forward_off_the_wall():
     assert v > 0.05
 
 
+def test_a_tail_gap_recovery_refuses_still_drives_forward():
+    """The no-reverse band used to command zero wheels.
+
+    Recovery will not back up when the tail is the tight face inside
+    0.12 m. The escape used to require 0.10 m, so 0.11 m did neither.
+    The sweep had already stopped the plan. Live depth here is the
+    south-seed freeze: an open nose the creep gate does not accept.
+    """
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 30.0
+    bot.odometry.x_m = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 30.0
+    bot._progress_t = 0.0
+    bot._last_clear = (0.75, 1.05, 0.52)
+    bot._bubble_view = BubbleView(0.32, 0.50, 0.40, 0.11, 0.11)
+    bot._bubble_gap = 0.32
+    bot._min_gap = 0.11
+    assert bot._gap_ahead() == ""
+    bot._start_recovery()
+    assert bot._reverse_left_m == 0.0
+    cmd_l, cmd_r = bot._go(False, 0.0, 1.05, 0.52)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+    # Just outside the band, the escape does not take over.
+    bot._bubble_view = BubbleView(0.32, 0.50, 0.40, 0.13, 0.13)
+    assert bot._leave_rear() is None
+
+
 def test_an_unchanged_view_with_no_corners_is_still():
     """A flat wall has nothing to track. The picture not moving is the reading."""
     from src.mapping.visual_odometry import VisualOdometry

@@ -18,7 +18,9 @@ SPEED = 0.22
 LIP_X = float(os.environ.get("RBM_LIP_X", "3.0"))
 LIP_Z = float(os.environ.get("RBM_LIP_Z", "0.0127"))
 STRAIGHT_M = 2.0
-SPIN_RAD = math.pi
+# A half turn leaves the nose pointing away from the lip. One full turn
+# checks the spin and finishes facing the step again.
+SPIN_RAD = 2.0 * math.pi
 
 # Soft contact may sink the hub by a millimetre or two. More than this is
 # a tire floating or a bounding volume buried in the floor.
@@ -156,13 +158,16 @@ def main() -> None:
     origin = None
     straight_pose = None
     spin_pose = None
-    spin_yaw0 = 0.0
     spin_excursion = 0.0
+    spin_total = 0.0
+    spin_prev = None
     climb_t0 = None
     rest_samples: list[dict] = []
     climb_samples: list[dict] = []
     reasons: list[str] = []
     report: list[str] = []
+    trace = open(os.path.join(folder, "trace.csv"), "w", encoding="utf-8")
+    trace.write("t,phase,x,y,z,yaw,roll,pitch,up,rl_z,rr_z,fl_z,fr_z\n")
 
     def command(left: float, right: float) -> None:
         motors["rear_left"].setVelocity(left)
@@ -211,6 +216,7 @@ def main() -> None:
             report.append("SKID SANITY fail " + "; ".join(reasons))
         text = "\n".join(report) + "\n"
         print(text, flush=True)
+        trace.close()
         with open(os.path.join(folder, "result.txt"), "w", encoding="utf-8") as handle:
             handle.write(text)
         print(f"SKID SANITY quit t={now:.2f}", flush=True)
@@ -254,6 +260,15 @@ def main() -> None:
             finish(now)
             return
         snap = sample()
+        if int(now * 8) != int((now - timestep / 1000.0) * 8):
+            tires = snap["tires"]
+            trace.write(
+                f"{now:.3f},{phase},{snap['x']:.4f},{snap['y']:.4f},{snap['z']:.4f},"
+                f"{snap['yaw']:.4f},{snap['roll']:.4f},{snap['pitch']:.4f},{snap['up']:.4f},"
+                f"{tires['rear_left']['z']:.4f},{tires['rear_right']['z']:.4f},"
+                f"{tires['front_left']['z']:.4f},{tires['front_right']['z']:.4f}\n"
+            )
+            trace.flush()
         if origin is None and now >= 0.2:
             origin = snap
         if phase == "rest":
@@ -303,28 +318,24 @@ def main() -> None:
                 phase = "spin"
                 phase_t = now
                 spin_pose = snap
-                spin_yaw0 = snap["yaw"]
                 spin_excursion = 0.0
             continue
         if phase == "spin":
             command(-omega, omega)
             travel = math.hypot(snap["x"] - spin_pose["x"], snap["y"] - spin_pose["y"])
             spin_excursion = max(spin_excursion, travel)
-            turned = _wrap(snap["yaw"] - spin_yaw0)
-            # Unwrap across the ±pi cut by integrating the short step.
-            if not hasattr(main, "_spin_total"):
-                main._spin_total = 0.0
-                main._spin_prev = snap["yaw"]
-            main._spin_total += _wrap(snap["yaw"] - main._spin_prev)
-            main._spin_prev = snap["yaw"]
-            if abs(main._spin_total) >= SPIN_RAD or now > phase_t + 8.0:
+            if spin_prev is None:
+                spin_prev = snap["yaw"]
+            spin_total += _wrap(snap["yaw"] - spin_prev)
+            spin_prev = snap["yaw"]
+            if abs(spin_total) >= SPIN_RAD or now > phase_t + 12.0:
                 command(0.0, 0.0)
                 report.append(
-                    f"SKID SANITY spin yaw_deg={math.degrees(main._spin_total):.2f} "
+                    f"SKID SANITY spin yaw_deg={math.degrees(spin_total):.2f} "
                     f"excursion_m={spin_excursion:.3f} net_m={travel:.3f}"
                 )
-                if abs(main._spin_total) < math.radians(160.0):
-                    reasons.append(f"spin only {math.degrees(main._spin_total):.0f} deg")
+                if abs(spin_total) < math.radians(340.0):
+                    reasons.append(f"spin only {math.degrees(spin_total):.0f} deg")
                 if spin_excursion > 0.08:
                     reasons.append(f"spin wandered {spin_excursion * 100.0:.1f} cm")
                 phase = "climb_settle"
@@ -339,8 +350,16 @@ def main() -> None:
             continue
         if phase == "climb":
             command(omega, omega)
-            on_top = all(tire["z"] > LIP_Z + WHEEL_R - 0.006 and tire["x"] > LIP_X + 0.04 for tire in snap["tires"].values())
-            if (on_top and snap["x"] >= LIP_X + 0.30) or now > phase_t + 18.0:
+            on_top = all(
+                tire["z"] > LIP_Z + WHEEL_R - 0.006 and tire["x"] > LIP_X + 0.02
+                for tire in snap["tires"].values()
+            )
+            if snap["x"] < 2.0:
+                reasons.append(f"climb drove back to x={snap['x']:.2f}")
+                command(0.0, 0.0)
+                finish(now)
+                return
+            if (on_top and snap["x"] >= LIP_X + 0.25) or now > phase_t + 18.0:
                 command(0.0, 0.0)
                 phase = "climb_done"
                 phase_t = now

@@ -705,6 +705,59 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
     assert math.hypot(*bot.pose()[:2]) < 0.08
 
 
+def test_a_still_floor_freezes_translation_while_the_view_turns():
+    """The pile is still and the forward picture is not. That is a scrub.
+
+    Depth and vision used to veto the floor, so the wheels kept writing
+    travel while the shell sat on the lip. Translation freezes and the
+    drive backs off. Yaw does not: the gyro is actually turning.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    floor = 40.0 + noise * (3.2 / float(np.std(noise)))
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[22:34, 24:36] = 40.0
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    saw_reverse = False
+    for i in range(28):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.04,
+            depth=depth + 0.2 * (i % 2),
+            floor=floor,
+            rgb=np.roll(rgb, i, axis=1),
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events >= 1
+    assert saw_reverse
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.08
+    assert abs(bot.pose()[2]) > 0.015
+
+
 def test_a_moving_floor_is_not_a_zero_velocity_update():
     """The floor picture shifting is the body moving. Yaw and travel stay."""
     from src.mapping.explore import Explorer

@@ -171,25 +171,35 @@ class MotionFusion:
         The apartment world steps at 8 ms. One frame at cruise is a couple
         of millimetres, under the stall threshold, so a per-frame check
         never flags slip. The shift is summed until the hubs claim about
-        2 cm, then compared once. A fast yaw, or a stretch of floor with
-        nothing to track, drops the window instead of calling it a stall.
+        2 cm, then compared once. Yaw does not throw that comparison
+        away: on the lip the shell was turning while the wheels spun, and
+        dropping the window left that travel in the pose. A fast yaw still
+        does not accept a floor correction, only a stall.
         """
         sample = self.floor.measure(floor)
         if sample is None:
             if not self._floor.armed:
                 self._reset_floor()
             return ""
-        if sample.ok:
-            self.scene_floor_m = math.hypot(float(sample.dx_m), float(sample.dy_m))
-        if not sample.ok or abs(self._floor.yaw_rad) > 0.08:
+        if not sample.ok:
+            # The lip face is a flat frame. It is not "the floor moved".
+            # If the pile was already tracking, judge that stretch before
+            # the blank frame throws it away. A climb that is blank the
+            # whole way never tracked, so it is not a stall.
+            if self._floor_q > 0.0 and abs(self._floor.raw_m) >= 0.02:
+                return self._judge_floor(odom)
             if abs(self._floor.raw_m) > 0.05 or abs(self._floor.yaw_rad) > 0.08:
                 self._reset_floor()
             return ""
+        self.scene_floor_m = math.hypot(float(sample.dx_m), float(sample.dy_m))
         self._floor_dx += float(sample.dx_m)
         self._floor_dy += float(sample.dy_m)
         self._floor_q = float(sample.quality)
         if abs(self._floor.raw_m) < 0.02:
             return ""
+        return self._judge_floor(odom)
+
+    def _judge_floor(self, odom: WheelGyroOdometry) -> str:
         raw_m = self._floor.raw_m
         measured = self._floor_dx
         note = self._apply_shift(
@@ -227,15 +237,15 @@ class MotionFusion:
         pixel_shift: float = 0.0,
         expect_px: float = 0.0,
     ) -> str:
-        if not ok or quality < 0.15:
+        if not ok or quality < 0.12:
             return ""
         raw = interval.raw_m
         applied = interval.applied_m
-        # A fast yaw between two frames breaks a short patch search and a
-        # floor phase correlation. The fit looks like a sideways shove and
-        # walks the pose in the middle of a scan. Wheels and the gyro own
-        # that step.
-        if abs(interval.yaw_rad) > 0.08:
+        # A fast yaw between two frames breaks a short patch search. The
+        # fit looks like a sideways shove and walks the pose in the middle
+        # of a scan. The floor sensor still gets to call a stall: the
+        # comparison below is translation, and a yaw used to skip it.
+        if kind != "floor" and abs(interval.yaw_rad) > 0.08:
             return ""
         scene = math.hypot(float(dx_m), float(dy_m))
         # Wheels turned, the sensor says the body did not. Drop the travel.
@@ -256,6 +266,10 @@ class MotionFusion:
             self.last_slip = kind
             return "slip"
         self._visual_still = 0
+        # The stall above is the stuck signal. A floor shift during a
+        # fast yaw is not a correction: the peak picks up the rotation.
+        if kind == "floor" and abs(interval.yaw_rad) > 0.08:
+            return ""
         var = float(var_xy)
         if kind == "floor" and abs(interval.yaw_rad) > 0.04:
             var += 0.05

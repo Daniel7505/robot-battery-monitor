@@ -138,6 +138,57 @@ def test_floor_shift_sign_and_low_texture():
     assert rejected is not None and not rejected.ok
 
 
+def test_carpet_pile_contrast_tracks_and_the_lip_face_does_not():
+    """The pile is dimmer than the old std-4 gate and the lip face is flat.
+
+    A straight climb measured carpet frames around std 3, and the gate
+    rejected every one of them. The vertical face of the step is about
+    std 0.5 and still has nothing to track.
+    """
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    pile = 40.0 + noise * (3.2 / float(np.std(noise)))
+    assert 2.0 < float(np.std(pile)) < 4.0
+    flow = FloorFlow(scale=1.0, noise_px=0.0)
+    assert flow.measure(pile) is None
+    sample = flow.measure(np.roll(pile, 3, axis=1))
+    assert sample is not None and sample.ok
+    assert abs(sample.dy_m) > 0.002
+    face = np.full((32, 32), 18.0)
+    blank = FloorFlow(scale=1.0, noise_px=0.0)
+    assert blank.measure(face) is None
+    rejected = blank.measure(face)
+    assert rejected is not None and not rejected.ok
+
+
+def test_a_yaw_on_a_still_floor_is_still_a_stall():
+    """The lip scrub yaws past 0.08 rad before the wheels have claimed 2 cm.
+
+    That used to drop the floor window, and the wheel travel stayed in
+    the pose. A still pile is a stall whether or not the shell is turning.
+    """
+    image = np.random.default_rng(4).normal(40.0, 8.0, size=(32, 32))
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(visual=False, floor=True, rng=np.random.default_rng(1))
+    fuse.floor.noise_px = 0.0
+    assert fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image) == ""
+    saw = False
+    for _ in range(8):
+        odom.x_m += 0.004
+        noted = fuse.observe(
+            odom,
+            ds_raw_m=0.004,
+            ds_applied_m=0.004,
+            dyaw_rad=0.03,
+            floor=image,
+        )
+        if noted == "slip":
+            saw = True
+            break
+    assert saw
+    assert abs(odom.x_m) < 0.008
+    assert fuse.floor_updates == 0
+
+
 def test_scale_error_shrinks_when_the_wheels_agree():
     rng = np.random.default_rng(3)
     image = rng.normal(0.0, 30.0, size=(32, 32))

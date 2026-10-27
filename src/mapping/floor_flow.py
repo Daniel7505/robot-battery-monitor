@@ -48,7 +48,12 @@ def _shift_peak(prev: np.ndarray, curr: np.ndarray) -> tuple[float, float, float
         return None
     a = a - float(a.mean())
     b = b - float(b.mean())
-    if float(a.std()) < 4.0 or float(b.std()) < 4.0:
+    # Laminate in this camera is about std 5–8. The carpet pile, 4 cm
+    # up, lands around 3. The vertical face of the lip is a flat frame,
+    # std about 0.5, and that one stays rejected: there is nothing to
+    # track. A cutoff of 4 dropped every carpet frame, so a still pile
+    # never became a stuck reading.
+    if float(a.std()) < 2.0 or float(b.std()) < 2.0:
         return None
     cross = np.fft.rfft2(a) * np.conj(np.fft.rfft2(b))
     mag = np.abs(cross)

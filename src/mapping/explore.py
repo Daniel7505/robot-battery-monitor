@@ -218,6 +218,9 @@ class Explorer:
         # moved. A zero-velocity update puts the pose back there.
         self._zupt_anchor: dict | None = None
         self._zupt_until = -1.0
+        # Translation hold from the floor sensor alone. Yaw stays on the
+        # gyro until depth and vision agree as well.
+        self._zupt_trans_until = -1.0
         self._pitch_rest: float | None = None
         self.zupt_events = 0
         self.wheels_lifted = 0
@@ -347,14 +350,15 @@ class Explorer:
         # While the cameras still agree the shell is sitting, do not
         # integrate this step. The latch is refreshed only when a new
         # picture says the same thing.
-        held_still = self.t_s < self._zupt_until
+        held_yaw = self.t_s < self._zupt_until
+        held_trans = held_yaw or self.t_s < self._zupt_trans_until
         self.odometry.update(
             left_wheel_rad,
             right_wheel_rad,
             yaw_rate_rad_s,
             dt,
-            trust_translation=not drop and not spin_cmd and not held_still,
-            trust_yaw=not held_still,
+            trust_translation=not drop and not spin_cmd and not held_trans,
+            trust_yaw=not held_yaw,
         )
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
         self._mark_visited()
@@ -714,12 +718,15 @@ class Explorer:
         self._pin.reset()
 
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
+        held_depth = None
+        if depth is None and self._zupt_anchor is not None:
+            held_depth = self._zupt_anchor.get("depth")
         self._zupt_anchor = {
             "t": self.t_s,
             "x": self.odometry.x_m,
             "y": self.odometry.y_m,
             "yaw": self.odometry.yaw_unwrapped_rad,
-            "depth": np.array(depth, copy=True),
+            "depth": np.array(depth, copy=True) if depth is not None else held_depth,
             "floor": np.array(floor, copy=True),
             "rgb": None if rgb is None else np.array(rgb, copy=True),
             "left": float(left_rad),
@@ -742,19 +749,25 @@ class Explorer:
         left_rad: float,
         right_rad: float,
     ) -> None:
-        """Freeze translation and yaw when depth, floor, and vision are unchanged.
+        """Freeze translation when the floor image has not moved.
 
-        The pictures are the measurement. Gyro yaw is not: a false yaw
-        shifts a depth residual until the old pin thinks the room moved,
-        and the pose walks while the shell sits on a threshold. The hubs
-        may be spinning the whole time. That is slip, or the casters
-        holding the body with the drive wheels off the floor.
+        The downward camera is the stuck signal. Depth and the forward
+        view used to have to agree before a still floor counted, and a
+        yaw against the jamb changed those pictures while the pile under
+        the shell did not. Yaw is frozen only when those pictures agree
+        too: a real turn whose floor peak sits near zero must keep the gyro.
+        The hubs may be spinning the whole time.
         """
         if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch)) < 0.15:
             self._pitch_rest = float(pitch)
-        if depth is None or floor is None:
+        if floor is None:
             return
         if self._zupt_anchor is None:
+            # Wait for a depth frame so a later yaw freeze has a picture
+            # to compare. Translation does not need it, but the first
+            # arm is the one the forward view is judged against.
+            if depth is None:
+                return
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             return
         anchor = self._zupt_anchor
@@ -769,7 +782,9 @@ class Explorer:
         if shift is None or math.hypot(float(shift[0]), float(shift[1])) > 2.0:
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             return
-        depth_ok = _picture_still(anchor["depth"], depth, limit=0.045, min_std=0.0)
+        depth_ok = False
+        if depth is not None and anchor.get("depth") is not None:
+            depth_ok = _picture_still(anchor["depth"], depth, limit=0.045, min_std=0.0)
         vis_ok = bool(self._fusion.scene_visual_still)
         if rgb is not None and anchor["rgb"] is not None:
             before = np.asarray(anchor["rgb"], dtype=np.float64)
@@ -780,14 +795,7 @@ class Explorer:
                 and float(np.std(after)) >= 4.0
             ):
                 vis_ok = vis_ok and _picture_still(anchor["rgb"], rgb, limit=8.0, min_std=4.0)
-        if not (depth_ok and vis_ok):
-            # One noisy depth frame is not the shell moving. The floor
-            # already agreed. Two misses in a row rearms.
-            anchor["misses"] = int(anchor["misses"]) + 1
-            if int(anchor["misses"]) >= 2:
-                self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
-            return
-        anchor["misses"] = 0
+        pictures = bool(depth_ok and vis_ok)
         # One matching pair is the start of a creep, whose picture has not
         # moved a pixel yet. Wait until a second picture, a fifth of a
         # second later, is still the same before touching the pose.
@@ -800,16 +808,21 @@ class Explorer:
         spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
         self.odometry.x_m = float(anchor["x"])
         self.odometry.y_m = float(anchor["y"])
-        self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
-        self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
         # Only the steps until the next picture. A latch that ran on
         # after the shell started moving deleted a real turn.
-        self._zupt_until = self.t_s + 0.12
+        self._zupt_trans_until = self.t_s + 0.12
+        if pictures:
+            self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
+            self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
+            self._zupt_until = self.t_s + 0.12
         if not anchor["logged"]:
             anchor["logged"] = True
             self.zupt_events += 1
-            self.odometry.observe_rest(float(yaw_rate), self._step_dt)
-            self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
+            if pictures:
+                self.odometry.observe_rest(float(yaw_rate), self._step_dt)
+                self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
+            else:
+                self._log("floor still, translation frozen")
         rest = self._pitch_rest
         # The carpet ramp is about 0.04 rad. A real unload tips past that.
         pitched = rest is not None and abs(float(pitch) - rest) > 0.12

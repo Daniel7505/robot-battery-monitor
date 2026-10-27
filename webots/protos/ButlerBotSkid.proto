@@ -496,7 +496,8 @@ Robot {
     # Left shoulder. Boom + box from Daniel's 2026-08-25 framing (DUMP_CAM,
     # VIEWPOINT COPY position 0.01042 0.41808 0.72919). Since 2026-10-01
     # NADIR_CAM_L sits in this box (front-bottom edge), see the Camera node.
-    # Boom and box are in SENSOR_VIS (same centres). Device stays here.
+    # The visual support runs from the deck into the box behind this lens.
+    # The camera pose is unchanged.
     DEF NADIR_CAM_L Camera {
       # Lens on the front-bottom edge of NADIR_BOX_L (box centre
       # 0.01042 0.41808 0.72919, 0.05 m cube): the box is behind/above the

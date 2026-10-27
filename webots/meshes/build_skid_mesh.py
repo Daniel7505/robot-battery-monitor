@@ -138,6 +138,17 @@ def quat_from_to(src, dst):
     return Vector(src).rotation_difference(Vector(dst))
 
 
+def add_strut(name, start, end, radius, col, mat, segments=12):
+    """Cylinder from start to end, extended 5 mm into each so the joint is solid."""
+    a = Vector(start)
+    b = Vector(end)
+    delta = b - a
+    length = delta.length
+    center = (a + b) * 0.5
+    quat = quat_from_to((0.0, 0.0, 1.0), delta)
+    return add_cyl(name, center, radius, length + 0.01, col, mat, quat=quat, segments=segments)
+
+
 def look_from_ypr(yaw=0.0, pitch=0.0):
     """Camera/radar default look is +X. Pitch about +Y sends it toward -Z."""
     forward = Vector((1.0, 0.0, 0.0))
@@ -236,13 +247,27 @@ def build():
                 segments=16,
             )
 
-    # Nadir booms and boxes, same centres and rotations as the PROTO.
-    boom_l = Quaternion((1.0, 0.0, 0.0), -0.767)
-    boom_r = Quaternion((1.0, 0.0, 0.0), 0.767)
-    add_cyl("nadir_boom_l", (0.00521, 0.26904, 0.57460), 0.012, 0.43, sensors, mat_mount, boom_l, 12)
-    add_cyl("nadir_boom_r", (0.00521, -0.26904, 0.57460), 0.012, 0.43, sensors, mat_mount, boom_r, 12)
+    # Nadir housings stay on the camera poses. The old shoulder booms ended
+    # at z ≈ 0.42, clear of the deck. Each support now runs from the deck
+    # rail into the box behind the lens. The lens still looks forward-down.
     add_box("nadir_box_l", (0.01042, 0.41808, 0.72919), (0.05, 0.05, 0.05), sensors, mat_mount)
     add_box("nadir_box_r", (0.01042, -0.41808, 0.72919), (0.05, 0.05, 0.05), sensors, mat_mount)
+    add_strut(
+        "nadir_strut_l",
+        (0.01, 0.10, 0.135),
+        (0.01042, 0.41808, 0.72919),
+        0.012,
+        sensors,
+        mat_mount,
+    )
+    add_strut(
+        "nadir_strut_r",
+        (0.01, -0.10, 0.135),
+        (0.01042, -0.41808, 0.72919),
+        0.012,
+        sensors,
+        mat_mount,
+    )
     for side, y in (("l", 0.41808), ("r", -0.41808)):
         look = look_from_ypr(0.0, 0.9411)
         origin = Vector((0.03542, y, 0.70419))
@@ -258,7 +283,8 @@ def build():
         )
 
     # Stereo mast from the deck up to the bar, then the bar and three lenses.
-    add_cyl("stereo_mast", (0.115, 0.0, 0.4625), 0.012, 0.635, sensors, mat_mount, segments=12)
+    # Bottom is 10 mm inside the deck (top z = 0.145) so the mast is seated.
+    add_cyl("stereo_mast", (0.115, 0.0, 0.460), 0.012, 0.650, sensors, mat_mount, segments=12)
     add_box("stereo_bar", (0.125, 0.0, 0.78), (0.04, 0.18, 0.045), sensors, mat_mount)
     add_box("oak_body", (0.145, 0.0, 0.785), (0.035, 0.06, 0.04), sensors, mat_mount)
     for name, y, pitch in (
@@ -283,7 +309,7 @@ def build():
     radar = Vector((0.16, 0.0, 0.45))
     down = look_from_ypr(0.0, 1.5708)
     add_box("radar_body", radar + Vector((0.0, 0.0, 0.018)), (0.04, 0.05, 0.028), sensors, mat_mount)
-    add_cyl("radar_pedestal", (0.145, 0.0, 0.312), 0.01, 0.334, sensors, mat_mount, segments=12)
+    add_cyl("radar_pedestal", (0.145, 0.0, 0.3075), 0.01, 0.345, sensors, mat_mount, segments=12)
     add_cyl(
         "radar_dish",
         radar + down * 0.01,
@@ -300,7 +326,7 @@ def build():
     rear_look = look_from_ypr(math.pi, 0.0)
     add_box("rear_body", (-0.125, 0.0, 0.28), (0.07, 0.06, 0.05), sensors, mat_mount)
     # Post is inboard of the rear lens, which looks along -X.
-    add_box("rear_post", (-0.10, 0.0, 0.21), (0.02, 0.02, 0.13), sensors, mat_mount)
+    add_box("rear_post", (-0.10, 0.0, 0.205), (0.02, 0.02, 0.14), sensors, mat_mount)
     add_cyl(
         "rear_lens",
         rear + rear_look * 0.008,
@@ -314,7 +340,7 @@ def build():
 
     # Floor camera looks straight down from z = 0.04. The pod hangs under the
     # deck and is not part of the deck collider.
-    add_cyl("floor_pod", (0.0, 0.0, 0.075), 0.028, 0.06, sensors, mat_mount, segments=16)
+    add_cyl("floor_pod", (0.0, 0.0, 0.0785), 0.028, 0.067, sensors, mat_mount, segments=16)
     floor_look = look_from_ypr(0.0, 1.5708)
     add_cyl(
         "floor_lens",
@@ -332,10 +358,11 @@ def build():
         origin = Vector(pos)
         if name in ("us_left", "us_right"):
             sign = 1.0 if pos[1] > 0.0 else -1.0
-            add_box(
+            add_strut(
                 f"{name}_rail",
-                (0.0, sign * 0.155, 0.125),
-                (0.02, 0.09, 0.018),
+                (0.0, sign * 0.08, 0.135),
+                (pos[0], pos[1] - sign * 0.018, pos[2]),
+                0.009,
                 sensors,
                 mat_mount,
             )
@@ -343,6 +370,11 @@ def build():
             # The device origin sits inside the tire cylinder. The visible
             # cap is the same x,y, just above the tread.
             cap = Vector((pos[0], pos[1], 0.178))
+            foot_x = math.copysign(0.06, pos[0])
+            foot_y = math.copysign(0.08, pos[1])
+            elbow = Vector((pos[0], foot_y, 0.195))
+            add_strut(f"{name}_up", (foot_x, foot_y, 0.135), elbow, 0.008, sensors, mat_mount)
+            add_strut(f"{name}_out", elbow, cap, 0.008, sensors, mat_mount)
             add_cyl(f"{name}_cap", cap, 0.016, 0.022, sensors, mat_mount, segments=16)
             add_cyl(
                 f"{name}_lens",
@@ -474,6 +506,7 @@ def measure(groups):
         ],
         "notes": [
             "No payload. The chassis is a flat deck. A 0.14 m square pocket, 2 mm deep, is empty mounting room for a later tray.",
+            "Nadir supports, the stereo mast, the radar pedestal, the rear post, and the side sonar rails all meet the deck. Camera device poses are unchanged.",
             "The pocket is aft of the stereo mast and in front of the rear camera, so it does not enter those views. Forward lenses sit above it. The floor lens looks down from under the deck.",
             "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
             "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",

@@ -37,6 +37,7 @@
   ],
   "notes": [
     "No payload. The chassis is a flat deck. A 0.14 m square pocket, 2 mm deep, is empty mounting room for a later tray.",
+    "Nadir supports, the stereo mast, the radar pedestal, the rear post, and the side sonar rails all meet the deck. Camera device poses are unchanged.",
     "The pocket is aft of the stereo mast and in front of the rear camera, so it does not enter those views. Forward lenses sit above it. The floor lens looks down from under the deck.",
     "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
     "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",

@@ -433,23 +433,24 @@ The physics check below is this narrowed body, headless, Webots R2025a, fast, no
 
 The door scenario on this body crosses the lower shared-wall opening and stays. Heading is +0.15°, position error is 0.041 m, final pose is (1.31, 2.50), minimum x is 0.36 m, and the wall-press time is 0. The run is 90 s with `done` set. That opening is the west-hallway door, not letter G. One sweep at 86.3 s refused a footprint that would clip; it was already through the door.
 
-The eight seeds below are the earlier skid body, not this flat deck and not this narrowed body. They were not re-run. They use the apartment, carpet ramp included, on the current mapper. They are a different robot from the `828e01d` tables. Every run slaved the front hubs, reached the 600 s cap, and exited 0. Lip-stall time is the sum of episodes of at least 0.5 s where true speed stayed under 0.05 m/s inside the walkway box or the letter-G box and no tire was on a wall. Airborne time is the sum of episodes of at least 0.3 s in those boxes where a hub centre was above 0.086 m and speed stayed under 0.08 m/s. The same cut was applied to the `828e01d` logs.
+The eight seeds below are this narrowed body at `383e22a` (frozen-turn fix included), same spawns as the `828e01d` caster baseline. The caster logs were not re-run. Every skid run slaved the front hubs, reached 600 s, and exited 0.
 
 | | Stock | +0.40 | −0.35 | East | West | SW | North | South |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| End heading, skid | −62.10° | −9.07° | −2.93° | +12.85° | +4.65° | +3.03° | −8.67° | −0.05° |
-| End heading, `828e01d` | −0.21° | +2.53° | −2.35° | +2.63° | +5.08° | +12.12° | +4.44° | −18.78° |
-| End position, skid | 3.76 m | 0.27 m | 0.65 m | 0.67 m | 1.48 m | 0.47 m | 1.25 m | 0.04 m |
-| End position, `828e01d` | 0.77 m | 0.42 m | 0.44 m | 0.53 m | 0.78 m | 2.06 m | 0.91 m | 1.00 m |
-| Longest wall press, skid | 2.26 s | 2.68 s | 0.29 s | 4.95 s | 11.70 s | 0.92 s | 3.97 s | 0.58 s |
-| Longest wall press, `828e01d` | 2.74 s | 0 | 1.71 s | 0 | 0 | 3.20 s | 0 | 0 |
-| Wall-contact rows, skid | 2017 | 705 | 76 | 461 | 2632 | 301 | 977 | 74 |
-| Lip stall, skid | 27.5 s | 3.8 s | 49.9 s | 54.1 s | 42.7 s | 4.0 s | 47.2 s | 0 |
-| Lip stall, `828e01d` | 75.4 s | 0 | 41.9 s | 9.3 s | 33.8 s | 44.7 s | 6.5 s | 4.9 s |
-| Airborne at the lip, skid | 21.3 s | 6.7 s | 38.8 s | 39.7 s | 30.5 s | 0 | 52.4 s | 0 |
-| Airborne at the lip, `828e01d` | 29.7 s | 0 | 25.6 s | 11.1 s | 31.0 s | 73.5 s | 3.1 s | 2.7 s |
+| End heading, skid | −0.50° | +0.63° | +2.27° | +10.43° | +12.94° | −4.20° | +8.39° | −15.89° |
+| End heading, caster | −0.21° | +2.53° | −2.35° | +2.63° | +5.08° | +12.12° | +4.44° | −18.78° |
+| End position, skid | 0.27 m | 0.02 m | 0.62 m | 1.40 m | 0.38 m | 0.44 m | 1.32 m | 0.19 m |
+| End position, caster | 0.77 m | 0.42 m | 0.44 m | 0.53 m | 0.78 m | 2.06 m | 0.91 m | 1.00 m |
+| Longest wall press, skid | 0 | 1.26 s | 0 | 0.10 s | 0 | 1.32 s | 0 | 0.01 s |
+| Longest wall press, caster | 2.74 s | 0 | 1.71 s | 0 | 0 | 3.20 s | 0 | 0 |
+| Bedroom, skid | yes | yes | yes | no | yes | yes | yes | no |
+| Bedroom, caster | yes | no | yes | yes | yes | yes | yes | yes |
+| Coverage, skid | 94.4% | 97.4% | 96.3% | 93.8% | 92.7% | 95.0% | 65.0% | 74.6% |
+| Coverage, caster | 80.0% | 92.2% | 94.0% | 91.4% | 90.9% | 91.9% | 97.2% | 96.7% |
 
-South finishes at −0.05° and 0.04 m, on the carpet at (0.74, 6.51), with no lip stall and no airborne episode. SW's heading comes in from +12.12° to +3.03° and its position error from 2.06 m to 0.47 m. Its walkway press drops from 3.20 s to 0.92 s, and the airborne time at the lips drops from 73.5 s to 0. The +0.40 seed now enters the bedroom. Its end position is 0.27 m. Stock is the failure: heading is −0.9° at 60 s, −27° at 180 s, and −62° at 360 s, and the end position error is 3.76 m. West does not enter the bedroom. It holds the east face beside letter G for 11.70 s (t = 89–101 s, x 3.93–3.97 m, y 4.81–4.89 m) and logs 2632 wall-contact rows. East's longest press is 4.95 s on that same face, and north's is 3.97 s at the walkway (t = 151–155 s, x 1.51 m, y 4.56–4.58 m). Seven of the eight bodies entered the bedroom. The "floor slip" line is almost absent (2 on +0.40, 1 on north, 0 on the rest). The mapper records those moments as "floor still" instead: 65, 45, 86, 66, 50, 69, 55, and 3, with 16, 9, 31, 26, 19, 22, 25, and 1 still-backups. South is the only seed with a single still-backup.
+Averages: skid mean absolute heading 6.9°, position error 0.58 m, longest press 0.34 s, coverage 88.7%, bedroom 6/8. Caster: 6.0°, 0.86 m, 0.96 s, 91.8%, bedroom 7/8.
+
+The skid finishes closer and presses less, and the old stock heading blow-up is gone. North and south look broken: north covers 65% of the floor, and south never enters the bedroom, ends at −15.89°, and covers 74.6%. East also stays out of the bedroom (1.40 m, +10.43°).
 
 Borrowed methods, implemented here (not copied from another repo): frontier cells are free cells next to unknown space (Yamauchi, *A Frontier-Based Approach for Autonomous Exploration*, IEEE CIRA 1997); the grid is log-odds (Moravec and Elfes, *High Resolution Maps from Wide Angle Sonar*, ICRA 1985; Thrun, Burgard, and Fox, *Probabilistic Robotics*, ch. 9); the drive is pure pursuit (Coulter, *Implementation of the Pure Pursuit Path Tracking Algorithm*, CMU-RI-TR-92-01, 1992). Depth noise matches a Webots `RangeFinder` fraction of max range: 0.002 × 8 m = 1.6 cm. Wheel angles are quantized to 0.0015 rad in the mapper only. The warehouse sensors and the warehouse worlds are unchanged.
 

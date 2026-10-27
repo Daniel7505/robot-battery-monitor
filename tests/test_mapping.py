@@ -758,6 +758,47 @@ def test_a_still_floor_freezes_translation_while_the_view_turns():
     assert abs(bot.pose()[2]) > 0.015
 
 
+def test_a_real_spin_is_not_stuck_when_the_floor_picture_stays():
+    """The survey rotates about the downward camera, so that picture barely translates.
+
+    Treating the match as a stall aborted the spin at 0.8 s on every seed.
+    The gyro is turning, so the shell is not stuck.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    floor = 40.0 + noise * (3.2 / float(np.std(noise)))
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "spin"
+    bot._spin_start = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    yaw = 0.0
+    dt = 0.05
+    rate = 0.70
+    for _ in range(24):
+        yaw += rate * dt
+        left -= rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        right += rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    assert bot.phase == "spin"
+    assert abs(bot.pose()[2]) > 0.4
+
+
 def test_a_moving_floor_is_not_a_zero_velocity_update():
     """The floor picture shifting is the body moving. Yaw and travel stay."""
     from src.mapping.explore import Explorer

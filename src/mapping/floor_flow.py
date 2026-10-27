@@ -232,14 +232,13 @@ class ShortFloorTrack:
             self._wheel = 0.0
             self._age = 0.0
             return "moving"
-        # Same buffer twice, before the texture could have slid. The camera
-        # has not produced a new frame yet. Keep the earlier baseline.
-        if (
-            step_dt > 0.0
-            and quality >= 0.95
-            and closed_wheel < _STEP_WHEEL_M
-            and closed_age < 0.10
-        ):
+        # Closed because the clock ran out, not because the hubs claimed
+        # enough ground for a real slide. A few millimetres is under two
+        # pixels, so a match is not evidence the shell is stuck.
+        if step_dt > 0.0 and closed_wheel < _STEP_WHEEL_M:
+            self._base = np.array(gray, copy=True)
+            self._wheel = 0.0
+            self._age = 0.0
             return "pending"
         if quality < _STILL_QUALITY:
             self._base = np.array(gray, copy=True)

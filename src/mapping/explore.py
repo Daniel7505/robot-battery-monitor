@@ -806,6 +806,14 @@ class Explorer:
             return
         if not self._floor_track.confident_still() or age < 0.40:
             return
+        # A real spin barely translates the downward image, so the floor
+        # peak sits near zero while the gyro is turning. That is not a
+        # stuck shell, and aborting it here cancelled the survey.
+        yaw_moved = abs(self.odometry.yaw_unwrapped_rad - float(anchor["yaw"]))
+        if self.phase == "spin" and yaw_moved >= 0.12:
+            self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            self._floor_track.reset()
+            return
         depth_ok = False
         if depth is not None and anchor.get("depth") is not None:
             depth_ok = _picture_still(anchor["depth"], depth, limit=0.045, min_std=0.0)

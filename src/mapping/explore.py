@@ -99,6 +99,10 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
+# No new reachable free cell on this robot's own grid. Longer than a
+# doorway align, shorter than the multi-minute sits. Not an apartment
+# area and not a ground-truth floor count.
+_STALE_FLOOR_S = 25.0
 
 
 class Explorer:
@@ -202,6 +206,14 @@ class Explorer:
         self._commit_until = -1.0
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
+        # High-water mark of free cells reachable on this grid. Growth
+        # clears a stall. The count is not compared to a known floor area.
+        self._floor_check_at = -1.0
+        self._reachable_free = -1
+        self._reachable_grew_at = -1.0
+        self._floor_stale = False
+        self._stale_acted_at = -1.0e9
+        self._skip_goal: tuple[float, float] | None = None
         self._blocked_since: float | None = None
         self.room_labels = None
         self.room_names: dict[int, str] = {}
@@ -574,6 +586,7 @@ class Explorer:
                 self._progress_t = self.t_s
         else:
             self._opening_since = None
+        self._watch_floor()
         if (
             self._script is None
             and self.phase == "go"
@@ -1183,6 +1196,91 @@ class Explorer:
             return "yaw"
         return ""
 
+    def _dead_zone_open(self) -> bool:
+        """A stopped sweep still has a live path.
+
+        The creep gate wants more than 0.38 m of bubble, and a tail
+        between 0.10 m and 0.12 m neither reverses nor drives off. A
+        flat wall at long range is left alone until this robot's own
+        map has stopped gaining reachable floor. Nothing here is a
+        ground-truth measurement.
+        """
+        if self._view_blind:
+            return False
+        bubble = 0.0 if self._bubble_gap is None else float(self._bubble_gap)
+        if bubble < 0.20:
+            return False
+        if self._floor_stale:
+            return True
+        nose, left, right = self._last_clear
+        nearer = min(left, right)
+        further = max(left, right)
+        flat = nearer < 20.0 and abs(nose - nearer) < 0.18 and abs(further - nearer) < 0.35
+        open_ahead = nearer >= 20.0 or nose > nearer + 0.18
+        if (not flat) and nose > 0.55 and open_ahead and bubble <= 0.38:
+            return True
+        tight = self._tight_face()
+        return tight is not None and tight[0] == "rear" and 0.10 <= tight[1] < 0.12
+
+    def _reachable_free_cells(self) -> int:
+        """Free cells this grid can reach from the robot, by flood fill.
+
+        The high-water mark is how much floor this robot has observed.
+        It is not the apartment's floor area.
+        """
+        labels = self.grid.labels()
+        cell = self.grid.cell_of(self.odometry.x_m, self.odometry.y_m)
+        if cell is None or int(labels[cell]) != 0:
+            return 0
+        free = labels == 0
+        seen = np.zeros(free.shape, dtype=bool)
+        stack = [cell]
+        seen[cell] = True
+        count = 0
+        height, width = free.shape
+        while stack:
+            row, col = stack.pop()
+            count += 1
+            for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nxt_row = row + d_row
+                nxt_col = col + d_col
+                if nxt_row < 0 or nxt_col < 0 or nxt_row >= height or nxt_col >= width:
+                    continue
+                if seen[nxt_row, nxt_col] or not free[nxt_row, nxt_col]:
+                    continue
+                seen[nxt_row, nxt_col] = True
+                stack.append((nxt_row, nxt_col))
+        return count
+
+    def _watch_floor(self) -> None:
+        """Clear bans when this map has gained no reachable floor."""
+        if self.t_s < self._floor_check_at:
+            return
+        self._floor_check_at = self.t_s + 1.0
+        count = self._reachable_free_cells()
+        if count > self._reachable_free:
+            self._reachable_free = count
+            self._reachable_grew_at = self.t_s
+            self._floor_stale = False
+            return
+        if self._reachable_grew_at < 0.0:
+            self._reachable_grew_at = self.t_s
+            self._reachable_free = count
+            return
+        if self.t_s - self._reachable_grew_at < _STALE_FLOOR_S:
+            self._floor_stale = False
+            return
+        self._floor_stale = True
+        if self.t_s < self._stale_acted_at + _STALE_FLOOR_S:
+            return
+        self._stale_acted_at = self.t_s
+        self._skip_goal = self.goal_xy
+        self._banned.clear()
+        self.goal_xy = None
+        self.path_xy = []
+        self._replan_at = self.t_s
+        self._log("no new reachable floor, clearing bans")
+
     def _map_gap_heading(self) -> float | None:
         """Yaw rate toward a short smeared threshold with free space beyond.
 
@@ -1613,6 +1711,13 @@ class Explorer:
                 if self.t_s >= self._sweep_log_at:
                     self._log(f"opening {relief}, live gap ahead of the sweep")
                     self._sweep_log_at = self.t_s + 0.5
+            elif self._dead_zone_open():
+                # The creep gate, the tail band, or a stalled map left no
+                # command. Live range still shows air ahead.
+                v2, w2, kind = self._opening_command("creep")
+                if self.t_s >= self._sweep_log_at:
+                    self._log("stall creep, live air ahead of the sweep")
+                    self._sweep_log_at = self.t_s + 0.5
         self.sweep_checks += 1
         if kind != "clear":
             self.sweep_rejected += 1
@@ -1684,6 +1789,15 @@ class Explorer:
             self._no_frontier()
             return
         banned = self._ban_set()
+        skip = self._skip_goal
+        self._skip_goal = None
+        if skip is not None:
+            cell = self.grid.cell_of(skip[0], skip[1])
+            if cell is not None:
+                for dy in range(-3, 4):
+                    for dx in range(-3, 4):
+                        if dy * dy + dx * dx <= 9:
+                            banned.add((cell[0] + dy, cell[1] + dx))
         prefer = self._forward_preference()
         heading_xy = (math.cos(yaw), math.sin(yaw))
         rooms = segment_map(self.grid.labels(), self.grid.res)
@@ -1699,6 +1813,17 @@ class Explorer:
             rooms=rooms,
             heading_xy=heading_xy,
         )
+        if chosen is None and skip is not None:
+            # The frontier we just left was the only one. Allow it.
+            chosen = select_goal(
+                self.grid,
+                (x, y),
+                radius_m=ROBOT_RADIUS_M,
+                banned=self._ban_set(),
+                prefer_xy=prefer,
+                rooms=rooms,
+                heading_xy=heading_xy,
+            )
         if chosen is None and self._banned:
             self._log("no goal under bans, clearing them")
             self._banned.clear()

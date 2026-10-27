@@ -99,11 +99,10 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
-# Tail gap that is too close to reverse into. The forward escape uses
-# the same limit. Stopping that escape at 0.10 m left the band between
-# the two commanding zero wheels: recovery cleared the reverse, the
-# escape did not run, and the occupancy sweep had already rejected the
-# planned arc. The shell then sat still with an open nose.
+# Recovery will not reverse when the tail gap is inside this. The
+# hard-press escape (_leave_rear) only drives forward under 0.10 m.
+# The band between the two used to command zero wheels: the sweep had
+# already rejected the plan, and neither escape ran.
 _REAR_WALL_M = 0.12
 
 
@@ -208,6 +207,9 @@ class Explorer:
         self._commit_until = -1.0
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
+        # Short forward creep after a stall whose tail is too close to
+        # reverse into and not close enough for the hard-press escape.
+        self._tail_creep_until = -1.0
         self._blocked_since: float | None = None
         self.room_labels = None
         self.room_names: dict[int, str] = {}
@@ -1116,10 +1118,14 @@ class Explorer:
         tight = self._tight_face()
         if tight is not None and tight[0] == "rear" and tight[1] < _REAR_WALL_M:
             # The tail is on the wall. A reverse drives further in.
-            # _leave_rear covers this same gap, so the next command
-            # drives off the wall instead of stopping.
+            # Under 0.10 m, _leave_rear drives off every step. Between
+            # that and this limit the sweep was already stopping the
+            # plan, so creep forward once when the nose still has air.
             self._reverse_left_m = 0.0
             self._reverse_needs_gap = False
+            forward = None if self._bubble_view is None else self._bubble_view.forward
+            if tight[1] >= 0.10 and forward is not None and forward >= 0.20:
+                self._tail_creep_until = self.t_s + 0.8
         else:
             self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.08, reason="backup")
         self._recover_until = self.t_s + 0.8
@@ -1348,10 +1354,11 @@ class Explorer:
         The pivot backup always reversed. With the nose in an open room
         and the rear sonar on the shared wall, that command held the
         tires on the wall for minutes and the encoders walked the pose.
-        The cutoff is the same gap recovery refuses to reverse into.
+        A lighter tail gap is a one-shot creep from recovery, not this
+        override, so a doorway align is not taken over.
         """
         tight = self._tight_face()
-        if tight is None or tight[0] != "rear" or tight[1] >= _REAR_WALL_M:
+        if tight is None or tight[0] != "rear" or tight[1] >= 0.10:
             return None
         self._reverse_left_m = 0.0
         self._reverse_needs_gap = False
@@ -1394,6 +1401,8 @@ class Explorer:
         leaving = self._leave_rear()
         if leaving is not None:
             return leaving
+        if self.t_s <= self._tail_creep_until:
+            return wheel_speeds(0.12, 0.0)
         if self._side_escape_sign != 0.0 and self.t_s <= self._side_escape_until:
             # Yaw away from the jamb while reversing. A straight reverse
             # stays on a frame that is beside the shell.

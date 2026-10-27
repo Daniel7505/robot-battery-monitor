@@ -1293,6 +1293,40 @@ def test_a_bubble_under_the_creep_gate_still_moves_when_the_sweep_stops():
     assert not wall._dead_zone_open()
 
 
+def test_an_open_bubble_creeps_before_the_stall_timer():
+    """Stock sat 12 s on a flat picture whose bubble was about 0.35 m.
+
+    That is under the 0.38 m creep gate, so only the 25 s stall would
+    have moved it. Four seconds of zero command is enough. A close
+    shoulder stays stopped: that is the corner press.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot._view_blind = False
+    bot._bubble_gap = 0.36
+    bot._last_clear = (0.57, 0.54, 0.60)
+    bot._zero_since = 10.0
+    bot.t_s = 13.0
+    assert bot._remember((0.0, 0.0)) == (0.0, 0.0)
+    bot.t_s = 14.1
+    left, right = bot._remember((0.0, 0.0))
+    assert left > 0.2 and right > 0.2
+    assert abs(left - right) < 0.05
+
+    close = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    close._view_blind = False
+    close._bubble_gap = 0.60
+    close._last_clear = (0.80, 0.10, 0.80)
+    close._zero_since = 0.0
+    close.t_s = 6.0
+    assert close._remember((0.0, 0.0)) == (0.0, 0.0)
+    close._commanded = (2.8, 3.4)
+    assert close._scrub_wait_s() == 0.35
+    close._commanded = (-1.1, 3.5)
+    assert close._scrub_wait_s() == 0.70
+
+
 def test_no_new_reachable_floor_clears_the_blacklist():
     """The stall uses this grid only. A disconnected free cell does not count."""
     from src.mapping.explore import Explorer

@@ -159,6 +159,7 @@ def test_referee_from_the_world_tag():
     assert r.exit_name(30.0, 0.0) is None
 
 
+@pytest.mark.slow
 def test_closed_loop_dock_shuttle():
     d = json.loads(TRACK.read_text(encoding="utf-8"))
     m = next(m for m in d["missions"] if m["name"] == "dock_shuttle")

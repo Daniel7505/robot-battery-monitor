@@ -18,6 +18,10 @@ Most tests are pure Python. Tests that need the test database
   rest still run, so a newcomer can run the suite without a database.
 * ``RBM_REQUIRE_DB=1`` (set in CI) or ``CI=true`` -> a missing database is a
   hard error instead of a skip, so CI can never go green by skipping.
+
+``pytest.ini`` sets ``--dist loadgroup``. With ``-n``, every ``db`` test is
+pinned to one worker (``xdist_group``) because they share one database and
+truncate it.
 """
 import os
 
@@ -42,11 +46,19 @@ def _db_required() -> bool:
     return False
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark every test that uses ``clean_database`` as a ``db`` test."""
+    """Auto-mark every test that uses ``clean_database`` as a ``db`` test.
+
+    ``tryfirst`` so ``xdist_group`` is set before pytest-xdist copies the
+    group name onto the node id (that is what keeps these tests on one
+    worker under ``--dist loadgroup``).
+    """
     for item in items:
         if "clean_database" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.db)
+        if item.get_closest_marker("db"):
+            item.add_marker(pytest.mark.xdist_group("db"))
 
 
 @pytest.fixture(scope="session", autouse=True)

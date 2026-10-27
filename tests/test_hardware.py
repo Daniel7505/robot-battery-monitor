@@ -25,6 +25,7 @@ def test_validate_reading_works():
     assert source.validate_reading("Legs", 80, 999) is False
 
 
+@pytest.mark.slow
 def test_simulator_can_start():
     source = SimulatorSource()
     source.start()

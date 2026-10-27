@@ -89,6 +89,7 @@ def test_finish_referee_comes_from_the_loaded_world(tmp_path, world, expect):
     assert "WARNING finish referee" not in text
 
 
+@pytest.mark.slow
 def test_controller_obstacles_on_sees_box_and_slows(tmp_path):
     """RBM_OBSTACLES=1: stereo cams bound from the live (fake supervisor) pose, a box 1.0 m
     ahead in the fake stereo images -> confirmed -> SLOW_FOR_OBSTACLE, CSV columns filled."""
@@ -140,6 +141,7 @@ def test_speed_trace_console_flag_prints_rows(tmp_path):
     assert "wL_cmd=" in text and "v_body=" in text
 
 
+@pytest.mark.slow
 def test_obstacles_world_tag_turns_sensing_on(tmp_path):
     text = _run(tmp_path, None, "butlerbot_warehouse_obstacles.wbt")
     assert "OBSTACLES on (world tag '# OBSTACLES on' in butlerbot_warehouse_obstacles.wbt" in text, text

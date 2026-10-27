@@ -206,8 +206,6 @@ class Explorer:
         self._commit_until = -1.0
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
-        self._zero_since: float | None = None
-        self._early_replan_at = -1.0
         # Free cells this robot has already reached on its own grid.
         # A stall is no new cell, not a smaller connected component and
         # not a comparison with the apartment's floor area.
@@ -663,60 +661,10 @@ class Explorer:
             return self._go(False, 99.0)
         return wheel_speeds(0.0, SPIN_RAD_S)
 
-    def _scrub_wait_s(self) -> float:
-        """How long a still floor may last before the reverse.
-
-        Both hubs driving forward while the floor picture stays put is
-        the tire on a corner the forward beams miss. 0.35 s ends that
-        before a half-second press. A spin keeps the longer wait.
-        """
-        left, right = self._commanded
-        if left > 0.4 and right > 0.4:
-            return 0.35
-        return 0.70
-
-    def _open_bubble_creep(self) -> tuple[float, float] | None:
-        """Move when a stop already has clear air, without the 25 s stall.
-
-        The flat-wall gate refuses a creep at a bubble of about 0.35 m,
-        and the stall timer then waits 25 s. Four seconds of zero
-        command with that much air is enough to roll. A close shoulder
-        is not this case: that swing is the corner press.
-        """
-        if self._zero_since is None or self.t_s - self._zero_since < 4.0:
-            return None
-        if self._view_blind:
-            return None
-        bubble = 0.0 if self._bubble_gap is None else float(self._bubble_gap)
-        if bubble < 0.32:
-            return None
-        _nose, left, right = self._last_clear
-        if min(left, right) < 0.22:
-            return None
-        if self.goal_xy is not None and self.t_s >= self._early_replan_at:
-            self._skip_goal = self.goal_xy
-            self.goal_xy = None
-            self.path_xy = []
-            self._replan_at = self.t_s
-            self._early_replan_at = self.t_s + 4.0
-        if self.t_s >= self._escape_log_at:
-            self._log("open bubble, creeping before the stall timer")
-            self._escape_log_at = self.t_s + 1.0
-        return wheel_speeds(DOOR_SPEED_M_S, 0.0)
-
     def _remember(self, speeds: tuple[float, float]) -> tuple[float, float]:
-        left, right = float(speeds[0]), float(speeds[1])
-        if abs(left) < 0.05 and abs(right) < 0.05:
-            if self._zero_since is None:
-                self._zero_since = self.t_s
-            creep = self._open_bubble_creep()
-            if creep is not None:
-                left, right = creep
-        else:
-            self._zero_since = None
-        self._commanded = (left, right)
+        self._commanded = (float(speeds[0]), float(speeds[1]))
         self._mark_xy = self.odometry.pose()[:2]
-        return left, right
+        return speeds
 
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
         """A translation command the hubs did not follow. A spin in place is not a stall.
@@ -965,15 +913,14 @@ class Explorer:
             self._log("spin did not turn the shell")
         elif (
             self.phase == "go"
-            and age >= self._scrub_wait_s()
+            and age >= 0.70
             and commanding
             and not anchor["backed"]
             and self.t_s >= self._reverse_until
         ):
             # A press the side sonar never sees: the nose looks through
-            # the opening while the tires scrub. A forward scrub backs
-            # off sooner. The south seed's front tire sat on a corner
-            # for 0.67 s, which is this wait. The goal stays.
+            # the opening while the tires scrub. Back off before the
+            # contact has lasted two seconds. The goal stays.
             anchor["backed"] = True
             reason = "wheels lifted" if pitched else "still"
             self._arm_reverse(

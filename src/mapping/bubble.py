@@ -21,12 +21,11 @@ from dataclasses import dataclass
 
 from src.obstacle_gate import stop_distance_m
 
-# Caster centres sit at x = ±0.11 m with a 0.04 m sphere, so the shell
-# reaches about 0.15 m. The front sensor is mounted just ahead of that.
-SHELL_NOSE_M = 0.17
-SHELL_TAIL_M = 0.16
-# Hubs at ±0.17 m, tire 0.05 m wide.
-SHELL_HALF_M = 0.195
+# Tire faces reach |x| = 0.19 m. Side-sonar faces reach |y| = 0.227 m.
+# The sweep adds FOOTPRINT_MARGIN_M outside this outline.
+SHELL_NOSE_M = 0.19
+SHELL_TAIL_M = 0.19
+SHELL_HALF_M = 0.227
 _CORNER_M = math.hypot(max(SHELL_NOSE_M, SHELL_TAIL_M), SHELL_HALF_M)
 # Air past the tire that a spin in place needs.
 PIVOT_CLEARANCE_M = _CORNER_M - SHELL_HALF_M

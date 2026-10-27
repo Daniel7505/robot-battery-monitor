@@ -52,6 +52,11 @@ from src.mapping.scripted import BodyScript, drive_mode
 from src.mapping.slip import MotionCheck
 from src.mapping.wall_line import wall_yaw_delta
 
+# WheelGyroOdometry treats a rate under this as the lookup offset, not a
+# turn. A pure pivot sits above it. The floor camera is on the spin axis,
+# so that picture stays still and must not freeze the gyro.
+_GYRO_REST_RAD_S = 0.02
+
 def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
     """True when two frames are the same picture, not a shifted one.
 
@@ -352,7 +357,11 @@ class Explorer:
         # While the cameras still agree the shell is sitting, do not
         # integrate this step. The latch is refreshed only when a new
         # picture says the same thing.
-        held_yaw = self.t_s < self._zupt_until
+        # A real gyro rate is a turn even when the floor image is still.
+        # Holding yaw there rewound every sample, so the heading never
+        # reached the release and the turn stayed frozen.
+        gyro_turning = abs(float(yaw_rate_rad_s)) >= _GYRO_REST_RAD_S
+        held_yaw = self.t_s < self._zupt_until and not gyro_turning
         held_trans = held_yaw or self.t_s < self._zupt_trans_until
         self.odometry.update(
             left_wheel_rad,
@@ -779,10 +788,13 @@ class Explorer:
         anchor from a fifth of a second ago wraps: 32 px is about 3.9 cm,
         and one period comes back as a still picture, which reversed a
         real 0.12 m/s doorway crossing. The stall is a run of short steps,
-        each about 1.2 cm, all matching. Depth and the forward view used
+        each about 1.2 cm, all matching.         Depth and the forward view used
         to have to agree before a still floor counted, and a yaw against
         the jamb changed those pictures while the pile under the shell did
-        not. Yaw is frozen only when those pictures agree too.
+        not. Yaw is frozen only when those pictures agree too, and only
+        while the gyro is inside its rest gate. A pure pivot leaves the
+        floor image still. The gyro keeps that turn, and only translation
+        is put back on the anchor.
         The hubs may be spinning the whole time.
         """
         if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch)) < 0.15:
@@ -848,15 +860,18 @@ class Explorer:
         # after the shell started moving deleted a real turn.
         self._zupt_trans_until = self.t_s + 0.12
         # A real turn keeps the gyro. The still picture is the axis of
-        # that turn, not evidence the heading was wrong.
-        if pictures and yaw_moved < 0.12:
+        # that turn, not evidence the heading was wrong. Rewinding while
+        # the rate stayed above the rest gate held fused yaw near the
+        # anchor for the whole pivot.
+        turning = abs(float(yaw_rate)) >= _GYRO_REST_RAD_S
+        if pictures and yaw_moved < 0.12 and not turning:
             self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
             self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
             self._zupt_until = self.t_s + 0.12
         if not anchor["logged"]:
             anchor["logged"] = True
             self.zupt_events += 1
-            if pictures:
+            if pictures and not turning:
                 self.odometry.observe_rest(float(yaw_rate), self._step_dt)
                 self._log("zero velocity, depth floor and vision still, translation and yaw frozen")
             else:

@@ -149,6 +149,54 @@ def _hold_upper(robot) -> None:
             continue
 
 
+class _Drive:
+    """Rear hubs, plus a front axle when the skid-steer proto is in the world.
+
+    The baseline robot has no front_left_wheel device. Looking the name up
+    only after the device list says it exists keeps that robot's startup
+    quiet. Both motors on a side get the same command.
+    """
+
+    def __init__(self, robot) -> None:
+        names: set[str] = set()
+        try:
+            count = int(robot.getNumberOfDevices())
+        except Exception:
+            count = 0
+        for index in range(count):
+            device = robot.getDeviceByIndex(index)
+            if device is None:
+                continue
+            try:
+                names.add(str(device.getName()))
+            except Exception:
+                continue
+        self.left = robot.getDevice("left_wheel")
+        self.right = robot.getDevice("right_wheel")
+        self._extra: list[tuple[str, object]] = []
+        for name, side in (("front_left_wheel", "left"), ("front_right_wheel", "right")):
+            if count > 0 and name not in names:
+                continue
+            try:
+                motor = robot.getDevice(name)
+            except Exception:
+                continue
+            if motor is None:
+                continue
+            self._extra.append((side, motor))
+        for motor in (self.left, self.right, *(item[1] for item in self._extra)):
+            motor.setPosition(float("inf"))
+            motor.setVelocity(0.0)
+        if self._extra:
+            print("MAPPING front hubs slaved")
+
+    def set(self, left: float, right: float) -> None:
+        self.left.setVelocity(left)
+        self.right.setVelocity(right)
+        for side, motor in self._extra:
+            motor.setVelocity(left if side == "left" else right)
+
+
 def _finish(folder: str, now: float) -> None:
     try:
         with open(os.path.join(folder, "mapping_done"), "w", encoding="utf-8") as handle:
@@ -157,7 +205,7 @@ def _finish(folder: str, now: float) -> None:
         pass
 
 
-def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: float) -> None:
+def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: float, hubs: _Drive) -> None:
     """Drive straight on open floor. Used to measure wheel contact and slip.
 
     Both hubs get the same speed. The pose logger records true speed and
@@ -166,8 +214,6 @@ def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: 
     from src.mapping.body import FLOOR_CAM, WHEEL_RADIUS_M
     from src.mapping.floor_flow import FloorFlow
 
-    left_motor = robot.getDevice("left_wheel")
-    right_motor = robot.getDevice("right_wheel")
     left_enc = robot.getDevice("left_wheel_sensor")
     right_enc = robot.getDevice("right_wheel_sensor")
     gyro = robot.getDevice("oak_gyro")
@@ -195,8 +241,7 @@ def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: 
             pass
         driving = 0.4 <= now <= 0.4 + float(seconds)
         cmd = omega if driving else 0.0
-        left_motor.setVelocity(cmd)
-        right_motor.setVelocity(cmd)
+        hubs.set(cmd, cmd)
         log.write_wheels(now, float(left_enc.getValue()), float(right_enc.getValue()), cmd, cmd)
         if driving and floor is not None and dt > 0.0 and int(now * 8) != int((now - dt) * 8):
             image = _camera_gray(floor, FLOOR_CAM.width, FLOOR_CAM.height)
@@ -218,8 +263,7 @@ def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: 
             except OSError:
                 pass
             _finish(folder, now)
-            left_motor.setVelocity(0.0)
-            right_motor.setVelocity(0.0)
+            hubs.set(0.0, 0.0)
             log.close()
             return
 
@@ -228,11 +272,7 @@ def main() -> None:
     robot = Robot()
     timestep = int(robot.getBasicTimeStep())
     dt = timestep / 1000.0
-    left_motor = robot.getDevice("left_wheel")
-    right_motor = robot.getDevice("right_wheel")
-    for motor in (left_motor, right_motor):
-        motor.setPosition(float("inf"))
-        motor.setVelocity(0.0)
+    hubs = _Drive(robot)
     _hold_upper(robot)
     left_enc = robot.getDevice("left_wheel_sensor")
     right_enc = robot.getDevice("right_wheel_sensor")
@@ -277,7 +317,7 @@ def main() -> None:
     print(f"MAPPING run folder: {folder}")
     straight_s = _env_float("RBM_STRAIGHT_S")
     if straight_s is not None and straight_s > 0.0:
-        _straight_probe(robot, timestep, log, folder, straight_s)
+        _straight_probe(robot, timestep, log, folder, straight_s, hubs)
         return
     print(f"MAPPING depth {width}x{height} stride {explorer.stride} period {_DEPTH_PERIOD_S:.3f}s")
     next_depth = _DEPTH_PERIOD_S
@@ -305,8 +345,7 @@ def main() -> None:
                     yaw_rate,
                     dt,
                 )
-                left_motor.setVelocity(0.0)
-                right_motor.setVelocity(0.0)
+                hubs.set(0.0, 0.0)
                 log.write_wheels(now, float(left_enc.getValue()), float(right_enc.getValue()), 0.0, 0.0)
                 x, y, yaw = explorer.pose()
                 log.write_pose(now, x, y, yaw)
@@ -365,8 +404,7 @@ def main() -> None:
                 rear_depth=rear_image,
                 rear_rgb=rear_color,
             )
-            left_motor.setVelocity(left_cmd)
-            right_motor.setVelocity(right_cmd)
+            hubs.set(left_cmd, right_cmd)
             log.write_wheels(
                 now,
                 float(left_enc.getValue()),
@@ -424,8 +462,7 @@ def main() -> None:
                 )
                 next_note = now + 2.0
             if explorer.done:
-                left_motor.setVelocity(0.0)
-                right_motor.setVelocity(0.0)
+                hubs.set(0.0, 0.0)
     except Exception:
         traceback.print_exc()
     finally:

@@ -389,6 +389,11 @@ class Explorer:
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
+                if self._fusion.last_slip == "floor":
+                    # The picture already matched. Waiting for the pose
+                    # anchor to age another 0.7 s held the caster on the
+                    # walkway lip until the press was past two seconds.
+                    self._floor_stall_backoff()
         self._watch_pin(depth, ds, rear_depth)
         self._watch_zupt(
             depth,
@@ -806,11 +811,12 @@ class Explorer:
             return
         if not self._floor_track.confident_still() or age < 0.40:
             return
-        # A real spin barely translates the downward image, so the floor
-        # peak sits near zero while the gyro is turning. That is not a
-        # stuck shell, and aborting it here cancelled the survey.
+        # The downward camera sits on the spin axis, so a real turn
+        # leaves that picture still. Rewinding the gyro to the anchor
+        # deleted a pivot in one sample (the door heading jumped 29°).
+        # A stuck scrub does not turn this far while the anchor is open.
         yaw_moved = abs(self.odometry.yaw_unwrapped_rad - float(anchor["yaw"]))
-        if self.phase == "spin" and yaw_moved >= 0.12:
+        if yaw_moved >= 0.12:
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()
             return
@@ -885,6 +891,22 @@ class Explorer:
                 self._min_gap, blind=self._view_blind, force_min_m=0.16, reason=reason
             )
             self._progress_t = self.t_s
+
+    def _floor_stall_backoff(self) -> None:
+        """Reverse when the floor image says the shell is not driving.
+
+        A pure pivot is left alone: the commands oppose, and the gyro is
+        what says whether that turn is real. Net forward with a matched
+        floor is the caster on the lip, wheels spinning in the air.
+        """
+        if self.phase != "go" or self.t_s < self._reverse_until:
+            return
+        left, right = self._commanded
+        if abs(left + right) < 0.5 or abs(left) + abs(right) < 0.4:
+            return
+        self._arm_reverse(
+            self._min_gap, blind=self._view_blind, force_min_m=0.16, reason="floor"
+        )
 
     def _pressing_side(self, view: BubbleView) -> float:
         """+1 when the left shell is on a surface, -1 for the right, else 0."""

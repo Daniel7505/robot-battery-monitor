@@ -125,6 +125,7 @@ def test_junction_centre_is_the_crossing_road_centre():
 
 @pytest.mark.parametrize("name,x0,x1", [("corner90", 0.0, 3.6), ("corner_mix", 0.0, 3.0), ("widen", 0.0, 9.0),
                                          ("corner90_wide", 0.0, 3.6)])
+@pytest.mark.slow
 def test_no_turn_junction_on_old_courses_or_bars(name, x0, x1):
     g = sim.track_geometry(name)
     x = x0
@@ -212,6 +213,7 @@ def test_runtime_reads_route_env(monkeypatch, tmp_path):
 @pytest.mark.parametrize("course,route,exit_", [
     ("plus", "L", "north"), ("t_end", "R", "south"), ("t_left", None, "east"), ("t_right", "R", "south"),
 ])
+@pytest.mark.slow
 def test_closed_loop_routes(course, route, exit_):
     r = sim.run(course, route=route, max_s=45.0)
     assert r["ok"] and r["exit"] == exit_, (r["exit"], r["junctions"], r["braked_at"])
@@ -219,6 +221,7 @@ def test_closed_loop_routes(course, route, exit_):
     assert all(abs(p["true_err_deg"]) < 3.0 for p in r["pivots"])
 
 
+@pytest.mark.slow
 def test_closed_loop_large_gap_crossed_blind():
     r = sim.run("gap45", max_s=60.0)
     assert r["ok"] and r["exit"] == "east"
@@ -228,6 +231,7 @@ def test_closed_loop_large_gap_crossed_blind():
     assert any(e.startswith("GAP reacquire") for e in r["events"])
 
 
+@pytest.mark.slow
 def test_gap_gives_up_after_max_blind_and_looks_around():
     r = sim.run("gap45", max_blind=2.0, max_s=60.0)
     assert not r["finished"] and r["final_state"] == "STOPPED"
@@ -297,6 +301,7 @@ def test_approach_remaining_never_increases_from_delayed_vision():
     assert ctl.remaining_m == 0.55  # vision may refine downward
 
 
+@pytest.mark.slow
 def test_closed_loop_junction_turn_with_one_frame_latency():
     """1-frame camera latency: turn still finishes; pivot not a full frame late."""
     r = sim.run("t_end", route="L", latency_frames=1, max_s=45.0)

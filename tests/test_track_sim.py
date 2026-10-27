@@ -10,6 +10,7 @@ sim = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sim)
 
 
+@pytest.mark.slow
 def test_widen_track_is_followed_and_width_tracked():
     r = sim.run("widen")
     assert r["finished"] and r["end"]["s_m"] >= 11.0
@@ -19,6 +20,7 @@ def test_widen_track_is_followed_and_width_tracked():
 
 
 @pytest.mark.parametrize("track,turn", [("corner90", 90.0), ("corner90_right", -90.0), ("corner90_wide", 90.0)])
+@pytest.mark.slow
 def test_sharp_corner_pivot_and_finish(track, turn):
     r = sim.run(track, max_s=40.0)
     assert r["finished"] and r["end"]["s_m"] >= 7.9 and r["braked_at"] is None
@@ -43,6 +45,7 @@ def test_sharp_corner_pivot_and_finish(track, turn):
     assert not [e for e in ev[4:] if e.startswith("JUNCTION") and "lane_lost" not in e], ev
 
 
+@pytest.mark.slow
 def test_corner_mix_rounded_left_then_sharp_right():
     r = sim.run("corner_mix", max_s=50.0)
     assert r["finished"] and r["braked_at"] is None and r["left_lane_at"] is None
@@ -51,11 +54,13 @@ def test_corner_mix_rounded_left_then_sharp_right():
     assert r["max_lateral_m"] < 0.16  # the rounded corner, unchanged from before
 
 
+@pytest.mark.slow
 def test_pivot_with_tyre_scrub_and_imu_drift():
     r = sim.run("corner90", max_s=40.0, turn_eff=0.8, imu_noise_deg=0.3, imu_drift_dps=0.5)
     assert r["finished"] and len(r["pivots"]) == 1 and abs(r["pivots"][0]["true_err_deg"]) < 4.0
 
 
+@pytest.mark.slow
 def test_corner90_without_imu_stops_at_the_corner():
     """No yaw to the controller: approach, then brake on the pivot point (inside the lane)."""
     r = sim.run("corner90", max_s=30.0, corners=False)

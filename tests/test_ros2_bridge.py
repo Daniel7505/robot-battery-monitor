@@ -1,4 +1,5 @@
 import time
+import pytest
 
 from src.ros2_bridge import ROS2Bridge
 from src.hardware import reset_hardware_source, get_hardware_source, get_hardware_mode, SimulatorSource
@@ -69,6 +70,7 @@ def test_mission_force_task():
     assert mgr.seconds_remaining == 30
 
 
+@pytest.mark.slow
 def test_ros2_source_publishes_and_accepts_commands():
     reset_hardware_source()
     source = ROS2BatterySource()

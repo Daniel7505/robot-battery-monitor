@@ -153,6 +153,7 @@ def test_wheels_follow_the_camera_curve_with_the_old_map_loaded():
     assert distance_to_next_corner(load_track("s"), PROBE_X_M, y, hd) is None
 
 
+@pytest.mark.slow
 def test_live_width_tracks_the_paint_and_one_line_falls_back():
     """Both lines in view: the fit follows the sine, not the 1.30 m constant.
 
@@ -272,6 +273,7 @@ def test_painted_meshes_span_1_15_to_1_45_along_the_s():
     assert narrow[2] > -1.0
 
 
+@pytest.mark.slow
 def test_stronger_width_option_paints_1_0_to_1_6_and_both_lines_stay_in_view(tmp_path):
     """RBM_CAMERA_S_WIDTH=1.0,1.6 is visible, and both nadir cameras still see both lines."""
     from src.lane_vision import NADIR_CAMS, LaneTracker, lane_polyline_robot, render_lane_bgra

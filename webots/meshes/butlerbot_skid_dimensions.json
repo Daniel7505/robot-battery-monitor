@@ -14,31 +14,18 @@
     {
       "name": "deck",
       "where": "robot",
-      "translation": "0 0 0.134",
-      "size": "0.32 0.24 0.058"
-    },
-    {
-      "name": "torso",
-      "where": "torso_solid",
-      "translation": "0 0 0.06",
-      "size": "0.16 0.12 0.28"
-    },
-    {
-      "name": "left_arm",
-      "where": "left_arm_solid",
-      "translation": "0 0 -0.13",
-      "size": "0.05 0.05 0.26"
-    },
-    {
-      "name": "right_arm",
-      "where": "right_arm_solid",
-      "translation": "0 0 -0.13",
-      "size": "0.05 0.05 0.26"
+      "translation": "0 0 0.125",
+      "size": "0.32 0.24 0.04"
     }
   ],
+  "tray_pad": {
+    "translation": "0 0 0.143",
+    "size": "0.136 0.136 0.004",
+    "opening_m": "0.14 0.14",
+    "depth_below_deck_top_m": 0.002
+  },
   "excluded_from_collision": [
-    "neck",
-    "head",
+    "tray pad and bolt marks",
     "nadir booms and boxes",
     "stereo mast and bar",
     "oak housing",
@@ -49,8 +36,10 @@
     "lens discs"
   ],
   "notes": [
+    "No payload. The chassis is a flat deck. A 0.14 m square pocket, 2 mm deep, is empty mounting room for a later tray.",
+    "The pocket is aft of the stereo mast and in front of the rear camera, so it does not enter those views. Forward lenses sit above it. The floor lens looks down from under the deck.",
     "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
     "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",
-    "Head, neck, and every sensor mount are visual. Body collision is the deck box, the torso box, and the two arm boxes."
+    "Body collision is the deck box only. Sensor mounts and the tray marks are visual."
   ]
 }

@@ -6,9 +6,10 @@
 # by a driven front axle on the same 0.34 m track.
 # Visual meshes come from webots/meshes/build_skid_mesh.py (Blender,
 # X forward, Y left, Z up). Collision is not the mesh. Tire bounds are
-# cylinders measured from the wheel mesh. Body bounds are boxes measured
-# from the deck, the torso, and the arms (webots/meshes/butlerbot_skid_dimensions.json).
-# The head, neck, and every camera and sonar mount are visual only.
+# cylinders measured from the wheel mesh. The body bound is one box
+# measured from the flat deck (webots/meshes/butlerbot_skid_dimensions.json).
+# There is no payload. A 2 mm pocket on the deck is empty room for a
+# later tray, and it stays out of every camera view. Sensor mounts are visual.
 # Pose, name, controller, bodyMass, bodyInertia, and mappingSensors
 # are the same fields, so a world that instances ButlerBot is unchanged.
 PROTO ButlerBotSkid [
@@ -33,8 +34,7 @@ Robot {
   controllerArgs IS controllerArgs
   customData "ButlerBotSkid — four driven wheels, no casters"
   children [
-    # Deck, upper body, sensor mounts, and lens discs. Robot frame, so the
-    # torso hinge does not move them. The mapper holds that hinge at 0.
+    # Flat deck, tray marks, sensor mounts, and lens discs. Robot frame.
     DEF DECK_VIS Pose {
       children [
         Shape {
@@ -51,17 +51,17 @@ Robot {
         }
       ]
     }
-    DEF UPPER_VIS Pose {
+    DEF PAD_VIS Pose {
       children [
         Shape {
           appearance PBRAppearance {
-            baseColor 0.18 0.36 0.52
-            roughness 0.42
-            metalness 0.2
+            baseColor 0.30 0.32 0.34
+            roughness 0.35
+            metalness 0.55
           }
           geometry Mesh {
             url [
-              "../meshes/butlerbot_skid_upper.obj"
+              "../meshes/butlerbot_skid_pad.obj"
             ]
           }
         }
@@ -455,28 +455,10 @@ Robot {
             endPoint Solid {
               name "left_arm_solid"
               translation 0 0.11 0.10
-              # Arm shell is in UPPER_VIS. The box below is the collider.
+              # No arm payload on this prototype. The motor stays so the mapper
+              # can hold the joint. Nothing here rises above the deck.
               children [
               ]
-              boundingObject Transform {
-                translation 0 0 -0.13
-                children [
-                  Box {
-                    size 0.05 0.05 0.26
-                  }
-                ]
-              }
-              physics Physics {
-                density -1
-                mass 0.12
-                centerOfMass [
-                  0 0 -0.13
-                ]
-                inertiaMatrix [
-                  9.0e-04 9.0e-04 1.2e-04
-                  0 0 0
-                ]
-              }
             }
           }
           DEF RIGHT_ARM_JOINT HingeJoint {
@@ -498,51 +480,15 @@ Robot {
             endPoint Solid {
               name "right_arm_solid"
               translation 0 -0.11 0.10
-              # Arm shell is in UPPER_VIS. The box below is the collider.
+              # No arm payload on this prototype. The motor stays so the mapper
+              # can hold the joint. Nothing here rises above the deck.
               children [
               ]
-              boundingObject Transform {
-                translation 0 0 -0.13
-                children [
-                  Box {
-                    size 0.05 0.05 0.26
-                  }
-                ]
-              }
-              physics Physics {
-                density -1
-                mass 0.12
-                centerOfMass [
-                  0 0 -0.13
-                ]
-                inertiaMatrix [
-                  9.0e-04 9.0e-04 1.2e-04
-                  0 0 0
-                ]
-              }
             }
           }
         ]
-        # Measured from the torso mesh. Local to torso_solid (origin z = 0.24).
-        boundingObject Pose {
-          translation 0 0 0.06
-          children [
-            Box {
-              size 0.16 0.12 0.28
-            }
-          ]
-        }
-        physics Physics {
-          density -1
-          mass 0.75
-          centerOfMass [
-            0 0 0.04
-          ]
-          inertiaMatrix [
-            7.0e-03 7.5e-03 3.5e-03
-            0 0 0
-          ]
-        }
+        # No torso payload. gps_head stays in HEAD_VIS. The motor stays
+        # so the mapper can hold the joint.
       }
     }
     # Shoulder nadirs only. LINE / SIDE / FINISH / Z/W and aim pucks
@@ -840,14 +786,14 @@ Robot {
     }
 %< } >%
   ]
-  # Deck box from the Blender mesh. Bottom is z = 0.105, so it clears
-  # the floor. |y| is 0.12, inside the tire inner faces at |y| = 0.145.
-  # Not a Mesh collider.
+  # Flat deck box from the Blender mesh. Bottom is z = 0.105, top is
+  # z = 0.145. |y| is 0.12, inside the tire inner faces at |y| = 0.145.
+  # The tray pocket is visual and is not a collider.
   boundingObject Pose {
-    translation 0 0 0.134
+    translation 0 0 0.125
     children [
       Box {
-        size 0.32 0.24 0.058
+        size 0.32 0.24 0.04
       }
     ]
   }

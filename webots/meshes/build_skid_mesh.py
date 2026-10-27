@@ -199,10 +199,7 @@ def write_obj(path, objects):
 def build():
     clear_scene()
     deck = collection("deck")
-    upper = collection("upper")
-    torso_col = collection("torso_collision")
-    arm_l = collection("arm_l")
-    arm_r = collection("arm_r")
+    pad = collection("pad")
     sensors = collection("sensors")
     lenses = collection("lenses")
     wheel_col = collection("wheel")
@@ -210,46 +207,34 @@ def build():
     show = collection("show")
 
     mat_deck = material("deck", (0.16, 0.17, 0.19), metallic=0.45, rough=0.38)
-    mat_ridge = material("ridge", (0.22, 0.24, 0.27), metallic=0.55, rough=0.32)
-    mat_body = material("body", (0.18, 0.36, 0.52), metallic=0.2, rough=0.42)
-    mat_head = material("head", (0.12, 0.13, 0.16), metallic=0.35, rough=0.3)
-    mat_arm = material("arm", (0.45, 0.46, 0.48), metallic=0.4, rough=0.35)
+    mat_pad = material("pad", (0.30, 0.32, 0.34), metallic=0.55, rough=0.35)
     mat_mount = material("mount", (0.07, 0.075, 0.09), metallic=0.3, rough=0.4)
     mat_lens = material("lens", (0.15, 0.85, 1.0), metallic=0.0, rough=0.2, emit=8.0)
     mat_tire = material("tire", (0.015, 0.015, 0.018), metallic=0.05, rough=0.7)
     mat_hub = material("hub", (0.62, 0.63, 0.66), metallic=0.85, rough=0.25)
     mat_ground = material("ground", (0.55, 0.56, 0.58), metallic=0.0, rough=0.9)
 
-    # Deck plate and a center ridge. Bottom stays 0.105 m, clear of the floor
-    # and of the tire inner faces (|y| = 0.145).
-    add_box("deck_plate", (0.0, 0.0, 0.125), (0.32, 0.24, 0.04), deck, mat_deck)
-    add_box("deck_ridge", (0.0, 0.0, 0.153), (0.20, 0.14, 0.020), deck, mat_ridge)
-
-    # Torso column sits on the deck. Neck and head are visual only, matching
-    # the baseline (the head sphere was never a collider). GPS stays at the
-    # head centre in the PROTO; this sphere is the shell around it.
-    add_box("torso", (0.0, 0.0, 0.30), (0.16, 0.12, 0.28), torso_col, mat_body)
-    add_box("shoulder", (0.0, 0.0, 0.40), (0.14, 0.10, 0.05), torso_col, mat_body)
-    # Yokes are visual only. They bridge the torso shell to the arm boxes.
-    add_box("yoke_l", (0.0, 0.085, 0.36), (0.07, 0.07, 0.08), upper, mat_body)
-    add_box("yoke_r", (0.0, -0.085, 0.36), (0.07, 0.07, 0.08), upper, mat_body)
-    add_cyl("neck", (0.0, 0.0, 0.50), 0.028, 0.12, upper, mat_head)
-    add_sphere("head", (0.0, 0.0, 0.62), 0.060, upper, mat_head)
-    eye_look = look_from_ypr(0.0, 0.15)
-    add_cyl(
-        "eye",
-        Vector((0.0, 0.0, 0.62)) + eye_look * 0.055,
-        0.012,
-        0.008,
-        lenses,
-        mat_lens,
-        quat=quat_from_to((0, 0, 1), eye_look),
-        segments=16,
-    )
-
-    # Arms: same boxes the baseline used, hung from the torso joints at rest.
-    add_box("arm_l", (0.0, 0.11, 0.21), (0.05, 0.05, 0.26), arm_l, mat_arm)
-    add_box("arm_r", (0.0, -0.11, 0.21), (0.05, 0.05, 0.26), arm_r, mat_arm)
+    # Flat chassis. No payload. Bottom stays 0.105 m. The outer top is one
+    # plane at z = 0.145. A 0.14 m square pocket, 2 mm deep, is spare room
+    # for a future tray. It sits between the stereo mast (x ≈ 0.115) and the
+    # rear camera, and it does not rise into any lens.
+    add_box("deck_slab", (0.0, 0.0, 0.123), (0.32, 0.24, 0.036), deck, mat_deck)
+    add_box("deck_front", (0.115, 0.0, 0.143), (0.09, 0.24, 0.004), deck, mat_deck)
+    add_box("deck_rear", (-0.115, 0.0, 0.143), (0.09, 0.24, 0.004), deck, mat_deck)
+    add_box("deck_left", (0.0, 0.095, 0.143), (0.14, 0.05, 0.004), deck, mat_deck)
+    add_box("deck_right", (0.0, -0.095, 0.143), (0.14, 0.05, 0.004), deck, mat_deck)
+    add_box("tray_pad", (0.0, 0.0, 0.142), (0.136, 0.136, 0.002), pad, mat_pad)
+    for sx in (-0.045, 0.045):
+        for sy in (-0.045, 0.045):
+            add_cyl(
+                f"tray_bolt_{sx}_{sy}",
+                (sx, sy, 0.1435),
+                0.007,
+                0.003,
+                pad,
+                mat_hub,
+                segments=16,
+            )
 
     # Nadir booms and boxes, same centres and rotations as the PROTO.
     boom_l = Quaternion((1.0, 0.0, 0.0), -0.767)
@@ -273,7 +258,7 @@ def build():
         )
 
     # Stereo mast from the deck up to the bar, then the bar and three lenses.
-    add_cyl("stereo_mast", (0.115, 0.0, 0.47), 0.012, 0.62, sensors, mat_mount, segments=12)
+    add_cyl("stereo_mast", (0.115, 0.0, 0.4625), 0.012, 0.635, sensors, mat_mount, segments=12)
     add_box("stereo_bar", (0.125, 0.0, 0.78), (0.04, 0.18, 0.045), sensors, mat_mount)
     add_box("oak_body", (0.145, 0.0, 0.785), (0.035, 0.06, 0.04), sensors, mat_mount)
     for name, y, pitch in (
@@ -298,7 +283,7 @@ def build():
     radar = Vector((0.16, 0.0, 0.45))
     down = look_from_ypr(0.0, 1.5708)
     add_box("radar_body", radar + Vector((0.0, 0.0, 0.018)), (0.04, 0.05, 0.028), sensors, mat_mount)
-    add_cyl("radar_pedestal", (0.145, 0.0, 0.32), 0.01, 0.32, sensors, mat_mount, segments=12)
+    add_cyl("radar_pedestal", (0.145, 0.0, 0.312), 0.01, 0.334, sensors, mat_mount, segments=12)
     add_cyl(
         "radar_dish",
         radar + down * 0.01,
@@ -314,6 +299,8 @@ def build():
     rear = Vector((-0.16, 0.0, 0.28))
     rear_look = look_from_ypr(math.pi, 0.0)
     add_box("rear_body", (-0.125, 0.0, 0.28), (0.07, 0.06, 0.05), sensors, mat_mount)
+    # Post is inboard of the rear lens, which looks along -X.
+    add_box("rear_post", (-0.10, 0.0, 0.21), (0.02, 0.02, 0.13), sensors, mat_mount)
     add_cyl(
         "rear_lens",
         rear + rear_look * 0.008,
@@ -404,14 +391,9 @@ def build():
             dup.matrix_world = Matrix.Translation(Vector(loc)) @ roll
             show.objects.link(dup)
 
-    # Render-only upper copies so neck/head/arms/torso are in the picture.
-    # The export joins torso into the upper file; these objects are the source.
     return {
         "deck": list(deck.objects),
-        "torso": list(torso_col.objects),
-        "upper_extra": list(upper.objects),
-        "arm_l": list(arm_l.objects),
-        "arm_r": list(arm_r.objects),
+        "pad": list(pad.objects),
         "sensors": list(sensors.objects),
         "lenses": list(lenses.objects),
         "wheel": [tire],
@@ -422,9 +404,7 @@ def build():
 
 def measure(groups):
     deck_c, deck_s = aabb_of(groups["deck"])
-    torso_c, torso_s = aabb_of(groups["torso"])
-    arm_l_c, arm_l_s = aabb_of(groups["arm_l"])
-    arm_r_c, arm_r_s = aabb_of(groups["arm_r"])
+    pad_c, pad_s = aabb_of(groups["pad"])
     wheel_pts_r = 0.0
     wheel_z = []
     me = world_mesh(groups["wheel"][0])
@@ -444,19 +424,16 @@ def measure(groups):
 
     if abs(deck_s.x - 0.32) > 1e-4 or abs(deck_s.y - 0.24) > 1e-4:
         raise SystemExit(f"deck footprint changed: {deck_s}")
-    if abs(deck_s.z - 0.058) > 1e-4 or abs(deck_c.z - 0.134) > 1e-4:
+    if abs(deck_s.z - 0.04) > 1e-4 or abs(deck_c.z - 0.125) > 1e-4:
         raise SystemExit(f"deck height changed: center {deck_c} size {deck_s}")
+    if pad_c.z + pad_s.z / 2.0 > deck_c.z + deck_s.z / 2.0 + 1e-4:
+        raise SystemExit("tray pad rises above the flat deck")
     if deck_c.z - deck_s.z / 2.0 < 0.10:
         raise SystemExit("deck collision would sit under 0.10 m")
     if abs(wheel_pts_r - WHEEL_R) > 1e-4 or abs(wheel_h - WHEEL_H) > 1e-4:
         raise SystemExit(f"wheel aabb {wheel_pts_r} {wheel_h}")
     if hub_r > WHEEL_R - 1e-4 or hub_h > WHEEL_H - 1e-4:
         raise SystemExit(f"hub escapes the tire aabb {hub_r} {hub_h}")
-
-    torso_origin = Vector((0.0, 0.0, 0.24))
-    torso_local = torso_c - torso_origin
-    arm_l_local = arm_l_c - Vector((0.0, 0.11, 0.34))
-    arm_r_local = arm_r_c - Vector((0.0, -0.11, 0.34))
 
     dims = {
         "units": "m",
@@ -476,29 +453,16 @@ def measure(groups):
                 "where": "robot",
                 "translation": fmt(deck_c),
                 "size": fmt(deck_s),
-            },
-            {
-                "name": "torso",
-                "where": "torso_solid",
-                "translation": fmt(torso_local),
-                "size": fmt(torso_s),
-            },
-            {
-                "name": "left_arm",
-                "where": "left_arm_solid",
-                "translation": fmt(arm_l_local),
-                "size": fmt(arm_l_s),
-            },
-            {
-                "name": "right_arm",
-                "where": "right_arm_solid",
-                "translation": fmt(arm_r_local),
-                "size": fmt(arm_r_s),
-            },
+            }
         ],
+        "tray_pad": {
+            "translation": fmt(pad_c),
+            "size": fmt(pad_s),
+            "opening_m": "0.14 0.14",
+            "depth_below_deck_top_m": 0.002,
+        },
         "excluded_from_collision": [
-            "neck",
-            "head",
+            "tray pad and bolt marks",
             "nadir booms and boxes",
             "stereo mast and bar",
             "oak housing",
@@ -509,9 +473,11 @@ def measure(groups):
             "lens discs",
         ],
         "notes": [
+            "No payload. The chassis is a flat deck. A 0.14 m square pocket, 2 mm deep, is empty mounting room for a later tray.",
+            "The pocket is aft of the stereo mast and in front of the rear camera, so it does not enter those views. Forward lenses sit above it. The floor lens looks down from under the deck.",
             "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
             "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",
-            "Head, neck, and every sensor mount are visual. Body collision is the deck box, the torso box, and the two arm boxes.",
+            "Body collision is the deck box only. Sensor mounts and the tray marks are visual.",
         ],
     }
     return dims
@@ -520,10 +486,10 @@ def measure(groups):
 def export(groups, dims):
     ROOT.mkdir(parents=True, exist_ok=True)
     write_obj(ROOT / "butlerbot_skid_deck.obj", groups["deck"])
-    write_obj(
-        ROOT / "butlerbot_skid_upper.obj",
-        groups["torso"] + groups["upper_extra"] + groups["arm_l"] + groups["arm_r"],
-    )
+    write_obj(ROOT / "butlerbot_skid_pad.obj", groups["pad"])
+    upper = ROOT / "butlerbot_skid_upper.obj"
+    if upper.exists():
+        upper.unlink()
     write_obj(ROOT / "butlerbot_skid_sensors.obj", groups["sensors"])
     write_obj(ROOT / "butlerbot_skid_lenses.obj", groups["lenses"])
     write_obj(ROOT / "butlerbot_skid_wheel.obj", groups["wheel"])

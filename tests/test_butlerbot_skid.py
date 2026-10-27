@@ -89,7 +89,7 @@ def test_mapper_slaves_front_hubs_only_when_the_device_exists():
 
 MESHES = (
     "butlerbot_skid_deck.obj",
-    "butlerbot_skid_upper.obj",
+    "butlerbot_skid_pad.obj",
     "butlerbot_skid_sensors.obj",
     "butlerbot_skid_lenses.obj",
     "butlerbot_skid_wheel.obj",
@@ -138,13 +138,14 @@ def test_skid_visual_is_mesh_and_collision_matches_blender_boxes():
         assert obj.stat().st_size > 200
         assert "\nv " in obj.read_text(encoding="utf-8")[:400] or obj.read_text(encoding="utf-8").startswith("v ")
     assert text.count("geometry Mesh {") == 12
+    assert "butlerbot_skid_upper.obj" not in text
     assert "boundingObject Mesh" not in text
     assert "boundingObject IndexedFaceSet" not in text
     blocks = [
         _brace_block(text, match.start())
         for match in re.finditer(r"(?m)^[ \t]*boundingObject\b", text)
     ]
-    assert len(blocks) == 8
+    assert len(blocks) == 5
     for block in blocks:
         assert "Mesh" not in block
         assert "IndexedFaceSet" not in block
@@ -155,14 +156,13 @@ def test_skid_visual_is_mesh_and_collision_matches_blender_boxes():
         assert "height 0.05" in block
         assert "rotation 1 0 0 1.5708" in block
     by_name = {box["name"]: box for box in dims["body_boxes"]}
-    assert by_name["deck"]["translation"] == "0 0 0.134"
-    assert by_name["deck"]["size"] == "0.32 0.24 0.058"
+    assert by_name["deck"]["translation"] == "0 0 0.125"
+    assert by_name["deck"]["size"] == "0.32 0.24 0.04"
     assert f"translation {by_name['deck']['translation']}" in text
     assert f"size {by_name['deck']['size']}" in text
-    assert f"translation {by_name['torso']['translation']}" in text
-    assert f"size {by_name['torso']['size']}" in text
-    assert f"translation {by_name['left_arm']['translation']}" in text
-    assert f"size {by_name['left_arm']['size']}" in text
+    assert dims["tray_pad"]["opening_m"] == "0.14 0.14"
+    assert "size 0.16 0.12 0.28" not in text
+    assert "size 0.05 0.05 0.26" not in text
     assert dims["wheel"]["radius_m"] == 0.08
     assert dims["wheel"]["height_m"] == 0.05
     for pose in _DEVICE_POSES:

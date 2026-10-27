@@ -206,10 +206,12 @@ class Explorer:
         self._commit_until = -1.0
         self._commit_heading = 0.0
         self._escape_log_at = -1.0
-        # High-water mark of free cells reachable on this grid. Growth
-        # clears a stall. The count is not compared to a known floor area.
+        # Free cells this robot has already reached on its own grid.
+        # A stall is no new cell, not a smaller connected component and
+        # not a comparison with the apartment's floor area.
         self._floor_check_at = -1.0
-        self._reachable_free = -1
+        self._reached: np.ndarray | None = None
+        self._reached_n = 0
         self._reachable_grew_at = -1.0
         self._floor_stale = False
         self._stale_acted_at = -1.0e9
@@ -1210,9 +1212,11 @@ class Explorer:
         bubble = 0.0 if self._bubble_gap is None else float(self._bubble_gap)
         if bubble < 0.20:
             return False
-        if self._floor_stale:
-            return True
         nose, left, right = self._last_clear
+        # A stale creep with a shoulder on the wall is how a corner
+        # caster sat in contact. Live air ahead is not a side clearance.
+        if self._floor_stale and min(left, right) >= 0.22:
+            return True
         nearer = min(left, right)
         further = max(left, right)
         flat = nearer < 20.0 and abs(nose - nearer) < 0.18 and abs(further - nearer) < 0.35
@@ -1222,25 +1226,31 @@ class Explorer:
         tight = self._tight_face()
         return tight is not None and tight[0] == "rear" and 0.10 <= tight[1] < 0.12
 
-    def _reachable_free_cells(self) -> int:
-        """Free cells this grid can reach from the robot, by flood fill.
+    def _note_new_floor(self) -> int | None:
+        """Newly reached free cells since the last check.
 
-        The high-water mark is how much floor this robot has observed.
-        It is not the apartment's floor area.
+        ``None`` means the robot is not standing on a free cell, so this
+        sample says nothing. A smear that cuts the map in two does not
+        erase cells already reached, and new cells in the smaller piece
+        still count. The total is not the apartment's floor area.
         """
         labels = self.grid.labels()
+        if self._reached is None or self._reached.shape != labels.shape:
+            self._reached = np.zeros(labels.shape, dtype=bool)
         cell = self.grid.cell_of(self.odometry.x_m, self.odometry.y_m)
         if cell is None or int(labels[cell]) != 0:
-            return 0
+            return None
         free = labels == 0
         seen = np.zeros(free.shape, dtype=bool)
         stack = [cell]
         seen[cell] = True
-        count = 0
+        gained = 0
         height, width = free.shape
         while stack:
             row, col = stack.pop()
-            count += 1
+            if not self._reached[row, col]:
+                self._reached[row, col] = True
+                gained += 1
             for d_row, d_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nxt_row = row + d_row
                 nxt_col = col + d_col
@@ -1250,22 +1260,23 @@ class Explorer:
                     continue
                 seen[nxt_row, nxt_col] = True
                 stack.append((nxt_row, nxt_col))
-        return count
+        return gained
 
     def _watch_floor(self) -> None:
         """Clear bans when this map has gained no reachable floor."""
         if self.t_s < self._floor_check_at:
             return
         self._floor_check_at = self.t_s + 1.0
-        count = self._reachable_free_cells()
-        if count > self._reachable_free:
-            self._reachable_free = count
+        gained = self._note_new_floor()
+        if gained is None:
+            return
+        if gained > 0:
+            self._reached_n += gained
             self._reachable_grew_at = self.t_s
             self._floor_stale = False
             return
         if self._reachable_grew_at < 0.0:
             self._reachable_grew_at = self.t_s
-            self._reachable_free = count
             return
         if self.t_s - self._reachable_grew_at < _STALE_FLOOR_S:
             self._floor_stale = False

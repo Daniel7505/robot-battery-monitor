@@ -29,16 +29,22 @@ HUBS = (
 )
 
 # Device poses copied from ButlerBotSkid.proto. Do not move the devices.
+# Corner sonars sit outboard of the tire and above the tread. Their old
+# origins (z = 0.12, |y| = 0.16) were inside the tire cylinder, and two of
+# the three sonar rays pitch down.
 SONARS = (
     ("us_front", (0.18, 0.0, 0.12), 0.0),
-    ("us_front_left", (0.14, 0.16, 0.12), 0.7854),
+    ("us_front_left", (0.18, 0.20, 0.20), 0.7854),
     ("us_left", (0.0, 0.22, 0.12), 1.5708),
-    ("us_rear_left", (-0.12, 0.16, 0.12), 2.3562),
+    ("us_rear_left", (-0.18, 0.20, 0.20), 2.3562),
     ("us_rear", (-0.18, 0.0, 0.12), math.pi),
-    ("us_rear_right", (-0.12, -0.16, 0.12), -2.3562),
+    ("us_rear_right", (-0.18, -0.20, 0.20), -2.3562),
     ("us_right", (0.0, -0.22, 0.12), -1.5708),
-    ("us_front_right", (0.14, -0.16, 0.12), -0.7854),
+    ("us_front_right", (0.18, -0.20, 0.20), -0.7854),
 )
+# Shell the mapper uses: tire faces at |x| = 0.19, side-sonar faces at |y| = 0.227.
+SHELL_X_M = 0.19
+SHELL_Y_M = 0.227
 CORNER_SONARS = {
     "us_front_left",
     "us_front_right",
@@ -247,38 +253,29 @@ def build():
                 segments=16,
             )
 
-    # Nadir housings stay on the camera poses. The old shoulder booms ended
-    # at z ≈ 0.42, clear of the deck. Each support now runs from the deck
-    # rail into the box behind the lens. The lens still looks forward-down.
-    add_box("nadir_box_l", (0.01042, 0.41808, 0.72919), (0.05, 0.05, 0.05), sensors, mat_mount)
-    add_box("nadir_box_r", (0.01042, -0.41808, 0.72919), (0.05, 0.05, 0.05), sensors, mat_mount)
-    add_strut(
-        "nadir_strut_l",
-        (0.01, 0.10, 0.135),
-        (0.01042, 0.41808, 0.72919),
-        0.012,
-        sensors,
-        mat_mount,
-    )
-    add_strut(
-        "nadir_strut_r",
-        (0.01, -0.10, 0.135),
-        (0.01042, -0.41808, 0.72919),
-        0.012,
-        sensors,
-        mat_mount,
-    )
-    for side, y in (("l", 0.41808), ("r", -0.41808)):
-        look = look_from_ypr(0.0, 0.9411)
-        origin = Vector((0.03542, y, 0.70419))
+    # Shoulder cameras are floor-flow sensors now. Each pod hangs under the
+    # deck, inboard of the tires, and the lens looks straight down. The
+    # housing stays above the lens so the frame is floor.
+    down = look_from_ypr(0.0, 1.5708)
+    for side, y in (("l", 0.05), ("r", -0.05)):
+        add_cyl(
+            f"nadir_pod_{side}",
+            (0.0, y, 0.082),
+            0.016,
+            0.046,
+            sensors,
+            mat_mount,
+            segments=16,
+        )
+        origin = Vector((0.0, y, 0.055))
         add_cyl(
             f"nadir_lens_{side}",
-            origin + look * 0.006,
+            origin + down * 0.003,
             0.010,
-            0.006,
+            0.004,
             lenses,
             mat_lens,
-            quat=quat_from_to((0, 0, 1), look),
+            quat=quat_from_to((0, 0, 1), down),
             segments=16,
         )
 
@@ -367,20 +364,22 @@ def build():
                 mat_mount,
             )
         if name in CORNER_SONARS:
-            # The device origin sits inside the tire cylinder. The visible
-            # cap is the same x,y, just above the tread.
-            cap = Vector((pos[0], pos[1], 0.178))
-            foot_x = math.copysign(0.06, pos[0])
-            foot_y = math.copysign(0.08, pos[1])
-            elbow = Vector((pos[0], foot_y, 0.195))
-            add_strut(f"{name}_up", (foot_x, foot_y, 0.135), elbow, 0.008, sensors, mat_mount)
-            add_strut(f"{name}_out", elbow, cap, 0.008, sensors, mat_mount)
-            add_cyl(f"{name}_cap", cap, 0.016, 0.022, sensors, mat_mount, segments=16)
+            # Bracket clears the tread (top z = 0.16), then drops to the
+            # sensor, which is outside the tire cylinder.
+            foot = Vector((math.copysign(0.08, pos[0]), math.copysign(0.06, pos[1]), 0.145))
+            knee = Vector((foot.x, foot.y, 0.20))
+            origin = Vector(pos)
+            high = Vector((origin.x, origin.y, 0.20))
+            add_strut(f"{name}_up", foot, knee, 0.008, sensors, mat_mount)
+            add_strut(f"{name}_out", knee, high, 0.008, sensors, mat_mount)
+            add_strut(f"{name}_down", high, origin, 0.008, sensors, mat_mount)
+            cap = origin - look * 0.008
+            add_cyl(f"{name}_cap", cap, 0.012, 0.016, sensors, mat_mount, quat=quat_from_to((0, 0, 1), look), segments=16)
             add_cyl(
                 f"{name}_lens",
-                cap + look * 0.012,
-                0.008,
-                0.004,
+                origin + look * 0.003,
+                0.006,
+                0.003,
                 lenses,
                 mat_lens,
                 quat=quat_from_to((0, 0, 1), look),
@@ -434,6 +433,51 @@ def build():
     }
 
 
+def _colliders():
+    """Primitives for parts that stick past the deck. Bottoms stay above the lip."""
+    boxes = [
+        ("deck", (0.0, 0.0, 0.125), (0.32, 0.24, 0.04)),
+        ("us_left", (0.0, 0.173, 0.12), (0.03, 0.106, 0.03)),
+        ("us_right", (0.0, -0.173, 0.12), (0.03, 0.106, 0.03)),
+        ("us_front", (0.172, 0.0, 0.12), (0.032, 0.04, 0.03)),
+        ("us_rear", (-0.172, 0.0, 0.12), (0.032, 0.04, 0.03)),
+        ("rear_cam", (-0.155, 0.0, 0.28), (0.05, 0.05, 0.04)),
+        ("radar_dish", (0.168, 0.0, 0.45), (0.036, 0.046, 0.04)),
+        ("stereo_bar", (0.125, 0.0, 0.78), (0.04, 0.18, 0.045)),
+        ("oak_body", (0.145, 0.0, 0.785), (0.035, 0.06, 0.04)),
+    ]
+    for name, pos, _yaw in SONARS:
+        if name not in CORNER_SONARS:
+            continue
+        boxes.append((f"{name}_head", (math.copysign(0.176, pos[0]), math.copysign(0.196, pos[1]), 0.20), (0.024, 0.028, 0.04)))
+        boxes.append(
+            (
+                f"{name}_link",
+                (math.copysign(0.13, pos[0]), math.copysign(0.13, pos[1]), 0.20),
+                (0.11, 0.15, 0.016),
+            )
+        )
+    cylinders = [
+        ("floor_pod", (0.0, 0.0, 0.08), 0.028, 0.05),
+        ("nadir_pod_l", (0.0, 0.05, 0.08), 0.016, 0.05),
+        ("nadir_pod_r", (0.0, -0.05, 0.08), 0.016, 0.05),
+    ]
+    out = []
+    for name, center, size in boxes:
+        out.append({"name": name, "shape": "box", "translation": fmt(center), "size": fmt(size)})
+    for name, center, radius, height in cylinders:
+        out.append(
+            {
+                "name": name,
+                "shape": "cylinder",
+                "translation": fmt(center),
+                "radius": radius,
+                "height": height,
+            }
+        )
+    return out
+
+
 def measure(groups):
     deck_c, deck_s = aabb_of(groups["deck"])
     pad_c, pad_s = aabb_of(groups["pad"])
@@ -467,6 +511,23 @@ def measure(groups):
     if hub_r > WHEEL_R - 1e-4 or hub_h > WHEEL_H - 1e-4:
         raise SystemExit(f"hub escapes the tire aabb {hub_r} {hub_h}")
 
+    # Placed wheels live in the show collection. Everything else is in the
+    # exported groups. The visual footprint has to stay inside the shell.
+    offenders = []
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.hide_render:
+            continue
+        if obj.name in {"ground", "tire", "hub"}:
+            continue
+        me = world_mesh(obj)
+        for vert in me.vertices:
+            if abs(vert.co.x) > SHELL_X_M + 1e-4 or abs(vert.co.y) > SHELL_Y_M + 1e-4:
+                offenders.append((obj.name, vert.co.x, vert.co.y, vert.co.z))
+                break
+        bpy.data.meshes.remove(me)
+    if offenders:
+        raise SystemExit(f"visual footprint outside the shell: {offenders[:6]}")
+
     dims = {
         "units": "m",
         "frame": "X forward, Y left, Z up",
@@ -493,24 +554,15 @@ def measure(groups):
             "opening_m": "0.14 0.14",
             "depth_below_deck_top_m": 0.002,
         },
-        "excluded_from_collision": [
-            "tray pad and bolt marks",
-            "nadir booms and boxes",
-            "stereo mast and bar",
-            "oak housing",
-            "radar dish and pedestal",
-            "eight sonar housings",
-            "rear camera housing",
-            "floor camera pod",
-            "lens discs",
-        ],
+        "shell_m": {"half_length": SHELL_X_M, "half_width": SHELL_Y_M},
+        "colliders": _colliders(),
         "notes": [
             "No payload. The chassis is a flat deck. A 0.14 m square pocket, 2 mm deep, is empty mounting room for a later tray.",
-            "Nadir supports, the stereo mast, the radar pedestal, the rear post, and the side sonar rails all meet the deck. Camera device poses are unchanged.",
-            "The pocket is aft of the stereo mast and in front of the rear camera, so it does not enter those views. Forward lenses sit above it. The floor lens looks down from under the deck.",
-            "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
+            "Nadir cameras are compact downward floor-flow pods under the deck, inboard of the tires.",
+            "Corner sonars sit outside the tire cylinders and above the tread. Their beams are not aimed into the rubber.",
+            "Full width stays inside the side-sonar faces at |y| = 0.227 m. Length stays inside the tire faces at |x| = 0.19 m.",
             "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",
-            "Body collision is the deck box only. Sensor mounts and the tray marks are visual.",
+            "Every part that sticks past the deck has a box or cylinder collider. No mesh colliders.",
         ],
     }
     return dims
@@ -530,6 +582,61 @@ def export(groups, dims):
     (ROOT / "butlerbot_skid_dimensions.json").write_text(
         json.dumps(dims, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _render_labels(scene, _quarter_cam):
+    """One three-quarter frame with a callout on every sensor."""
+    cam = bpy.data.objects["cam_quarter"]
+    labels_col = collection("labels")
+    mat = material("label", (1.0, 1.0, 1.0), metallic=0.0, rough=0.4, emit=4.0)
+    mat_line = material("leader", (0.02, 0.02, 0.02), metallic=0.0, rough=0.5)
+    labels = (
+        ("floor-flow L", (0.0, 0.05, 0.05)),
+        ("floor-flow R", (0.0, -0.05, 0.05)),
+        ("floor cam", (0.0, 0.0, 0.03)),
+        ("stereo L", (0.16, 0.07, 0.82)),
+        ("stereo R", (0.16, -0.07, 0.82)),
+        ("oak depth/rgb", (0.16, 0.0, 0.86)),
+        ("radar", (0.18, 0.0, 0.50)),
+        ("rear depth/rgb", (-0.18, 0.0, 0.32)),
+        ("sonar front", (0.20, 0.0, 0.16)),
+        ("sonar front-left", (0.18, 0.20, 0.24)),
+        ("sonar left", (0.0, 0.24, 0.16)),
+        ("sonar rear-left", (-0.18, 0.20, 0.24)),
+        ("sonar rear", (-0.20, 0.0, 0.16)),
+        ("sonar rear-right", (-0.18, -0.20, 0.24)),
+        ("sonar right", (0.0, -0.24, 0.16)),
+        ("sonar front-right", (0.18, -0.20, 0.24)),
+        ("gyro, imu, gps", (0.0, 0.0, 0.18)),
+    )
+    for text, pos in labels:
+        anchor = Vector(pos)
+        away = anchor - Vector((0.0, 0.0, 0.28))
+        if away.length < 0.08:
+            away = Vector((0.15, -0.4, 0.2))
+        away.normalize()
+        to_cam = (cam.location - anchor).normalized()
+        label_at = anchor + away * 0.18 + to_cam * 0.10
+        curve = bpy.data.curves.new(text, type="FONT")
+        curve.body = text
+        curve.size = 0.042
+        curve.extrude = 0.0015
+        curve.align_x = "CENTER"
+        curve.align_y = "CENTER"
+        obj = bpy.data.objects.new(text, curve)
+        obj.location = label_at
+        obj.rotation_euler = (cam.location - label_at).to_track_quat("Z", "Y").to_euler()
+        obj.data.materials.append(mat)
+        labels_col.objects.link(obj)
+        safe = "".join(ch if ch.isalnum() else "_" for ch in text)
+        add_strut("leader_" + safe, anchor, label_at, 0.003, labels_col, mat_line, segments=6)
+
+    scene.camera = cam
+    out = ART / "skid_sensors.png"
+    scene.render.filepath = str(out)
+    bpy.ops.render.render(write_still=True)
+    shutil.copy(out, PREVIEW / "skid_sensors.png")
+    print(f"rendered {out}")
 
 
 def render(ground_mat):
@@ -593,6 +700,7 @@ def render(ground_mat):
         "skid_three_quarter.png": camera(
             "cam_quarter", (1.45, -1.35, 1.05), (0.0, 0.0, 0.36)
         ),
+        "skid_bottom.png": camera("cam_bottom", (0.0, 0.0, -0.55), (0.0, 0.0, 0.08), ortho=1.2),
     }
     # Top view: nose (+X) toward the top of the frame.
     top = bpy.data.objects["cam_top"]
@@ -600,13 +708,17 @@ def render(ground_mat):
 
     PREVIEW.mkdir(parents=True, exist_ok=True)
     ART.mkdir(parents=True, exist_ok=True)
+    ground = bpy.data.objects["ground"]
     for filename, cam in shots.items():
         scene.camera = cam
+        ground.hide_render = filename == "skid_bottom.png"
         out = ART / filename
         scene.render.filepath = str(out)
         bpy.ops.render.render(write_still=True)
         shutil.copy(out, PREVIEW / filename)
         print(f"rendered {out}")
+    ground.hide_render = False
+    _render_labels(scene, shots["skid_three_quarter.png"])
 
 
 def main():

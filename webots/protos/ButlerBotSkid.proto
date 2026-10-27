@@ -6,10 +6,13 @@
 # by a driven front axle on the same 0.34 m track.
 # Visual meshes come from webots/meshes/build_skid_mesh.py (Blender,
 # X forward, Y left, Z up). Collision is not the mesh. Tire bounds are
-# cylinders measured from the wheel mesh. The body bound is one box
-# measured from the flat deck (webots/meshes/butlerbot_skid_dimensions.json).
+# cylinders measured from the wheel mesh. The body bound is the deck
+# box plus a primitive for each part that sticks past it
+# (webots/meshes/butlerbot_skid_dimensions.json).
 # There is no payload. A 2 mm pocket on the deck is empty room for a
-# later tray, and it stays out of every camera view. Sensor mounts are visual.
+# later tray, and it stays out of every camera view. The shoulder
+# cameras are downward floor-flow pods under the deck. Parts that
+# stick past the deck have a box or cylinder collider, not a mesh.
 # Pose, name, controller, bodyMass, bodyInertia, and mappingSensors
 # are the same fields, so a world that instances ButlerBot is unchanged.
 PROTO ButlerBotSkid [
@@ -491,43 +494,32 @@ Robot {
         # so the mapper can hold the joint.
       }
     }
-    # Shoulder nadirs only. LINE / SIDE / FINISH / Z/W and aim pucks
-    # archived at archives/butlerbot_choir_2026-09-02.wbt.
-    # Left shoulder. Boom + box from Daniel's 2026-08-25 framing (DUMP_CAM,
-    # VIEWPOINT COPY position 0.01042 0.41808 0.72919). Since 2026-10-01
-    # NADIR_CAM_L sits in this box (front-bottom edge), see the Camera node.
-    # The visual support runs from the deck into the box behind this lens.
-    # The camera pose is unchanged.
+    # Former shoulder nadirs. They are floor-flow cameras now: compact
+    # pods under the deck, inboard of the tires, looking straight down.
+    # The pod is above the lens, so the frame is floor. Keep a direct
+    # Robot child. Do not File-Save.
     DEF NADIR_CAM_L Camera {
-      # Lens on the front-bottom edge of NADIR_BOX_L (box centre
-      # 0.01042 0.41808 0.72919, 0.05 m cube): the box is behind/above the
-      # lens, so no ray can see its inside. Pure pitch 0 1 0 0.9411 rad
-      # (53.9 deg down) from scripts/aim_camera.py: top row -> 1.96 m ahead
-      # of the axle (same reach as the old z 1.31 mount), bottom row
-      # ~0.06 m ahead. Controller reads this pose live (Supervisor).
-      # Keep a direct Robot child. Do not File-Save.
-      translation 0.03542 0.41808 0.70419
-      rotation 0 1 0 0.9411
+      translation 0 0.05 0.055
+      rotation 0 1 0 1.5708
       name "nadir_left"
       width 128
       height 128
       fieldOfView 1.2
       near 0.03
     }
-    # Right shoulder: Y-mirror of the left boom/box/camera.
+    # Right pod: Y-mirror of the left. Same straight-down pitch.
     DEF NADIR_CAM_R Camera {
-      # True Y-mirror of NADIR_CAM_L: translation y negated, same pure
-      # pitch (0 1 0 theta is mirror-symmetric). Front-bottom edge of NADIR_BOX_R.
-      translation 0.03542 -0.41808 0.70419
-      rotation 0 1 0 0.9411
+      translation 0 -0.05 0.055
+      rotation 0 1 0 1.5708
       name "nadir_right"
       width 128
       height 128
       fieldOfView 1.2
       near 0.03
     }
-    # Forward STEREO pair for obstacles (docs/OBSTACLES.md). Mast and bar are
-    # visuals only (no boundingObject, no mass: physics unchanged). Lenses on the
+    # Forward STEREO pair for obstacles (docs/OBSTACLES.md). The camera
+    # nodes have no boundingObject. The body group has a box on the bar
+    # and a box on the oak body. Lenses on the
     # front face of STEREO_BAR: baseline 0.10 m (y +-0.05), z 0.78 m,
     # pure pitch 0 1 0 0.3469 (19.9 deg down) from src/stereo_depth.py
     # stereo_pitch_for_top(): the top row reaches 1.0 m height 1.0 m ahead of the
@@ -668,7 +660,7 @@ Robot {
       aperture 0.3
     }
     DistanceSensor {
-      translation 0.14 0.16 0.12
+      translation 0.18 0.20 0.20
       rotation 0 0 1 0.7854
       name "us_front_left"
       lookupTable [
@@ -692,7 +684,7 @@ Robot {
       aperture 0.3
     }
     DistanceSensor {
-      translation -0.12 0.16 0.12
+      translation -0.18 0.20 0.20
       rotation 0 0 1 2.3562
       name "us_rear_left"
       lookupTable [
@@ -716,7 +708,7 @@ Robot {
       aperture 0.3
     }
     DistanceSensor {
-      translation -0.12 -0.16 0.12
+      translation -0.18 -0.20 0.20
       rotation 0 0 1 -2.3562
       name "us_rear_right"
       lookupTable [
@@ -740,7 +732,7 @@ Robot {
       aperture 0.3
     }
     DistanceSensor {
-      translation 0.14 -0.16 0.12
+      translation 0.18 -0.20 0.20
       rotation 0 0 1 -0.7854
       name "us_front_right"
       lookupTable [
@@ -787,14 +779,130 @@ Robot {
     }
 %< } >%
   ]
-  # Flat deck box from the Blender mesh. Bottom is z = 0.105, top is
-  # z = 0.145. |y| is 0.12, inside the tire inner faces at |y| = 0.145.
+  # Deck box plus a primitive for every part that sticks past it.
+  # Cylinders here stand on Z (pods). Bottoms stay above the 12.7 mm lip.
   # The tray pocket is visual and is not a collider.
-  boundingObject Pose {
-    translation 0 0 0.125
+  boundingObject Group {
     children [
-      Box {
-        size 0.32 0.24 0.04
+      Pose {
+        translation 0 0 0.125
+        children [
+          Box { size 0.32 0.24 0.04 }
+        ]
+      }
+      Pose {
+        translation 0 0 0.08
+        children [
+          Cylinder { height 0.05 radius 0.028 }
+        ]
+      }
+      Pose {
+        translation 0 0.05 0.08
+        children [
+          Cylinder { height 0.05 radius 0.016 }
+        ]
+      }
+      Pose {
+        translation 0 -0.05 0.08
+        children [
+          Cylinder { height 0.05 radius 0.016 }
+        ]
+      }
+      Pose {
+        translation 0 0.173 0.12
+        children [
+          Box { size 0.03 0.106 0.03 }
+        ]
+      }
+      Pose {
+        translation 0 -0.173 0.12
+        children [
+          Box { size 0.03 0.106 0.03 }
+        ]
+      }
+      Pose {
+        translation 0.172 0 0.12
+        children [
+          Box { size 0.032 0.04 0.03 }
+        ]
+      }
+      Pose {
+        translation -0.172 0 0.12
+        children [
+          Box { size 0.032 0.04 0.03 }
+        ]
+      }
+      Pose {
+        translation -0.155 0 0.28
+        children [
+          Box { size 0.05 0.05 0.04 }
+        ]
+      }
+      Pose {
+        translation 0.168 0 0.45
+        children [
+          Box { size 0.036 0.046 0.04 }
+        ]
+      }
+      Pose {
+        translation 0.125 0 0.78
+        children [
+          Box { size 0.04 0.18 0.045 }
+        ]
+      }
+      Pose {
+        translation 0.145 0 0.785
+        children [
+          Box { size 0.035 0.06 0.04 }
+        ]
+      }
+      Pose {
+        translation 0.176 0.196 0.20
+        children [
+          Box { size 0.024 0.028 0.04 }
+        ]
+      }
+      Pose {
+        translation 0.13 0.13 0.20
+        children [
+          Box { size 0.11 0.15 0.016 }
+        ]
+      }
+      Pose {
+        translation 0.176 -0.196 0.20
+        children [
+          Box { size 0.024 0.028 0.04 }
+        ]
+      }
+      Pose {
+        translation 0.13 -0.13 0.20
+        children [
+          Box { size 0.11 0.15 0.016 }
+        ]
+      }
+      Pose {
+        translation -0.176 0.196 0.20
+        children [
+          Box { size 0.024 0.028 0.04 }
+        ]
+      }
+      Pose {
+        translation -0.13 0.13 0.20
+        children [
+          Box { size 0.11 0.15 0.016 }
+        ]
+      }
+      Pose {
+        translation -0.176 -0.196 0.20
+        children [
+          Box { size 0.024 0.028 0.04 }
+        ]
+      }
+      Pose {
+        translation -0.13 -0.13 0.20
+        children [
+          Box { size 0.11 0.15 0.016 }
+        ]
       }
     ]
   }

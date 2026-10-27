@@ -814,9 +814,13 @@ class Explorer:
         # The downward camera sits on the spin axis, so a real turn
         # leaves that picture still. Rewinding the gyro to the anchor
         # deleted a pivot in one sample (the door heading jumped 29°).
-        # A stuck scrub does not turn this far while the anchor is open.
+        # Forward wheel travel with that same still picture is the lip:
+        # the shell is yawing and not driving. A pure pivot is not.
         yaw_moved = abs(self.odometry.yaw_unwrapped_rad - float(anchor["yaw"]))
-        if yaw_moved >= 0.12:
+        dl_now = float(left_rad) - float(anchor["left"])
+        dr_now = float(right_rad) - float(anchor["right"])
+        claimed_now = abs(0.5 * (dl_now + dr_now)) * self.odometry.radius_m
+        if yaw_moved >= 0.12 and claimed_now < 0.02:
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()
             return
@@ -843,7 +847,9 @@ class Explorer:
         # Only the steps until the next picture. A latch that ran on
         # after the shell started moving deleted a real turn.
         self._zupt_trans_until = self.t_s + 0.12
-        if pictures:
+        # A real turn keeps the gyro. The still picture is the axis of
+        # that turn, not evidence the heading was wrong.
+        if pictures and yaw_moved < 0.12:
             self.odometry.yaw_unwrapped_rad = float(anchor["yaw"])
             self.odometry.yaw_rad = wrap_rad(self.odometry.yaw_unwrapped_rad)
             self._zupt_until = self.t_s + 0.12
@@ -1506,13 +1512,17 @@ class Explorer:
 
         One shoulder crossing 1.20 m for a single depth frame used to zero
         the clock, and the shell spun on the threshold until the goal died.
+        The align spin itself swings a shoulder out of that band. Holding
+        the clock for the same 1.2 s as the align window lets that spin
+        finish and the creep start. A doorway that is gone for the whole
+        window is a different opening.
         """
         if self._approach_since is None:
             self._approach_gone = None
             return
         if self._approach_gone is None:
             self._approach_gone = self.t_s
-        if self.t_s - self._approach_gone >= 0.40:
+        if self.t_s - self._approach_gone >= 1.2:
             self._approach_since = None
             self._approach_gone = None
 

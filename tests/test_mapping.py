@@ -1133,6 +1133,40 @@ def test_a_flicker_off_the_doorway_band_does_not_restart_the_align():
     assert v <= DOOR_SPEED_M_S + 1e-6
 
 
+def test_an_align_spin_that_loses_the_shoulders_keeps_the_clock():
+    """The align yaw swings one shoulder past 1.20 m. That is not a new doorway.
+
+    The hall is narrow enough that the corridor reads as an approach.
+    Clearing the clock after 0.40 s of that swing restarted the spin
+    for the whole bedroom run.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    bot._go(False, 0.28, 0.62, 0.70)
+    started = bot._approach_since
+    assert started is not None
+    bot.t_s += 0.8
+    bot._last_clear = (1.6, 0.62, 1.40)
+    bot._go(False, 0.28, 0.62, 1.40)
+    assert bot._approach_since == started
+    bot.t_s += 1.3
+    bot._go(False, 0.28, 0.62, 1.40)
+    assert bot._approach_since is None
+
+
 def test_a_smeared_door_still_creeps_after_the_align_window():
     """Occupied cells in the opening do not keep the shell spinning.
 

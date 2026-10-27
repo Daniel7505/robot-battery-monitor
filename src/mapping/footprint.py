@@ -156,6 +156,8 @@ def swing_out(
     if abs(v) < 1e-4 and abs(w) < 1e-4:
         return None
     x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    x0, y0, yaw0 = x, y, yaw
+    cos0, sin0 = math.cos(yaw0), math.sin(yaw0)
     ignore = _covered(grid, x, y, yaw) if grid is not None else set()
     samples = max(1, int(round(SWING_HORIZON_S / SWING_DT_S)))
     left_dir = (-math.sin(yaw), math.cos(yaw))
@@ -170,7 +172,17 @@ def swing_out(
                 break
             wx = x + cos_y * bx - sin_y * by
             wy = y + sin_y * bx + cos_y * by
-            if _corner_occupied(grid, wx, wy, ignore):
+            if not _corner_occupied(grid, wx, wy, ignore):
+                continue
+            # Body frame of the pose the arc started from. Sliding along a
+            # wall the side is already beside does not move a corner
+            # outward, and it is not a swing into that wall.
+            sx = cos0 * (wx - x0) + sin0 * (wy - y0)
+            sy = -sin0 * (wx - x0) + cos0 * (wy - y0)
+            outward = (sy - by) if by > 0.0 else (by - sy)
+            if outward > 0.01:
+                return f"swing:{name}"
+            if _face_crossed(grid, wx, wy, x0, y0, cos0, sin0, sx, v):
                 return f"swing:{name}"
         for name, bx, by in _SHELL_CORNERS:
             wx = x + cos_y * bx - sin_y * by
@@ -208,6 +220,39 @@ def _past_sonar(
     dx = wx - float(pose[0])
     dy = wy - float(pose[1])
     return dx * direction[0] + dy * direction[1] > limit + 1e-3
+
+
+def _face_crossed(
+    grid: OccupancyGrid,
+    wx: float,
+    wy: float,
+    x0: float,
+    y0: float,
+    cos0: float,
+    sin0: float,
+    sx: float,
+    v: float,
+) -> bool:
+    """True when this corner has crossed the nose or the tail into a wall.
+
+    The occupied cell's centre has to sit inside the real side faces. A
+    cell outboard of the shell is the wall the robot is driving beside,
+    and a straight pass is allowed to keep that clearance.
+    """
+    cell = grid.cell_of(wx, wy)
+    if cell is None:
+        return False
+    row, col = cell
+    cx = grid.origin[0] + (col + 0.5) * grid.res
+    cy = grid.origin[1] + (row + 0.5) * grid.res
+    csy = -sin0 * (cx - x0) + cos0 * (cy - y0)
+    if abs(csy) > SHELL_HALF_M:
+        return False
+    if v > 0.02 and sx > NOSE_M:
+        return True
+    if v < -0.02 and sx < -TAIL_M:
+        return True
+    return False
 
 
 def _corner_occupied(

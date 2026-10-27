@@ -1082,6 +1082,12 @@ def test_a_turn_away_from_a_mapped_wall_swings_the_rear_corner():
     assert choice.maneuver["wall"] == "left"
     assert choice.maneuver["away_w"] < 0.0
     assert any(str(item["sensor"]).startswith("swing:") for item in choice.vetoes)
+    # A wall the side is already beside. Straight keeps that clearance.
+    # Turning away swings the rear corner into it.
+    beside = OccupancyGrid()
+    _fill(beside, -0.6, 0.26, 1.2, 0.55, beside.l_max)
+    assert swing_out(beside, pose, 0.28, 0.0) is None
+    assert swing_out(beside, pose, 0.10, -0.75) is not None
 
 
 def test_side_sonar_vetoes_the_swing_and_a_matched_gyro_is_not_a_rub():

@@ -304,8 +304,9 @@ def choose_motion(
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
     maneuver = _three_point(view, vetoes, best_v, best_w)
-    if maneuver is not None and best_costs is not None:
-        return MotionChoice("three_point", 0.06, 0.0, best_costs, vetoes, maneuver)
+    if maneuver is not None:
+        costs = best_costs if best_costs is not None else {"total": 0.0}
+        return MotionChoice("three_point", 0.06, 0.0, costs, vetoes, maneuver)
     if best_costs is not None:
         return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
     fallen = _fallback(view)
@@ -335,8 +336,9 @@ def _three_point(
 ) -> dict | None:
     """Start a three-point turn when every forward steer-away swings into the wall.
 
-    The winner has to be a forward command that does not turn away. A
-    reverse that already yaws off the wall is left alone.
+    A forward command that already turns the nose away is left alone, and
+    so is a reverse that yaws off the wall. No legal forward motion is
+    still this case: holding there is how a mapped side wall froze the shell.
     """
     wall = _near_wall(view)
     side = None if wall is None else wall[0]
@@ -351,9 +353,11 @@ def _three_point(
             if sensor.endswith("right"):
                 side = "right"
                 break
-    if side is None or best_v <= 0.02:
+    if side is None:
         return None
-    if _steers_away(best_v, best_w, side):
+    if best_v > 0.02 and _steers_away(best_v, best_w, side):
+        return None
+    if best_v < -0.02 and _steers_away(-best_v, best_w, side):
         return None
     saw_swing = False
     blocked = {str(item["motion"]): str(item["sensor"]) for item in vetoes}

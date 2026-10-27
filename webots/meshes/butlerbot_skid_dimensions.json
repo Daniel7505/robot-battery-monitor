@@ -1,0 +1,56 @@
+{
+  "units": "m",
+  "frame": "X forward, Y left, Z up",
+  "wheel": {
+    "collision": "cylinder",
+    "radius_m": 0.08,
+    "height_m": 0.05,
+    "axis_local": "z",
+    "proto_rotation": "1 0 0 1.5708",
+    "hub_radius_m": 0.032,
+    "hub_height_m": 0.042
+  },
+  "body_boxes": [
+    {
+      "name": "deck",
+      "where": "robot",
+      "translation": "0 0 0.134",
+      "size": "0.32 0.24 0.058"
+    },
+    {
+      "name": "torso",
+      "where": "torso_solid",
+      "translation": "0 0 0.06",
+      "size": "0.16 0.12 0.28"
+    },
+    {
+      "name": "left_arm",
+      "where": "left_arm_solid",
+      "translation": "0 0 -0.13",
+      "size": "0.05 0.05 0.26"
+    },
+    {
+      "name": "right_arm",
+      "where": "right_arm_solid",
+      "translation": "0 0 -0.13",
+      "size": "0.05 0.05 0.26"
+    }
+  ],
+  "excluded_from_collision": [
+    "neck",
+    "head",
+    "nadir booms and boxes",
+    "stereo mast and bar",
+    "oak housing",
+    "radar dish and pedestal",
+    "eight sonar housings",
+    "rear camera housing",
+    "floor camera pod",
+    "lens discs"
+  ],
+  "notes": [
+    "Corner sonar device origins (z=0.12) lie inside the tire cylinders. Visible caps use the same x,y at z=0.178.",
+    "Radar rotation 0 1 0 1.5708 pitches the +X beam to -Z, so the dish faces down. The Radar node is not moved.",
+    "Head, neck, and every sensor mount are visual. Body collision is the deck box, the torso box, and the two arm boxes."
+  ]
+}

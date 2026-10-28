@@ -289,6 +289,30 @@ def test_path_aims_through_the_middle_of_a_doorway():
     assert _goal[0] > 1.6
 
 
+def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
+    """Turns sit 0.30 m out. A doorway is a pivot, then a straight crossing."""
+    from src.mapping.body import TURN_AIM_M, TURN_CLEAR_M
+    from src.mapping.frontiers import approach_command, hold_turning_clearance
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.4, -0.8, 2.2, 0.0, grid.l_max)
+    _fill(grid, -0.4, 0.05, 2.2, 1.5, grid.l_min)
+    hugging = [(0.2, 0.12), (0.8, 0.12), (1.4, 0.14)]
+    held = hold_turning_clearance(grid, hugging)
+    assert min(p[1] for p in held[1:]) >= TURN_CLEAR_M - 0.02
+    assert min(p[1] for p in held[1:]) >= TURN_AIM_M - 0.06
+
+    door = OccupancyGrid()
+    _fill(door, -0.5, -1.2, 2.4, 1.2, door.l_min)
+    _fill(door, 0.9, -1.2, 1.2, -0.40, door.l_max)
+    _fill(door, 0.9, 0.40, 1.2, 1.2, door.l_max)
+    path = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
+    yawed = approach_command(door, (0.3, 0.0, 1.2), path)
+    assert yawed is not None and yawed[2] == "pivot" and abs(yawed[1]) > 0.4 and yawed[0] == 0.0
+    lined = approach_command(door, (0.3, 0.0, 0.0), path)
+    assert lined is not None and lined[2] == "straight" and lined[1] == 0.0 and lined[0] > 0.0
+
+
 def test_narrow_opening_stays_passable_after_a_thick_jamb():
     """0.81 m between jambs, each smeared 0.15 m into the opening.
 

@@ -39,7 +39,7 @@ from src.mapping.depth_cloud import (
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
-from src.mapping.frontiers import select_goal
+from src.mapping.frontiers import approach_command, select_goal
 from src.mapping.tick import choose_motion, log_decision
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
@@ -188,6 +188,7 @@ class Explorer:
         self._body_v = 0.0
         self._body_w = 0.0
         self._last_motion = ""
+        self._pivot_since: float | None = None
         self._motion_log_at = -1.0
         self._radar_blocked = False
         self.room_labels = None
@@ -911,6 +912,21 @@ class Explorer:
             prev = nxt
         return heading
 
+    def _note_approach(self, why: str, v: float, w: float) -> None:
+        if why == self._last_motion and self.t_s < self._motion_log_at:
+            return
+        self._last_motion = why
+        self._motion_log_at = self.t_s + 1.0
+        log_decision(
+            {
+                "t": round(self.t_s, 2),
+                "kind": "approach",
+                "response": why,
+                "v": round(float(v), 3),
+                "w": round(float(w), 3),
+            }
+        )
+
     def _note_motion(self, choice) -> None:
         if choice.name == self._last_motion and self.t_s < self._motion_log_at:
             return
@@ -946,6 +962,18 @@ class Explorer:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
         pose = self.odometry.pose()
+        approach = approach_command(self.grid, pose, self.path_xy)
+        if approach is not None and approach[2] == "pivot":
+            if self._pivot_since is None:
+                self._pivot_since = self.t_s
+            if self.t_s - self._pivot_since <= 2.5:
+                _v, w, _why = approach
+                self._body_v, self._body_w = 0.0, w
+                self._note_approach("pivot", 0.0, w)
+                return wheel_speeds(0.0, w)
+            approach = None
+        else:
+            self._pivot_since = None
         v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
         if arrived:
             if self.goal_xy is not None:
@@ -973,11 +1001,16 @@ class Explorer:
         view = self._bubble_view
         if view is None and self._bubble_gap is not None:
             view = BubbleView(self._bubble_gap, None, None, None, self._min_gap)
+        heading_err = wrap_rad(self._segment_heading() - pose[2])
+        if approach is not None and approach[2] == "straight":
+            v, w = approach[0], approach[1]
+            heading_err = 0.0
+            self._note_approach("straight", v, w)
         choice = choose_motion(
             view=view,
             pursuit_v=v,
             pursuit_w=w,
-            heading_err=wrap_rad(self._segment_heading() - pose[2]),
+            heading_err=heading_err,
             grid=self.grid,
             pose=pose,
             left_clear=float(left_clear),

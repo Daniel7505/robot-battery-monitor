@@ -1088,6 +1088,60 @@ def test_a_turn_away_from_a_mapped_wall_swings_the_rear_corner():
     _fill(beside, -0.6, 0.26, 1.2, 0.55, beside.l_max)
     assert swing_out(beside, pose, 0.28, 0.0) is None
     assert swing_out(beside, pose, 0.10, -0.75) is not None
+    # The front tire, inboard of the shell corner. A low table the outer
+    # corner clears still stops a straight approach.
+    table = OccupancyGrid()
+    # One cell row, inboard of the shell corner. The outer corner stays
+    # in free space; the front tire does not.
+    _fill(table, 0.30, 0.16, 0.70, 0.19, table.l_max)
+    tire = swing_out(table, pose, 0.18, 0.0)
+    assert tire is not None and "tire" in tire
+
+
+def test_recovery_reverses_only_on_a_clear_arc():
+    """The reverse leg is angled away and swept. A blocked arc does not run."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import safe_recovery
+
+    # Open behind and to the right. The left wall is the one being left.
+    # The reverse yaws the nose right, which walks the centre away from it.
+    grid = OccupancyGrid()
+    _fill(grid, -0.2, 0.32, 0.6, 0.70, grid.l_max)
+    plan = safe_recovery(grid, (0.0, 0.0, 0.0), None, "left")
+    assert plan["response"] == "reverse"
+    assert plan["v"] < 0.0
+    assert plan["w"] < 0.0
+    assert plan["horizon_s"] <= 0.40
+    # Rear and both sides are inside the stop gap. No reverse and no spin.
+    boxed = BubbleView(None, 0.03, 0.03, 0.03, 0.03)
+    stopped = safe_recovery(None, (0.0, 0.0, 0.0), boxed, "left")
+    assert stopped["response"] == "stop"
+
+
+def test_a_path_prefers_turning_room_and_a_door_still_opens():
+    """The outer corner is a cost. The 0.81 m door is not sealed."""
+    from src.mapping.frontiers import TURN_CORNER_M, astar
+
+    assert TURN_CORNER_M > ROBOT_RADIUS_M
+    free = np.ones((40, 40), dtype=bool)
+    free[:, 18] = False
+    free[10, 18] = True
+    free[30, 18] = True
+    costs = np.ones((40, 40), dtype=np.float32)
+    costs[:20, :] = 5.0
+    roomy = astar(free, (20, 4), (20, 34), step_cost=1.0, costs=costs)
+    assert roomy is not None
+    assert any(row >= 28 for row, _col in roomy)
+    # 0.81 m between jambs, same geometry as the doorway regression.
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.85, 1.35, 0.85, grid.l_min)
+    _fill(grid, -0.25, -1.10, 1.50, -0.85, grid.l_max)
+    _fill(grid, -0.25, 0.85, 1.50, 1.10, grid.l_max)
+    _fill(grid, -0.25, -1.10, 0.0, 1.10, grid.l_max)
+    _fill(grid, 1.05, -0.85, 1.30, -0.42, grid.l_max)
+    _fill(grid, 1.05, 0.42, 1.30, 0.85, grid.l_max)
+    chosen = select_goal(grid, (0.4, 0.0))
+    assert chosen is not None
 
 
 def test_side_sonar_vetoes_the_swing_and_a_matched_gyro_is_not_a_rub():

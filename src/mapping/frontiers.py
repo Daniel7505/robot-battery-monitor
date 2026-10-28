@@ -3,20 +3,30 @@
 Yamauchi 1997: a frontier cell is free space next to unknown space.
 Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
 scored by size divided by the A* path length. The path is planned on
-the free grid with occupied cells inflated by the robot radius, so the
-robot does not try to squeeze through a door it cannot fit.
+the free grid with occupied cells inflated by the chassis half-width,
+so the robot does not try to squeeze through a door it cannot fit.
+An 0.81 m doorway still has a centre line at that pad. Cells inside
+the outer corner of the turning footprint cost more, so a route with
+room to turn wins when one exists. Set ``RBM_TURN_PAD=0`` to drop that
+cost and keep only the hard pad.
 """
 
 from __future__ import annotations
 
 import heapq
 import math
+import os
 
 import numpy as np
 
 from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M
+from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import crossing_bonus
+
+# Outer corner of the shell. On a 5 cm grid this is one cell past the
+# 0.20 m hard pad, which is what still leaves the 0.81 m door open.
+TURN_CORNER_M = math.hypot(SHELL_NOSE_M, SHELL_HALF_M)
 
 _NEIGHBORS = (
     (1, 0, 1.0),
@@ -332,6 +342,7 @@ def astar(
     goal: tuple[int, int],
     *,
     step_cost: float,
+    costs: np.ndarray | None = None,
 ) -> list[tuple[int, int]] | None:
     """8-connected A* on a boolean free grid. ``start`` may sit just off the grid."""
     h, w = free.shape
@@ -373,7 +384,8 @@ def astar(
             if dy != 0 and dx != 0:
                 if not free[y + dy, x] or not free[y, x + dx]:
                     continue
-            ng = g + mul * step_cost
+            weight = 1.0 if costs is None else float(costs[ny, nx])
+            ng = g + mul * step_cost * weight
             key = (ny, nx)
             if ng + 1e-9 < best.get(key, 1e18):
                 best[key] = ng
@@ -528,6 +540,27 @@ def _region_factor(goal: tuple[float, float], avoid: list[tuple[float, float, fl
     return factor
 
 
+def _turn_costs(labels: np.ndarray, free: np.ndarray, res: float) -> np.ndarray | None:
+    """Higher step cost inside the turning corner. None keeps every cell equal.
+
+    The hard pad is already applied in ``free``. This ring is the rest of
+    the outer corner, so a path can still use a doorway and will not hug
+    a mapped table when the room beside it is open.
+    """
+    if os.environ.get("RBM_TURN_PAD", "1") == "0":
+        return None
+    occupied = labels == 1
+    if not np.any(occupied):
+        return None
+    near = dilate_disk(occupied, TURN_CORNER_M, res)
+    tight = near & free
+    if not np.any(tight):
+        return None
+    costs = np.ones(free.shape, dtype=np.float32)
+    costs[tight] = 2.5
+    return costs
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -563,6 +596,7 @@ def select_goal(
                 ranked.append(group)
                 extra += 1
     free = traversable(labels, grid.res, radius_m)
+    costs = _turn_costs(labels, free, grid.res)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
         return None
@@ -590,7 +624,7 @@ def select_goal(
         target = viewpoint(free, cells, occupied=(labels == 1))
         if target is None:
             continue
-        path_cells = astar(free, start, target, step_cost=grid.res)
+        path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         length = 0.0
@@ -629,7 +663,7 @@ def select_goal(
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
         if mouth in banned:
             continue
-        path_cells = astar(free, start, mouth, step_cost=grid.res)
+        path_cells = astar(free, start, mouth, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         pts = [grid.cell_center(*rc) for rc in path_cells]

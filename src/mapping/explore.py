@@ -965,16 +965,19 @@ class Explorer:
 
     def _note_motion(self, choice) -> None:
         if choice.maneuver is not None:
-            self._last_motion = "three_point"
+            plan = choice.maneuver
+            self._last_motion = "recovery"
             self._motion_log_at = self.t_s + 1.0
             swing = [item for item in choice.vetoes if str(item.get("sensor", "")).startswith("swing:")]
             log_decision(
                 {
                     "t": round(self.t_s, 2),
-                    "kind": "three_point",
-                    "wall": choice.maneuver["wall"],
-                    "away_w": choice.maneuver["away_w"],
-                    "phases": "slow,stop,reverse,forward",
+                    "kind": "recovery",
+                    "response": plan["response"],
+                    "wall": plan["wall"],
+                    "v": round(float(plan["v"]), 3),
+                    "w": round(float(plan["w"]), 3),
+                    "horizon_s": plan["horizon_s"],
                     "vetoes": swing[:8],
                 }
             )
@@ -1058,7 +1061,7 @@ class Explorer:
         )
         self._note_motion(choice)
         if choice.maneuver is not None:
-            self._three.start(self.t_s, choice.maneuver["wall"], choice.maneuver["away_w"])
+            self._three.start(self.t_s, choice.maneuver)
             command = self._three.poll(self.t_s)
             if command is not None:
                 self._body_v, self._body_w = command

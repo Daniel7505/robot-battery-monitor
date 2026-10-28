@@ -1,12 +1,14 @@
-"""One control tick: live range and swing-out vetoes, everything else is a cost.
+"""One control tick: live range and footprint vetoes, everything else is a cost.
 
 Candidates are a handful of forward, arc, spin, and reverse speeds.
 A motion is dropped when live range says that speed would meet the shell,
-or when the swept corners would swing into a wall the robot has mapped
-or that side/rear sonar already sees. Doorway centring and a close side
-are costs. If no forward motion can turn away from a wall without that
-swing, a short three-point maneuver runs inside this tick. Ground truth
-is not read.
+or when a swept corner or tire would enter a wall this robot has mapped
+or that side/rear sonar already sees. The front tires are in that sweep:
+they catch a table the outer corner clears and the camera looks over.
+Doorway centring and a close side are costs. If no forward motion can
+turn away without that contact, a short recovery runs inside this tick:
+reverse only on an arc that stays clear, otherwise a clear spin, otherwise
+a stop. Ground truth is not read.
 """
 
 from __future__ import annotations
@@ -303,10 +305,11 @@ def choose_motion(
         costs = _costs(v, w, v_des, w_des, view, left_clear, right_clear, radar_blocked)
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
-    maneuver = _three_point(view, vetoes, best_v, best_w)
-    if maneuver is not None:
+    seed = _three_point(view, vetoes, best_v, best_w)
+    if seed is not None:
+        plan = safe_recovery(grid, pose, view, seed["wall"])
         costs = best_costs if best_costs is not None else {"total": 0.0}
-        return MotionChoice("three_point", 0.06, 0.0, costs, vetoes, maneuver)
+        return MotionChoice("recovery", plan["v"], plan["w"], costs, vetoes, plan)
     if best_costs is not None:
         return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
     fallen = _fallback(view)
@@ -375,35 +378,115 @@ def _three_point(
     return {"wall": side, "away_w": away_w}
 
 
-# slow, stop, reverse at a slight angle away from the wall, forward on
-# the heading that reverse just made. Durations are seconds.
-_THREE_POINT = (
-    ("slow", 0.20, 0.06, 0.0),
-    ("stop", 0.15, 0.0, 0.0),
-    ("reverse", 0.55, -0.10, None),
-    ("forward", 0.40, 0.12, 0.0),
-)
+# How long the reverse arc is allowed to run. Short on purpose: a longer
+# backup walks the tail into whatever is behind the shell.
+_REVERSE_S = 0.40
+_REVERSE_V = -0.10
+
+
+def safe_recovery(grid, pose, view: BubbleView | None, wall: str) -> dict:
+    """A short reverse angled away, a clear spin, or a stop.
+
+    The reverse is swept against this robot's map and its rear and side
+    sonar for ``_REVERSE_S`` seconds. The largest angle that stays clear
+    wins. A reverse into the obstacle is not used. A spin is used only
+    when its swept footprint is clear. Otherwise the tick stops.
+    """
+    away = -1.0 if wall == "left" else 1.0
+    left_m = None if view is None else view.left
+    right_m = None if view is None else view.right
+    rear_m = None if view is None else view.rear
+    for angle in (0.40, 0.28, 0.15, 0.0):
+        w = away * angle
+        if live_veto(_REVERSE_V, w, view):
+            continue
+        if swing_out(
+            grid,
+            pose,
+            _REVERSE_V,
+            w,
+            left_m=left_m,
+            right_m=right_m,
+            rear_m=rear_m,
+            horizon_s=_REVERSE_S,
+        ):
+            continue
+        return {
+            "response": "reverse",
+            "wall": wall,
+            "away_w": away * 0.28,
+            "v": _REVERSE_V,
+            "w": w,
+            "horizon_s": _REVERSE_S,
+        }
+    for w in (away * 0.55, -away * 0.55):
+        if live_veto(0.0, w, view):
+            continue
+        if swing_out(
+            grid,
+            pose,
+            0.0,
+            w,
+            left_m=left_m,
+            right_m=right_m,
+            rear_m=rear_m,
+            horizon_s=0.45,
+        ):
+            continue
+        return {
+            "response": "spin",
+            "wall": wall,
+            "away_w": away * 0.28,
+            "v": 0.0,
+            "w": w,
+            "horizon_s": 0.45,
+        }
+    return {
+        "response": "stop",
+        "wall": wall,
+        "away_w": away * 0.28,
+        "v": 0.0,
+        "w": 0.0,
+        "horizon_s": 0.0,
+    }
 
 
 class ThreePoint:
-    """The steer-away maneuver. Inactive until ``start``."""
+    """The recovery maneuver. Inactive until ``start``."""
 
     def __init__(self) -> None:
         self.phase: str | None = None
         self.until = 0.0
         self.away_w = 0.0
         self.wall = ""
+        self.response = ""
         self._index = 0
+        self._phases: tuple = ()
 
     def active(self) -> bool:
         return self.phase is not None
 
-    def start(self, t: float, wall: str, away_w: float) -> None:
-        self.wall = wall
-        self.away_w = float(away_w)
+    def start(self, t: float, plan: dict) -> None:
+        self.wall = str(plan["wall"])
+        self.away_w = float(plan["away_w"])
+        self.response = str(plan["response"])
         self._index = 0
-        self.phase = _THREE_POINT[0][0]
-        self.until = float(t) + _THREE_POINT[0][1]
+        if self.response == "stop":
+            self._phases = (("stop", 0.30, 0.0, 0.0),)
+        elif self.response == "spin":
+            self._phases = (
+                ("stop", 0.10, 0.0, 0.0),
+                ("spin", float(plan["horizon_s"]), 0.0, float(plan["w"])),
+            )
+        else:
+            self._phases = (
+                ("slow", 0.15, 0.06, 0.0),
+                ("stop", 0.10, 0.0, 0.0),
+                ("reverse", float(plan["horizon_s"]), float(plan["v"]), float(plan["w"])),
+                ("forward", 0.35, 0.12, 0.0),
+            )
+        self.phase = self._phases[0][0]
+        self.until = float(t) + self._phases[0][1]
 
     def poll(self, t: float) -> tuple[float, float] | None:
         if self.phase is None:
@@ -411,16 +494,14 @@ class ThreePoint:
         if float(t) + 1e-9 < self.until:
             return self._command()
         self._index += 1
-        if self._index >= len(_THREE_POINT):
+        if self._index >= len(self._phases):
             self.phase = None
             return None
-        name, dur, _v, _w = _THREE_POINT[self._index]
+        name, dur, _v, _w = self._phases[self._index]
         self.phase = name
         self.until = float(t) + dur
         return self._command()
 
     def _command(self) -> tuple[float, float]:
-        _name, _dur, v, w = _THREE_POINT[self._index]
-        if w is None:
-            w = self.away_w
+        _name, _dur, v, w = self._phases[self._index]
         return float(v), float(w)

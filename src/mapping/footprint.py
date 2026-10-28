@@ -125,6 +125,15 @@ _SHELL_CORNERS = (
     ("rear-left", -SHELL_TAIL_M, SHELL_HALF_M),
     ("rear-right", -SHELL_TAIL_M, -SHELL_HALF_M),
 )
+# Tire leading edges sit inboard of the shell corners. A desk leg or an
+# end table under a desktop the camera is looking over hits the tire
+# while the outer corner is still in a free cell.
+_TIRE_POINTS = (
+    ("front-left-tire", 0.19, 0.195),
+    ("front-right-tire", 0.19, -0.195),
+    ("rear-left-tire", -0.19, 0.195),
+    ("rear-right-tire", -0.19, -0.195),
+)
 
 
 def rear_swing_m(angle_rad: float) -> float:
@@ -143,6 +152,7 @@ def swing_out(
     left_m: float | None = None,
     right_m: float | None = None,
     rear_m: float | None = None,
+    horizon_s: float | None = None,
 ) -> str | None:
     """Corner that this arc drives into a mapped wall or a sonar plane.
 
@@ -159,7 +169,8 @@ def swing_out(
     x0, y0, yaw0 = x, y, yaw
     cos0, sin0 = math.cos(yaw0), math.sin(yaw0)
     ignore = _covered(grid, x, y, yaw) if grid is not None else set()
-    samples = max(1, int(round(SWING_HORIZON_S / SWING_DT_S)))
+    horizon = SWING_HORIZON_S if horizon_s is None else max(SWING_DT_S, float(horizon_s))
+    samples = max(1, int(round(horizon / SWING_DT_S)))
     left_dir = (-math.sin(yaw), math.cos(yaw))
     right_dir = (math.sin(yaw), -math.cos(yaw))
     back_dir = (-math.cos(yaw), -math.sin(yaw))
@@ -167,7 +178,7 @@ def swing_out(
         x, y, yaw = _advance(x, y, yaw, v, w, SWING_DT_S)
         cos_y = math.cos(yaw)
         sin_y = math.sin(yaw)
-        for name, bx, by in _CORNERS:
+        for name, bx, by in (*_CORNERS, *_TIRE_POINTS):
             if grid is None:
                 break
             wx = x + cos_y * bx - sin_y * by

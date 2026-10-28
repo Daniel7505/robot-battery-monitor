@@ -1,10 +1,10 @@
 """Frontier exploration loop.
 
-The robot spins once to fill the depth camera's blind sides, drives to
-the best frontier with pure pursuit, spins again on arrival, and stops
-when no reachable frontier is longer than 0.3 m. Depth closer than the
-stop range, or a radar flag from the controller, holds the wheels and
-turns toward the clearer side.
+The robot spins once to fill the depth camera's blind sides, then picks
+a frontier every few seconds and drives the motion live range still
+allows. Sweep, doorway, and footprint checks are costs. A command that
+does not move the odometry waits once, reverses once, and tries the
+next goal. Depth closer than the stop distance is the only veto.
 
 This module does not know the apartment. Pose is whatever the odometry
 object reports.
@@ -28,7 +28,7 @@ from src.mapping.body import (
     STOP_CLEARANCE_M,
     DepthCamera,
 )
-from src.mapping.bubble import BubbleView, assess_bubble, max_speed_for_gap, pivot_ready, reverse_budget_m
+from src.mapping.bubble import BubbleView, assess_bubble
 from src.mapping.depth_cloud import (
     blind_fraction,
     body_points,
@@ -39,8 +39,8 @@ from src.mapping.depth_cloud import (
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
-from src.mapping.footprint import fit_motion
-from src.mapping.frontiers import select_goal
+from src.mapping.frontiers import approach_command, select_goal
+from src.mapping.tick import choose_motion, log_decision
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
@@ -133,26 +133,15 @@ class Explorer:
         self.path_xy: list[tuple[float, float]] = []
         self._spin_start: float | None = None
         self._replan_at = -1.0
-        self._avoid_until = -1.0
-        self._reverse_until = -1.0
-        self._turn = SPIN_RAD_S
-        self._banned: dict[tuple[int, int], float] = {}
-        self._fails: dict[tuple[int, int], int] = {}
         self._goal_since = 0.0
-        self._stuck_anchor: tuple[float, float, float] | None = None
         self._wheels: tuple[float, float] | None = None
         self._commanded = (0.0, 0.0)
         self._motion = MotionCheck()
-        self._progress_xy = (0.0, 0.0)
-        self._progress_t = 0.0
-        self._recover_until = -1.0
         self._confident_after = 0.0
         self._last_spin_t = -100.0
         self._nudge_at = 0.0
         self._match_proposal: tuple[float, float, float] | None = None
         self._match_proposal_t = -10.0
-        self._close_since: float | None = None
-        self._heading_anchor: tuple[float, float] | None = None
         self._view_blind = False
         self._blind_frames = 0
         self._slip_debt_m = 0.0
@@ -173,9 +162,6 @@ class Explorer:
         self._bubble_gap: float | None = None
         self._min_gap: float | None = None
         self._path_m = 0.0
-        self._reverse_left_m = 0.0
-        self._reverse_release = False
-        self._reverse_needs_gap = False
         self._bubble_view: BubbleView | None = None
         self._pin = PinWatch()
         self._pin_idle_s = 0.0
@@ -183,10 +169,6 @@ class Explorer:
         self._mark_xy = (0.0, 0.0)
         self._prev_depth = None
         self._prev_depth_yaw = 0.0
-        self._side_since: float | None = None
-        self._side_sign = 0.0
-        self._side_escape_sign = 0.0
-        self._side_escape_until = -1.0
         self._stall_t = 0.0
         self._stall_exp = 0.0
         self._stall_act = 0.0
@@ -198,11 +180,19 @@ class Explorer:
         self.sweep_aligned = 0
         self.sweep_straight = 0
         self.sweep_stopped = 0
-        self._sweep_log_at = -1.0
-        self._commit_until = -1.0
-        self._commit_heading = 0.0
-        self._escape_log_at = -1.0
-        self._blocked_since: float | None = None
+        self._attempts: list[tuple[float, float, float, float]] = []
+        self._motion_anchor: tuple[float, float, float, float] | None = None
+        self._relief: str | None = None
+        self._relief_until = -1.0
+        self._relief_w = 0.0
+        self._body_v = 0.0
+        self._body_w = 0.0
+        self._last_motion = ""
+        self._pivot_since: float | None = None
+        self._approach_why = ""
+        self._approach_log_at = 0.0
+        self._motion_log_at = -1.0
+        self._radar_blocked = False
         self.room_labels = None
         self.room_names: dict[int, str] = {}
         self.room_doors = None
@@ -210,12 +200,6 @@ class Explorer:
         # doorway paints the next room free; that is not a visit.
         self.visited = np.zeros((self.grid.n, self.grid.n), dtype=bool)
         self._visited_cell: tuple[int, int] | None = None
-        self._opening_since: float | None = None
-        self._opening_holds = 0
-        self._approach_since: float | None = None
-        self._approach_gone: float | None = None
-        self._gentle_side = 0
-        self._gap_looks = 0
         self._rear_gap: float | None = None
         self._prev_rear = None
         self._prev_rear_yaw = 0.0
@@ -287,8 +271,6 @@ class Explorer:
         self._step_dt = dt
         self.t_s += dt
         stalled = self._wheels_stalled(left_wheel_rad, right_wheel_rad, dt)
-        if stalled:
-            self._note_contact()
         self._wheels = (float(left_wheel_rad), float(right_wheel_rad))
         ds = self.odometry.pending_translation(left_wheel_rad, right_wheel_rad)
         clearance = left_clear = right_clear = 99.0
@@ -312,14 +294,10 @@ class Explorer:
                 self._view_blind = False
             if self._blind_frames >= 2:
                 self._view_blind = True
-            prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
         elif self._held_clear is not None:
             # Depth arrives at 10 Hz. Dropping it on the steps in between
             # made the shell look open and the speed cap ignored the wall.
             clearance, left_clear, right_clear = self._held_clear
-            prefer = SPIN_RAD_S if left_clear >= right_clear else -SPIN_RAD_S
-        else:
-            prefer = self._turn
         if rear_depth is not None:
             rear_hits, _rear_floors, _rear_sensor = body_points(
                 REAR_DEPTH,
@@ -398,11 +376,6 @@ class Explorer:
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
-                if self._fusion.last_slip == "floor":
-                    # The picture already matched. Waiting for the pose
-                    # anchor to age another 0.7 s held the caster on the
-                    # walkway lip until the press was past two seconds.
-                    self._floor_stall_backoff()
         self._watch_pin(depth, ds, rear_depth)
         self._watch_zupt(
             depth,
@@ -464,35 +437,7 @@ class Explorer:
         self._bubble_view = view
         self._bubble_gap = view.forward
         self._min_gap = view.minimum
-        self._watch_side(view)
-        if self._reverse_left_m > 0.0 and self._reverse_needs_gap:
-            # Encoder distance along a jamb spends the budget while the
-            # tire is still on the frame. Wait until that side opens.
-            if self._side_opened(view) or self.t_s > self._reverse_until:
-                self._reverse_left_m = 0.0
-                self._reverse_needs_gap = False
-                self._side_escape_sign = 0.0
-                self._side_since = None
-        elif self._reverse_left_m > 0.0:
-            if ds >= -1e-4:
-                # Hubs have not started going backward. A stall would
-                # otherwise burn the timer and the backup would expire
-                # before the wheels ever moved.
-                self._reverse_until = max(
-                    self._reverse_until, self.t_s + self._reverse_left_m / 0.12 + 0.35
-                )
-            if ds < 0.0:
-                self._reverse_left_m = max(0.0, self._reverse_left_m + ds)
-            if self._reverse_left_m <= 0.0 or self.t_s > self._reverse_until:
-                self._reverse_left_m = 0.0
-            elif (
-                self._reverse_release
-                and ds < -0.002
-                and view.minimum is not None
-                and pivot_ready(view.minimum)
-                and not self._view_blind
-            ):
-                self._reverse_left_m = 0.0
+        self._radar_blocked = bool(radar_blocked)
         if (
             self._script is None
             and self.loop_enabled
@@ -524,87 +469,7 @@ class Explorer:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
             self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
         self._last_clear = (clearance, left_clear, right_clear)
-        # A depth hit at 1.5 m is the far side of the room, not a press.
-        # Recovery only when the shell itself is close. An open room was
-        # backing up every few seconds and never leaving the spawn area.
-        shell_gap = self._min_gap if self._min_gap is not None else self._bubble_gap
-        near_shell = self._view_blind or (shell_gap is not None and shell_gap < 0.45)
-        if near_shell:
-            if self._close_since is None:
-                self._close_since = self.t_s
-        else:
-            self._close_since = None
-        close_held = self._close_since is not None and (self.t_s - self._close_since) >= 0.4
-        # Pure pursuit spins in place when the path is behind the nose.
-        # If that spin does not actually change the heading, the body is
-        # wedged and an open view must not hide it. A real turn, which
-        # does change the heading, is left alone.
-        yaw_u = self.odometry.yaw_unwrapped_rad
-        # A few degrees resets the timer. Only a heading that is not
-        # turning at all counts as wedged. A slow alignment is a real turn.
-        if self._heading_anchor is None or abs(yaw_u - self._heading_anchor[1]) > 0.08:
-            self._heading_anchor = (self.t_s, yaw_u)
-        heading_stuck = (self.t_s - self._heading_anchor[0]) > 3.5
-        if math.hypot(x - self._progress_xy[0], y - self._progress_xy[1]) > 0.05:
-            self._progress_xy = (x, y)
-            self._progress_t = self.t_s
-            self._opening_holds = 0
-            self._gentle_side = 0
-            self._gap_looks = 0
-        # Both shoulders on a frame, and the nose still looking through
-        # it, is a doorway approach. A few seconds of lining up is not a
-        # stall, and the recovery used to blacklist the opening. The same
-        # window covers a live gap the occupancy sweep is calling a wall.
-        in_mouth = (
-            0.12 < left_clear < 0.80
-            and 0.12 < right_clear < 0.80
-            and clearance > 0.16
-        )
-        relief_now = self._gap_ahead()
-        if in_mouth or relief_now:
-            if self._opening_since is None:
-                self._opening_since = self.t_s
-            # A pure yaw at a one-sided wall is not a doorway. Two seconds
-            # is enough to square up; longer than that was a spin in the bath.
-            if relief_now == "yaw" and not in_mouth:
-                window = 2.0
-            else:
-                window = 10.0 if in_mouth else 8.0
-            if self.t_s - self._opening_since < window:
-                self._progress_t = self.t_s
-        else:
-            self._opening_since = None
-        if (
-            self._script is None
-            and self.phase == "go"
-            and not self.done
-            and self.t_s >= self._recover_until
-            and (self.t_s - self._progress_t) > 3.5
-            and (close_held or heading_stuck)
-        ):
-            self._start_recovery()
-        # The bubble is the whole shell. A jamb in the shoulder of the
-        # depth view is still a steer (see _go), not a wall by itself.
-        cap = self._speed_cap(view)
-        shell_blocked = cap < 0.04
-        # The forward radar reports furniture inside 0.45 m. That is not
-        # the shell touching it. Treating it as a block turned an open
-        # bubble into a spin, and the spin reversed whenever the depth
-        # shoulders swapped, for minutes.
-        if radar_blocked and not shell_blocked:
-            cap = min(cap, 0.12)
-        blocked = shell_blocked
-        # One direction for the whole blocked episode. Picking again
-        # every frame wags the robot between the two sides of a jamb.
-        if self.phase == "go" and blocked:
-            if self._blocked_since is None:
-                self._blocked_since = self.t_s
-                self._turn = prefer
-                if self._replan_at < self.t_s:
-                    self._replan_at = self.t_s + 0.45
-            self._avoid_until = self.t_s + 0.08
-        elif not blocked:
-            self._blocked_since = None
+        self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
                 ds_m=ds,
@@ -622,7 +487,7 @@ class Explorer:
         if self.phase == "spin":
             return self._remember(self._spin())
         if self.phase == "go":
-            return self._remember(self._go(blocked, cap, left_clear, right_clear))
+            return self._remember(self._go(False, 0.0, left_clear, right_clear))
         return self._remember((0.0, 0.0))
 
     def _spin(self) -> tuple[float, float]:
@@ -636,8 +501,6 @@ class Explorer:
             self.phase = "go"
             self._replan_at = -1.0
             self.goal_xy = None
-            self._progress_t = self.t_s
-            self._progress_xy = self.odometry.pose()[:2]
             if then == "settle":
                 self._log("final scan finished")
                 self._plan()
@@ -726,12 +589,6 @@ class Explorer:
             self.odometry.y_m = self._pin.y0
             self._pin_until = self.t_s + 1.2
             self._log("pinned, depth floor and visual still, wheel translation frozen")
-            # A crossing that is already lined up stays the goal. Recovery
-            # would reverse and drop it, which is how a 7 s hall visit ended.
-            if self.t_s < self._commit_until:
-                self._progress_t = self._commit_until
-            else:
-                self._start_recovery()
         self._pin.reset()
 
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
@@ -887,243 +744,21 @@ class Explorer:
         # nothing to back away from. The pose freeze above is the update.
         if claimed < 0.02 and spun < 0.08:
             return
-        commanding = abs(self._commanded[0]) + abs(self._commanded[1]) > 0.4
         if self.phase == "spin" and age >= 0.80 and not anchor["left_spin"]:
             anchor["left_spin"] = True
             self._spin_start = None
             self._spin_then = None
             self.phase = "go"
             self._replan_at = self.t_s
-            self._progress_t = self.t_s
             self._log("spin did not turn the shell")
-        elif (
-            self.phase == "go"
-            and age >= 0.70
-            and commanding
-            and not anchor["backed"]
-            and self.t_s >= self._reverse_until
-        ):
-            # A press the side sonar never sees: the nose looks through
-            # the opening while the tires scrub. Back off before the
-            # contact has lasted two seconds. The goal stays.
-            anchor["backed"] = True
-            reason = "wheels lifted" if pitched else "still"
-            self._arm_reverse(
-                self._min_gap, blind=self._view_blind, force_min_m=0.16, reason=reason
-            )
-            self._progress_t = self.t_s
-
-    def _floor_stall_backoff(self) -> None:
-        """Reverse when the floor image says the shell is not driving.
-
-        A pure pivot is left alone: the commands oppose, and the gyro is
-        what says whether that turn is real. Net forward with a matched
-        floor is the caster on the lip, wheels spinning in the air.
-        """
-        if self.phase != "go" or self.t_s < self._reverse_until:
-            return
-        left, right = self._commanded
-        if abs(left + right) < 0.5 or abs(left) + abs(right) < 0.4:
-            return
-        self._arm_reverse(
-            self._min_gap, blind=self._view_blind, force_min_m=0.16, reason="floor"
-        )
-
-    def _pressing_side(self, view: BubbleView) -> float:
-        """+1 when the left shell is on a surface, -1 for the right, else 0."""
-        left = 99.0 if view.left is None else view.left
-        right = 99.0 if view.right is None else view.right
-        if left < 0.09 and left + 0.04 < right:
-            return 1.0
-        if right < 0.09 and right + 0.04 < left:
-            return -1.0
-        return 0.0
-
-    def _watch_side(self, view: BubbleView) -> None:
-        """A side gap that stays shut is a jamb, not a nose contact.
-
-        The bubble's reverse drives along the heading and used to count
-        encoder radians, so a tire skidding on the frame spent the budget
-        and the same doorway was tried again. Hold the press, then yaw
-        off that side and keep reversing until the gap opens.
-        """
-        if self.phase != "go" or self.t_s < self._side_escape_until:
-            return
-        side = self._pressing_side(view)
-        if side == 0.0:
-            self._side_sign = 0.0
-            self._side_since = None
-            return
-        if side != self._side_sign or self._side_since is None:
-            self._side_sign = side
-            self._side_since = self.t_s
-            return
-        # A third of a second is a brush on the way through a doorway.
-        # The long presses are the shell sitting still, which the
-        # zero-velocity update backs out of.
-        if self.t_s - self._side_since >= 0.45:
-            self._start_side_escape(side, view)
-
-    def _side_opened(self, view: BubbleView) -> bool:
-        if self._side_escape_sign > 0.0:
-            return view.left is None or view.left > 0.14
-        if self._side_escape_sign < 0.0:
-            return view.right is None or view.right > 0.14
-        return True
-
-    def _start_side_escape(self, side: float, view: BubbleView) -> None:
-        which = "left" if side > 0.0 else "right"
-        gap = view.left if side > 0.0 else view.right
-        shown = -1.0 if gap is None else float(gap)
-        # A jamb beside a gap the nose still looks through. Yaw off that
-        # jamb and keep the goal. Blacklisting here painted the bedroom
-        # shut and the robot never went back.
-        self._gentle_side += 1
-        if self._gap_ahead() and self._gentle_side < 3:
-            self._log(f"side contact on the {which} beside an opening, yawing off gap={shown:.2f}")
-            self._side_escape_sign = side
-            self._side_escape_until = self.t_s + 1.0
-            # A 6 cm twitch left the tire on the frame and the same goal
-            # was driven into the wall again. Back up far enough to turn.
-            self._reverse_left_m = 0.16
-            self._reverse_until = self._side_escape_until
-            self._reverse_needs_gap = True
-            self._reverse_release = False
-            self._recover_until = max(self._recover_until, self.t_s + 0.6)
-            self._progress_t = self.t_s + 0.6
-            self._turn = -side * SPIN_RAD_S
-            self.phase = "go"
-            self.done = False
-            return
-        self._gentle_side = 0
-        self._log(f"side contact on the {which}, backing off the frame gap={shown:.2f}")
-        key = self._goal_key()
-        if key is not None:
-            self._fails[key] = self._fails.get(key, 0) + 1
-            self._blacklist(key, radius=3, ttl_s=8.0)
-        self.goal_xy = None
-        self.path_xy = []
-        self._replan_at = self.t_s + 1.2
-        self._side_escape_sign = side
-        self._side_escape_until = self.t_s + 1.3
-        self._reverse_left_m = 0.22
-        self._reverse_until = self._side_escape_until
-        self._reverse_needs_gap = True
-        self._reverse_release = False
-        self._recover_until = max(self._recover_until, self.t_s + 0.8)
-        self._progress_t = self._side_escape_until
-        self._progress_xy = self.odometry.pose()[:2]
-        self._confident_after = max(self._confident_after, self.t_s + 4.0)
-        self._turn = -side * SPIN_RAD_S
-        self.phase = "go"
-        self.done = False
-
-    def _door_yaw(self, left_clear: float, right_clear: float) -> tuple[float, str]:
-        """Centre on a doorway. The mode is mouth, approach, or empty.
-
-        Mouth: both side sonars see the frame, so a small yaw holds the
-        line while the shell is in the opening. Approach: the depth
-        shoulders see a gap the nose has not entered yet, so the drive
-        lines up on that centre line and then goes straight. A press
-        closer than 5 cm is the side-escape case, not a centering command.
-        """
-        view = self._bubble_view
-        left_s = None if view is None else view.left
-        right_s = None if view is None else view.right
-        nose = self._last_clear[0]
-        if (
-            left_s is not None
-            and right_s is not None
-            and 0.05 < left_s < 0.50
-            and 0.05 < right_s < 0.50
-        ):
-            return self._jamb_yaw(left_s, right_s), "mouth"
-        nearer = min(float(left_clear), float(right_clear))
-        if left_clear < 1.20 and right_clear < 1.20 and nose > nearer + 0.20:
-            return self._jamb_yaw(left_clear, right_clear), "approach"
-        return 0.0, ""
 
     def _log(self, message: str) -> None:
         print(f"MAPPING t={self.t_s:.1f}s {message}", flush=True)
 
-    def _note_contact(self) -> None:
-        x, y, yaw = self.odometry.pose()
-        fresh = self.t_s >= self._reverse_until
-        # Tire outer corners. The old point 0.28 m down the centre line
-        # sat in the 0.81 m opening and stayed occupied.
-        self._reinforce_corners(x, y, yaw)
-        if not fresh:
-            return
-        # Only as far as the pivot disk needs. A fixed two-second reverse
-        # yanked the robot off a doorway it had already lined up with.
-        self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.14, reason="contact")
-        self.path_xy = []
-        self._replan_at = self._avoid_until
-        nose, left_c, right_c = self._last_clear
-        self._log(f"contact, backing up nose={nose:.2f} left={left_c:.2f} right={right_c:.2f}")
 
     def _note_slip(self) -> None:
         self.slip_events += 1
         self._confident_after = max(self._confident_after, self.t_s + 6.0)
-        self._start_recovery(keep_opening=False)
-
-    def _start_recovery(self, *, keep_opening: bool = True) -> None:
-        """Reverse, drop the frontier ahead, and refuse to call the run finished."""
-        if self.t_s < self._recover_until:
-            return
-        x, y, yaw = self.odometry.pose()
-        nose, left_c, right_c = self._last_clear
-        self._log(f"backup nose={nose:.2f} left={left_c:.2f} right={right_c:.2f} blind={int(self._view_blind)}")
-        # Live depth still shows the gap. The stall is the sweep sitting
-        # on a smeared cell, not a wall. Painting the goal bans the room
-        # on the far side. A wheel slip is not this case: the pose is lying.
-        if keep_opening and self._gap_ahead() and self._opening_holds < 2:
-            self._opening_holds += 1
-            self._log("stall in an opening, not painting it")
-            self._turn = self._opening_yaw() or self._turn
-            if nose < 0.70:
-                self._arm_reverse(self._min_gap, blind=False, force_min_m=0.06, reason="opening")
-            self._recover_until = self.t_s + 0.8
-            self._progress_t = self.t_s + 0.8
-            self._opening_since = self.t_s
-            self.phase = "go"
-            self.done = False
-            return
-        # An open nose is not a wall. Banning the goal paints a disk on the
-        # room beyond the doorway, which is how the bedroom was abandoned.
-        if nose >= 1.50:
-            self._log("stall with an open nose, not painting the opening")
-            self.goal_xy = None
-            self.path_xy = []
-            self._replan_at = self.t_s + 0.4
-            self._recover_until = self.t_s + 0.8
-            self._progress_t = self.t_s + 0.8
-            self._progress_xy = (x, y)
-            self.phase = "go"
-            self.done = False
-            return
-        self._ban_current(immediate=True)
-        # A small, expiring patch on the jamb. Radius 12 sealed the 0.81 m
-        # opening and the ban never came back, so the bedroom was abandoned.
-        self._blacklist_xy(x + math.cos(yaw) * 0.30, y + math.sin(yaw) * 0.30, radius=4, ttl_s=12.0)
-        self._reinforce_corners(x, y, yaw)
-        tight = self._tight_face()
-        if tight is not None and tight[0] == "rear" and tight[1] < 0.12:
-            # The tail is on the wall. A reverse drives further in.
-            self._reverse_left_m = 0.0
-            self._reverse_needs_gap = False
-        else:
-            self._arm_reverse(self._min_gap, blind=self._view_blind, force_min_m=0.08, reason="backup")
-        self._recover_until = self.t_s + 0.8
-        self._progress_t = self._recover_until
-        self._progress_xy = (x, y)
-        self._confident_after = max(self._confident_after, self.t_s + 6.0)
-        self._turn = SPIN_RAD_S if self._turn < 0.0 else -SPIN_RAD_S
-        self.path_xy = []
-        self.goal_xy = None
-        self._replan_at = self._recover_until
-        self.phase = "go"
-        self.done = False
 
     def _confident(self) -> bool:
         # Still against a surface the camera cannot see, or the wheels
@@ -1138,415 +773,121 @@ class Explorer:
                 return False
         return True
 
-    def _jamb_yaw(self, left_clear: float, right_clear: float) -> float:
-        """Centre in a gap. A wall on only one side is not a doorway.
+    def _avoid_now(self) -> list[tuple[float, float, float]]:
+        live: list[tuple[float, float, float, float]] = []
+        out: list[tuple[float, float, float]] = []
+        for x, y, t0, weight in self._attempts:
+            age = self.t_s - t0
+            if age > 36.0:
+                continue
+            live.append((x, y, t0, weight))
+            decayed = weight * math.exp(-age / 12.0)
+            if decayed > 0.05:
+                out.append((x, y, decayed))
+        self._attempts = live
+        return out
 
-        Yawing at every nearby shoulder turned the robot parallel to the
-        bedroom wall and held it there. Both shoulders have to be close
-        before this adds a turn, and a matched pair stays straight.
-        """
-        if left_clear > 1.3 or right_clear > 1.3:
-            return 0.0
-        # Positive error: more air on the left, so the body is right of
-        # the centre line and should yaw left. A matched pair (a few
-        # centimetres) stays straight instead of hunting.
-        error = float(left_clear) - float(right_clear)
-        if abs(error) < 0.08:
-            return 0.0
-        return max(-0.45, min(0.45, 1.1 * error))
+    def _remember_attempt(self, x: float, y: float, weight: float = 2.0) -> None:
+        self._attempts.append((float(x), float(y), self.t_s, float(weight)))
 
-    def _gap_ahead(self) -> str:
-        """Live sensors see air the occupancy sweep is treating as a wall.
-
-        ``creep``: the nose and the bubble both look past the nearer
-        return, so a slow move is safer than freezing on a smeared cell.
-        ``yaw``: one shoulder is a jamb and the other is the opening, so
-        turn toward it instead of backing out. A flat wall, where the
-        nose and both shoulders agree, is neither.
-        """
-        if self._view_blind:
-            return ""
-        nose, left, right = self._last_clear
-        if nose >= 20.0:
-            return ""
-        nearer = min(left, right)
-        further = max(left, right)
-        bubble = 0.0 if self._bubble_gap is None else float(self._bubble_gap)
-        if nearer < 20.0 and abs(nose - nearer) < 0.18 and abs(further - nearer) < 0.35:
-            return ""
-        open_ahead = nearer >= 20.0 or nose > nearer + 0.18
-        if nose > 0.55 and bubble > 0.38 and open_ahead:
-            if nearer < 0.36:
-                return "yaw"
-            return "creep"
-        if 0.18 < nearer < 1.20 and further > nearer + 0.70 and nose > 0.32:
-            return "yaw"
-        return ""
-
-    def _map_gap_heading(self) -> float | None:
-        """Yaw rate toward a short smeared threshold with free space beyond.
-
-        A long wall also has rooms on both sides. The threshold is the
-        short one, about a metre of thin occupied cells. Already facing
-        it returns nothing, so a stall against a real wall still backs out.
-        """
+    def _watch_motion(self) -> None:
+        """Stuck and contact are the same fact: a command the odometry did not follow."""
+        if self._relief is not None or self.phase != "go" or self.done:
+            return
+        translating = abs(self._body_v) > 0.03
+        spinning = abs(self._body_w) > 0.12 and not translating
+        if not translating and not spinning:
+            self._motion_anchor = None
+            return
         x, y, yaw = self.odometry.pose()
-        labels = self.grid.labels()
-        best_dist = 1e9
-        best_heading = None
-        for index in range(16):
-            ang = index * math.pi / 8.0
-            if abs(wrap_rad(ang - yaw)) < 0.5:
-                continue
-            dx, dy = math.cos(ang), math.sin(ang)
-            hit = None
-            for step in range(1, 18):
-                dist = step * self.grid.res
-                cell = self.grid.cell_of(x + dx * dist, y + dy * dist)
-                if cell is None:
-                    break
-                kind = int(labels[cell])
-                if kind == 1 and hit is None and dist >= 0.12:
-                    hit = dist
-                elif hit is not None and kind == 0 and dist <= hit + 0.45:
-                    span = self._thin_opening_span(
-                        labels, x + dx * hit, y + dy * hit, dx, dy, -dy, dx
-                    )
-                    if 0.45 <= span <= 1.45 and hit < best_dist:
-                        best_dist = hit
-                        best_heading = ang
-                    break
-                elif hit is not None and dist > hit + 0.45:
-                    break
-        if best_heading is None:
-            return None
-        turn = wrap_rad(best_heading - yaw)
-        if abs(turn) < 0.4:
-            return None
-        return math.copysign(0.55, turn)
-
-    def _thin_opening_span(
-        self,
-        labels,
-        x: float,
-        y: float,
-        dx: float,
-        dy: float,
-        px: float,
-        py: float,
-    ) -> float:
-        """How far a thin occupied strip runs while free space sits just past it."""
-        res = self.grid.res
-        total = 0.0
-        for sign in (1.0, -1.0):
-            side = 0.0
-            for step in range(0, 36):
-                dist = step * res
-                cx = x + px * sign * dist
-                cy = y + py * sign * dist
-                cell = self.grid.cell_of(cx, cy)
-                if cell is None or int(labels[cell]) != 1:
-                    break
-                far = self.grid.cell_of(cx + dx * 0.30, cy + dy * 0.30)
-                if far is None or int(labels[far]) != 0:
-                    break
-                side = dist
-            total += side
-        return total
-
-    def _opening_yaw(self) -> float:
-        """Yaw toward the shoulder that looks further. Positive is left."""
-        _nose, left, right = self._last_clear
-        if abs(left - right) < 0.18:
-            return 0.0
-        return 0.40 if left > right else -0.40
-
-    def _opening_command(self, relief: str) -> tuple[float, float, str]:
-        """Motion that trusts the live gap over a stop from the map."""
-        yaw = self._opening_yaw()
-        _nose, left, right = self._last_clear
-        nearer = min(left, right)
-        if relief == "yaw" or (relief == "creep" and nearer < 0.45 and abs(yaw) > 0.2):
-            # Square up, then drive. Staying in the pure spin turned the
-            # bath robot off a bedroom goal that was still ahead.
-            held = self._opening_since is not None and (self.t_s - self._opening_since) > 1.2
-            if not held:
-                if abs(yaw) < 0.2:
-                    yaw = 0.40
-                return 0.0, yaw, "align"
-            yaw = max(-0.35, min(0.35, yaw))
-        allowed = DOOR_SPEED_M_S
-        if self._bubble_gap is not None:
-            allowed = min(allowed, max_speed_for_gap(self._bubble_gap))
-        speed = max(0.0, allowed)
-        if speed < 0.04:
-            if abs(yaw) < 0.2:
-                yaw = 0.40
-            return 0.0, yaw, "align"
-        steer = 0.0 if abs(left - right) < 0.22 else max(-0.28, min(0.28, yaw))
-        kind = "clear" if abs(steer) < 0.08 else "straight"
-        return speed, steer, kind
-
-    def _speed_cap(self, view) -> float:
-        cap = CRUISE_M_S
-        for gap in (view.forward, view.left, view.right, view.rear):
-            if gap is None:
-                continue
-            cap = min(cap, max_speed_for_gap(gap))
-        return cap
-
-    def _arm_reverse(
-        self,
-        gap: float | None,
-        *,
-        blind: bool,
-        force_min_m: float = 0.0,
-        reason: str,
-    ) -> None:
-        budget = reverse_budget_m(gap, blind=blind, force_min_m=force_min_m)
-        if budget < 0.03:
+        if self._motion_anchor is None:
+            self._motion_anchor = (self.t_s, x, y, yaw)
             return
-        if self._reverse_left_m >= budget * 0.8 and self.t_s < self._reverse_until:
+        t0, x0, y0, yaw0 = self._motion_anchor
+        moved = math.hypot(x - x0, y - y0)
+        turned = abs(wrap_rad(yaw - yaw0))
+        if translating and moved >= 0.04:
+            self._motion_anchor = (self.t_s, x, y, yaw)
             return
-        self._reverse_left_m = max(self._reverse_left_m, budget)
-        self._reverse_release = gap is not None and not pivot_ready(gap)
-        self._reverse_until = self.t_s + budget / 0.12 + 0.35
-        self._avoid_until = max(self._avoid_until, self._reverse_until + 0.3)
-        shown = -1.0 if gap is None else float(gap)
-        self._log(f"{reason} backup {budget:.2f}m gap={shown:.2f}")
+        if spinning and turned >= 0.12:
+            self._motion_anchor = (self.t_s, x, y, yaw)
+            return
+        if self.t_s - t0 < 2.2:
+            return
+        self._relief = "wait"
+        self._relief_until = self.t_s + 0.40
+        self._relief_w = 0.0
+        log_decision(
+            {
+                "t": round(self.t_s, 2),
+                "kind": "stuck",
+                "response": "wait",
+                "disp_m": round(moved, 3),
+            }
+        )
 
-    def _tight_face(self) -> tuple[str, float] | None:
-        """The shell face with the smallest measured gap."""
+    def _open_reverse(self) -> bool:
         view = self._bubble_view
-        if view is None:
-            return None
-        known = [
-            (name, gap)
-            for name, gap in (
-                ("forward", view.forward),
-                ("rear", view.rear),
-                ("left", view.left),
-                ("right", view.right),
-            )
-            if gap is not None
-        ]
-        if not known:
-            return None
-        return min(known, key=lambda item: item[1])
+        if view is None or view.rear is None:
+            return True
+        return float(view.rear) > 0.08
 
-    def _leave_rear(self) -> tuple[float, float] | None:
-        """Drive forward when the tail is the face on the wall.
-
-        The pivot backup always reversed. With the nose in an open room
-        and the rear sonar on the shared wall, that command held the
-        tires on the wall for minutes and the encoders walked the pose.
-        """
-        tight = self._tight_face()
-        if tight is None or tight[0] != "rear" or tight[1] >= 0.10:
-            return None
-        self._reverse_left_m = 0.0
-        self._reverse_needs_gap = False
-        if self.t_s >= self._escape_log_at:
-            self._log(f"rear contact, driving off the wall gap={tight[1]:.2f}")
-            self._escape_log_at = self.t_s + 0.5
-        return wheel_speeds(0.12, 0.0)
-
-    def _drive_off_block(self) -> tuple[float, float] | None:
-        """Leave a block that a spin has not opened."""
+    def _relief_spin(self) -> float:
         view = self._bubble_view
-        if view is None:
+        left = -1.0 if view is None or view.left is None else float(view.left)
+        right = -1.0 if view is None or view.right is None else float(view.right)
+        if left < 0.0 and right < 0.0:
+            _nose, left_c, right_c = self._last_clear
+            return SPIN_RAD_S if left_c >= right_c else -SPIN_RAD_S
+        return SPIN_RAD_S if left >= right else -SPIN_RAD_S
+
+    def _relief_command(self) -> tuple[float, float] | None:
+        if self._relief is None:
             return None
-
-        def air(gap: float | None) -> float:
-            return 9.0 if gap is None else float(gap)
-
-        faces = {
-            "forward": air(view.forward),
-            "rear": air(view.rear),
-            "left": air(view.left),
-            "right": air(view.right),
-        }
-        open_name = max(faces, key=lambda name: faces[name])
-        if faces[open_name] < 0.20:
-            return None
-        self._reverse_left_m = 0.0
-        self._reverse_needs_gap = False
-        if self.t_s >= self._escape_log_at:
-            self._log(f"blocked spin, driving toward {open_name} gap={faces[open_name]:.2f}")
-            self._escape_log_at = self.t_s + 0.5
-        if open_name == "rear":
-            return wheel_speeds(-0.12, 0.0)
-        yaw = 0.45 if open_name == "left" else (-0.45 if open_name == "right" else 0.0)
-        return wheel_speeds(0.12, yaw)
-
-    def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
-        if self.done:
-            return 0.0, 0.0
-        leaving = self._leave_rear()
-        if leaving is not None:
-            return leaving
-        if self._side_escape_sign != 0.0 and self.t_s <= self._side_escape_until:
-            # Yaw away from the jamb while reversing. A straight reverse
-            # stays on a frame that is beside the shell.
-            return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
-        if self._reverse_left_m > 0.0 and self.t_s <= self._reverse_until:
-            # Nearly straight. A hard yaw here swings a tire into the jamb
-            # the reverse was supposed to leave.
-            return wheel_speeds(-0.12, self._turn * 0.08)
-        nose_now = self._last_clear[0]
-        in_opening = 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and nose_now > 0.30
-        # Both shoulders on a frame means the shell is in the opening.
-        # Dropping the goal here is how the bedroom threshold was abandoned.
-        if self._goal_expired() or (
-            not in_opening and self._is_stuck() and (self._bubble_gap or 99.0) < 1.2
-        ):
-            # One look at a doorway the map shows off to the side. Banning
-            # on the first pause is how a smeared threshold was abandoned
-            # for the room beside it. A second pause still drops the goal.
-            gap_yaw = None if self._gap_looks else self._map_gap_heading()
-            if gap_yaw is not None:
-                self._gap_looks += 1
-                x, y, _yaw = self.odometry.pose()
-                self._stuck_anchor = (self.t_s, x, y)
-                self._turn = gap_yaw
-                self._avoid_until = self.t_s + 1.6
-                self._log("turning toward a mapped opening")
-                return wheel_speeds(0.0, gap_yaw)
-            self._ban_current()
-            self._plan()
-        if self.phase != "go":
-            return 0.0, 0.0
-        if blocked and not pivot_ready(self._min_gap):
-            # Nose contact backs up. A rear contact was already returned
-            # above. A side gap is the side-escape path, not another reverse
-            # along the wall.
-            tight = self._tight_face()
-            if tight is not None and tight[0] in ("left", "right") and tight[1] < 0.09:
-                if self.t_s > self._side_escape_until:
-                    self._start_side_escape(1.0 if tight[0] == "left" else -1.0, self._bubble_view)
-                return wheel_speeds(-0.10, -0.55 * self._side_escape_sign)
-            self._arm_reverse(self._min_gap, blind=self._view_blind, reason="pivot")
-            if self._reverse_left_m > 0.0:
-                return wheel_speeds(-0.12, self._turn * 0.08)
-        if (
-            blocked
-            and self._blocked_since is not None
-            and (self.t_s - self._blocked_since) > 1.2
-        ):
-            # A spin that does not open the gap is the scrub that walked
-            # the encoders. Drive toward the open face instead.
-            leaving_block = self._drive_off_block()
-            if leaving_block is not None:
-                return leaving_block
-        if self.t_s < self._avoid_until or blocked:
-            return wheel_speeds(0.0, self._turn)
-        if self.t_s >= self._replan_at or not self.path_xy:
-            self._plan()
-        if self.phase != "go" or self.done or not self.path_xy:
-            return 0.0, 0.0
-        pose = self.odometry.pose()
-        v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
-        raw_w = w
-        door_w, door_mode = self._door_yaw(left_clear, right_clear)
-        nose_open = self._bubble_gap is None or self._bubble_gap > 0.12
-        through = arrived and left_clear < 1.05 and right_clear < 1.05 and nose_open
-        if arrived and not through:
-            self._last_spin_t = self.t_s
-            self.phase = "spin"
-            self._spin_start = None
-            self.goal_xy = None
-            self.path_xy = []
-            return wheel_speeds(0.0, SPIN_RAD_S)
-        approach_kind = ""
-        if door_mode == "approach":
-            # Outside the frame: face the centre line, then drive straight.
-            # An arc here is the corner cut that puts a tire on the jamb.
-            # A heading that jitters across the align threshold used to
-            # restart the spin forever, which is how the hall was abandoned.
-            # One align window, then creep even if the error comes back.
-            err = wrap_rad(self._segment_heading() - pose[2])
-            self._mark_approach()
-            if abs(err) > 0.12 and self.t_s - self._approach_since < 1.2:
-                v = 0.0
-                w = max(-0.55, min(0.55, math.copysign(0.55, err)))
-                approach_kind = "align"
+        if self._relief == "wait":
+            if self.t_s <= self._relief_until:
+                self._body_v, self._body_w = 0.0, 0.0
+                return 0.0, 0.0
+            if self._open_reverse():
+                self._relief = "reverse"
+                self._relief_until = self.t_s + 0.45
+                log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "reverse"})
             else:
-                v = DOOR_SPEED_M_S
-                w = 0.0 if abs(err) <= 0.12 else max(-0.35, min(0.35, 1.1 * err))
-                if abs(err) > 0.12 or abs(raw_w) > 0.15:
-                    approach_kind = "straight"
-        elif door_mode == "mouth" or through:
-            self._approach_since = None
-            self._approach_gone = None
-            # In the opening, or arriving with both jambs beside the nose.
-            w = door_w if through else w + door_w
-            v = min(DOOR_SPEED_M_S if through else v, DOOR_SPEED_M_S)
-        elif 0.18 < left_clear < 1.05 and 0.18 < right_clear < 1.05 and self._last_clear[0] > 0.30:
-            # In the frame. A spin here used to follow the wall. If the
-            # command is already stopped, turn toward the goal instead.
-            # Do not take over a drive command: the hall is this narrow too.
-            err = 0.0
-            if self.goal_xy is not None:
-                err = wrap_rad(
-                    math.atan2(self.goal_xy[1] - pose[1], self.goal_xy[0] - pose[0]) - pose[2]
+                self._relief = "spin"
+                self._relief_w = self._relief_spin()
+                self._relief_until = self.t_s + 0.45
+                log_decision(
+                    {
+                        "t": round(self.t_s, 2),
+                        "kind": "stuck",
+                        "response": "spin",
+                        "w": round(self._relief_w, 2),
+                    }
                 )
-            if v < 0.06 and abs(err) > 0.6:
-                v = 0.0
-                w = math.copysign(0.50, err)
-                approach_kind = "align"
-            elif abs(w) > 0.25 and v < 0.06:
-                if self._approach_since is None:
-                    self._approach_since = self.t_s
-                if self.t_s - self._approach_since >= 1.2:
-                    v = DOOR_SPEED_M_S
-                    w = max(-0.28, min(0.28, self._jamb_yaw(left_clear, right_clear)))
-                    approach_kind = "straight"
-                else:
-                    approach_kind = "align"
-            else:
-                self._approach_since = None
-                self._approach_gone = None
-                v = min(v, DOOR_SPEED_M_S)
-                w = max(-0.28, min(0.28, self._jamb_yaw(left_clear, right_clear)))
-        elif left_clear < 0.90 and right_clear < 0.90:
-            self._release_approach()
-            v = min(v, DOOR_SPEED_M_S)
+        if self.t_s <= self._relief_until:
+            if self._relief == "reverse":
+                self._body_v, self._body_w = -0.10, 0.0
+                return wheel_speeds(-0.10, 0.0)
+            self._body_v, self._body_w = 0.0, self._relief_w
+            return wheel_speeds(0.0, self._relief_w)
+        self._finish_relief()
+        return None
+
+    def _finish_relief(self) -> None:
+        x, y, _yaw = self.odometry.pose()
+        if self.goal_xy is not None:
+            self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
         else:
-            self._release_approach()
-        v = min(v, max(0.0, cap))
-        v, w = self._apply_sweep(v, w, approach_kind, door_mode)
-        return wheel_speeds(v, w)
-
-    def _mark_approach(self) -> None:
-        self._approach_gone = None
-        if self._approach_since is None:
-            self._approach_since = self.t_s
-
-    def _release_approach(self) -> None:
-        """Forget the align clock after the doorway reading has actually gone.
-
-        One shoulder crossing 1.20 m for a single depth frame used to zero
-        the clock, and the shell spun on the threshold until the goal died.
-        The align spin itself swings a shoulder out of that band. Holding
-        the clock for the same 1.2 s as the align window lets that spin
-        finish and the creep start. A doorway that is gone for the whole
-        window is a different opening.
-        """
-        if self._approach_since is None:
-            self._approach_gone = None
-            return
-        if self._approach_gone is None:
-            self._approach_gone = self.t_s
-        if self.t_s - self._approach_gone >= 1.2:
-            self._approach_since = None
-            self._approach_gone = None
+            self._remember_attempt(x, y, 2.2)
+        self.goal_xy = None
+        self.path_xy = []
+        self._replan_at = self.t_s
+        self._relief = None
+        self._motion_anchor = None
+        self._body_v, self._body_w = 0.0, 0.0
+        self._log("stuck, next goal")
 
     def _segment_heading(self) -> float:
-        """Heading of the polyline about 0.35 m ahead.
-
-        That is the next segment, not the chord from the robot to a
-        later corner. The chord is what cuts the doorway.
-        """
         x, y, yaw = self.odometry.pose()
         path = self.path_xy
         if not path:
@@ -1573,83 +914,117 @@ class Explorer:
             prev = nxt
         return heading
 
-    def _apply_sweep(self, v: float, w: float, approach_kind: str, door_mode: str = "") -> tuple[float, float]:
-        """Reject an arc the shell would drive into an occupied cell."""
+    def _note_approach(self, why: str, v: float, w: float) -> None:
+        # Separate from the motion log. Sharing that throttle let a straight
+        # crossing write a line on every tick, because the scored command
+        # changed the motion name in between.
+        if why == self._approach_why and self.t_s < self._approach_log_at:
+            return
+        self._approach_why = why
+        self._approach_log_at = self.t_s + 1.0
+        log_decision(
+            {
+                "t": round(self.t_s, 2),
+                "kind": "approach",
+                "response": why,
+                "v": round(float(v), 3),
+                "w": round(float(w), 3),
+            }
+        )
+
+    def _note_motion(self, choice) -> None:
+        if choice.name == self._last_motion and self.t_s < self._motion_log_at:
+            return
+        self._last_motion = choice.name
+        self._motion_log_at = self.t_s + 1.0
+        costs = {key: value for key, value in choice.costs.items() if key != "total" and abs(value) > 1e-3}
+        log_decision(
+            {
+                "t": round(self.t_s, 2),
+                "kind": "motion",
+                "chosen": choice.name,
+                "v": round(choice.v, 3),
+                "w": round(choice.w, 3),
+                "why": choice.why(),
+                "costs": costs,
+                "vetoes": choice.vetoes[:8],
+            }
+        )
+
+    def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
+        del blocked, cap
+        if self.done:
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
+        relief = self._relief_command()
+        if relief is not None:
+            return relief
+        if self.phase != "go":
+            return 0.0, 0.0
+        if self.t_s >= self._replan_at or not self.path_xy:
+            self._plan()
+        if self.phase != "go" or self.done or not self.path_xy:
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
         pose = self.odometry.pose()
-        v2, w2, kind = fit_motion(self.grid, pose, v, w, self._segment_heading())
-        nose, left_c, right_c = self._last_clear
-        # Live jambs, matched, and air ahead. The occupancy sweep was
-        # vetoing this with a smeared cell, and the segment heading kept
-        # the body spinning on the threshold instead of driving through.
-        centered = (
-            door_mode in ("approach", "mouth")
-            and 0.18 < left_c < 0.70
-            and 0.18 < right_c < 0.70
-            and abs(left_c - right_c) < 0.12
-            and nose > 0.25
+        approach = approach_command(self.grid, pose, self.path_xy)
+        if approach is not None and approach[2] == "pivot":
+            if self._pivot_since is None:
+                self._pivot_since = self.t_s
+            if self.t_s - self._pivot_since <= 2.5:
+                _v, w, _why = approach
+                self._body_v, self._body_w = 0.0, w
+                self._note_approach("pivot", 0.0, w)
+                return wheel_speeds(0.0, w)
+            approach = None
+        else:
+            self._pivot_since = None
+        v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
+        if arrived:
+            if self.goal_xy is not None:
+                self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.0)
+            if self.t_s - self._last_spin_t > 12.0:
+                self._last_spin_t = self.t_s
+                self.phase = "spin"
+                self._spin_start = None
+                self.goal_xy = None
+                self.path_xy = []
+                self._body_v, self._body_w = 0.0, SPIN_RAD_S
+                return wheel_speeds(0.0, SPIN_RAD_S)
+            self.goal_xy = None
+            self.path_xy = []
+            self._replan_at = self.t_s
+            self._plan()
+            if self.phase != "go" or not self.path_xy:
+                self._body_v, self._body_w = 0.0, 0.0
+                return 0.0, 0.0
+            pose = self.odometry.pose()
+            v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
+            if arrived:
+                self._body_v, self._body_w = 0.0, 0.0
+                return 0.0, 0.0
+        view = self._bubble_view
+        if view is None and self._bubble_gap is not None:
+            view = BubbleView(self._bubble_gap, None, None, None, self._min_gap)
+        heading_err = wrap_rad(self._segment_heading() - pose[2])
+        if approach is not None and approach[2] == "straight":
+            v, w = approach[0], approach[1]
+            heading_err = 0.0
+            self._note_approach("straight", v, w)
+        choice = choose_motion(
+            view=view,
+            pursuit_v=v,
+            pursuit_w=w,
+            heading_err=heading_err,
+            grid=self.grid,
+            pose=pose,
+            left_clear=float(left_clear),
+            right_clear=float(right_clear),
+            radar_blocked=self._radar_blocked,
         )
-        # The align window already finished. Live depth still shows the
-        # opening, and a smeared cell is what the sweep is refusing.
-        # Waiting for the shoulders to match left the shell spinning
-        # outside the bedroom door until the goal was dropped.
-        held = (
-            door_mode == "approach"
-            and self._approach_since is not None
-            and self.t_s - float(self._approach_since) >= 1.2
-            and 0.18 < left_c < 1.20
-            and 0.18 < right_c < 1.20
-            and nose > 0.30
-        )
-        if (centered or held) and (kind != "clear" or abs(w) > 0.15 or v < 0.05):
-            v2 = DOOR_SPEED_M_S
-            w2 = 0.0 if centered else max(-0.28, min(0.28, self._jamb_yaw(left_c, right_c)))
-            kind = "clear"
-        # The sweep stops when a smeared jamb fills the opening. Live
-        # depth that still looks through that gap is the measurement.
-        if kind == "stop":
-            relief = self._gap_ahead()
-            if relief:
-                v2, w2, kind = self._opening_command(relief)
-                if self.t_s >= self._sweep_log_at:
-                    self._log(f"opening {relief}, live gap ahead of the sweep")
-                    self._sweep_log_at = self.t_s + 0.5
-        self.sweep_checks += 1
-        if kind != "clear":
-            self.sweep_rejected += 1
-            if kind == "wider":
-                self.sweep_widened += 1
-            elif kind == "straight":
-                self.sweep_straight += 1
-            elif kind == "align":
-                self.sweep_aligned += 1
-            elif kind == "stop":
-                self.sweep_stopped += 1
-        elif approach_kind == "align":
-            self.sweep_aligned += 1
-        elif approach_kind == "straight":
-            self.sweep_straight += 1
-        modified = kind != "clear" or approach_kind != ""
-        if modified and self.t_s >= self._sweep_log_at:
-            if kind != "clear":
-                self._log(f"sweep {kind}, footprint would clip")
-            elif approach_kind == "align":
-                self._log("sweep align, doorway off the centre line")
-            else:
-                self._log("sweep straight, doorway on the centre line")
-            self._sweep_log_at = self.t_s + 0.5
-        # Lined up, and the straight shell misses the map. Stay on this
-        # heading instead of taking the next frontier back through the door.
-        if (
-            (door_mode in ("approach", "mouth") or self._gap_ahead() == "creep")
-            and kind == "clear"
-            and v2 > 0.05
-            and abs(w2) < 0.08
-        ):
-            self._commit_until = max(self._commit_until, self.t_s + 16.0)
-            # The polyline heading hunts between the jambs. Once the
-            # sonars agree, the way through is the way the shell is facing.
-            self._commit_heading = pose[2] if centered else self._segment_heading()
-        return v2, w2
+        self._note_motion(choice)
+        self._body_v, self._body_w = choice.v, choice.w
+        return wheel_speeds(choice.v, choice.w)
 
     def sweep_summary(self) -> str:
         return (
@@ -1658,129 +1033,86 @@ class Explorer:
             f"straight={self.sweep_straight} stop={self.sweep_stopped}"
         )
 
-    def _forward_preference(self) -> tuple[float, float] | None:
-        if self._commit_until < 0.0 or self.t_s > self._commit_until + 20.0:
-            return None
-        return (math.cos(self._commit_heading), math.sin(self._commit_heading))
-
-    def _hold_goal(self) -> bool:
-        """Keep the path while a lined-up doorway crossing is committed.
-
-        Replanning every few seconds handed the -0.35 seed a frontier back
-        in the main room seven seconds after it had entered the hall.
-        Holding every young goal did the opposite: the robot kept a
-        frontier it could not reach and spun in place.
-        """
-        if self.goal_xy is None or not self.path_xy:
-            return False
-        return self.t_s < self._commit_until
+    def _log_goal(self, goal: tuple[float, float], report: dict) -> None:
+        runner = report.get("runner_up")
+        runner_score = report.get("runner_score")
+        log_decision(
+            {
+                "t": round(self.t_s, 2),
+                "kind": "goal",
+                "chosen": [round(goal[0], 2), round(goal[1], 2)],
+                "score": round(float(report.get("score") or 0.0), 3),
+                "runner_up": None if runner is None else [round(runner[0], 2), round(runner[1], 2)],
+                "runner_score": None if runner_score is None else round(float(runner_score), 3),
+            }
+        )
+        self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
 
     def _plan(self, depth: int = 0) -> None:
-        self._replan_at = self.t_s + 3.0
+        self._replan_at = self.t_s + 4.0
         x, y, yaw = self.odometry.pose()
-        if self._hold_goal():
-            return
         if depth > 6:
             self._no_frontier()
             return
-        banned = self._ban_set()
-        prefer = self._forward_preference()
-        heading_xy = (math.cos(yaw), math.sin(yaw))
         rooms = segment_map(self.grid.labels(), self.grid.res)
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
+        report: dict = {}
         chosen = select_goal(
             self.grid,
             (x, y),
             radius_m=ROBOT_RADIUS_M,
-            banned=banned,
-            prefer_xy=prefer,
+            avoid=self._avoid_now(),
             rooms=rooms,
-            heading_xy=heading_xy,
+            heading_xy=(math.cos(yaw), math.sin(yaw)),
+            report=report,
         )
-        if chosen is None and self._banned:
-            self._log("no goal under bans, clearing them")
-            self._banned.clear()
-            chosen = select_goal(
-                self.grid,
-                (x, y),
-                radius_m=ROBOT_RADIUS_M,
-                banned=set(),
-                prefer_xy=prefer,
-                rooms=rooms,
-                heading_xy=heading_xy,
-            )
         if chosen is None:
             self._no_frontier()
             return
         goal, path = chosen
+        if math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
+            self._remember_attempt(goal[0], goal[1], 1.5)
+            if self.t_s - self._last_spin_t > 12.0:
+                self._last_spin_t = self.t_s
+                self.phase = "spin"
+                self._spin_start = None
+                self.goal_xy = None
+                self.path_xy = []
+                self._log_goal(goal, report)
+                return
+            self._plan(depth + 1)
+            return
         if (
             self.goal_xy is not None
             and self.path_xy
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 1.2
         ):
             return
-        cell = self.grid.cell_of(goal[0], goal[1])
-        # Already standing on it: look once more, then drop it so a speck
-        # of unknown next to the robot cannot spin the run forever.
-        if cell is not None and math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
-            # One look. A second spin on the same door is how the Webots run
-            # sat against the loveseat for minutes. An open view is not that
-            # case: reversing there turned the robot off the bedroom door.
-            if self.t_s - self._last_spin_t < 25.0:
-                self._ban_current(immediate=True)
-                nose = self._last_clear[0]
-                if self._view_blind or nose < 1.5:
-                    self._start_recovery()
-                else:
-                    self._log("goal already under the robot, skipping the reverse")
-                    self._plan(depth + 1)
-                return
-            count = self._fails.get(cell, 0) + 1
-            self._fails[cell] = count
-            if count >= 2:
-                self._blacklist(cell, radius=4)
-                self._plan(depth + 1)
-                return
-            self._last_spin_t = self.t_s
-            self.phase = "spin"
-            self._spin_start = None
-            self.goal_xy = None
-            self.path_xy = []
-            return
-        same = self.goal_xy is not None and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
+        same = (
+            self.goal_xy is not None
+            and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
+        )
         self.goal_xy, self.path_xy = goal, path
         self.frontiers_left = 1
         self.phase = "go"
+        self.done = False
         if not same:
             self._goal_since = self.t_s
-            self._stuck_anchor = (self.t_s, x, y)
-            self._gap_looks = 0
-            self._did_final_scan = False
-            self._settle_since = None
-            self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
-
-    def _goal_key(self) -> tuple[int, int] | None:
-        if self.goal_xy is None:
-            return None
-        cell = self.grid.cell_of(self.goal_xy[0], self.goal_xy[1])
-        return cell
+            self._motion_anchor = None
+            self._log_goal(goal, report)
 
     def _no_frontier(self) -> None:
         """No reachable frontier. Done only after a scan and a stopped hold."""
         if not self._confident():
-            # A smeared map can hide every frontier. Look again once the
-            # pose has stopped slipping instead of declaring the apartment done.
             self._log("frontiers hidden, pose not trusted, not done")
             self.goal_xy = None
             self.path_xy = []
             self.phase = "go"
             self.done = False
             self._did_final_scan = False
-            self._reverse_until = max(self._reverse_until, self.t_s + 0.8)
             self._replan_at = self.t_s + 1.5
-            self._progress_t = self._replan_at
             return
         if not self._did_final_scan:
             self._did_final_scan = True
@@ -1810,20 +1142,18 @@ class Explorer:
             return 0.0, 0.0
         self._settle_check = self.t_s + 0.5
         x, y, yaw = self.odometry.pose()
-        heading_xy = (math.cos(yaw), math.sin(yaw))
         rooms = segment_map(self.grid.labels(), self.grid.res)
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
         chosen = select_goal(
-            self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=self._ban_set(), rooms=rooms, heading_xy=heading_xy
+            self.grid,
+            (x, y),
+            radius_m=ROBOT_RADIUS_M,
+            avoid=self._avoid_now(),
+            rooms=rooms,
+            heading_xy=(math.cos(yaw), math.sin(yaw)),
         )
-        if chosen is None and self._banned:
-            self._log("no goal under bans, clearing them")
-            self._banned.clear()
-            chosen = select_goal(
-                self.grid, (x, y), radius_m=ROBOT_RADIUS_M, banned=set(), rooms=rooms, heading_xy=heading_xy
-            )
         if chosen is not None:
             self._log("frontier open, resuming")
             self._did_final_scan = False
@@ -1831,8 +1161,7 @@ class Explorer:
             goal, path = chosen
             self.goal_xy, self.path_xy = goal, path
             self._goal_since = self.t_s
-            self._stuck_anchor = (self.t_s, x, y)
-            self._gap_looks = 0
+            self._motion_anchor = None
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
             return 0.0, 0.0
         count = int((self.grid.labels() == 1).sum())
@@ -1847,59 +1176,3 @@ class Explorer:
             self.done = True
             self._log("done: no reachable frontier after a final scan, map stable while stopped")
         return 0.0, 0.0
-
-    def _ban_current(self, *, immediate: bool = False) -> None:
-        key = self._goal_key()
-        self.goal_xy = None
-        self.path_xy = []
-        self._replan_at = -1.0
-        if key is None:
-            return
-        count = self._fails.get(key, 0) + 1
-        self._fails[key] = count
-        if immediate or count >= 2:
-            # A short ban, not a permanent disk. The opening has to be
-            # reachable again after the robot has backed up and looked.
-            self._blacklist(key, radius=5 if immediate else 3, ttl_s=12.0)
-
-    def _ban_set(self) -> set[tuple[int, int]]:
-        expired = [cell for cell, until in self._banned.items() if self.t_s >= until]
-        for cell in expired:
-            del self._banned[cell]
-        return set(self._banned)
-
-    def _blacklist(self, cell: tuple[int, int], *, radius: int, ttl_s: float = 12.0) -> None:
-        until = self.t_s + float(ttl_s)
-        n = 0
-        for dy in range(-radius, radius + 1):
-            for dx in range(-radius, radius + 1):
-                if dy * dy + dx * dx <= radius * radius:
-                    key = (cell[0] + dy, cell[1] + dx)
-                    self._banned[key] = max(self._banned.get(key, 0.0), until)
-                    n += 1
-        self._log(f"blacklist {n} cells for {ttl_s:.0f}s around ({cell[0]},{cell[1]})")
-
-    def _reinforce_corners(self, x: float, y: float, yaw: float) -> None:
-        """Bump the two front tire corners, not the air in front of the nose."""
-        c, s = math.cos(yaw), math.sin(yaw)
-        for fx, fy in ((0.10, 0.20), (0.10, -0.20)):
-            self.grid.mark_contact(x + c * fx - s * fy, y + s * fx + c * fy)
-
-    def _blacklist_xy(self, x: float, y: float, *, radius: int, ttl_s: float = 12.0) -> None:
-        cell = self.grid.cell_of(x, y)
-        if cell is not None:
-            self._blacklist(cell, radius=radius, ttl_s=ttl_s)
-
-    def _goal_expired(self) -> bool:
-        return self.goal_xy is not None and (self.t_s - self._goal_since) > 40.0
-
-    def _is_stuck(self) -> bool:
-        if self._stuck_anchor is None or self.goal_xy is None:
-            return False
-        t0, x0, y0 = self._stuck_anchor
-        if self.t_s - t0 < 4.0:
-            return False
-        x, y, _yaw = self.odometry.pose()
-        moved = math.hypot(x - x0, y - y0)
-        self._stuck_anchor = (self.t_s, x, y)
-        return moved < 0.08

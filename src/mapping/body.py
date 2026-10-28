@@ -27,6 +27,13 @@ ENCODER_RESOLUTION_RAD = 0.0015
 # that extra cell. Furniture is handled by the stop range, not by sealing
 # the opening.
 ROBOT_RADIUS_M = 0.20
+# Where the centre may turn. 0.23 m clears the side face. 0.30 m is the
+# outer corner, so a pivot does not swing a tire into the wall. A doorway
+# is not a turn: the robot stops, lines up, pivots in the open, and drives
+# straight through. Smooth-arc turning (forklift-style rear steer) is a
+# later option for a payload on a warehouse route. It is not implemented.
+TURN_CLEAR_M = 0.23
+TURN_AIM_M = 0.30
 GRID_RESOLUTION_M = 0.05
 GRID_SIZE_M = 20.0
 MIN_FRONTIER_M = 0.30

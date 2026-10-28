@@ -4,7 +4,10 @@ Yamauchi 1997: a frontier cell is free space next to unknown space.
 Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
 scored by size divided by the A* path length. The path is planned on
 the free grid with occupied cells inflated by the robot radius, so the
-robot does not try to squeeze through a door it cannot fit.
+robot does not try to squeeze through a door it cannot fit. Turns are
+placed where the centre is at least ``TURN_CLEAR_M`` from a mapped
+obstacle, and the path prefers ``TURN_AIM_M``. A doorway is a straight
+crossing, not a turn.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import math
 
 import numpy as np
 
-from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M
+from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import crossing_bonus
 
@@ -332,6 +335,7 @@ def astar(
     goal: tuple[int, int],
     *,
     step_cost: float,
+    costs: np.ndarray | None = None,
 ) -> list[tuple[int, int]] | None:
     """8-connected A* on a boolean free grid. ``start`` may sit just off the grid."""
     h, w = free.shape
@@ -373,7 +377,8 @@ def astar(
             if dy != 0 and dx != 0:
                 if not free[y + dy, x] or not free[y, x + dx]:
                     continue
-            ng = g + mul * step_cost
+            weight = 1.0 if costs is None else float(costs[ny, nx])
+            ng = g + mul * step_cost * weight
             key = (ny, nx)
             if ng + 1e-9 < best.get(key, 1e18):
                 best[key] = ng
@@ -514,6 +519,203 @@ def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     return False
 
 
+def _region_factor(goal: tuple[float, float], avoid: list[tuple[float, float, float]]) -> float:
+    """Scale a score down near a recently attempted region. The frontier stays reachable."""
+    factor = 1.0
+    for item in avoid:
+        weight = float(item[2])
+        if weight <= 0.0:
+            continue
+        dist = math.hypot(float(goal[0]) - float(item[0]), float(goal[1]) - float(item[1]))
+        if dist >= 0.60:
+            continue
+        factor *= math.exp(-weight * (1.0 - dist / 0.60))
+    return factor
+
+
+def clearance_m(occupied: np.ndarray, res: float, reach_m: float = 1.4) -> np.ndarray:
+    """Distance in metres from each cell to the nearest occupied cell."""
+    dist = np.full(occupied.shape, float(reach_m) + float(res), dtype=np.float32)
+    if np.any(occupied):
+        dist[occupied] = 0.0
+    ortho = np.float32(res)
+    diag = np.float32(res * math.sqrt(2.0))
+    steps = int(math.ceil(reach_m / res))
+    for _ in range(steps):
+        nxt = dist.copy()
+        nxt[1:, :] = np.minimum(nxt[1:, :], dist[:-1, :] + ortho)
+        nxt[:-1, :] = np.minimum(nxt[:-1, :], dist[1:, :] + ortho)
+        nxt[:, 1:] = np.minimum(nxt[:, 1:], dist[:, :-1] + ortho)
+        nxt[:, :-1] = np.minimum(nxt[:, :-1], dist[:, 1:] + ortho)
+        nxt[1:, 1:] = np.minimum(nxt[1:, 1:], dist[:-1, :-1] + diag)
+        nxt[1:, :-1] = np.minimum(nxt[1:, :-1], dist[:-1, 1:] + diag)
+        nxt[:-1, 1:] = np.minimum(nxt[:-1, 1:], dist[1:, :-1] + diag)
+        nxt[:-1, :-1] = np.minimum(nxt[:-1, :-1], dist[1:, 1:] + diag)
+        dist = nxt
+    return dist
+
+
+def approach_costs(clear: np.ndarray) -> np.ndarray:
+    """Prefer a centre 0.30 m out. Cells inside 0.23 m are a last resort.
+
+    The middle of a narrow opening stays cheap, so a doorway is crossed
+    on its centre line instead of being sealed.
+    """
+    costs = np.ones(clear.shape, dtype=np.float32)
+    costs[clear < TURN_AIM_M] = 2.5
+    costs[clear < TURN_CLEAR_M] = 6.0
+    # A throat centre is the cell with more air than its neighbours.
+    peak = clear.copy()
+    peak[1:, :] = np.maximum(peak[1:, :], clear[:-1, :])
+    peak[:-1, :] = np.maximum(peak[:-1, :], clear[1:, :])
+    peak[:, 1:] = np.maximum(peak[:, 1:], clear[:, :-1])
+    peak[:, :-1] = np.maximum(peak[:, :-1], clear[:, 1:])
+    throat = (clear >= peak - 1e-4) & (clear >= 0.18) & (clear <= 0.70)
+    costs[throat] = 1.0
+    return costs
+
+
+def _clearance_at(grid: OccupancyGrid, dist: np.ndarray, x: float, y: float) -> float:
+    cell = grid.cell_of(x, y)
+    if cell is None:
+        return 0.0
+    return float(dist[cell])
+
+
+def hold_turning_clearance(
+    grid: OccupancyGrid, path_xy: list[tuple[float, float]]
+) -> list[tuple[float, float]]:
+    """Move path points out to the turning aim, except a doorway centre.
+
+    The first point is the robot and stays. A point already on an opening
+    centre stays, so the crossing is straight. Anything else closer than
+    the aim is pushed away from the nearest mapped obstacle.
+    """
+    if len(path_xy) < 2:
+        return list(path_xy)
+    occupied = grid.labels() == 1
+    if not np.any(occupied):
+        return list(path_xy)
+    dist = clearance_m(occupied, grid.res)
+    out: list[tuple[float, float]] = [path_xy[0]]
+    for index, here in enumerate(path_xy[1:], start=1):
+        prev = out[-1]
+        nxt = path_xy[min(index + 1, len(path_xy) - 1)]
+        opening = _opening_center(grid, occupied, prev, here, nxt)
+        if opening is not None and math.hypot(here[0] - opening[0], here[1] - opening[1]) < 0.20:
+            point = (opening[0], opening[1])
+        else:
+            point = _push_clear(grid, dist, here[0], here[1])
+            if point is None:
+                continue
+        if math.hypot(point[0] - out[-1][0], point[1] - out[-1][1]) < 0.05:
+            continue
+        out.append(point)
+    return out if len(out) >= 2 else list(path_xy)
+
+
+def _push_clear(
+    grid: OccupancyGrid, dist: np.ndarray, x: float, y: float
+) -> tuple[float, float] | None:
+    have = _clearance_at(grid, dist, x, y)
+    if have >= TURN_AIM_M:
+        return (x, y)
+    cell = grid.cell_of(x, y)
+    if cell is None:
+        return None
+    row, col = cell
+    away_r, away_c = 0, 0
+    nearest = have
+    for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        rr, cc = row + dr, col + dc
+        if rr < 0 or cc < 0 or rr >= dist.shape[0] or cc >= dist.shape[1]:
+            continue
+        if float(dist[rr, cc]) < nearest:
+            nearest = float(dist[rr, cc])
+            away_r, away_c = -dr, -dc
+    if away_r == 0 and away_c == 0:
+        return (x, y) if have >= TURN_CLEAR_M else None
+    step = grid.res
+    best = (x, y) if have >= TURN_CLEAR_M else None
+    px, py = x, y
+    for _ in range(12):
+        px += away_c * step
+        py += away_r * step
+        got = _clearance_at(grid, dist, px, py)
+        if got >= TURN_CLEAR_M:
+            best = (px, py)
+        if got >= TURN_AIM_M:
+            return (px, py)
+    return best
+
+
+def _opening_persists(
+    grid: OccupancyGrid,
+    occupied: np.ndarray,
+    opening: tuple[float, float, float, float],
+    ahead_m: float,
+) -> bool:
+    """True when the same gap is still there past the mouth. That is a hall."""
+    cx, cy, tx, ty = opening
+    ahead = (cx + tx * ahead_m, cy + ty * ahead_m)
+    further = (ahead[0] + tx * 0.2, ahead[1] + ty * 0.2)
+    return _opening_center(grid, occupied, (cx, cy), ahead, further) is not None
+
+
+def _wrap(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def approach_command(
+    grid: OccupancyGrid,
+    pose: tuple[float, float, float],
+    path_xy: list[tuple[float, float]],
+) -> tuple[float, float, str] | None:
+    """Pivot before a turn or a doorway, then drive the doorway straight.
+
+    None means ordinary pursuit. The pivot happens in the open, before
+    the shell is inside the turning radius. A doorway is not an arc.
+    """
+    if len(path_xy) < 2:
+        return None
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    nearest = min(range(len(path_xy)), key=lambda i: math.hypot(path_xy[i][0] - x, path_xy[i][1] - y))
+    occupied = grid.labels() == 1
+    prev = path_xy[max(0, nearest - 1)]
+    here = path_xy[nearest]
+    travelled = 0.0
+    for nxt in path_xy[nearest + 1 :]:
+        travelled += math.hypot(nxt[0] - here[0], nxt[1] - here[1])
+        opening = _opening_center(grid, occupied, prev, here, nxt)
+        # A hall is still a gap a metre past this point. A doorway is not.
+        if (
+            opening is not None
+            and math.hypot(here[0] - x, here[1] - y) <= 1.05
+            and not _opening_persists(grid, occupied, opening, 0.85)
+        ):
+            cx, cy, tx, ty = opening
+            along = (x - cx) * tx + (y - cy) * ty
+            if along > 0.55:
+                return None
+            err = _wrap(math.atan2(ty, tx) - yaw)
+            if abs(err) > 0.18:
+                return (0.0, math.copysign(0.70, err), "pivot")
+            return (0.12, 0.0, "straight")
+        if travelled > 0.15:
+            h_in = math.atan2(here[1] - prev[1], here[0] - prev[0])
+            h_out = math.atan2(nxt[1] - here[1], nxt[0] - here[0])
+            # A 45° grid step is the path, not a turn. A right angle is a pivot.
+            if abs(_wrap(h_out - h_in)) > 1.0:
+                dist = math.hypot(here[0] - x, here[1] - y)
+                err = _wrap(h_out - yaw)
+                if dist < 0.28 and abs(err) > 0.20:
+                    return (0.0, math.copysign(0.70, err), "pivot")
+        prev, here = here, nxt
+        if travelled > 1.1:
+            break
+    return None
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -524,6 +726,8 @@ def select_goal(
     prefer_xy: tuple[float, float] | None = None,
     rooms: dict | None = None,
     heading_xy: tuple[float, float] | None = None,
+    avoid: list[tuple[float, float, float]] | None = None,
+    report: dict | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -547,6 +751,8 @@ def select_goal(
                 ranked.append(group)
                 extra += 1
     free = traversable(labels, grid.res, radius_m)
+    occupied_now = labels == 1
+    costs = approach_costs(clearance_m(occupied_now, grid.res)) if np.any(occupied_now) else None
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
         return None
@@ -554,7 +760,17 @@ def select_goal(
     if start is None:
         return None
     banned = banned or set()
+    avoid = list(avoid or [])
     best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
+    ranked_scores: list[tuple[float, tuple[float, float]]] = []
+
+    def _keep(score: float, goal: tuple[float, float], pts: list[tuple[float, float]]) -> None:
+        nonlocal best
+        adjusted = score * _region_factor(goal, avoid)
+        ranked_scores.append((adjusted, goal))
+        if best is None or adjusted > best[0]:
+            best = (adjusted, goal, pts)
+
     for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
@@ -564,7 +780,7 @@ def select_goal(
         target = viewpoint(free, cells, occupied=(labels == 1))
         if target is None:
             continue
-        path_cells = astar(free, start, target, step_cost=grid.res)
+        path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         length = 0.0
@@ -597,14 +813,13 @@ def select_goal(
             # entry) is still in the new room, so only the rear half loses.
             if ahead < -0.05:
                 score *= 0.25
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     # A room already painted free, with the threshold smeared shut, is
     # not a frontier. Score it by its area and aim through the gap.
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
         if mouth in banned:
             continue
-        path_cells = astar(free, start, mouth, step_cost=grid.res)
+        path_cells = astar(free, start, mouth, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         pts = [grid.cell_center(*rc) for rc in path_cells]
@@ -631,11 +846,22 @@ def select_goal(
             if ahead < -0.05:
                 score *= 0.25
         pts = [*pts, far]
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])
+    pts = hold_turning_clearance(grid, pts)
     if not pts:
         return None
+    if report is not None:
+        report["score"] = best[0]
+        report["runner_up"] = None
+        report["runner_score"] = None
+        ranked_scores.sort(key=lambda item: item[0], reverse=True)
+        for scored, goal in ranked_scores:
+            if math.hypot(goal[0] - best[1][0], goal[1] - best[1][1]) < 0.25:
+                continue
+            report["runner_up"] = goal
+            report["runner_score"] = scored
+            break
     return pts[-1], pts

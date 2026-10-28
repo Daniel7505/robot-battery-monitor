@@ -3,20 +3,30 @@
 Yamauchi 1997: a frontier cell is free space next to unknown space.
 Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
 scored by size divided by the A* path length. The path is planned on
-the free grid with occupied cells inflated by the robot radius, so the
-robot does not try to squeeze through a door it cannot fit.
+the free grid with occupied cells inflated by the chassis half-width,
+so the robot does not try to squeeze through a door it cannot fit.
+An 0.81 m doorway still has a centre line at that pad. Cells inside
+the outer corner of the turning footprint cost more, so a route with
+room to turn wins when one exists. Set ``RBM_TURN_PAD=0`` to drop that
+cost and keep only the hard pad.
 """
 
 from __future__ import annotations
 
 import heapq
 import math
+import os
 
 import numpy as np
 
 from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M
+from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import crossing_bonus
+
+# Outer corner of the shell. On a 5 cm grid this is one cell past the
+# 0.20 m hard pad, which is what still leaves the 0.81 m door open.
+TURN_CORNER_M = math.hypot(SHELL_NOSE_M, SHELL_HALF_M)
 
 _NEIGHBORS = (
     (1, 0, 1.0),
@@ -332,6 +342,7 @@ def astar(
     goal: tuple[int, int],
     *,
     step_cost: float,
+    costs: np.ndarray | None = None,
 ) -> list[tuple[int, int]] | None:
     """8-connected A* on a boolean free grid. ``start`` may sit just off the grid."""
     h, w = free.shape
@@ -373,7 +384,8 @@ def astar(
             if dy != 0 and dx != 0:
                 if not free[y + dy, x] or not free[y, x + dx]:
                     continue
-            ng = g + mul * step_cost
+            weight = 1.0 if costs is None else float(costs[ny, nx])
+            ng = g + mul * step_cost * weight
             key = (ny, nx)
             if ng + 1e-9 < best.get(key, 1e18):
                 best[key] = ng
@@ -514,6 +526,41 @@ def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     return False
 
 
+def _region_factor(goal: tuple[float, float], avoid: list[tuple[float, float, float]]) -> float:
+    """Scale a score down near a recently attempted region. The frontier stays reachable."""
+    factor = 1.0
+    for item in avoid:
+        weight = float(item[2])
+        if weight <= 0.0:
+            continue
+        dist = math.hypot(float(goal[0]) - float(item[0]), float(goal[1]) - float(item[1]))
+        if dist >= 0.60:
+            continue
+        factor *= math.exp(-weight * (1.0 - dist / 0.60))
+    return factor
+
+
+def _turn_costs(labels: np.ndarray, free: np.ndarray, res: float) -> np.ndarray | None:
+    """Higher step cost inside the turning corner. None keeps every cell equal.
+
+    The hard pad is already applied in ``free``. This ring is the rest of
+    the outer corner, so a path can still use a doorway and will not hug
+    a mapped table when the room beside it is open.
+    """
+    if os.environ.get("RBM_TURN_PAD", "1") == "0":
+        return None
+    occupied = labels == 1
+    if not np.any(occupied):
+        return None
+    near = dilate_disk(occupied, TURN_CORNER_M, res)
+    tight = near & free
+    if not np.any(tight):
+        return None
+    costs = np.ones(free.shape, dtype=np.float32)
+    costs[tight] = 2.5
+    return costs
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -524,6 +571,8 @@ def select_goal(
     prefer_xy: tuple[float, float] | None = None,
     rooms: dict | None = None,
     heading_xy: tuple[float, float] | None = None,
+    avoid: list[tuple[float, float, float]] | None = None,
+    report: dict | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -547,6 +596,7 @@ def select_goal(
                 ranked.append(group)
                 extra += 1
     free = traversable(labels, grid.res, radius_m)
+    costs = _turn_costs(labels, free, grid.res)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
         return None
@@ -554,7 +604,17 @@ def select_goal(
     if start is None:
         return None
     banned = banned or set()
+    avoid = list(avoid or [])
     best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
+    ranked_scores: list[tuple[float, tuple[float, float]]] = []
+
+    def _keep(score: float, goal: tuple[float, float], pts: list[tuple[float, float]]) -> None:
+        nonlocal best
+        adjusted = score * _region_factor(goal, avoid)
+        ranked_scores.append((adjusted, goal))
+        if best is None or adjusted > best[0]:
+            best = (adjusted, goal, pts)
+
     for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
@@ -564,7 +624,7 @@ def select_goal(
         target = viewpoint(free, cells, occupied=(labels == 1))
         if target is None:
             continue
-        path_cells = astar(free, start, target, step_cost=grid.res)
+        path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         length = 0.0
@@ -597,14 +657,13 @@ def select_goal(
             # entry) is still in the new room, so only the rear half loses.
             if ahead < -0.05:
                 score *= 0.25
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     # A room already painted free, with the threshold smeared shut, is
     # not a frontier. Score it by its area and aim through the gap.
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
         if mouth in banned:
             continue
-        path_cells = astar(free, start, mouth, step_cost=grid.res)
+        path_cells = astar(free, start, mouth, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
         pts = [grid.cell_center(*rc) for rc in path_cells]
@@ -631,11 +690,21 @@ def select_goal(
             if ahead < -0.05:
                 score *= 0.25
         pts = [*pts, far]
-        if best is None or score > best[0]:
-            best = (score, goal, pts)
+        _keep(score, goal, pts)
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])
     if not pts:
         return None
+    if report is not None:
+        report["score"] = best[0]
+        report["runner_up"] = None
+        report["runner_score"] = None
+        ranked_scores.sort(key=lambda item: item[0], reverse=True)
+        for scored, goal in ranked_scores:
+            if math.hypot(goal[0] - best[1][0], goal[1] - best[1][1]) < 0.25:
+                continue
+            report["runner_up"] = goal
+            report["runner_score"] = scored
+            break
     return pts[-1], pts

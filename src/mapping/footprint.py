@@ -104,6 +104,180 @@ def _trajectory(
         yield x, y, yaw
 
 
+# How long a candidate is swept before it is allowed to swing a corner
+# into a wall. Long enough for a hard turn to show the rear, short
+# enough that a centred doorway is still a straight pass.
+SWING_HORIZON_S = 0.75
+SWING_DT_S = 0.05
+# Outward travel of the rear corner past the side face, for a yaw change.
+# A skid-steer pivots about its centre, so turning away from a wall
+# swings this corner into it while the nose camera still sees open floor.
+_CORNERS = (
+    ("front-left", NOSE_M, HALF_M),
+    ("front-right", NOSE_M, -HALF_M),
+    ("rear-left", -TAIL_M, HALF_M),
+    ("rear-right", -TAIL_M, -HALF_M),
+)
+# Sonar gaps are measured from the real shell, not from the 2 cm margin.
+_SHELL_CORNERS = (
+    ("front-left", SHELL_NOSE_M, SHELL_HALF_M),
+    ("front-right", SHELL_NOSE_M, -SHELL_HALF_M),
+    ("rear-left", -SHELL_TAIL_M, SHELL_HALF_M),
+    ("rear-right", -SHELL_TAIL_M, -SHELL_HALF_M),
+)
+# Tire leading edges sit inboard of the shell corners. A desk leg or an
+# end table under a desktop the camera is looking over hits the tire
+# while the outer corner is still in a free cell.
+_TIRE_POINTS = (
+    ("front-left-tire", 0.19, 0.195),
+    ("front-right-tire", 0.19, -0.195),
+    ("rear-left-tire", -0.19, 0.195),
+    ("rear-right-tire", -0.19, -0.195),
+)
+
+
+def rear_swing_m(angle_rad: float) -> float:
+    """How far the rear corner swings past the side face for a yaw change."""
+    angle = abs(float(angle_rad))
+    outward = SHELL_TAIL_M * math.sin(angle) - SHELL_HALF_M * (1.0 - math.cos(angle))
+    return max(0.0, outward)
+
+
+def swing_out(
+    grid: OccupancyGrid | None,
+    pose: tuple[float, float, float],
+    v_m_s: float,
+    w_rad_s: float,
+    *,
+    left_m: float | None = None,
+    right_m: float | None = None,
+    rear_m: float | None = None,
+    horizon_s: float | None = None,
+) -> str | None:
+    """Corner that this arc drives into a mapped wall or a sonar plane.
+
+    The check uses the robot's own grid, only cells it has already marked
+    occupied, plus the live side and rear ranges. Unknown space is not a
+    wall. Cells the shell already covers are ignored. None means the
+    sweep stays clear. The sensor string names the corner.
+    """
+    v = float(v_m_s)
+    w = float(w_rad_s)
+    if abs(v) < 1e-4 and abs(w) < 1e-4:
+        return None
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    x0, y0, yaw0 = x, y, yaw
+    cos0, sin0 = math.cos(yaw0), math.sin(yaw0)
+    ignore = _covered(grid, x, y, yaw) if grid is not None else set()
+    horizon = SWING_HORIZON_S if horizon_s is None else max(SWING_DT_S, float(horizon_s))
+    samples = max(1, int(round(horizon / SWING_DT_S)))
+    left_dir = (-math.sin(yaw), math.cos(yaw))
+    right_dir = (math.sin(yaw), -math.cos(yaw))
+    back_dir = (-math.cos(yaw), -math.sin(yaw))
+    for _ in range(samples):
+        x, y, yaw = _advance(x, y, yaw, v, w, SWING_DT_S)
+        cos_y = math.cos(yaw)
+        sin_y = math.sin(yaw)
+        for name, bx, by in (*_CORNERS, *_TIRE_POINTS):
+            if grid is None:
+                break
+            wx = x + cos_y * bx - sin_y * by
+            wy = y + sin_y * bx + cos_y * by
+            if not _corner_occupied(grid, wx, wy, ignore):
+                continue
+            # Body frame of the pose the arc started from. Sliding along a
+            # wall the side is already beside does not move a corner
+            # outward, and it is not a swing into that wall.
+            sx = cos0 * (wx - x0) + sin0 * (wy - y0)
+            sy = -sin0 * (wx - x0) + cos0 * (wy - y0)
+            outward = (sy - by) if by > 0.0 else (by - sy)
+            if outward > 0.01:
+                return f"swing:{name}"
+            if _face_crossed(grid, wx, wy, x0, y0, cos0, sin0, sx, v):
+                return f"swing:{name}"
+        for name, bx, by in _SHELL_CORNERS:
+            wx = x + cos_y * bx - sin_y * by
+            wy = y + sin_y * bx + cos_y * by
+            # A slight reverse is how the tire leaves a jamb. A couple of
+            # centimetres of rear swing on that backup is the maneuver.
+            # A forward turn gets no such slack.
+            slack = 0.03 if v < -0.02 else 0.0
+            if "left" in name and _past_sonar(wx, wy, pose, left_dir, left_m, SHELL_HALF_M, slack):
+                return f"swing:{name}"
+            if "right" in name and _past_sonar(wx, wy, pose, right_dir, right_m, SHELL_HALF_M, slack):
+                return f"swing:{name}"
+            if name.startswith("rear") and _past_sonar(wx, wy, pose, back_dir, rear_m, SHELL_TAIL_M, slack):
+                return f"swing:{name}"
+    return None
+
+
+def _past_sonar(
+    wx: float,
+    wy: float,
+    pose: tuple[float, float, float],
+    direction: tuple[float, float],
+    gap_m: float | None,
+    along_m: float,
+    slack_m: float = 0.0,
+) -> bool:
+    """True when this corner has crossed the plane the sonar is reporting.
+
+    ``along_m`` is the shell face the sensor sits on (side half-width, or
+    the tail). The gap is air outside that face.
+    """
+    if gap_m is None or not math.isfinite(float(gap_m)):
+        return False
+    limit = float(along_m) + float(gap_m) + float(slack_m)
+    dx = wx - float(pose[0])
+    dy = wy - float(pose[1])
+    return dx * direction[0] + dy * direction[1] > limit + 1e-3
+
+
+def _face_crossed(
+    grid: OccupancyGrid,
+    wx: float,
+    wy: float,
+    x0: float,
+    y0: float,
+    cos0: float,
+    sin0: float,
+    sx: float,
+    v: float,
+) -> bool:
+    """True when this corner has crossed the nose or the tail into a wall.
+
+    The occupied cell's centre has to sit inside the real side faces. A
+    cell outboard of the shell is the wall the robot is driving beside,
+    and a straight pass is allowed to keep that clearance.
+    """
+    cell = grid.cell_of(wx, wy)
+    if cell is None:
+        return False
+    row, col = cell
+    cx = grid.origin[0] + (col + 0.5) * grid.res
+    cy = grid.origin[1] + (row + 0.5) * grid.res
+    csy = -sin0 * (cx - x0) + cos0 * (cy - y0)
+    if abs(csy) > SHELL_HALF_M:
+        return False
+    if v > 0.02 and sx > NOSE_M:
+        return True
+    if v < -0.02 and sx < -TAIL_M:
+        return True
+    return False
+
+
+def _corner_occupied(
+    grid: OccupancyGrid,
+    x: float,
+    y: float,
+    ignore: set[tuple[int, int]],
+) -> bool:
+    cell = grid.cell_of(x, y)
+    if cell is None or cell in ignore:
+        return False
+    return float(grid.log[cell]) >= grid.occ_thresh
+
+
 def _advance(x: float, y: float, yaw: float, v: float, w: float, dt: float) -> tuple[float, float, float]:
     if abs(w) < 1e-3:
         return x + v * dt * math.cos(yaw), y + v * dt * math.sin(yaw), yaw

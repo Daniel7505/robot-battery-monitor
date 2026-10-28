@@ -308,6 +308,11 @@ def choose_motion(
     seed = _three_point(view, vetoes, best_v, best_w)
     if seed is not None:
         plan = safe_recovery(grid, pose, view, seed["wall"])
+        # A stop is only for when nothing else is clear. Dropping a legal
+        # creep here made the next tick stop again, and the shell sat in
+        # the doorway for the rest of the run.
+        if plan["response"] == "stop" and best_costs is not None:
+            return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
         costs = best_costs if best_costs is not None else {"total": 0.0}
         return MotionChoice("recovery", plan["v"], plan["w"], costs, vetoes, plan)
     if best_costs is not None:

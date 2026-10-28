@@ -1116,6 +1116,25 @@ def test_recovery_reverses_only_on_a_clear_arc():
     boxed = BubbleView(None, 0.03, 0.03, 0.03, 0.03)
     stopped = safe_recovery(None, (0.0, 0.0, 0.0), boxed, "left")
     assert stopped["response"] == "stop"
+    # The doorway case: hard turns swing into the jamb, but a slow
+    # forward is still clear and the reverse is not. Do not stop.
+    from src.mapping.tick import choose_motion
+
+    door = OccupancyGrid()
+    _fill(door, 0.15, -0.55, 0.45, -0.28, door.l_max)
+    view = BubbleView(1.5, 0.80, 0.12, 0.03, 0.03)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.20,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=door,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.80,
+        right_clear=0.12,
+    )
+    assert choice.maneuver is None or choice.maneuver.get("response") != "stop"
+    assert choice.v > 0.02
 
 
 def test_a_path_prefers_turning_room_and_a_door_still_opens():

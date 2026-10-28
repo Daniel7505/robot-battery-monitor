@@ -189,6 +189,8 @@ class Explorer:
         self._body_w = 0.0
         self._last_motion = ""
         self._pivot_since: float | None = None
+        self._approach_why = ""
+        self._approach_log_at = 0.0
         self._motion_log_at = -1.0
         self._radar_blocked = False
         self.room_labels = None
@@ -913,10 +915,13 @@ class Explorer:
         return heading
 
     def _note_approach(self, why: str, v: float, w: float) -> None:
-        if why == self._last_motion and self.t_s < self._motion_log_at:
+        # Separate from the motion log. Sharing that throttle let a straight
+        # crossing write a line on every tick, because the scored command
+        # changed the motion name in between.
+        if why == self._approach_why and self.t_s < self._approach_log_at:
             return
-        self._last_motion = why
-        self._motion_log_at = self.t_s + 1.0
+        self._approach_why = why
+        self._approach_log_at = self.t_s + 1.0
         log_decision(
             {
                 "t": round(self.t_s, 2),

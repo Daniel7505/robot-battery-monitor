@@ -427,6 +427,28 @@ def test_a_rear_corner_graze_still_backs_out():
     assert not any(item["sensor"] == "map:rear" and item["motion"] == "reverse" for item in choice.vetoes)
 
 
+def test_a_stuck_sonar_on_known_free_floor_still_creeps():
+    """A 6 cm reading on floor the map already calls free is not a place to sit."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.0, -1.0, 1.2, 1.0, grid.l_min)
+    _fill(grid, -0.6, -0.5, -0.2, 0.5, grid.l_max)
+    view = BubbleView(0.04, 0.05, 0.05, 0.04, 0.04)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.name == "creep" and choice.v > 0.02 and choice.w == 0.0
+
+
 def test_a_mapped_wall_ahead_is_not_driven_straight():
     """The centreline veto stops a beeline. It does not close a side gap."""
     from src.mapping.bubble import BubbleView

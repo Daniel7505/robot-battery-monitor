@@ -295,6 +295,22 @@ def _behind_blocked(grid, pose: tuple[float, float, float]) -> bool:
     return False
 
 
+def _known_free_ahead(grid, pose: tuple[float, float, float]) -> bool:
+    """The robot's own map says the nose path is free, not merely unknown."""
+    if grid is None or _ahead_blocked(grid, pose):
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    step = float(grid.res)
+    dist = 0.16
+    while dist <= 0.36 + 1e-9:
+        cell = grid.cell_of(x + math.cos(yaw) * dist, y + math.sin(yaw) * dist)
+        if cell is None or int(labels[cell]) != 0:
+            return False
+        dist += step
+    return True
+
+
 def _reverse_blocked(grid, pose) -> bool:
     """A mapped wall spans the tail, so a straight backup would enter it."""
     return _behind_blocked(grid, pose)
@@ -379,4 +395,8 @@ def choose_motion(
         for name, w in (("spin_left", 0.70), ("spin_right", -0.70)):
             if not footprint_clips(grid, pose, 0.0, w):
                 return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+    # Sonar can sit at 6 cm on open floor the map has already marked free.
+    # Holding there never counts as stuck, so the seed does not move.
+    if _known_free_ahead(grid, pose) and not footprint_clips(grid, pose, 0.06, 0.0):
+        return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes)
     return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)

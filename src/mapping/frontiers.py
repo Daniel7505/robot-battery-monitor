@@ -692,6 +692,43 @@ def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+def spin_fits(grid: OccupancyGrid, pose: tuple[float, float, float]) -> bool:
+    """True when a half-turn in place stays off mapped obstacles.
+
+    Six headings, each swept by the footprint check, cover about 180°.
+    Either direction is enough. This is not a search planner.
+    """
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    for sign in (1.0, -1.0):
+        heading = yaw
+        clear = True
+        for _ in range(6):
+            if footprint_clips(grid, (x, y, heading), 0.0, sign * 0.70):
+                clear = False
+                break
+            heading += sign * 0.45
+        if clear:
+            return True
+    return False
+
+
+def free_behind_m(grid: OccupancyGrid, pose: tuple[float, float, float]) -> float:
+    """Known-free metres straight behind the tail. Unknown stops the count."""
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    back = (-math.cos(yaw), -math.sin(yaw))
+    step = float(grid.res)
+    dist = step
+    last = 0.0
+    while dist <= 1.5 + 1e-9:
+        cell = grid.cell_of(x + back[0] * dist, y + back[1] * dist)
+        if cell is None or int(labels[cell]) != 0:
+            return last
+        last = dist
+        dist += step
+    return last
+
+
 def wide_escape(
     grid: OccupancyGrid, pose: tuple[float, float, float]
 ) -> tuple[float, float, str] | None:

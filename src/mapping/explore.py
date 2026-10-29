@@ -30,7 +30,7 @@ from src.mapping.body import (
     TURN_CLEAR_M,
     DepthCamera,
 )
-from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M, BubbleView, assess_bubble, corner_gap
+from src.mapping.bubble import SIGHT_M, BubbleView, assess_bubble, corner_bump, corner_gap
 from src.mapping.depth_cloud import (
     blind_fraction,
     body_points,
@@ -42,7 +42,14 @@ from src.mapping.depth_cloud import (
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
 from src.mapping.footprint import footprint_clips
-from src.mapping.frontiers import _pose_clearance, approach_command, select_goal, wide_escape
+from src.mapping.frontiers import (
+    _pose_clearance,
+    approach_command,
+    free_behind_m,
+    select_goal,
+    spin_fits,
+    wide_escape,
+)
 from src.mapping.tick import (
     TURN_W_RAD_S,
     _ahead_blocked,
@@ -214,6 +221,7 @@ class Explorer:
         self._contact_until = -1.0
         self._proximity: dict = {}
         self._refused: set[tuple] = set()
+        self._goal_score = 0.0
         self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
@@ -1036,6 +1044,16 @@ class Explorer:
         self._note_approach("back", -0.10, 0.0)
         return wheel_speeds(-0.10, 0.0)
 
+    def _dead_end(self, pose) -> bool:
+        """No half-turn, and the free corridor behind is shorter than the robot."""
+        if spin_fits(self.grid, pose):
+            return False
+        behind = free_behind_m(self.grid, pose)
+        # Still a corridor to leave by, but not a robot-length of it.
+        if behind < 0.18 or behind >= 0.48:
+            return False
+        return _pose_clearance(self.grid, float(pose[0]), float(pose[1])) < TURN_AIM_M
+
     def _goal_ahead(self, pose) -> bool:
         """The adopted goal lies in front of the nose, not behind it."""
         if self.goal_xy is None:
@@ -1047,10 +1065,7 @@ class Explorer:
         """A corner IR inside 0.10 m. A centre sonar on open floor is not this."""
         if self.t_s < self._contact_until:
             return None
-        gap = corner_gap(self._proximity)
-        if gap is None or gap >= TOO_CLOSE_M:
-            return None
-        return float(gap)
+        return corner_bump(self._proximity)
 
     def _begin_recover(self, pose) -> tuple[float, float] | None:
         """Reverse until the corner object can be seen, then stop and look."""
@@ -1088,7 +1103,7 @@ class Explorer:
         if self.t_s < self._recover_until:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
-        if gap is not None and gap < TOO_CLOSE_M and not self._reverse_closed(pose) and dist < 0.55:
+        if corner_bump(self._proximity) is not None and not self._reverse_closed(pose) and dist < 0.55:
             self._recover_phase = "reverse"
             self._recover_need = dist + max(0.12, SIGHT_M - gap)
             self._body_v, self._body_w = -0.10, 0.0
@@ -1245,6 +1260,23 @@ class Explorer:
             cmd = self._begin_back(pose)
             if cmd is not None:
                 return cmd
+        if (approach is None or approach[2] != "straight") and self._dead_end(pose):
+            spot = self.goal_xy if self.goal_xy is not None else (float(pose[0]), float(pose[1]))
+            self._note_refusals(
+                {
+                    "refused": [
+                        {
+                            "xy": spot,
+                            "reason": "dead end",
+                            "clear_m": round(_pose_clearance(self.grid, float(pose[0]), float(pose[1])), 2),
+                            "size_m": round(free_behind_m(self.grid, pose), 2),
+                        }
+                    ]
+                }
+            )
+            cmd = self._begin_back(pose)
+            if cmd is not None:
+                return cmd
         held = self._hold_command(pose, view)
         if held is not None:
             self._body_v, self._body_w = held
@@ -1357,17 +1389,21 @@ class Explorer:
             shift = math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1])
             # Same target: refresh the path. A different target waits, so
             # the goal does not flip every replan.
-            if shift < 0.6:
+            if shift < 0.45:
                 self.path_xy = path
                 self._pocket = bool(report.get("tight"))
                 return
             if self.t_s - self._goal_since < 8.0:
+                return
+            new_score = float(report.get("score") or 0.0)
+            if self._goal_score > 0.0 and new_score < self._goal_score * 1.25:
                 return
         same = (
             self.goal_xy is not None
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
         )
         self.goal_xy, self.path_xy = goal, path
+        self._goal_score = float(report.get("score") or 0.0)
         self._pocket = bool(report.get("tight"))
         self.frontiers_left = 1
         self.phase = "go"
@@ -1439,6 +1475,7 @@ class Explorer:
             self.phase = "go"
             goal, path = chosen
             self.goal_xy, self.path_xy = goal, path
+            self._goal_score = float(report.get("score") or 0.0)
             self._pocket = bool(report.get("tight"))
             self._goal_since = self.t_s
             self._motion_anchor = None

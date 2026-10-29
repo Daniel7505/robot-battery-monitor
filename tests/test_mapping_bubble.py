@@ -107,14 +107,14 @@ def test_a_centred_door_is_passable_and_a_close_side_is_not():
     assert clip.left is not None and max_speed_for_gap(clip.left) < 0.08
 
 
-def test_a_corner_ir_closes_the_forward_gap():
-    """The tire corner is outside the inset sonar cones. The IR sees it."""
+def test_a_corner_tof_closes_the_forward_gap():
+    """The tire corner is outside the inset sonar cones. The ToF sees it."""
     open_ring = assess_bubble(2.0, blind=False, proximity={"us_front": 0.80, "us_front_left": 0.60})
     assert open_ring.forward is not None and open_ring.forward > 0.50
     corner = assess_bubble(
         2.0,
         blind=False,
-        proximity={"us_front": 0.80, "us_front_left": 0.60, "ir_front_left": 0.05},
+        proximity={"us_front": 0.80, "us_front_left": 0.60, "tof_front_left": 0.05},
     )
     assert corner.forward == pytest.approx(0.05)
 

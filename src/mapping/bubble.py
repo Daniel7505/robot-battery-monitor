@@ -38,17 +38,18 @@ BUBBLE_STANDOFF_M = 0.04
 BUBBLE_LATENCY_S = 0.30
 BUBBLE_DECEL_M_S2 = 1.4
 
-# Four corner IR beams sit on the tire corners and look out along the
-# diagonal. The 45° sonars are inset, and their 0.3 rad cones leave a
-# gap over the corner the tire actually hits. A Sharp GP2Y0A41-class
-# part (4–30 cm, about $3) is the stand-in. Four of them are about $12.
-_CORNER_FRONT = ("ir_front_left", "ir_front_right")
-_CORNER_REAR = ("ir_rear_left", "ir_rear_right")
+# VL53L0X-class ToF, one per corner, aimed about 40° out and 8° down.
+# The inset sonars leave a gap over the tire corner. A reading inside
+# 3 cm is the bump switch on that corner (the switch travel), not a new
+# collision hull. About $2.50 per ToF and $0.40 per switch, $12 for four.
+_CORNER_FRONT = ("tof_front_left", "tof_front_right")
+_CORNER_REAR = ("tof_rear_left", "tof_rear_right")
 _CORNERS = _CORNER_FRONT + _CORNER_REAR
 _FRONT = ("us_front", "us_front_left", "us_front_right", *_CORNER_FRONT)
-_LEFT = ("us_left", "us_front_left", "us_rear_left", "ir_front_left", "ir_rear_left")
-_RIGHT = ("us_right", "us_front_right", "us_rear_right", "ir_front_right", "ir_rear_right")
+_LEFT = ("us_left", "us_front_left", "us_rear_left", "tof_front_left", "tof_rear_left")
+_RIGHT = ("us_right", "us_front_right", "us_rear_right", "tof_front_right", "tof_rear_right")
 _REAR = ("us_rear", "us_rear_left", "us_rear_right", *_CORNER_REAR)
+BUMP_M = 0.03
 # Lens at 0.14 m, ignores returns inside 0.35 m, nose at 0.19 m.
 # An object closer than this air gap is outside the depth camera.
 SIGHT_M = 0.14 + 0.35 - SHELL_NOSE_M
@@ -111,8 +112,16 @@ def reverse_budget_m(gap_m: float | None, *, blind: bool = False, force_min_m: f
 
 
 def corner_gap(proximity: dict | None) -> float | None:
-    """Closest corner IR reading, or None when those sensors are absent."""
+    """Closest corner ToF reading, or None when those sensors are absent."""
     return _side(proximity or {}, _CORNERS)
+
+
+def corner_bump(proximity: dict | None) -> float | None:
+    """Corner switch closed: the ToF beam is inside the switch travel."""
+    gap = corner_gap(proximity)
+    if gap is None or gap >= BUMP_M:
+        return None
+    return float(gap)
 
 
 def _side(proximity: dict, names: tuple[str, ...]) -> float | None:

@@ -743,56 +743,76 @@ Robot {
       numberOfRays 3
       aperture 0.3
     }
-    # Corner IR, one at each tire corner, aimed along the diagonal.
-    # Short range on purpose: this is the spot the sonars' cones miss.
-    # No bounding object. Apartment mapper only.
-    DistanceSensor {
-      translation 0.21 0.21 0.12
-      rotation 0 0 1 0.7854
-      name "ir_front_left"
-      lookupTable [
-        0.04 0.04 0.005
-        0.30 0.30 0.01
+    # VL53L0X-class ToF at each tire corner: 40° outward, 8° down.
+    # A reading inside 3 cm is that corner's bump switch. No bounding
+    # object, so the tires stay the contact surface.
+    Transform {
+      translation 0.21 0.21 0.14
+      rotation 0 0 1 0.70
+      children [
+        DistanceSensor {
+          rotation 0 1 0 0.14
+          name "tof_front_left"
+          lookupTable [
+            0.03 0.03 0.004
+            1.20 1.20 0.02
+          ]
+          type "infra-red"
+          numberOfRays 1
+          aperture 0.44
+        }
       ]
-      type "infra-red"
-      numberOfRays 1
-      aperture 0.15
     }
-    DistanceSensor {
-      translation 0.21 -0.21 0.12
-      rotation 0 0 1 -0.7854
-      name "ir_front_right"
-      lookupTable [
-        0.04 0.04 0.005
-        0.30 0.30 0.01
+    Transform {
+      translation 0.21 -0.21 0.14
+      rotation 0 0 1 -0.70
+      children [
+        DistanceSensor {
+          rotation 0 1 0 0.14
+          name "tof_front_right"
+          lookupTable [
+            0.03 0.03 0.004
+            1.20 1.20 0.02
+          ]
+          type "infra-red"
+          numberOfRays 1
+          aperture 0.44
+        }
       ]
-      type "infra-red"
-      numberOfRays 1
-      aperture 0.15
     }
-    DistanceSensor {
-      translation -0.21 0.21 0.12
-      rotation 0 0 1 2.3562
-      name "ir_rear_left"
-      lookupTable [
-        0.04 0.04 0.005
-        0.30 0.30 0.01
+    Transform {
+      translation -0.21 0.21 0.14
+      rotation 0 0 1 2.44
+      children [
+        DistanceSensor {
+          rotation 0 1 0 0.14
+          name "tof_rear_left"
+          lookupTable [
+            0.03 0.03 0.004
+            1.20 1.20 0.02
+          ]
+          type "infra-red"
+          numberOfRays 1
+          aperture 0.44
+        }
       ]
-      type "infra-red"
-      numberOfRays 1
-      aperture 0.15
     }
-    DistanceSensor {
-      translation -0.21 -0.21 0.12
-      rotation 0 0 1 -2.3562
-      name "ir_rear_right"
-      lookupTable [
-        0.04 0.04 0.005
-        0.30 0.30 0.01
+    Transform {
+      translation -0.21 -0.21 0.14
+      rotation 0 0 1 -2.44
+      children [
+        DistanceSensor {
+          rotation 0 1 0 0.14
+          name "tof_rear_right"
+          lookupTable [
+            0.03 0.03 0.004
+            1.20 1.20 0.02
+          ]
+          type "infra-red"
+          numberOfRays 1
+          aperture 0.44
+        }
       ]
-      type "infra-red"
-      numberOfRays 1
-      aperture 0.15
     }
     # Rear view for reversing and for a forward picture with no corners.
     # Yawed 180 degrees so the optical axis is the robot's -X. No

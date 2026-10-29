@@ -455,13 +455,13 @@ def test_a_corner_contact_reverses_until_the_camera_can_see():
     bot._replan_at = 1.0e9
     bot.goal_xy = (2.0, 0.0)
     bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
-    bot._proximity = {"ir_front_left": 0.05}
+    bot._proximity = {"tof_front_left": 0.02}
     bot._go(False, 0.2)
     assert bot._body_v < 0.0 and bot._body_w == 0.0
-    assert bot._recover_need >= SIGHT_M - 0.05 - 1e-6
+    assert bot._recover_need >= SIGHT_M - 0.02 - 1e-6
     assert bot._recover_need > TOO_CLOSE_M
     bot.odometry.x_m = -bot._recover_need
-    bot._proximity = {"ir_front_left": 0.29}
+    bot._proximity = {"tof_front_left": 0.29}
     bot.t_s = 6.0
     bot._go(False, 0.2)
     assert bot._body_v == 0.0 and bot._body_w == 0.0
@@ -478,10 +478,50 @@ def test_a_corner_you_cannot_back_away_from_does_not_freeze():
     bot.goal_xy = (2.0, 0.0)
     bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
     _fill(bot.grid, -0.55, -0.40, -0.22, 0.40, bot.grid.l_max)
-    bot._proximity = {"ir_front_left": 0.05, "us_rear": 0.04}
+    bot._proximity = {"tof_front_left": 0.02, "us_rear": 0.04}
     bot._go(False, 0.2)
     assert bot._body_v > 0.02 or abs(bot._body_w) > 0.05
     assert not bot._recover
+
+
+def test_a_half_turn_needs_open_floor_and_a_weak_goal_does_not_win(monkeypatch):
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import free_behind_m, spin_fits
+
+    open_grid = OccupancyGrid()
+    _fill(open_grid, -1.5, -1.5, 1.5, 1.5, open_grid.l_min)
+    assert spin_fits(open_grid, (0.0, 0.0, 0.0))
+    alley = OccupancyGrid()
+    _fill(alley, -1.0, -1.0, 1.2, 1.0, alley.l_min)
+    _fill(alley, -1.0, 0.16, 1.2, 0.40, alley.l_max)
+    _fill(alley, -1.0, -0.40, 1.2, -0.16, alley.l_max)
+    assert not spin_fits(alley, (0.0, 0.0, 0.0))
+    assert free_behind_m(alley, (0.0, 0.0, 0.0)) > 0.4
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    planned = [
+        (3.0, ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)])),
+        (3.2, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+        (5.0, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+    ]
+
+    def _fake(*_args, **kwargs):
+        score, chosen = planned.pop(0)
+        report = kwargs.get("report")
+        if report is not None:
+            report["score"] = score
+        return chosen
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.t_s = 10.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 30.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
 
 
 def test_a_tight_speck_is_refused_once(monkeypatch):

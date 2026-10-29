@@ -436,43 +436,6 @@ def test_doorways_are_at_least_the_measured_widths(solids: dict):
     assert got["bedroom_bath_walkway"] + 1e-4 >= walk
 
 
-def _carpet_ramp(world_text: str, name: str):
-    """Low top, high top, and the xy centre of each end of a transition mesh."""
-    raw = _strip_comments(world_text)
-    match = re.search(rf"\bDEF\s+{name}\s+Solid\s*\{{", raw)
-    assert match, name
-    body = _brace_body(raw, match.end() - 1)
-    trans = re.search(
-        r"translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
-        body,
-    )
-    mesh = re.search(
-        r"boundingObject\s+IndexedFaceSet\s*\{.*?point\s*\[([^\]]*)\]",
-        body,
-        re.S,
-    )
-    assert trans and mesh, name
-    cx, cy, cz = (float(v) for v in trans.groups())
-    nums = [float(v) for v in mesh.group(1).split()]
-    pts = [(cx + nums[i], cy + nums[i + 1], cz + nums[i + 2]) for i in range(0, len(nums), 3)]
-    span_x = max(p[0] for p in pts) - min(p[0] for p in pts)
-    span_y = max(p[1] for p in pts) - min(p[1] for p in pts)
-    axis = 0 if span_x < span_y else 1
-    mid = 0.5 * (min(p[axis] for p in pts) + max(p[axis] for p in pts))
-    neg = [p for p in pts if p[axis] <= mid]
-    pos = [p for p in pts if p[axis] > mid]
-    ends = ((max(p[2] for p in neg), neg), (max(p[2] for p in pos), pos))
-    (high_z, high), (low_z, low) = sorted(ends, key=lambda item: item[0], reverse=True)
-
-    def centre(group: list[tuple[float, float, float]]) -> tuple[float, float]:
-        return (
-            sum(p[0] for p in group) / len(group),
-            sum(p[1] for p in group) / len(group),
-        )
-
-    return low_z, high_z, centre(low), centre(high)
-
-
 def test_floor_zones_and_carpet_step(solids: dict, world_text: str):
     gt = _ground_truth()
     tol = float(gt["tolerance_m"])
@@ -500,19 +463,26 @@ def test_floor_zones_and_carpet_step(solids: dict, world_text: str):
     lip = solids["APT_FLOOR_BEDROOM"]["zmax"] - solids["APT_FLOOR_HALL"]["zmax"]
     assert abs(lip - step) <= tol
     assert solids["APT_FLOOR_BEDROOM"]["material"] == "carpet"
-    # The step stays. The transition the casters roll over is a ramp, not a curb.
-    bed = solids["APT_FLOOR_BEDROOM"]
-    hall = solids["APT_FLOOR_HALL"]
-    bed_xy = ((bed["xmin"] + bed["xmax"]) / 2.0, (bed["ymin"] + bed["ymax"]) / 2.0)
-    for name in ("APT_FLOOR_CARPET_EDGE", "APT_FLOOR_CARPET_EDGE_BATH"):
-        low_z, high_z, low_xy, high_xy = _carpet_ramp(world_text, name)
-        assert low_z == pytest.approx(hall["zmax"], abs=0.001)
-        assert high_z == pytest.approx(bed["zmax"], abs=0.001)
-        high_d = math.hypot(high_xy[0] - bed_xy[0], high_xy[1] - bed_xy[1])
-        low_d = math.hypot(low_xy[0] - bed_xy[0], low_xy[1] - bed_xy[1])
-        assert high_d < low_d
+    # The measured lip is about 10 mm and is not a collider. No ramp solids.
+    assert "APT_FLOOR_CARPET_EDGE" not in world_text
+    assert 'material1 "caster"' not in world_text
     for name in ("APT_FLOOR_LIVING", "APT_FLOOR_KITCHEN", "APT_FLOOR_HALL", "APT_FLOOR_BATH"):
         assert solids[name]["material"] == "laminate"
+
+
+def _contact_rolling(text: str) -> dict[tuple[str, str], tuple[float, float, float]]:
+    raw = _strip_comments(text)
+    pairs: dict[tuple[str, str], tuple[float, float, float]] = {}
+    for match in re.finditer(r"\bContactProperties\s*\{", raw):
+        body = _brace_body(raw, match.end() - 1)
+        mats = re.findall(r'material[12]\s+"([^"]+)"', body)
+        roll = re.search(
+            r"rollingFriction\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+            body,
+        )
+        if len(mats) == 2 and roll:
+            pairs[(mats[0], mats[1])] = tuple(float(v) for v in roll.groups())  # type: ignore[assignment]
+    return pairs
 
 
 def test_carpet_slip_is_higher_and_energy_is_not_wired(world_text: str):
@@ -520,9 +490,14 @@ def test_carpet_slip_is_higher_and_energy_is_not_wired(world_text: str):
     pairs = _contact_fds(world_text)
     laminate = pairs[("drive_wheel", "laminate")]
     carpet = pairs[("drive_wheel", "carpet")]
-    assert carpet > laminate
+    assert carpet == laminate
     assert laminate == pytest.approx(gt["floors"]["contact_force_dependent_slip"]["drive_wheel_laminate"])
     assert carpet == pytest.approx(gt["floors"]["contact_force_dependent_slip"]["drive_wheel_carpet"])
+    rolling = _contact_rolling(world_text)
+    lam_r = rolling[("drive_wheel", "laminate")]
+    car_r = rolling[("drive_wheel", "carpet")]
+    assert lam_r[1] == pytest.approx(0.0061)
+    assert car_r[1] == pytest.approx(lam_r[1] * 2.5, abs=0.0002)
     assert gt["floors"]["energy_model_wired"] is False
     energy = (ROOT / "src" / "twin_energy_cruise.py").read_text(encoding="utf-8")
     assert GT_NAME not in energy

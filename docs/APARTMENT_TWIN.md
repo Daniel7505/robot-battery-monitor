@@ -123,14 +123,12 @@ Each zone is its own floor solid with a `contactMaterial`.
 
 Walls are light greige, doors and trim white, laminate a grey-brown wood, carpet a medium pile.
 
-Webots R2025a `ContactProperties` has no rolling-resistance coefficient. `forceDependentSlip` (ODE `v = k·F`) is the stand-in. Laminate uses the same pair as the warehouse floor so the robot still drives. Carpet is higher.
+Grip is the same on both floors (`coulombFriction` 8, `forceDependentSlip` 0.01). Rolling drag is Webots `rollingFriction`: linoleum Crr 0.0061, carpet 2.5× that (0.0153). Coast-down measured carpet 0.0143 versus linoleum 0.0061 (doi:10.1016/j.proeng.2010.04.113). A review of 17 papers puts carpet near 3× linoleum (PMC7863146). The skid-steer has no casters, so the apartment world has no caster contact pairs. The measured lip is about 10 mm and is not a collider. There is no ramp.
 
-| pair | coulombFriction | forceDependentSlip | documented Crr |
+| pair | coulombFriction | forceDependentSlip | rollingFriction (y, z) |
 |---|---:|---:|---:|
-| `drive_wheel` / `laminate` | 8 | 0.01 | 0.012 |
-| `drive_wheel` / `carpet` | 8 | 0.04 | 0.050 (medium pile, between a rental carpet and shag) |
-| `caster` / `laminate` | 0.08 | 1 | — |
-| `caster` / `carpet` | 0.15 | 0.6 | — |
+| `drive_wheel` / `laminate` | 8 | 0.01 | 0.0061 |
+| `drive_wheel` / `carpet` | 8 | 0.01 | 0.0153 |
 
 **Not wired into the energy model.** `src/twin_energy_cruise.py` still uses the warehouse `drive_wheel` / `default` pair and `DEFAULT_CRR` 0.015. The Crr numbers above are notes for a later hookup.
 

@@ -56,7 +56,7 @@ from src.mapping.tick import (
     _behind_blocked,
     choose_motion,
     live_veto,
-    log_decision,
+    log_major,
 )
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
@@ -768,12 +768,13 @@ class Explorer:
             else:
                 self._log("floor still, translation frozen")
         rest = self._pitch_rest
-        # The carpet ramp is about 0.04 rad. A real unload tips past that.
+        # No casters and no carpet ramp. A pitch past 0.12 rad while the
+        # hubs claim motion means the shell tipped, not a wheel unload.
         pitched = rest is not None and abs(float(pitch) - rest) > 0.12
         if pitched and (claimed >= 0.02 or spun >= 0.08) and not anchor["lifted"]:
             anchor["lifted"] = True
             self.wheels_lifted += 1
-            self._log("wheels lifted, casters holding, drive wheels spinning free")
+            self._log("wheels lifted, shell pitched, drive wheels spinning free")
         # Hubs that are not claiming motion have nothing to undo and
         # nothing to back away from. The pose freeze above is the update.
         if claimed < 0.02 and spun < 0.08:
@@ -853,14 +854,7 @@ class Explorer:
         self._relief_w = 0.0
         self._backing = False
         self._commit = None
-        log_decision(
-            {
-                "t": round(self.t_s, 2),
-                "kind": "stuck",
-                "response": "wait",
-                "disp_m": round(moved, 3),
-            }
-        )
+        self._major("stuck", "unknown", disp_m=moved)
 
     def _open_reverse(self) -> bool:
         view = self._bubble_view
@@ -891,24 +885,17 @@ class Explorer:
             ):
                 self._relief = "reverse"
                 self._relief_until = self.t_s + 0.45
-                log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "reverse"})
+                self._major("stuck", "unknown")
             else:
                 self._relief_w = self._relief_spin()
                 self._relief_until = self.t_s + 0.45
                 if self._shell_clips(0.0, self._relief_w):
                     self._relief = "stop"
-                    log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "stop"})
+                    self._major("stuck", "too_tight_to_fit")
                 else:
                     self._reverse_failed = False
                     self._relief = "spin"
-                    log_decision(
-                        {
-                            "t": round(self.t_s, 2),
-                            "kind": "stuck",
-                            "response": "spin",
-                            "w": round(self._relief_w, 2),
-                        }
-                    )
+                    self._major("stuck", "heading_off", heading_err_deg=math.degrees(self._relief_w))
         if self.t_s <= self._relief_until:
             if self._relief == "reverse":
                 self._body_v, self._body_w = -0.10, 0.0
@@ -966,6 +953,27 @@ class Explorer:
             prev = nxt
         return heading
 
+    def _place_tag(self) -> str:
+        """doorway, hallway, or room from this robot's own map. Not the floor plan."""
+        x, y, _yaw = self.odometry.pose()
+        cell = self.grid.cell_of(x, y)
+        if cell is None:
+            return "room"
+        row, col = cell
+        doors = self.room_doors
+        if doors is not None and 0 <= row < doors.shape[0] and 0 <= col < doors.shape[1] and bool(doors[row, col]):
+            return "doorway"
+        labels = self.room_labels
+        if labels is not None and 0 <= row < labels.shape[0] and 0 <= col < labels.shape[1]:
+            name = str(self.room_names.get(int(labels[row, col]), ""))
+            if name.startswith("hall"):
+                return "hallway"
+        return "room"
+
+    def _major(self, action: str, reason: str, **numbers: float) -> None:
+        x, y, _yaw = self.odometry.pose()
+        log_major(self.t_s, x, y, self._place_tag(), action, reason, **numbers)
+
     def _note_approach(self, why: str, v: float, w: float) -> None:
         # Separate from the motion log. Sharing that throttle let a straight
         # crossing write a line on every tick, because the scored command
@@ -974,36 +982,28 @@ class Explorer:
             return
         self._approach_why = why
         self._approach_log_at = self.t_s + 1.0
-        kind = {"back": "back_out", "recover": "recover"}.get(why, "approach")
-        log_decision(
-            {
-                "t": round(self.t_s, 2),
-                "kind": kind,
-                "response": why,
-                "v": round(float(v), 3),
-                "w": round(float(w), 3),
-            }
-        )
+        err = abs(wrap_rad(self._segment_heading() - self.odometry.pose()[2]))
+        clear = _pose_clearance(self.grid, *self.odometry.pose()[:2])
+        if why == "pivot":
+            self._major("pivot", "heading_off", heading_err_deg=math.degrees(err), clearance_m=clear)
+        elif why == "back":
+            self._major("back", "cant_see_behind_backing_out", clearance_m=clear)
+        elif why == "recover":
+            self._major("recover", "contact_bump", clearance_m=clear)
+        elif why == "wide":
+            self._major("wide", "too_tight_to_fit", heading_err_deg=math.degrees(err), clearance_m=clear)
+        elif why == "straight":
+            self._major("cross", "heading_off", heading_err_deg=math.degrees(err), clearance_m=clear)
 
     def _note_motion(self, choice) -> None:
         if choice.name == self._last_motion and self.t_s < self._motion_log_at:
             return
         self._last_motion = choice.name
         self._motion_log_at = self.t_s + 1.0
-        kind = choice.name if choice.name in ("back_out", "doorway_rescan", "doorway_refusal") else "motion"
-        costs = {key: value for key, value in choice.costs.items() if key != "total" and abs(value) > 1e-3}
-        log_decision(
-            {
-                "t": round(self.t_s, 2),
-                "kind": kind,
-                "chosen": choice.name,
-                "v": round(choice.v, 3),
-                "w": round(choice.w, 3),
-                "why": choice.why(),
-                "costs": costs,
-                "vetoes": choice.vetoes[:8],
-            }
-        )
+        if choice.name == "doorway_refusal":
+            self._major("stop", "too_tight_to_fit", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
+        elif choice.name in ("back_out", "doorway_rescan"):
+            self._major("back", "cant_see_behind_backing_out", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
 
     def _shell_clips(self, v: float, w: float) -> bool:
         return footprint_clips(self.grid, self.odometry.pose(), v, w)
@@ -1323,18 +1323,8 @@ class Explorer:
         )
 
     def _log_goal(self, goal: tuple[float, float], report: dict) -> None:
-        runner = report.get("runner_up")
-        runner_score = report.get("runner_score")
-        log_decision(
-            {
-                "t": round(self.t_s, 2),
-                "kind": "goal",
-                "chosen": [round(goal[0], 2), round(goal[1], 2)],
-                "score": round(float(report.get("score") or 0.0), 3),
-                "runner_up": None if runner is None else [round(runner[0], 2), round(runner[1], 2)],
-                "runner_score": None if runner_score is None else round(float(runner_score), 3),
-            }
-        )
+        del report
+        self._major("goal", "goal_changed", goal_x=float(goal[0]), goal_y=float(goal[1]))
         self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
 
     def _note_refusals(self, report: dict) -> None:
@@ -1347,15 +1337,14 @@ class Explorer:
             if key in self._refused:
                 continue
             self._refused.add(key)
-            log_decision(
-                {
-                    "t": round(self.t_s, 2),
-                    "kind": "refuse",
-                    "chosen": [round(float(xy[0]), 2), round(float(xy[1]), 2)],
-                    "reason": item.get("reason"),
-                    "clear_m": item.get("clear_m"),
-                    "size_m": item.get("size_m"),
-                }
+            raw = str(item.get("reason") or "")
+            reason = "dead_end" if raw == "dead end" else "no_room_to_turn" if raw == "no room to turn" else "unknown"
+            self._major(
+                "refuse",
+                reason,
+                goal_x=float(xy[0]),
+                goal_y=float(xy[1]),
+                clearance_m=float(item.get("clear_m") or 0.0),
             )
             self._log(
                 f"refuse ({float(xy[0]):.2f},{float(xy[1]):.2f}) "

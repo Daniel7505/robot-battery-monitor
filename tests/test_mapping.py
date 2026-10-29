@@ -542,18 +542,11 @@ def test_a_half_turn_needs_open_floor_and_a_weak_goal_does_not_win(monkeypatch):
     assert bot.goal_xy == (0.0, 3.0)
 
 
-def test_a_tight_speck_is_refused_once(monkeypatch):
+def test_a_tight_speck_is_refused_once(monkeypatch, tmp_path):
     from src.mapping.explore import Explorer
-    from src.mapping.tick import log_decision
 
-    lines = []
-
-    def _capture(event):
-        lines.append(event)
-
-    monkeypatch.setattr("src.mapping.explore.log_decision", _capture)
     monkeypatch.setenv("RBM_DECISION_LOG", "1")
-    monkeypatch.setenv("RBM_MAP_DIR", "/tmp")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
     bot._note_refusals(
         {
@@ -566,11 +559,12 @@ def test_a_tight_speck_is_refused_once(monkeypatch):
     bot._note_refusals(
         {"refused": [{"xy": (1.21, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40}]}
     )
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    assert lines[0]["kind"] == "refuse"
-    assert lines[0]["reason"] == "no room to turn"
-    assert lines[0]["clear_m"] == 0.18
-    del log_decision
+    assert "reason=no_room_to_turn" in lines[0]
+    assert "clearance_m=0.18" in lines[0]
+    summary = (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    assert "no_room_to_turn 1" in summary
 
 
 def test_a_stuck_sonar_on_known_free_floor_still_creeps():
@@ -1124,7 +1118,7 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
     wheel = 0.22 / WHEEL_RADIUS_M
     dt = 0.05
     saw_reverse = False
-    # Pitch of the carpet ramp. The casters are not unloaded.
+    # A small pitch is not a tip. The skid-steer has no casters to unload.
     # Stuck is a few seconds of command without odometry displacement.
     for _ in range(80):
         cmd_l, cmd_r = bot.step(
@@ -1988,18 +1982,17 @@ def test_the_decision_log_is_off_unless_asked(tmp_path, monkeypatch):
     bot._bubble_view = BubbleView(0.70, 0.40, 0.40, 0.40, 0.40)
     bot._bubble_gap = 0.70
     bot._go(False, 0.28, 1.0, 1.0)
-    assert not (tmp_path / "decision.jsonl").exists()
+    assert not (tmp_path / "decisions.txt").exists()
 
     monkeypatch.setenv("RBM_DECISION_LOG", "1")
-    bot._last_motion = ""
-    bot._motion_log_at = -1.0
-    bot._go(False, 0.28, 1.0, 1.0)
-    lines = (tmp_path / "decision.jsonl").read_text(encoding="utf-8").splitlines()
+    bot._major("pivot", "heading_off", heading_err_deg=20.0, clearance_m=0.28)
+    bot._major("pivot", "heading_off", heading_err_deg=21.0, clearance_m=0.28)
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    row = json.loads(lines[0])
-    assert row["kind"] == "motion"
-    assert row["chosen"]
-    assert "why" in row
+    assert "place=" in lines[0]
+    assert "action=pivot" in lines[0]
+    assert "reason=heading_off" in lines[0]
+    assert "heading_err_deg=20.00" in lines[0]
     tight = BubbleView(0.09, 0.40, 0.40, 0.40, 0.09)
     assert live_veto(0.28, 0.0, tight) is not None
     choice = choose_motion(

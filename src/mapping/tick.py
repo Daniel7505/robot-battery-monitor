@@ -54,6 +54,72 @@ def decision_log_enabled() -> bool:
     return os.environ.get("RBM_DECISION_LOG") == "1"
 
 
+REASONS = (
+    "heading_off",
+    "too_tight_to_fit",
+    "cant_see_behind_backing_out",
+    "dead_end",
+    "no_room_to_turn",
+    "step_too_high",
+    "contact_bump",
+    "goal_changed",
+    "unknown",
+)
+_major_state: dict[str, dict] = {}
+
+
+def log_major(
+    t_s: float,
+    x_m: float,
+    y_m: float,
+    place: str,
+    action: str,
+    reason: str,
+    **numbers: float,
+) -> None:
+    """One plain line per decision, not per tick. Same line is not repeated.
+
+    ``place`` is doorway, hallway, or room from the robot's own map.
+    ``reason`` is one of ``REASONS``. Counts are rewritten to summary.txt.
+    """
+    if not decision_log_enabled():
+        return
+    folder = os.environ.get("RBM_MAP_DIR")
+    if not folder:
+        return
+    state = _major_state.setdefault(
+        folder,
+        {
+            "last": None,
+            "reasons": {name: 0 for name in REASONS},
+            "places": {"doorway": 0, "hallway": 0, "room": 0},
+        },
+    )
+    why = reason if reason in REASONS else "unknown"
+    where = place if place in state["places"] else "room"
+    key = (str(action), why)
+    if key == state["last"]:
+        return
+    state["last"] = key
+    state["reasons"][why] = state["reasons"].get(why, 0) + 1
+    state["places"][where] = state["places"].get(where, 0) + 1
+    bits = [f"{name}={float(value):.2f}" for name, value in numbers.items()]
+    extra = (" " + " ".join(bits)) if bits else ""
+    line = (
+        f"t={float(t_s):.2f} x={float(x_m):.2f} y={float(y_m):.2f} "
+        f"place={where} action={action} reason={why}{extra}\n"
+    )
+    path = os.path.join(folder, "decisions.txt")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(line)
+    summary = ["reasons"]
+    summary.extend(f"{name} {state['reasons'][name]}" for name in REASONS)
+    summary.append("places")
+    summary.extend(f"{name} {state['places'][name]}" for name in ("doorway", "hallway", "room"))
+    with open(os.path.join(folder, "summary.txt"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(summary) + "\n")
+
+
 def log_decision(event: dict) -> None:
     """Append one JSON object. Off unless ``RBM_DECISION_LOG=1``.
 

@@ -743,6 +743,57 @@ Robot {
       numberOfRays 3
       aperture 0.3
     }
+    # Corner IR, one at each tire corner, aimed along the diagonal.
+    # Short range on purpose: this is the spot the sonars' cones miss.
+    # No bounding object. Apartment mapper only.
+    DistanceSensor {
+      translation 0.19 0.19 0.08
+      rotation 0 0 1 0.7854
+      name "ir_front_left"
+      lookupTable [
+        0.04 0.04 0.005
+        0.30 0.30 0.01
+      ]
+      type "infra-red"
+      numberOfRays 1
+      aperture 0.15
+    }
+    DistanceSensor {
+      translation 0.19 -0.19 0.08
+      rotation 0 0 1 -0.7854
+      name "ir_front_right"
+      lookupTable [
+        0.04 0.04 0.005
+        0.30 0.30 0.01
+      ]
+      type "infra-red"
+      numberOfRays 1
+      aperture 0.15
+    }
+    DistanceSensor {
+      translation -0.19 0.19 0.08
+      rotation 0 0 1 2.3562
+      name "ir_rear_left"
+      lookupTable [
+        0.04 0.04 0.005
+        0.30 0.30 0.01
+      ]
+      type "infra-red"
+      numberOfRays 1
+      aperture 0.15
+    }
+    DistanceSensor {
+      translation -0.19 -0.19 0.08
+      rotation 0 0 1 -2.3562
+      name "ir_rear_right"
+      lookupTable [
+        0.04 0.04 0.005
+        0.30 0.30 0.01
+      ]
+      type "infra-red"
+      numberOfRays 1
+      aperture 0.15
+    }
     # Rear view for reversing and for a forward picture with no corners.
     # Yawed 180 degrees so the optical axis is the robot's -X. No
     # bounding object. Short range, small image, apartment mapper only.

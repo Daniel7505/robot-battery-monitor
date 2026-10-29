@@ -427,6 +427,78 @@ def test_a_rear_corner_graze_still_backs_out():
     assert not any(item["sensor"] == "map:rear" and item["motion"] == "reverse" for item in choice.vetoes)
 
 
+def test_a_forward_goal_is_not_driven_in_reverse():
+    """Recovery may reverse. A goal still in front does not."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._backing = True
+    bot._back_from = (0.0, 0.0)
+    bot.odometry.x_m = 0.2
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._backing
+
+
+def test_a_corner_contact_reverses_until_the_camera_can_see():
+    from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"ir_front_left": 0.05}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    assert bot._recover_need >= SIGHT_M - 0.05 - 1e-6
+    assert bot._recover_need > TOO_CLOSE_M
+    bot.odometry.x_m = -bot._recover_need
+    bot._proximity = {"ir_front_left": 0.29}
+    bot.t_s = 6.0
+    bot._go(False, 0.2)
+    assert bot._body_v == 0.0 and bot._body_w == 0.0
+    assert bot._recover_phase == "look"
+
+
+def test_a_tight_speck_is_refused_once(monkeypatch):
+    from src.mapping.explore import Explorer
+    from src.mapping.tick import log_decision
+
+    lines = []
+
+    def _capture(event):
+        lines.append(event)
+
+    monkeypatch.setattr("src.mapping.explore.log_decision", _capture)
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", "/tmp")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._note_refusals(
+        {
+            "refused": [
+                {"xy": (1.2, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+                {"xy": (1.22, 0.41), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+            ]
+        }
+    )
+    bot._note_refusals(
+        {"refused": [{"xy": (1.21, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40}]}
+    )
+    assert len(lines) == 1
+    assert lines[0]["kind"] == "refuse"
+    assert lines[0]["reason"] == "no room to turn"
+    assert lines[0]["clear_m"] == 0.18
+    del log_decision
+
+
 def test_a_stuck_sonar_on_known_free_floor_still_creeps():
     """A 6 cm reading on floor the map already calls free is not a place to sit."""
     from src.mapping.bubble import BubbleView

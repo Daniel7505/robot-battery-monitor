@@ -30,7 +30,7 @@ from src.mapping.body import (
     TURN_CLEAR_M,
     DepthCamera,
 )
-from src.mapping.bubble import BubbleView, assess_bubble
+from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M, BubbleView, assess_bubble, corner_gap
 from src.mapping.depth_cloud import (
     blind_fraction,
     body_points,
@@ -206,6 +206,13 @@ class Explorer:
         self._commit_until = -1.0
         self._backing = False
         self._back_from: tuple[float, float] | None = None
+        self._recover = False
+        self._recover_from: tuple[float, float] | None = None
+        self._recover_need = 0.0
+        self._recover_phase = ""
+        self._recover_until = -1.0
+        self._proximity: dict = {}
+        self._refused: set[tuple] = set()
         self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
@@ -438,7 +445,8 @@ class Explorer:
                     # floor often cannot support or disagree.
                     self._slip_debt_m = max(0.0, self._slip_debt_m - 0.05)
                 self._agree_at = self.t_s + 0.5
-        view = assess_bubble(clearance, blind=self._view_blind, proximity=proximity)
+        self._proximity = proximity or {}
+        view = assess_bubble(clearance, blind=self._view_blind, proximity=self._proximity)
         if self._rear_gap is not None:
             rear = self._rear_gap if view.rear is None else min(view.rear, self._rear_gap)
             known = [gap for gap in (view.forward, view.left, view.right, rear) if gap is not None]
@@ -950,7 +958,7 @@ class Explorer:
             return
         self._approach_why = why
         self._approach_log_at = self.t_s + 1.0
-        kind = "back_out" if why == "back" else "approach"
+        kind = {"back": "back_out", "recover": "recover"}.get(why, "approach")
         log_decision(
             {
                 "t": round(self.t_s, 2),
@@ -1027,9 +1035,75 @@ class Explorer:
         self._note_approach("back", -0.10, 0.0)
         return wheel_speeds(-0.10, 0.0)
 
+    def _goal_ahead(self, pose) -> bool:
+        """The adopted goal lies in front of the nose, not behind it."""
+        if self.goal_xy is None:
+            return False
+        bearing = math.atan2(self.goal_xy[1] - float(pose[1]), self.goal_xy[0] - float(pose[0]))
+        return abs(wrap_rad(bearing - float(pose[2]))) < 1.0
+
+    def _corner_contact(self) -> float | None:
+        """A corner IR inside 0.10 m. A centre sonar on open floor is not this."""
+        gap = corner_gap(self._proximity)
+        if gap is None or gap >= TOO_CLOSE_M:
+            return None
+        return float(gap)
+
+    def _begin_recover(self, pose) -> tuple[float, float] | None:
+        """Reverse until the corner object can be seen, then stop and look."""
+        if self._reverse_closed(pose):
+            return None
+        gap = self._corner_contact()
+        if not self._recover:
+            seen = 0.0 if gap is None else gap
+            self._recover = True
+            self._recover_from = (float(pose[0]), float(pose[1]))
+            self._recover_need = max(0.12, SIGHT_M - seen)
+            self._recover_phase = "reverse"
+            self._backing = False
+            self._commit = None
+        return self._recover_command(pose)
+
+    def _recover_command(self, pose) -> tuple[float, float] | None:
+        if not self._recover:
+            return None
+        x, y = float(pose[0]), float(pose[1])
+        origin = self._recover_from
+        dist = 0.0 if origin is None else math.hypot(x - origin[0], y - origin[1])
+        gap = corner_gap(self._proximity)
+        if self._recover_phase == "reverse":
+            in_view = gap is None or gap >= min(SIGHT_M, 0.28)
+            if (dist >= self._recover_need and in_view) or dist >= 0.55 or self._reverse_closed(pose):
+                self._recover_phase = "look"
+                self._recover_until = self.t_s + 0.25
+                self._body_v, self._body_w = 0.0, 0.0
+                self._note_approach("recover", 0.0, 0.0)
+                return 0.0, 0.0
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("recover", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
+        if self.t_s < self._recover_until:
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
+        if gap is not None and gap < TOO_CLOSE_M and not self._reverse_closed(pose) and dist < 0.55:
+            self._recover_phase = "reverse"
+            self._recover_need = dist + max(0.12, SIGHT_M - gap)
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("recover", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
+        self._recover = False
+        self._recover_phase = ""
+        return None
+
     def _continue_back(self, pose) -> tuple[float, float] | None:
         """Keep reversing until the centre can turn, the map closes, or 1 m."""
         if not self._backing:
+            return None
+        # A forward goal is not a reason to keep backing. That was the
+        # bedroom exit: the goal pointed out and the shell reversed in.
+        if self._goal_ahead(pose) and self._corner_contact() is None:
+            self._backing = False
+            self._back_from = None
             return None
         x, y = float(pose[0]), float(pose[1])
         origin = self._back_from
@@ -1070,6 +1144,18 @@ class Explorer:
         if self.phase != "go":
             return 0.0, 0.0
         pose = self.odometry.pose()
+        if self._recover or self._corner_contact() is not None:
+            recover = self._begin_recover(pose) if not self._recover else self._recover_command(pose)
+            if recover is not None:
+                return recover
+            if self._corner_contact() is not None and self._reverse_closed(pose):
+                if self.goal_xy is not None:
+                    self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.5)
+                self.goal_xy = None
+                self.path_xy = []
+                self._replan_at = self.t_s + 1.0
+                self._body_v, self._body_w = 0.0, 0.0
+                return 0.0, 0.0
         backing = self._continue_back(pose)
         if backing is not None:
             return backing
@@ -1095,12 +1181,20 @@ class Explorer:
             self._note_approach("pivot", 0.0, w)
             return wheel_speeds(0.0, w)
         if approach is not None and approach[2] == "back":
-            cmd = self._begin_back(pose)
-            if cmd is not None:
-                return cmd
-            approach = None
+            # Backing here is to make room. It is not the way out when the
+            # goal is still in front; a corner contact has its own reverse.
+            if self._goal_ahead(pose):
+                approach = None
+            else:
+                cmd = self._begin_back(pose)
+                if cmd is not None:
+                    return cmd
+                approach = None
         if approach is not None and approach[2] == "wide":
-            return self._issue_wide(approach)
+            if approach[0] < 0.0 and self._goal_ahead(pose):
+                approach = None
+            else:
+                return self._issue_wide(approach)
         v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
         if arrived:
             if self._pocket:
@@ -1144,9 +1238,9 @@ class Explorer:
             v, w = approach[0], approach[1]
             heading_err = 0.0
             self._note_approach("straight", v, w)
-        elif self._needs_room(pose, heading_err):
+        elif self._needs_room(pose, heading_err) and not self._goal_ahead(pose):
             wide = wide_escape(self.grid, pose)
-            if wide is not None:
+            if wide is not None and not (wide[0] < 0.0 and self._goal_ahead(pose)):
                 return self._issue_wide(wide)
             cmd = self._begin_back(pose)
             if cmd is not None:
@@ -1197,6 +1291,31 @@ class Explorer:
         )
         self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
 
+    def _note_refusals(self, report: dict) -> None:
+        """One line per refused spot, not one line per replan."""
+        for item in report.get("refused") or []:
+            xy = item.get("xy")
+            if not xy:
+                continue
+            key = (round(float(xy[0]), 1), round(float(xy[1]), 1), str(item.get("reason")))
+            if key in self._refused:
+                continue
+            self._refused.add(key)
+            log_decision(
+                {
+                    "t": round(self.t_s, 2),
+                    "kind": "refuse",
+                    "chosen": [round(float(xy[0]), 2), round(float(xy[1]), 2)],
+                    "reason": item.get("reason"),
+                    "clear_m": item.get("clear_m"),
+                    "size_m": item.get("size_m"),
+                }
+            )
+            self._log(
+                f"refuse ({float(xy[0]):.2f},{float(xy[1]):.2f}) "
+                f"{item.get('reason')} clear={item.get('clear_m')}m"
+            )
+
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 4.0
         x, y, yaw = self.odometry.pose()
@@ -1217,6 +1336,7 @@ class Explorer:
             heading_xy=(math.cos(yaw), math.sin(yaw)),
             report=report,
         )
+        self._note_refusals(report)
         if chosen is None:
             self._no_frontier()
             return
@@ -1312,6 +1432,7 @@ class Explorer:
             heading_xy=(math.cos(yaw), math.sin(yaw)),
             report=report,
         )
+        self._note_refusals(report)
         if chosen is not None:
             self._log("frontier open, resuming")
             self._did_final_scan = False

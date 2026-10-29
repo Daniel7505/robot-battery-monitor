@@ -38,10 +38,21 @@ BUBBLE_STANDOFF_M = 0.04
 BUBBLE_LATENCY_S = 0.30
 BUBBLE_DECEL_M_S2 = 1.4
 
-_FRONT = ("us_front", "us_front_left", "us_front_right")
-_LEFT = ("us_left", "us_front_left", "us_rear_left")
-_RIGHT = ("us_right", "us_front_right", "us_rear_right")
-_REAR = ("us_rear", "us_rear_left", "us_rear_right")
+# Four corner IR beams sit on the tire corners and look out along the
+# diagonal. The 45° sonars are inset, and their 0.3 rad cones leave a
+# gap over the corner the tire actually hits. A Sharp GP2Y0A41-class
+# part (4–30 cm, about $3) is the stand-in. Four of them are about $12.
+_CORNER_FRONT = ("ir_front_left", "ir_front_right")
+_CORNER_REAR = ("ir_rear_left", "ir_rear_right")
+_CORNERS = _CORNER_FRONT + _CORNER_REAR
+_FRONT = ("us_front", "us_front_left", "us_front_right", *_CORNER_FRONT)
+_LEFT = ("us_left", "us_front_left", "us_rear_left", "ir_front_left", "ir_rear_left")
+_RIGHT = ("us_right", "us_front_right", "us_rear_right", "ir_front_right", "ir_rear_right")
+_REAR = ("us_rear", "us_rear_left", "us_rear_right", *_CORNER_REAR)
+# Lens at 0.14 m, ignores returns inside 0.35 m, nose at 0.19 m.
+# An object closer than this air gap is outside the depth camera.
+SIGHT_M = 0.14 + 0.35 - SHELL_NOSE_M
+TOO_CLOSE_M = 0.10
 
 
 @dataclass(frozen=True)
@@ -97,6 +108,11 @@ def reverse_budget_m(gap_m: float | None, *, blind: bool = False, force_min_m: f
         budget = max(budget, 0.12)
     budget = max(budget, float(force_min_m))
     return min(PIVOT_REVERSE_MAX_M, budget)
+
+
+def corner_gap(proximity: dict | None) -> float | None:
+    """Closest corner IR reading, or None when those sensors are absent."""
+    return _side(proximity or {}, _CORNERS)
 
 
 def _side(proximity: dict, names: tuple[str, ...]) -> float | None:

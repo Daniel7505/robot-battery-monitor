@@ -866,6 +866,16 @@ def select_goal(
         # worth the trap. A longer one stays, and the drive reverses back out.
         size_m = len(group) * grid.res
         if clear is not None and float(clear[target]) < TURN_AIM_M and size_m < 0.80:
+            if report is not None:
+                xy = grid.cell_center(*target)
+                report.setdefault("refused", []).append(
+                    {
+                        "xy": (float(xy[0]), float(xy[1])),
+                        "reason": "no room to turn",
+                        "clear_m": round(float(clear[target]), 2),
+                        "size_m": round(size_m, 2),
+                    }
+                )
             continue
         path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
         if not path_cells:

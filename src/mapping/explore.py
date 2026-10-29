@@ -218,6 +218,8 @@ class Explorer:
         self._recover_need = 0.0
         self._recover_phase = ""
         self._recover_until = -1.0
+        self._recover_t0 = -1.0
+        self._reverse_failed = False
         self._contact_until = -1.0
         self._proximity: dict = {}
         self._refused: set[tuple] = set()
@@ -882,7 +884,11 @@ class Explorer:
             if self.t_s <= self._relief_until:
                 self._body_v, self._body_w = 0.0, 0.0
                 return 0.0, 0.0
-            if self._open_reverse() and not _behind_blocked(self.grid, self.odometry.pose()):
+            if (
+                self._open_reverse()
+                and not self._reverse_failed
+                and not _behind_blocked(self.grid, self.odometry.pose())
+            ):
                 self._relief = "reverse"
                 self._relief_until = self.t_s + 0.45
                 log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "reverse"})
@@ -893,6 +899,7 @@ class Explorer:
                     self._relief = "stop"
                     log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "stop"})
                 else:
+                    self._reverse_failed = False
                     self._relief = "spin"
                     log_decision(
                         {
@@ -1078,6 +1085,7 @@ class Explorer:
             self._recover_from = (float(pose[0]), float(pose[1]))
             self._recover_need = max(0.12, SIGHT_M - seen)
             self._recover_phase = "reverse"
+            self._recover_t0 = self.t_s
             self._backing = False
             self._commit = None
         return self._recover_command(pose)
@@ -1090,6 +1098,12 @@ class Explorer:
         dist = 0.0 if origin is None else math.hypot(x - origin[0], y - origin[1])
         gap = corner_gap(self._proximity)
         if self._recover_phase == "reverse":
+            # A reverse that does not move is into the wedge, not out of it.
+            if self.t_s - self._recover_t0 > 0.5 and dist < 0.02:
+                self._recover = False
+                self._contact_until = self.t_s + 2.0
+                self._reverse_failed = True
+                return None
             in_view = gap is None or gap >= min(SIGHT_M, 0.28)
             if (dist >= self._recover_need and in_view) or dist >= 0.55 or self._reverse_closed(pose):
                 self._recover_phase = "look"

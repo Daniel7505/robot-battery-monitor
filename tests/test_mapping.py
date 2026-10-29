@@ -468,6 +468,24 @@ def test_a_corner_contact_reverses_until_the_camera_can_see():
     assert bot._recover_phase == "look"
 
 
+def test_a_recover_that_does_not_move_lets_go():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"tof_front_left": 0.02}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0
+    bot.t_s = 5.7
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._recover
+
+
 def test_a_corner_you_cannot_back_away_from_does_not_freeze():
     from src.mapping.explore import Explorer
 

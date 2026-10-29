@@ -1,9 +1,13 @@
-"""One control tick: live range vetoes, everything else is a cost.
+"""One control tick: live range vetoes, and a map sweep on turns.
 
 Candidates are a handful of forward, arc, spin, and reverse speeds.
-A motion is dropped only when a live range says that speed would meet
-the shell. Sweep, doorway centring, and a close side are costs, so an
-open bubble still produces a command. Ground truth is not read.
+A motion is dropped when live range says that speed would meet the
+shell, and when a turn's swept corners enter a mapped obstacle. Straight
+driving is not a side veto: a centred doorway has about 21 cm per side.
+A mapped wall across the nose, or a swept cell behind a backup,
+still drops that command. A smear narrower than the shell does not. If every candidate is vetoed, the tick backs
+straight out when the rear sonar and the map both allow it. Ground truth
+is not read.
 """
 
 from __future__ import annotations
@@ -15,7 +19,6 @@ import os
 from src.mapping.bubble import (
     BUBBLE_STANDOFF_M,
     BubbleView,
-    max_speed_for_gap,
     pivot_ready,
     stop_gap,
 )
@@ -23,6 +26,10 @@ from src.mapping.footprint import footprint_clips
 
 # Half of cruise. A doorway correction has to finish before the tire meets the frame.
 DOOR_CREEP_M_S = 0.12
+# Below this yaw rate the command is straight. Arcs and pivots are above it,
+# and a map corner on those sweeps is a veto. A few centimetres of shell
+# margin (FOOTPRINT_MARGIN_M) covers drift; straight motion does not pay it.
+TURN_W_RAD_S = 0.12
 
 # (name, v m/s, w rad/s). Positive w turns left.
 CANDIDATES: tuple[tuple[str, float, float], ...] = (
@@ -45,6 +52,75 @@ CANDIDATES: tuple[tuple[str, float, float], ...] = (
 
 def decision_log_enabled() -> bool:
     return os.environ.get("RBM_DECISION_LOG") == "1"
+
+
+REASONS = (
+    "heading_off",
+    "too_tight_to_fit",
+    "cant_see_behind_backing_out",
+    "dead_end",
+    "no_room_to_turn",
+    "step_too_high",
+    "contact_bump",
+    "goal_changed",
+    "unknown",
+)
+_major_state: dict[str, dict] = {}
+
+
+def log_major(
+    t_s: float,
+    x_m: float,
+    y_m: float,
+    place: str,
+    action: str,
+    reason: str,
+    **numbers: float,
+) -> None:
+    """One plain line per decision, not per tick. Same line is not repeated.
+
+    ``place`` is doorway, hallway, or room from the robot's own map.
+    ``reason`` is one of ``REASONS``. Counts are rewritten to summary.txt.
+    """
+    if not decision_log_enabled():
+        return
+    folder = os.environ.get("RBM_MAP_DIR")
+    if not folder:
+        return
+    state = _major_state.setdefault(
+        folder,
+        {
+            "last": None,
+            "reasons": {name: 0 for name in REASONS},
+            "places": {"doorway": 0, "hallway": 0, "room": 0},
+        },
+    )
+    why = reason if reason in REASONS else "unknown"
+    where = place if place in state["places"] else "room"
+    # The same action a moment later is still the same decision, even if
+    # a neighbour action flipped in between.
+    recent = state.setdefault("recent_t", {})
+    if float(t_s) - float(recent.get(str(action), -10.0)) < 2.0:
+        return
+    recent[str(action)] = float(t_s)
+    state["last"] = (str(action), why)
+    state["reasons"][why] = state["reasons"].get(why, 0) + 1
+    state["places"][where] = state["places"].get(where, 0) + 1
+    bits = [f"{name}={float(value):.2f}" for name, value in numbers.items()]
+    extra = (" " + " ".join(bits)) if bits else ""
+    line = (
+        f"t={float(t_s):.2f} x={float(x_m):.2f} y={float(y_m):.2f} "
+        f"place={where} action={action} reason={why}{extra}\n"
+    )
+    path = os.path.join(folder, "decisions.txt")
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(line)
+    summary = ["reasons"]
+    summary.extend(f"{name} {state['reasons'][name]}" for name in REASONS)
+    summary.append("places")
+    summary.extend(f"{name} {state['places'][name]}" for name in ("doorway", "hallway", "room"))
+    with open(os.path.join(folder, "summary.txt"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(summary) + "\n")
 
 
 def log_decision(event: dict) -> None:
@@ -145,16 +221,12 @@ def _costs(
     w: float,
     v_des: float,
     w_des: float,
-    clips: bool,
     view: BubbleView | None,
     left_clear: float,
     right_clear: float,
     radar_blocked: bool,
 ) -> dict[str, float]:
     pursuit = 4.0 * (v - v_des) ** 2 + (w - w_des) ** 2
-    # Enough to prefer a clear arc over a clipped one, and not enough to
-    # turn an open nose into a spin or a reverse.
-    footprint = 0.25 if clips else 0.0
     door = 0.0
     if 0.12 < left_clear < 1.20 and 0.12 < right_clear < 1.20 and v > 0.16:
         door += 0.8
@@ -184,36 +256,147 @@ def _costs(
             door += 0.40
         if v < -0.02:
             door += 0.50
-    total = pursuit + footprint + door + side
+    total = pursuit + door + side
     return {
         "pursuit": round(pursuit, 3),
-        "footprint": round(footprint, 3),
         "door": round(door, 3),
         "side": round(side, 3),
         "total": round(total, 3),
     }
 
 
-def _fallback(view: BubbleView | None) -> tuple[str, float, float] | None:
-    """A legal-looking motion when every candidate was vetoed but some face still shows air."""
-    forward = None if view is None else view.forward
-    rear = None if view is None else view.rear
-    left = None if view is None else view.left
-    right = None if view is None else view.right
-    if _gap_air(forward):
-        if forward is None:
-            speed = 0.06
-        else:
-            speed = max_speed_for_gap(forward)
-            speed = 0.05 if speed < 0.04 else min(0.12, speed)
-        return ("air", speed, 0.0)
-    if _gap_air(rear):
-        return ("reverse", -0.10, 0.0)
-    left_m = -1.0 if left is None else left
-    right_m = -1.0 if right is None else right
-    if _gap_air(left) or _gap_air(right):
-        return ("spin_left", 0.0, 0.55) if left_m >= right_m else ("spin_right", 0.0, -0.55)
+def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
+    """Width of a mapped doorway the shell can still pass, or None.
+
+    Both sides have to be occupied, and the gap has to be wider than the
+    body. A smear that only vetoes turns is not a wall across the opening.
+    """
+    if grid is None:
+        return None
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    left = (-math.sin(yaw), math.cos(yaw))
+
+    def march(direction: tuple[float, float]) -> float | None:
+        dist = float(grid.res)
+        while dist <= 0.80:
+            cell = grid.cell_of(x + direction[0] * dist, y + direction[1] * dist)
+            if cell is None:
+                return None
+            if int(labels[cell]) == 1:
+                return dist
+            dist += float(grid.res)
+        return None
+
+    east = march(left)
+    west = march((-left[0], -left[1]))
+    if east is None or west is None:
+        return None
+    gap = east + west
+    if 0.48 <= gap <= 1.35:
+        return gap
     return None
+
+
+def _rear_open(view: BubbleView | None) -> bool:
+    """Rear sonar allows a straight backup. No reading is not a wall."""
+    if view is None or view.rear is None:
+        return True
+    return float(view.rear) > 0.06
+
+
+def _ahead_blocked(grid, pose: tuple[float, float, float]) -> bool:
+    """True when a mapped wall spans the nose, not a one-cell smear.
+
+    The centre and both sides at 0.12 m have to be occupied. A centred
+    doorway, and a smear narrower than the shell, stays drivable.
+    """
+    if grid is None:
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    forward = (math.cos(yaw), math.sin(yaw))
+    left = (-forward[1], forward[0])
+    step = float(grid.res)
+    dist = 0.18
+    while dist <= 0.36 + 1e-9:
+        cx = x + forward[0] * dist
+        cy = y + forward[1] * dist
+        blocked = True
+        for side in (0.0, 0.12, -0.12):
+            cell = grid.cell_of(cx + left[0] * side, cy + left[1] * side)
+            if cell is None or int(labels[cell]) != 1:
+                blocked = False
+                break
+        if blocked:
+            return True
+        dist += step
+    return False
+
+
+def _behind_blocked(grid, pose: tuple[float, float, float]) -> bool:
+    """True when a mapped wall spans the tail. A corner graze does not.
+
+    The straight-backup sweep's 2 cm margin kissed one rear corner and
+    the tick then held forever. The centre and both sides have to be
+    occupied, the same test as a wall across the nose.
+    """
+    if grid is None:
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    back = (-math.cos(yaw), -math.sin(yaw))
+    left = (-back[1], back[0])
+    step = float(grid.res)
+    dist = 0.22
+    while dist <= 0.42 + 1e-9:
+        cx = x + back[0] * dist
+        cy = y + back[1] * dist
+        blocked = True
+        for side in (0.0, 0.12, -0.12):
+            cell = grid.cell_of(cx + left[0] * side, cy + left[1] * side)
+            if cell is None or int(labels[cell]) != 1:
+                blocked = False
+                break
+        if blocked:
+            return True
+        dist += step
+    return False
+
+
+def _known_free_ahead(grid, pose: tuple[float, float, float]) -> bool:
+    """The robot's own map says the nose path is free, not merely unknown."""
+    if grid is None or _ahead_blocked(grid, pose):
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    step = float(grid.res)
+    dist = 0.16
+    while dist <= 0.36 + 1e-9:
+        cell = grid.cell_of(x + math.cos(yaw) * dist, y + math.sin(yaw) * dist)
+        if cell is None or int(labels[cell]) != 0:
+            return False
+        dist += step
+    return True
+
+
+def _reverse_blocked(grid, pose) -> bool:
+    """A mapped wall spans the tail, so a straight backup would enter it."""
+    return _behind_blocked(grid, pose)
+
+
+def _straight_reverse(view, grid, pose, vetoes: list[dict]) -> MotionChoice | None:
+    """Back straight out instead of holding. A fittable doorway is a rescan."""
+    door = _fittable_gap(grid, pose)
+    if not _rear_open(view) or _reverse_blocked(grid, pose):
+        if door is None:
+            return None
+        return MotionChoice("doorway_refusal", 0.0, 0.0, {"total": 0.0, "gap_m": round(door, 2)}, vetoes)
+    kind = "doorway_rescan" if door is not None else "back_out"
+    costs: dict[str, float] = {"total": 0.0, "fallback": 1.0}
+    if door is not None:
+        costs["gap_m"] = round(door, 2)
+    return MotionChoice(kind, -0.10, 0.0, costs, vetoes)
 
 
 class MotionChoice:
@@ -256,19 +439,33 @@ def choose_motion(
     best_costs: dict[str, float] | None = None
     for name, v, w in CANDIDATES:
         reason = live_veto(v, w, view)
+        if reason is None and grid is not None:
+            turning = abs(w) > TURN_W_RAD_S
+            if turning and footprint_clips(grid, pose, v, w):
+                reason = "map:corner"
+            elif v < -0.02 and not turning and _behind_blocked(grid, pose):
+                reason = "map:rear"
+            elif v > 0.02 and not turning and _ahead_blocked(grid, pose):
+                reason = "map:ahead"
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
             continue
-        clips = False
-        if grid is not None and (abs(v) > 1e-4 or abs(w) > 1e-4):
-            clips = footprint_clips(grid, pose, v, w)
-        costs = _costs(v, w, v_des, w_des, clips, view, left_clear, right_clear, radar_blocked)
+        costs = _costs(v, w, v_des, w_des, view, left_clear, right_clear, radar_blocked)
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
     if best_costs is not None:
         return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
-    fallen = _fallback(view)
-    if fallen is None:
-        return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)
-    name, v, w = fallen
-    return MotionChoice(name, v, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+    escape = _straight_reverse(view, grid, pose, vetoes)
+    if escape is not None:
+        return escape
+    # A nose gap vetoes every spin, and a hold never becomes a stuck event,
+    # so the robot would sit. A spin the map shows as clear is still a move.
+    if grid is not None:
+        for name, w in (("spin_left", 0.70), ("spin_right", -0.70)):
+            if not footprint_clips(grid, pose, 0.0, w):
+                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+    # Sonar can sit at 6 cm on open floor the map has already marked free.
+    # Holding there never counts as stuck, so the seed does not move.
+    if _known_free_ahead(grid, pose) and not footprint_clips(grid, pose, 0.06, 0.0):
+        return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes)
+    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)

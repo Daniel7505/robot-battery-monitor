@@ -1,10 +1,11 @@
-"""ButlerBot body constants the mapper is allowed to know.
+"""Skid-steer body constants the mapper is allowed to know.
 
-These are the robot's own wheels and the depth camera bolted to it.
-They are not the apartment. Values match ``ButlerBot.proto``: wheel
-radius 0.08 m, hub anchors at y = ±0.17 m, depth camera at
-(0.14, 0, 0.78) with a 5° down pitch. Tests check the proto still
-says the same numbers.
+Four driven wheels, no casters. Values match ``ButlerBotSkid.proto``:
+wheel radius 0.08 m (160 mm), hubs at y = ±0.17 m so the track is
+0.34 m, front axle at x = 0.11 m so the tire face is the 0.19 m nose.
+The depth camera is at (0.14, 0, 0.78) with a 5° down pitch. The
+two-wheel ``ButlerBot.proto`` shares this hub spacing and still has
+casters; the warehouse controller uses that proto, not these comments.
 """
 
 from __future__ import annotations
@@ -19,13 +20,12 @@ WHEEL_TRACK_M = 0.34
 # stay at infinite resolution so warehouse energy and ABS are unchanged.
 ENCODER_RESOLUTION_RAD = 0.0015
 # Planning inflation. Hubs sit at ±0.17 m and the tire is 0.05 m wide, so
-# the body is 0.195 m from the centreline to the outside of a tire.
-# 0.26 m of inflation leaves about 0.29 m of traversable width in an
-# 0.81 m opening, and one extra occupied cell on a jamb closes it. That
-# is the bedroom doorway the robot clipped on every Webots run. 0.20 m
-# is the tire plus a centimetre, and still leaves a centre line after
-# that extra cell. Furniture is handled by the stop range, not by sealing
-# the opening.
+# the colliding body is 0.195 m from the centreline. 0.20 m is that tire
+# plus a centimetre. The sonar face is 0.227 m (SHELL_HALF_M) and has no
+# bounding object, so it is not the inflation: a disk that wide treats a
+# sensor as a wall. 0.26 m already closes a smeared 0.81 m doorway.
+# 0.20 m still leaves a centre line after one extra jamb cell, and it is
+# wider than the tire, so a gap the planner accepts is a gap the wheels fit.
 ROBOT_RADIUS_M = 0.20
 # Where the centre may turn. 0.23 m clears the side face. 0.30 m is the
 # outer corner, so a pivot does not swing a tire into the wall. A doorway

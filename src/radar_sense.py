@@ -30,7 +30,9 @@ from src.obstacle_gate import (
 RADAR_NAME = "radar_fwd"
 RADAR_X_M = 0.16  # lens / antenna x in the bot frame (matches the .wbt mount)
 RADAR_Z_M = 0.45
-ROBOT_FRONT_X_M = 0.15  # axle → front face (same as stereo)
+# Two-wheel ButlerBot only, same caster front as stereo_depth. The
+# skid-steer nose is 0.19 m. Warehouse obstacle code still uses this.
+ROBOT_FRONT_X_M = 0.15
 DEFAULT_HALF_WIDTH_M = 0.54  # stereo corridor default; overridden from live robot
 DEFAULT_MAX_RANGE_M = 8.0
 # |world-relative radial m/s| above this ⇒ moving (rolling ball / forklift / person)

@@ -107,6 +107,19 @@ def test_a_centred_door_is_passable_and_a_close_side_is_not():
     assert clip.left is not None and max_speed_for_gap(clip.left) < 0.08
 
 
+def test_a_corner_tof_is_a_bump_and_not_a_door_veto():
+    """A jamb in the corner beam must not close a straight crossing."""
+    from src.mapping.bubble import corner_bump, corner_gap
+
+    view = assess_bubble(
+        2.0, blind=False, proximity={"us_front": 0.80, "tof_front_left": 0.05}
+    )
+    assert view.forward == pytest.approx(0.80)
+    assert corner_gap({"tof_front_left": 0.05}) == pytest.approx(0.05)
+    assert corner_bump({"tof_front_left": 0.05}) is None
+    assert corner_bump({"tof_front_left": 0.02}) == pytest.approx(0.02)
+
+
 def test_blind_depth_does_not_hide_a_sonar_return():
     blind = assess_bubble(99.0, blind=True, proximity=None)
     assert blind.forward == 0.0

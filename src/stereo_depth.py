@@ -55,7 +55,10 @@ STEREO_Z_M = 0.78
 STEREO_W, STEREO_H, STEREO_FOV = 320, 240, 1.4
 TOP_VIEW_H_M = 1.0
 TOP_VIEW_RANGE_M = 1.0
-ROBOT_FRONT_X_M = 0.15  # front of the casters (0.11 + 0.04 m sphere) = foremost body part at floor level
+# Two-wheel ButlerBot only: front of the casters (0.11 + 0.04 m sphere).
+# Warehouse worlds still read this. The skid-steer nose is the tire face
+# at 0.19 m (SHELL_NOSE_M); the mapper does not use this constant.
+ROBOT_FRONT_X_M = 0.15
 
 
 def vertical_fov(width: int, height: int, hfov: float) -> float:

@@ -305,7 +305,11 @@ _HUBS = ((0.11, 0.17, 0.08), (0.11, -0.17, 0.08), (-0.11, 0.17, 0.08), (-0.11, -
 
 def test_corner_sonar_beams_miss_the_tires():
     text = SKID.read_text(encoding="utf-8")
-    blocks = re.findall(r"DistanceSensor \{.*?\n    \}", text, flags=re.S)
+    blocks = [
+        block
+        for block in re.findall(r"DistanceSensor \{.*?\n    \}", text, flags=re.S)
+        if 'type "sonar"' in block
+    ]
     assert len(blocks) == 8
     for block in blocks:
         trans = re.search(r"translation ([-0-9.]+) ([-0-9.]+) ([-0-9.]+)", block)

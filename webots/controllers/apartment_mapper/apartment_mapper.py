@@ -24,7 +24,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
-from src.mapping.bubble import _FRONT, _LEFT, _REAR, _RIGHT
+from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
 from src.mapping.run_log import RunLog, default_run_dir, publish_current
 
@@ -82,7 +82,7 @@ def _radar_blocked(radar) -> bool:
     return False
 
 
-_PROXIMITY = _FRONT + _LEFT + _REAR + _RIGHT
+_PROXIMITY = _FRONT + _LEFT + _REAR + _RIGHT + _CORNERS
 
 
 def _flag(name: str, default: bool = True) -> bool:

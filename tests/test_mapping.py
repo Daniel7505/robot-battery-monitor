@@ -309,8 +309,430 @@ def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
     path = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
     yawed = approach_command(door, (0.3, 0.0, 1.2), path)
     assert yawed is not None and yawed[2] == "pivot" and abs(yawed[1]) > 0.4 and yawed[0] == 0.0
+    from src.mapping.drive import wheel_speeds
+
+    left_w, right_w = wheel_speeds(yawed[0], yawed[1])
+    assert abs(left_w + right_w) < 1e-9
     lined = approach_command(door, (0.3, 0.0, 0.0), path)
     assert lined is not None and lined[2] == "straight" and lined[1] == 0.0 and lined[0] > 0.0
+    # Centre already inside 0.30 m of the jamb. Do not start the pivot.
+    close = approach_command(door, (1.00, 0.22, 1.2), path)
+    assert close is not None and close[2] == "back" and close[0] < 0.0 and close[1] == 0.0
+
+
+def test_a_map_corner_vetoes_a_turn_and_not_a_straight_pass():
+    """The sweep is a hard veto only while yawing. A doorway stays drivable."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, 0.28, 0.70, 0.55, grid.l_max)
+    view = BubbleView(1.5, 0.40, 0.40, 0.50, 0.40)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=-0.6,
+        heading_err=-0.6,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert choice.w == 0.0 or abs(choice.w) < 0.12
+    assert any(item["sensor"] == "map:corner" for item in choice.vetoes)
+    straight = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert straight.v > 0.02 and abs(straight.w) < 0.12
+
+
+def test_a_vetoed_tick_backs_straight_out():
+    """No candidate left, and the rear is open: reverse, and say so."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    # Walls close on both sides and ahead, wide enough that the body fits.
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    # Rear is inside the stop gap for 0.10 m/s, so the reverse candidate
+    # is vetoed, and still open enough for a straight backup.
+    view = BubbleView(0.05, 0.08, 0.08, 0.07, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v < 0.0 and choice.w == 0.0
+    assert choice.name in ("back_out", "doorway_rescan")
+
+
+def test_a_mapped_wall_behind_is_not_a_backup():
+    """Rear sonar can be open and the map still forbids the backup."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    _fill(grid, -0.55, -0.40, -0.24, 0.40, grid.l_max)
+    view = BubbleView(0.05, 0.08, 0.08, 0.50, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v >= 0.0
+    assert any(item["sensor"] == "map:rear" for item in choice.vetoes)
+
+
+def test_a_rear_corner_graze_still_backs_out():
+    """One cell on the tail corner is not a wall behind the robot."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.22, -0.28, -0.16, -0.20, grid.l_max)
+    view = BubbleView(0.05, 0.40, 0.40, 0.40, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.4,
+        right_clear=0.4,
+    )
+    assert choice.v < 0.0 and abs(choice.w) < 0.12
+    assert not any(item["sensor"] == "map:rear" and item["motion"] == "reverse" for item in choice.vetoes)
+
+
+def test_a_forward_goal_is_not_driven_in_reverse():
+    """Recovery may reverse. A goal still in front does not."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._backing = True
+    bot._back_from = (0.0, 0.0)
+    bot.odometry.x_m = 0.2
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._backing
+
+
+def test_a_corner_contact_reverses_until_the_camera_can_see():
+    from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"tof_front_left": 0.02}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    assert bot._recover_need >= SIGHT_M - 0.02 - 1e-6
+    assert bot._recover_need > TOO_CLOSE_M
+    bot.odometry.x_m = -bot._recover_need
+    bot._proximity = {"tof_front_left": 0.29}
+    bot.t_s = 6.0
+    bot._go(False, 0.2)
+    assert bot._body_v == 0.0 and bot._body_w == 0.0
+    assert bot._recover_phase == "look"
+
+
+def test_a_recover_that_does_not_move_lets_go():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"tof_front_left": 0.02}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0
+    bot.t_s = 5.7
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._recover
+
+
+def test_a_corner_you_cannot_back_away_from_does_not_freeze():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    _fill(bot.grid, -0.55, -0.40, -0.22, 0.40, bot.grid.l_max)
+    bot._proximity = {"tof_front_left": 0.02, "us_rear": 0.04}
+    bot._go(False, 0.2)
+    assert bot._body_v > 0.02 or abs(bot._body_w) > 0.05
+    assert not bot._recover
+
+
+def test_a_half_turn_needs_open_floor_and_a_weak_goal_does_not_win(monkeypatch):
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import free_behind_m, spin_fits
+
+    open_grid = OccupancyGrid()
+    _fill(open_grid, -1.5, -1.5, 1.5, 1.5, open_grid.l_min)
+    assert spin_fits(open_grid, (0.0, 0.0, 0.0))
+    alley = OccupancyGrid()
+    _fill(alley, -1.0, -1.0, 1.2, 1.0, alley.l_min)
+    _fill(alley, -1.0, 0.16, 1.2, 0.40, alley.l_max)
+    _fill(alley, -1.0, -0.40, 1.2, -0.16, alley.l_max)
+    assert not spin_fits(alley, (0.0, 0.0, 0.0))
+    assert free_behind_m(alley, (0.0, 0.0, 0.0)) > 0.4
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    planned = [
+        (3.0, ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)])),
+        (3.2, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+        (5.0, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+    ]
+
+    def _fake(*_args, **kwargs):
+        score, chosen = planned.pop(0)
+        report = kwargs.get("report")
+        if report is not None:
+            report["score"] = score
+        return chosen
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.t_s = 10.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 30.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
+
+
+def test_a_tight_speck_is_refused_once(monkeypatch, tmp_path):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._note_refusals(
+        {
+            "refused": [
+                {"xy": (1.2, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+                {"xy": (1.22, 0.41), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+            ]
+        }
+    )
+    bot._note_refusals(
+        {"refused": [{"xy": (1.21, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40}]}
+    )
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "reason=no_room_to_turn" in lines[0]
+    assert "clearance_m=0.18" in lines[0]
+    summary = (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    assert "no_room_to_turn 1" in summary
+
+
+def test_a_stuck_sonar_on_known_free_floor_still_creeps():
+    """A 6 cm reading on floor the map already calls free is not a place to sit."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.0, -1.0, 1.2, 1.0, grid.l_min)
+    _fill(grid, -0.6, -0.5, -0.2, 0.5, grid.l_max)
+    view = BubbleView(0.04, 0.05, 0.05, 0.04, 0.04)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.name == "creep" and choice.v > 0.02 and choice.w == 0.0
+
+
+def test_a_mapped_wall_ahead_is_not_driven_straight():
+    """The centreline veto stops a beeline. It does not close a side gap."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.22, -0.25, 0.50, 0.25, grid.l_max)
+    view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.20,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(item["sensor"] == "map:ahead" for item in choice.vetoes)
+    assert not (choice.v > 0.02 and abs(choice.w) <= 0.12)
+
+
+def test_a_tight_speck_is_skipped_and_a_long_pocket_is_kept():
+    """A short frontier with no room to turn is not a goal. A long one is."""
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 2.2, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 2.45, -0.26, grid.l_max)
+    _fill(grid, 1.0, 0.26, 2.45, 0.90, grid.l_max)
+    assert select_goal(grid, (0.0, 0.0)) is None
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 3.4, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 3.6, -0.26, grid.l_max)
+    x = 1.0
+    while x < 3.3:
+        _fill(grid, x, 0.26, x + 0.08, 0.55, grid.l_max)
+        x += 0.20
+    report: dict = {}
+    chosen = select_goal(grid, (0.0, 0.0), report=report)
+    assert chosen is not None
+    assert report.get("tight") is True
+
+
+def test_a_tight_corner_backs_toward_the_open_room():
+    """No pivot in the corridor. The open floor behind is the way around."""
+    from src.mapping.frontiers import approach_command
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, -0.20, 1.4, -0.12, grid.l_max)
+    _fill(grid, 0.15, 0.12, 1.4, 0.20, grid.l_max)
+    _fill(grid, -1.5, -1.2, 0.15, 1.2, grid.l_min)
+    path = [(0.40, 0.0), (0.55, 0.0), (0.55, 0.6)]
+    command = approach_command(grid, (0.40, 0.0, 0.0), path)
+    assert command is not None and command[2] == "wide" and command[0] < 0.0
+
+
+def test_a_backup_continues_until_the_centre_can_turn():
+    from src.mapping.body import TURN_AIM_M
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import _pose_clearance
+
+    door = OccupancyGrid()
+    _fill(door, -0.5, -1.2, 2.4, 1.2, door.l_min)
+    _fill(door, 0.9, -1.2, 1.2, -0.40, door.l_max)
+    _fill(door, 0.9, 0.40, 1.2, 1.2, door.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid = door
+    bot.phase = "go"
+    bot.path_xy = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
+    bot.goal_xy = (1.7, 0.0)
+    bot._replan_at = 1.0e9
+    bot.t_s = 5.0
+    bot.odometry.x_m = 1.00
+    bot.odometry.y_m = 0.22
+    bot.odometry.yaw_rad = 1.2
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.90
+    bot.path_xy = [(0.90, 0.22), (0.2, 0.22)]
+    bot.goal_xy = (0.2, 0.22)
+    bot.t_s = 5.2
+    assert _pose_clearance(door, 0.90, 0.22) < TURN_AIM_M
+    bot._go(False, 0.2)
+    assert bot._backing
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.30
+    bot.odometry.y_m = 0.0
+    bot.odometry.yaw_rad = 0.0
+    bot.path_xy = [(0.30, 0.0), (1.6, 0.0)]
+    bot.goal_xy = (1.6, 0.0)
+    bot.t_s = 6.4
+    bot._go(False, 0.2)
+    assert not bot._backing
+    assert bot._body_v >= 0.0
+
+
+def test_a_goal_and_a_motion_stay_put_until_the_hold_ends(monkeypatch):
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._goal_since = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._bubble_view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    bot._go(False, 0.28, 2.0, 2.0)
+    held = (bot._body_v, bot._body_w)
+    assert abs(held[0]) + abs(held[1]) > 0.04
+    bot.t_s = 5.3
+    bot._go(False, 0.28, 0.25, 1.5)
+    assert (bot._body_v, bot._body_w) == held
+    _fill(bot.grid, 0.20, -0.30, 0.45, 0.30, bot.grid.l_max)
+    bot.t_s = 5.4
+    bot._go(False, 0.28, 2.0, 2.0)
+    assert (bot._body_v, bot._body_w) != held
+
+    goals = [
+        ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    ]
+
+    def _fake(*_args, **_kwargs):
+        return goals.pop(0)
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 22.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 29.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
 
 
 def test_narrow_opening_stays_passable_after_a_thick_jamb():
@@ -696,7 +1118,7 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
     wheel = 0.22 / WHEEL_RADIUS_M
     dt = 0.05
     saw_reverse = False
-    # Pitch of the carpet ramp. The casters are not unloaded.
+    # A small pitch is not a tip. The skid-steer has no casters to unload.
     # Stuck is a few seconds of command without odometry displacement.
     for _ in range(80):
         cmd_l, cmd_r = bot.step(
@@ -1560,18 +1982,17 @@ def test_the_decision_log_is_off_unless_asked(tmp_path, monkeypatch):
     bot._bubble_view = BubbleView(0.70, 0.40, 0.40, 0.40, 0.40)
     bot._bubble_gap = 0.70
     bot._go(False, 0.28, 1.0, 1.0)
-    assert not (tmp_path / "decision.jsonl").exists()
+    assert not (tmp_path / "decisions.txt").exists()
 
     monkeypatch.setenv("RBM_DECISION_LOG", "1")
-    bot._last_motion = ""
-    bot._motion_log_at = -1.0
-    bot._go(False, 0.28, 1.0, 1.0)
-    lines = (tmp_path / "decision.jsonl").read_text(encoding="utf-8").splitlines()
+    bot._major("pivot", "heading_off", heading_err_deg=20.0, clearance_m=0.28)
+    bot._major("pivot", "heading_off", heading_err_deg=21.0, clearance_m=0.28)
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
-    row = json.loads(lines[0])
-    assert row["kind"] == "motion"
-    assert row["chosen"]
-    assert "why" in row
+    assert "place=" in lines[0]
+    assert "action=pivot" in lines[0]
+    assert "reason=heading_off" in lines[0]
+    assert "heading_err_deg=20.00" in lines[0]
     tight = BubbleView(0.09, 0.40, 0.40, 0.40, 0.09)
     assert live_veto(0.28, 0.0, tight) is not None
     choice = choose_motion(

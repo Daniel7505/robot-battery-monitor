@@ -3,9 +3,11 @@
 Candidates are a handful of forward, arc, spin, and reverse speeds.
 A motion is dropped when live range says that speed would meet the
 shell, and when a turn's swept corners enter a mapped obstacle. Straight
-driving is not a map veto: a centred doorway has about 21 cm per side.
-If every candidate is vetoed, the tick backs straight out when the rear
-sonar allows it. Ground truth is not read.
+driving is not a side veto: a centred doorway has about 21 cm per side.
+A mapped wall across the nose, or a swept cell behind a backup,
+still drops that command. A smear narrower than the shell does not. If every candidate is vetoed, the tick backs
+straight out when the rear sonar and the map both allow it. Ground truth
+is not read.
 """
 
 from __future__ import annotations
@@ -234,10 +236,44 @@ def _rear_open(view: BubbleView | None) -> bool:
     return float(view.rear) > 0.06
 
 
+def _ahead_blocked(grid, pose: tuple[float, float, float]) -> bool:
+    """True when a mapped wall spans the nose, not a one-cell smear.
+
+    The centre and both sides at 0.12 m have to be occupied. A centred
+    doorway, and a smear narrower than the shell, stays drivable.
+    """
+    if grid is None:
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    forward = (math.cos(yaw), math.sin(yaw))
+    left = (-forward[1], forward[0])
+    step = float(grid.res)
+    dist = 0.18
+    while dist <= 0.36 + 1e-9:
+        cx = x + forward[0] * dist
+        cy = y + forward[1] * dist
+        blocked = True
+        for side in (0.0, 0.12, -0.12):
+            cell = grid.cell_of(cx + left[0] * side, cy + left[1] * side)
+            if cell is None or int(labels[cell]) != 1:
+                blocked = False
+                break
+        if blocked:
+            return True
+        dist += step
+    return False
+
+
+def _reverse_blocked(grid, pose) -> bool:
+    """The swept shell would enter a mapped cell while backing straight."""
+    return grid is not None and footprint_clips(grid, pose, -0.10, 0.0)
+
+
 def _straight_reverse(view, grid, pose, vetoes: list[dict]) -> MotionChoice | None:
     """Back straight out instead of holding. A fittable doorway is a rescan."""
     door = _fittable_gap(grid, pose)
-    if not _rear_open(view):
+    if not _rear_open(view) or _reverse_blocked(grid, pose):
         if door is None:
             return None
         return MotionChoice("doorway_refusal", 0.0, 0.0, {"total": 0.0, "gap_m": round(door, 2)}, vetoes)
@@ -288,9 +324,14 @@ def choose_motion(
     best_costs: dict[str, float] | None = None
     for name, v, w in CANDIDATES:
         reason = live_veto(v, w, view)
-        if reason is None and abs(w) > TURN_W_RAD_S and grid is not None:
-            if footprint_clips(grid, pose, v, w):
+        if reason is None and grid is not None:
+            turning = abs(w) > TURN_W_RAD_S
+            if turning and footprint_clips(grid, pose, v, w):
                 reason = "map:corner"
+            elif v < -0.02 and not turning and footprint_clips(grid, pose, v, w):
+                reason = "map:rear"
+            elif v > 0.02 and not turning and _ahead_blocked(grid, pose):
+                reason = "map:ahead"
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
             continue

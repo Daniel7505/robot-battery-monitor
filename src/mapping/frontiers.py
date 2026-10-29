@@ -7,7 +7,8 @@ the free grid with occupied cells inflated by the robot radius, so the
 robot does not try to squeeze through a door it cannot fit. Turns are
 placed where the centre is at least ``TURN_CLEAR_M`` from a mapped
 obstacle, and the path prefers ``TURN_AIM_M``. A doorway is a straight
-crossing, not a turn.
+crossing, not a turn. A frontier the robot cannot turn around in, and
+that is shorter than 0.8 m, is left alone.
 """
 
 from __future__ import annotations
@@ -691,6 +692,48 @@ def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+def wide_escape(
+    grid: OccupancyGrid, pose: tuple[float, float, float]
+) -> tuple[float, float, str] | None:
+    """Drive toward nearby open floor when this spot is too tight to pivot.
+
+    None when the centre already has turning room, or the open cell cannot
+    be reached without a pivot. Backing out of a doorway stays the caller's
+    choice; this is only the open-room option.
+    """
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    if _pose_clearance(grid, x, y) >= TURN_AIM_M:
+        return None
+    labels = grid.labels()
+    best: tuple[float, float, float] | None = None
+    for dist in (0.45, 0.65, 0.85):
+        for step in range(12):
+            ang = yaw + step * (math.pi / 6.0)
+            px = x + dist * math.cos(ang)
+            py = y + dist * math.sin(ang)
+            mid = grid.cell_of(0.5 * (x + px), 0.5 * (y + py))
+            if mid is not None and int(labels[mid]) == 1:
+                continue
+            got = _pose_clearance(grid, px, py)
+            if got < TURN_AIM_M:
+                continue
+            score = got - 0.15 * dist
+            if best is None or score > best[0]:
+                best = (score, px, py)
+    if best is None:
+        return None
+    _score, px, py = best
+    err = _wrap(math.atan2(py - y, px - x) - yaw)
+    if abs(err) > 1.4:
+        if footprint_clips(grid, pose, -0.10, 0.0):
+            return None
+        return (-0.10, 0.0, "wide")
+    w = max(-0.40, min(0.40, float(err)))
+    if footprint_clips(grid, pose, 0.12, w):
+        return None
+    return (0.12, w, "wide")
+
+
 def approach_command(
     grid: OccupancyGrid,
     pose: tuple[float, float, float],
@@ -743,6 +786,9 @@ def approach_command(
                 err = _wrap(h_out - yaw)
                 if dist < 0.28 and abs(err) > 0.20:
                     if _pose_clearance(grid, x, y) < TURN_AIM_M:
+                        wide = wide_escape(grid, pose)
+                        if wide is not None:
+                            return wide
                         return (-0.10, 0.0, "back")
                     return (0.0, math.copysign(0.70, err), "pivot")
         prev, here = here, nxt
@@ -787,7 +833,8 @@ def select_goal(
                 extra += 1
     free = traversable(labels, grid.res, radius_m)
     occupied_now = labels == 1
-    costs = approach_costs(clearance_m(occupied_now, grid.res)) if np.any(occupied_now) else None
+    clear = clearance_m(occupied_now, grid.res) if np.any(occupied_now) else None
+    costs = approach_costs(clear) if clear is not None else None
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
         return None
@@ -815,6 +862,11 @@ def select_goal(
         target = viewpoint(free, cells, occupied=(labels == 1))
         if target is None:
             continue
+        # A short frontier with no room to turn is a dead end with nothing
+        # worth the trap. A longer one stays, and the drive reverses back out.
+        size_m = len(group) * grid.res
+        if clear is not None and float(clear[target]) < TURN_AIM_M and size_m < 0.80:
+            continue
         path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
         if not path_cells:
             continue
@@ -822,7 +874,6 @@ def select_goal(
         pts = [grid.cell_center(*rc) for rc in path_cells]
         for a, b in zip(pts, pts[1:]):
             length += math.hypot(b[0] - a[0], b[1] - a[1])
-        size_m = len(group) * grid.res
         score = size_m / (length + 0.25)
         bonus = crossing_bonus(path_cells, rooms, start)
         score *= bonus
@@ -890,6 +941,7 @@ def select_goal(
         return None
     if report is not None:
         report["score"] = best[0]
+        report["tight"] = _pose_clearance(grid, best[1][0], best[1][1]) < TURN_AIM_M
         report["runner_up"] = None
         report["runner_score"] = None
         ranked_scores.sort(key=lambda item: item[0], reverse=True)

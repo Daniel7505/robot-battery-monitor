@@ -26,6 +26,8 @@ from src.mapping.body import (
     SPIN_RAD_S,
     REAR_DEPTH,
     STOP_CLEARANCE_M,
+    TURN_AIM_M,
+    TURN_CLEAR_M,
     DepthCamera,
 )
 from src.mapping.bubble import BubbleView, assess_bubble
@@ -39,8 +41,9 @@ from src.mapping.depth_cloud import (
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
-from src.mapping.frontiers import approach_command, select_goal
-from src.mapping.tick import choose_motion, log_decision
+from src.mapping.footprint import footprint_clips
+from src.mapping.frontiers import _pose_clearance, approach_command, select_goal, wide_escape
+from src.mapping.tick import TURN_W_RAD_S, _ahead_blocked, choose_motion, live_veto, log_decision
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
@@ -191,6 +194,12 @@ class Explorer:
         self._approach_why = ""
         self._approach_log_at = 0.0
         self._motion_log_at = -1.0
+        self._commit: tuple[float, float] | None = None
+        self._commit_at = -1.0
+        self._commit_until = -1.0
+        self._backing = False
+        self._back_from: tuple[float, float] | None = None
+        self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
         self.room_names: dict[int, str] = {}
@@ -816,6 +825,8 @@ class Explorer:
         self._relief = "wait"
         self._relief_until = self.t_s + 0.40
         self._relief_w = 0.0
+        self._backing = False
+        self._commit = None
         log_decision(
             {
                 "t": round(self.t_s, 2),
@@ -847,26 +858,33 @@ class Explorer:
             if self.t_s <= self._relief_until:
                 self._body_v, self._body_w = 0.0, 0.0
                 return 0.0, 0.0
-            if self._open_reverse():
+            if self._open_reverse() and not self._shell_clips(-0.10, 0.0):
                 self._relief = "reverse"
                 self._relief_until = self.t_s + 0.45
                 log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "reverse"})
             else:
-                self._relief = "spin"
                 self._relief_w = self._relief_spin()
                 self._relief_until = self.t_s + 0.45
-                log_decision(
-                    {
-                        "t": round(self.t_s, 2),
-                        "kind": "stuck",
-                        "response": "spin",
-                        "w": round(self._relief_w, 2),
-                    }
-                )
+                if self._shell_clips(0.0, self._relief_w):
+                    self._relief = "stop"
+                    log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "stop"})
+                else:
+                    self._relief = "spin"
+                    log_decision(
+                        {
+                            "t": round(self.t_s, 2),
+                            "kind": "stuck",
+                            "response": "spin",
+                            "w": round(self._relief_w, 2),
+                        }
+                    )
         if self.t_s <= self._relief_until:
             if self._relief == "reverse":
                 self._body_v, self._body_w = -0.10, 0.0
                 return wheel_speeds(-0.10, 0.0)
+            if self._relief == "stop":
+                self._body_v, self._body_w = 0.0, 0.0
+                return 0.0, 0.0
             self._body_v, self._body_w = 0.0, self._relief_w
             return wheel_speeds(0.0, self._relief_w)
         self._finish_relief()
@@ -883,6 +901,10 @@ class Explorer:
         self._replan_at = self.t_s
         self._relief = None
         self._motion_anchor = None
+        self._backing = False
+        self._back_from = None
+        self._commit = None
+        self._pocket = False
         self._body_v, self._body_w = 0.0, 0.0
         self._log("stuck, next goal")
 
@@ -952,6 +974,82 @@ class Explorer:
             }
         )
 
+    def _shell_clips(self, v: float, w: float) -> bool:
+        return footprint_clips(self.grid, self.odometry.pose(), v, w)
+
+    def _remember_command(self, v: float, w: float) -> None:
+        if abs(v) < 0.02 and abs(w) < 0.05:
+            self._commit = None
+            return
+        self._commit = (float(v), float(w))
+        self._commit_at = self.t_s
+        self._commit_until = self.t_s + 0.8
+
+    def _hold_command(self, pose, view) -> tuple[float, float] | None:
+        """Keep the last command briefly. A live or mapped contact drops it."""
+        if self._commit is None or self.t_s <= self._commit_at or self.t_s >= self._commit_until:
+            return None
+        v, w = self._commit
+        turning = abs(w) > TURN_W_RAD_S
+        blocked = live_veto(v, w, view) is not None
+        if not blocked and (turning or v < -0.02):
+            blocked = footprint_clips(self.grid, pose, v, w)
+        if not blocked and v > 0.02 and not turning and _ahead_blocked(self.grid, pose):
+            blocked = True
+        if blocked:
+            self._commit = None
+            return None
+        return v, w
+
+    def _reverse_closed(self, pose) -> bool:
+        rear = None if self._bubble_view is None else self._bubble_view.rear
+        if rear is not None and float(rear) <= 0.06:
+            return True
+        return footprint_clips(self.grid, pose, -0.10, 0.0)
+
+    def _begin_back(self, pose) -> tuple[float, float] | None:
+        if self._reverse_closed(pose):
+            return None
+        if not self._backing:
+            self._backing = True
+            self._back_from = (float(pose[0]), float(pose[1]))
+        self._commit = None
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
+
+    def _continue_back(self, pose) -> tuple[float, float] | None:
+        """Keep reversing until the centre can turn, the map closes, or 1 m."""
+        if not self._backing:
+            return None
+        x, y = float(pose[0]), float(pose[1])
+        origin = self._back_from
+        dist = 0.0 if origin is None else math.hypot(x - origin[0], y - origin[1])
+        if dist >= 1.0 or _pose_clearance(self.grid, x, y) >= TURN_AIM_M or self._reverse_closed(pose):
+            self._backing = False
+            self._back_from = None
+            return None
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
+
+    def _needs_room(self, pose, heading_err: float) -> bool:
+        """A turn is being asked for where the centre cannot pivot."""
+        clear = _pose_clearance(self.grid, float(pose[0]), float(pose[1]))
+        if clear >= TURN_AIM_M:
+            return False
+        if abs(heading_err) > 0.55:
+            return True
+        return bool(self._pocket and clear < TURN_CLEAR_M)
+
+    def _issue_wide(self, command) -> tuple[float, float]:
+        v, w, _why = command
+        self._backing = False
+        self._remember_command(v, w)
+        self._note_approach("wide", v, w)
+        self._body_v, self._body_w = v, w
+        return wheel_speeds(v, w)
+
     def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
         del blocked, cap
         if self.done:
@@ -962,6 +1060,10 @@ class Explorer:
             return relief
         if self.phase != "go":
             return 0.0, 0.0
+        pose = self.odometry.pose()
+        backing = self._continue_back(pose)
+        if backing is not None:
+            return backing
         # An empty path with a future replan time is a wait, not another
         # plan. Calling it every step flooded the log and stalled the sim.
         if not self.path_xy and self.t_s < self._replan_at:
@@ -977,19 +1079,32 @@ class Explorer:
         if approach is not None and approach[2] == "pivot":
             # A pivot is v = 0. Giving up into a forward arc is how the
             # shell drove into a jamb while the log still said pivot.
+            self._backing = False
+            self._commit = None
             _v, w, _why = approach
             self._body_v, self._body_w = 0.0, w
             self._note_approach("pivot", 0.0, w)
             return wheel_speeds(0.0, w)
         if approach is not None and approach[2] == "back":
-            rear = None if self._bubble_view is None else self._bubble_view.rear
-            if rear is None or float(rear) > 0.06:
-                self._body_v, self._body_w = -0.10, 0.0
-                self._note_approach("back", -0.10, 0.0)
-                return wheel_speeds(-0.10, 0.0)
+            cmd = self._begin_back(pose)
+            if cmd is not None:
+                return cmd
             approach = None
+        if approach is not None and approach[2] == "wide":
+            return self._issue_wide(approach)
         v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
         if arrived:
+            if self._pocket:
+                if self.goal_xy is not None:
+                    self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.5)
+                self.goal_xy = None
+                self.path_xy = []
+                self._pocket = False
+                self._commit = None
+                self._replan_at = self.t_s
+                cmd = self._begin_back(pose)
+                if cmd is not None:
+                    return cmd
             if self.goal_xy is not None:
                 self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.0)
             if self.t_s - self._last_spin_t > 12.0:
@@ -1020,6 +1135,17 @@ class Explorer:
             v, w = approach[0], approach[1]
             heading_err = 0.0
             self._note_approach("straight", v, w)
+        elif self._needs_room(pose, heading_err):
+            wide = wide_escape(self.grid, pose)
+            if wide is not None:
+                return self._issue_wide(wide)
+            cmd = self._begin_back(pose)
+            if cmd is not None:
+                return cmd
+        held = self._hold_command(pose, view)
+        if held is not None:
+            self._body_v, self._body_w = held
+            return wheel_speeds(*held)
         choice = choose_motion(
             view=view,
             pursuit_v=v,
@@ -1032,6 +1158,11 @@ class Explorer:
             radar_blocked=self._radar_blocked,
         )
         self._note_motion(choice)
+        if choice.name in ("back_out", "doorway_rescan"):
+            cmd = self._begin_back(pose)
+            if cmd is not None:
+                return cmd
+        self._remember_command(choice.v, choice.w)
         self._body_v, self._body_w = choice.v, choice.w
         return wheel_speeds(choice.v, choice.w)
 
@@ -1093,27 +1224,34 @@ class Explorer:
                 return
             self._plan(depth + 1)
             return
-        if (
-            self.goal_xy is not None
-            and self.path_xy
-            and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 1.2
-        ):
-            return
+        if self.goal_xy is not None and self.path_xy:
+            shift = math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1])
+            # Same target: refresh the path. A different target waits, so
+            # the goal does not flip every replan.
+            if shift < 0.6:
+                self.path_xy = path
+                self._pocket = bool(report.get("tight"))
+                return
+            if self.t_s - self._goal_since < 8.0:
+                return
         same = (
             self.goal_xy is not None
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
         )
         self.goal_xy, self.path_xy = goal, path
+        self._pocket = bool(report.get("tight"))
         self.frontiers_left = 1
         self.phase = "go"
         self.done = False
         if not same:
             self._goal_since = self.t_s
             self._motion_anchor = None
+            self._commit = None
             self._log_goal(goal, report)
 
     def _no_frontier(self) -> None:
         """No reachable frontier. Done only after a scan and a stopped hold."""
+        self._pocket = False
         if not self._confident():
             self._log("frontiers hidden, pose not trusted, not done")
             self.goal_xy = None
@@ -1155,6 +1293,7 @@ class Explorer:
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
+        report: dict = {}
         chosen = select_goal(
             self.grid,
             (x, y),
@@ -1162,6 +1301,7 @@ class Explorer:
             avoid=self._avoid_now(),
             rooms=rooms,
             heading_xy=(math.cos(yaw), math.sin(yaw)),
+            report=report,
         )
         if chosen is not None:
             self._log("frontier open, resuming")
@@ -1169,6 +1309,7 @@ class Explorer:
             self.phase = "go"
             goal, path = chosen
             self.goal_xy, self.path_xy = goal, path
+            self._pocket = bool(report.get("tight"))
             self._goal_since = self.t_s
             self._motion_anchor = None
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")

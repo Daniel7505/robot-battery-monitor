@@ -380,6 +380,177 @@ def test_a_vetoed_tick_backs_straight_out():
     assert choice.name in ("back_out", "doorway_rescan")
 
 
+def test_a_mapped_wall_behind_is_not_a_backup():
+    """Rear sonar can be open and the map still forbids the backup."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    _fill(grid, -0.55, -0.40, -0.24, 0.40, grid.l_max)
+    view = BubbleView(0.05, 0.08, 0.08, 0.50, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v >= 0.0
+    assert any(item["sensor"] == "map:rear" for item in choice.vetoes)
+
+
+def test_a_mapped_wall_ahead_is_not_driven_straight():
+    """The centreline veto stops a beeline. It does not close a side gap."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.22, -0.25, 0.50, 0.25, grid.l_max)
+    view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.20,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(item["sensor"] == "map:ahead" for item in choice.vetoes)
+    assert not (choice.v > 0.02 and abs(choice.w) <= 0.12)
+
+
+def test_a_tight_speck_is_skipped_and_a_long_pocket_is_kept():
+    """A short frontier with no room to turn is not a goal. A long one is."""
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 2.2, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 2.45, -0.26, grid.l_max)
+    _fill(grid, 1.0, 0.26, 2.45, 0.90, grid.l_max)
+    assert select_goal(grid, (0.0, 0.0)) is None
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 3.4, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 3.6, -0.26, grid.l_max)
+    x = 1.0
+    while x < 3.3:
+        _fill(grid, x, 0.26, x + 0.08, 0.55, grid.l_max)
+        x += 0.20
+    report: dict = {}
+    chosen = select_goal(grid, (0.0, 0.0), report=report)
+    assert chosen is not None
+    assert report.get("tight") is True
+
+
+def test_a_tight_corner_backs_toward_the_open_room():
+    """No pivot in the corridor. The open floor behind is the way around."""
+    from src.mapping.frontiers import approach_command
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, -0.20, 1.4, -0.12, grid.l_max)
+    _fill(grid, 0.15, 0.12, 1.4, 0.20, grid.l_max)
+    _fill(grid, -1.5, -1.2, 0.15, 1.2, grid.l_min)
+    path = [(0.40, 0.0), (0.55, 0.0), (0.55, 0.6)]
+    command = approach_command(grid, (0.40, 0.0, 0.0), path)
+    assert command is not None and command[2] == "wide" and command[0] < 0.0
+
+
+def test_a_backup_continues_until_the_centre_can_turn():
+    from src.mapping.body import TURN_AIM_M
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import _pose_clearance
+
+    door = OccupancyGrid()
+    _fill(door, -0.5, -1.2, 2.4, 1.2, door.l_min)
+    _fill(door, 0.9, -1.2, 1.2, -0.40, door.l_max)
+    _fill(door, 0.9, 0.40, 1.2, 1.2, door.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid = door
+    bot.phase = "go"
+    bot.path_xy = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
+    bot.goal_xy = (1.7, 0.0)
+    bot._replan_at = 1.0e9
+    bot.t_s = 5.0
+    bot.odometry.x_m = 1.00
+    bot.odometry.y_m = 0.22
+    bot.odometry.yaw_rad = 1.2
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.90
+    bot.path_xy = [(0.90, 0.22), (0.2, 0.22)]
+    bot.goal_xy = (0.2, 0.22)
+    bot.t_s = 5.2
+    assert _pose_clearance(door, 0.90, 0.22) < TURN_AIM_M
+    bot._go(False, 0.2)
+    assert bot._backing
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.30
+    bot.odometry.y_m = 0.0
+    bot.odometry.yaw_rad = 0.0
+    bot.path_xy = [(0.30, 0.0), (1.6, 0.0)]
+    bot.goal_xy = (1.6, 0.0)
+    bot.t_s = 6.4
+    bot._go(False, 0.2)
+    assert not bot._backing
+    assert bot._body_v >= 0.0
+
+
+def test_a_goal_and_a_motion_stay_put_until_the_hold_ends(monkeypatch):
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._goal_since = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._bubble_view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    bot._go(False, 0.28, 2.0, 2.0)
+    held = (bot._body_v, bot._body_w)
+    assert abs(held[0]) + abs(held[1]) > 0.04
+    bot.t_s = 5.3
+    bot._go(False, 0.28, 0.25, 1.5)
+    assert (bot._body_v, bot._body_w) == held
+    _fill(bot.grid, 0.20, -0.30, 0.45, 0.30, bot.grid.l_max)
+    bot.t_s = 5.4
+    bot._go(False, 0.28, 2.0, 2.0)
+    assert (bot._body_v, bot._body_w) != held
+
+    goals = [
+        ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    ]
+
+    def _fake(*_args, **_kwargs):
+        return goals.pop(0)
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 22.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 29.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
+
+
 def test_narrow_opening_stays_passable_after_a_thick_jamb():
     """0.81 m between jambs, each smeared 0.15 m into the opening.
 

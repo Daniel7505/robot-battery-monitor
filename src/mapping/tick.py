@@ -97,10 +97,13 @@ def log_major(
     )
     why = reason if reason in REASONS else "unknown"
     where = place if place in state["places"] else "room"
-    key = (str(action), why)
-    if key == state["last"]:
+    # The same action a moment later is still the same decision, even if
+    # a neighbour action flipped in between.
+    recent = state.setdefault("recent_t", {})
+    if float(t_s) - float(recent.get(str(action), -10.0)) < 2.0:
         return
-    state["last"] = key
+    recent[str(action)] = float(t_s)
+    state["last"] = (str(action), why)
     state["reasons"][why] = state["reasons"].get(why, 0) + 1
     state["places"][where] = state["places"].get(where, 0) + 1
     bits = [f"{name}={float(value):.2f}" for name, value in numbers.items()]

@@ -18,6 +18,7 @@ import math
 import numpy as np
 
 from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
+from src.mapping.footprint import footprint_clips
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import crossing_bonus
 
@@ -662,6 +663,30 @@ def _opening_persists(
     return _opening_center(grid, occupied, (cx, cy), ahead, further) is not None
 
 
+def _pose_clearance(grid: OccupancyGrid, x: float, y: float, reach_m: float = 0.45) -> float:
+    """Metres from the centre to the nearest mapped obstacle, capped."""
+    labels = grid.labels()
+    cell = grid.cell_of(x, y)
+    if cell is None:
+        return 0.0
+    res = float(grid.res)
+    n = int(math.ceil(reach_m / res))
+    row, col = cell
+    best = float(reach_m)
+    height, width = labels.shape
+    for dr in range(-n, n + 1):
+        rr = row + dr
+        if rr < 0 or rr >= height:
+            continue
+        for dc in range(-n, n + 1):
+            cc = col + dc
+            if cc < 0 or cc >= width or int(labels[rr, cc]) != 1:
+                continue
+            cx, cy = grid.cell_center(rr, cc)
+            best = min(best, math.hypot(cx - x, cy - y))
+    return best
+
+
 def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
@@ -698,9 +723,17 @@ def approach_command(
             if along > 0.55:
                 return None
             err = _wrap(math.atan2(ty, tx) - yaw)
-            if abs(err) > 0.18:
-                return (0.0, math.copysign(0.70, err), "pivot")
-            return (0.12, 0.0, "straight")
+            if abs(err) <= 0.18:
+                return (0.12, 0.0, "straight")
+            # Cameras still see the mouth here. A turn starts only with
+            # 0.30 m of air. Closer than that, back straight out, or the
+            # caller already took the straight crossing above.
+            if _pose_clearance(grid, x, y) < TURN_AIM_M:
+                return (-0.10, 0.0, "back")
+            spin = math.copysign(0.70, err)
+            if footprint_clips(grid, pose, 0.0, spin):
+                return (-0.10, 0.0, "back")
+            return (0.0, spin, "pivot")
         if travelled > 0.15:
             h_in = math.atan2(here[1] - prev[1], here[0] - prev[0])
             h_out = math.atan2(nxt[1] - here[1], nxt[0] - here[0])
@@ -709,6 +742,8 @@ def approach_command(
                 dist = math.hypot(here[0] - x, here[1] - y)
                 err = _wrap(h_out - yaw)
                 if dist < 0.28 and abs(err) > 0.20:
+                    if _pose_clearance(grid, x, y) < TURN_AIM_M:
+                        return (-0.10, 0.0, "back")
                     return (0.0, math.copysign(0.70, err), "pivot")
         prev, here = here, nxt
         if travelled > 1.1:

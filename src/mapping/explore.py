@@ -188,7 +188,6 @@ class Explorer:
         self._body_v = 0.0
         self._body_w = 0.0
         self._last_motion = ""
-        self._pivot_since: float | None = None
         self._approach_why = ""
         self._approach_log_at = 0.0
         self._motion_log_at = -1.0
@@ -922,10 +921,11 @@ class Explorer:
             return
         self._approach_why = why
         self._approach_log_at = self.t_s + 1.0
+        kind = "back_out" if why == "back" else "approach"
         log_decision(
             {
                 "t": round(self.t_s, 2),
-                "kind": "approach",
+                "kind": kind,
                 "response": why,
                 "v": round(float(v), 3),
                 "w": round(float(w), 3),
@@ -937,11 +937,12 @@ class Explorer:
             return
         self._last_motion = choice.name
         self._motion_log_at = self.t_s + 1.0
+        kind = choice.name if choice.name in ("back_out", "doorway_rescan", "doorway_refusal") else "motion"
         costs = {key: value for key, value in choice.costs.items() if key != "total" and abs(value) > 1e-3}
         log_decision(
             {
                 "t": round(self.t_s, 2),
-                "kind": "motion",
+                "kind": kind,
                 "chosen": choice.name,
                 "v": round(choice.v, 3),
                 "w": round(choice.w, 3),
@@ -969,16 +970,19 @@ class Explorer:
         pose = self.odometry.pose()
         approach = approach_command(self.grid, pose, self.path_xy)
         if approach is not None and approach[2] == "pivot":
-            if self._pivot_since is None:
-                self._pivot_since = self.t_s
-            if self.t_s - self._pivot_since <= 2.5:
-                _v, w, _why = approach
-                self._body_v, self._body_w = 0.0, w
-                self._note_approach("pivot", 0.0, w)
-                return wheel_speeds(0.0, w)
+            # A pivot is v = 0. Giving up into a forward arc is how the
+            # shell drove into a jamb while the log still said pivot.
+            _v, w, _why = approach
+            self._body_v, self._body_w = 0.0, w
+            self._note_approach("pivot", 0.0, w)
+            return wheel_speeds(0.0, w)
+        if approach is not None and approach[2] == "back":
+            rear = None if self._bubble_view is None else self._bubble_view.rear
+            if rear is None or float(rear) > 0.06:
+                self._body_v, self._body_w = -0.10, 0.0
+                self._note_approach("back", -0.10, 0.0)
+                return wheel_speeds(-0.10, 0.0)
             approach = None
-        else:
-            self._pivot_since = None
         v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
         if arrived:
             if self.goal_xy is not None:

@@ -309,8 +309,75 @@ def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
     path = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
     yawed = approach_command(door, (0.3, 0.0, 1.2), path)
     assert yawed is not None and yawed[2] == "pivot" and abs(yawed[1]) > 0.4 and yawed[0] == 0.0
+    from src.mapping.drive import wheel_speeds
+
+    left_w, right_w = wheel_speeds(yawed[0], yawed[1])
+    assert abs(left_w + right_w) < 1e-9
     lined = approach_command(door, (0.3, 0.0, 0.0), path)
     assert lined is not None and lined[2] == "straight" and lined[1] == 0.0 and lined[0] > 0.0
+    # Centre already inside 0.30 m of the jamb. Do not start the pivot.
+    close = approach_command(door, (1.00, 0.22, 1.2), path)
+    assert close is not None and close[2] == "back" and close[0] < 0.0 and close[1] == 0.0
+
+
+def test_a_map_corner_vetoes_a_turn_and_not_a_straight_pass():
+    """The sweep is a hard veto only while yawing. A doorway stays drivable."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, 0.28, 0.70, 0.55, grid.l_max)
+    view = BubbleView(1.5, 0.40, 0.40, 0.50, 0.40)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=-0.6,
+        heading_err=-0.6,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert choice.w == 0.0 or abs(choice.w) < 0.12
+    assert any(item["sensor"] == "map:corner" for item in choice.vetoes)
+    straight = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert straight.v > 0.02 and abs(straight.w) < 0.12
+
+
+def test_a_vetoed_tick_backs_straight_out():
+    """No candidate left, and the rear is open: reverse, and say so."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    # Walls close on both sides and ahead, wide enough that the body fits.
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    # Rear is inside the stop gap for 0.10 m/s, so the reverse candidate
+    # is vetoed, and still open enough for a straight backup.
+    view = BubbleView(0.05, 0.08, 0.08, 0.07, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v < 0.0 and choice.w == 0.0
+    assert choice.name in ("back_out", "doorway_rescan")
 
 
 def test_narrow_opening_stays_passable_after_a_thick_jamb():

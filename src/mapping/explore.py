@@ -211,6 +211,7 @@ class Explorer:
         self._recover_need = 0.0
         self._recover_phase = ""
         self._recover_until = -1.0
+        self._contact_until = -1.0
         self._proximity: dict = {}
         self._refused: set[tuple] = set()
         self._pocket = False
@@ -1044,6 +1045,8 @@ class Explorer:
 
     def _corner_contact(self) -> float | None:
         """A corner IR inside 0.10 m. A centre sonar on open floor is not this."""
+        if self.t_s < self._contact_until:
+            return None
         gap = corner_gap(self._proximity)
         if gap is None or gap >= TOO_CLOSE_M:
             return None
@@ -1144,18 +1147,15 @@ class Explorer:
         if self.phase != "go":
             return 0.0, 0.0
         pose = self.odometry.pose()
-        if self._recover or self._corner_contact() is not None:
+        contact = self._corner_contact()
+        if self._recover or (contact is not None and not self._reverse_closed(pose)):
             recover = self._begin_recover(pose) if not self._recover else self._recover_command(pose)
             if recover is not None:
                 return recover
-            if self._corner_contact() is not None and self._reverse_closed(pose):
-                if self.goal_xy is not None:
-                    self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.5)
-                self.goal_xy = None
-                self.path_xy = []
-                self._replan_at = self.t_s + 1.0
-                self._body_v, self._body_w = 0.0, 0.0
-                return 0.0, 0.0
+        elif contact is not None:
+            # Can't back off this corner. Sitting here is not a recovery.
+            self._recover = False
+            self._contact_until = self.t_s + 1.5
         backing = self._continue_back(pose)
         if backing is not None:
             return backing

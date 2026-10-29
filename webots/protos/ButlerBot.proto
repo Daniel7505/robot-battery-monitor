@@ -880,7 +880,7 @@ Robot {
     # Short range on purpose: this is the spot the sonars' cones miss.
     # No bounding object. Apartment mapper only.
     DistanceSensor {
-      translation 0.19 0.19 0.08
+      translation 0.21 0.21 0.12
       rotation 0 0 1 0.7854
       name "ir_front_left"
       lookupTable [
@@ -892,7 +892,7 @@ Robot {
       aperture 0.15
     }
     DistanceSensor {
-      translation 0.19 -0.19 0.08
+      translation 0.21 -0.21 0.12
       rotation 0 0 1 -0.7854
       name "ir_front_right"
       lookupTable [
@@ -904,7 +904,7 @@ Robot {
       aperture 0.15
     }
     DistanceSensor {
-      translation -0.19 0.19 0.08
+      translation -0.21 0.21 0.12
       rotation 0 0 1 2.3562
       name "ir_rear_left"
       lookupTable [
@@ -916,7 +916,7 @@ Robot {
       aperture 0.15
     }
     DistanceSensor {
-      translation -0.19 -0.19 0.08
+      translation -0.21 -0.21 0.12
       rotation 0 0 1 -2.3562
       name "ir_rear_right"
       lookupTable [

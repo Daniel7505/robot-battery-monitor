@@ -45,10 +45,13 @@ BUBBLE_DECEL_M_S2 = 1.4
 _CORNER_FRONT = ("tof_front_left", "tof_front_right")
 _CORNER_REAR = ("tof_rear_left", "tof_rear_right")
 _CORNERS = _CORNER_FRONT + _CORNER_REAR
-_FRONT = ("us_front", "us_front_left", "us_front_right", *_CORNER_FRONT)
-_LEFT = ("us_left", "us_front_left", "us_rear_left", "tof_front_left", "tof_rear_left")
-_RIGHT = ("us_right", "us_front_right", "us_rear_right", "tof_front_right", "tof_rear_right")
-_REAR = ("us_rear", "us_rear_left", "us_rear_right", *_CORNER_REAR)
+# The corner beams are not part of the straight-ahead stop. A jamb beside
+# a centred doorway sits in that beam, and folding it into the nose gap
+# refused the crossing.
+_FRONT = ("us_front", "us_front_left", "us_front_right")
+_LEFT = ("us_left", "us_front_left", "us_rear_left")
+_RIGHT = ("us_right", "us_front_right", "us_rear_right")
+_REAR = ("us_rear", "us_rear_left", "us_rear_right")
 BUMP_M = 0.03
 # Lens at 0.14 m, ignores returns inside 0.35 m, nose at 0.19 m.
 # An object closer than this air gap is outside the depth camera.

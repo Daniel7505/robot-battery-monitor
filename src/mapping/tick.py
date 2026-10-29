@@ -265,9 +265,39 @@ def _ahead_blocked(grid, pose: tuple[float, float, float]) -> bool:
     return False
 
 
+def _behind_blocked(grid, pose: tuple[float, float, float]) -> bool:
+    """True when a mapped wall spans the tail. A corner graze does not.
+
+    The straight-backup sweep's 2 cm margin kissed one rear corner and
+    the tick then held forever. The centre and both sides have to be
+    occupied, the same test as a wall across the nose.
+    """
+    if grid is None:
+        return False
+    labels = grid.labels()
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    back = (-math.cos(yaw), -math.sin(yaw))
+    left = (-back[1], back[0])
+    step = float(grid.res)
+    dist = 0.22
+    while dist <= 0.42 + 1e-9:
+        cx = x + back[0] * dist
+        cy = y + back[1] * dist
+        blocked = True
+        for side in (0.0, 0.12, -0.12):
+            cell = grid.cell_of(cx + left[0] * side, cy + left[1] * side)
+            if cell is None or int(labels[cell]) != 1:
+                blocked = False
+                break
+        if blocked:
+            return True
+        dist += step
+    return False
+
+
 def _reverse_blocked(grid, pose) -> bool:
-    """The swept shell would enter a mapped cell while backing straight."""
-    return grid is not None and footprint_clips(grid, pose, -0.10, 0.0)
+    """A mapped wall spans the tail, so a straight backup would enter it."""
+    return _behind_blocked(grid, pose)
 
 
 def _straight_reverse(view, grid, pose, vetoes: list[dict]) -> MotionChoice | None:
@@ -328,7 +358,7 @@ def choose_motion(
             turning = abs(w) > TURN_W_RAD_S
             if turning and footprint_clips(grid, pose, v, w):
                 reason = "map:corner"
-            elif v < -0.02 and not turning and footprint_clips(grid, pose, v, w):
+            elif v < -0.02 and not turning and _behind_blocked(grid, pose):
                 reason = "map:rear"
             elif v > 0.02 and not turning and _ahead_blocked(grid, pose):
                 reason = "map:ahead"
@@ -343,4 +373,10 @@ def choose_motion(
     escape = _straight_reverse(view, grid, pose, vetoes)
     if escape is not None:
         return escape
+    # A nose gap vetoes every spin, and a hold never becomes a stuck event,
+    # so the robot would sit. A spin the map shows as clear is still a move.
+    if grid is not None:
+        for name, w in (("spin_left", 0.70), ("spin_right", -0.70)):
+            if not footprint_clips(grid, pose, 0.0, w):
+                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes)
     return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)

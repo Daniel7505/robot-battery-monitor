@@ -43,7 +43,14 @@ from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
 from src.mapping.footprint import footprint_clips
 from src.mapping.frontiers import _pose_clearance, approach_command, select_goal, wide_escape
-from src.mapping.tick import TURN_W_RAD_S, _ahead_blocked, choose_motion, live_veto, log_decision
+from src.mapping.tick import (
+    TURN_W_RAD_S,
+    _ahead_blocked,
+    _behind_blocked,
+    choose_motion,
+    live_veto,
+    log_decision,
+)
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
 from src.mapping.loop_close import LoopCloser
@@ -858,7 +865,7 @@ class Explorer:
             if self.t_s <= self._relief_until:
                 self._body_v, self._body_w = 0.0, 0.0
                 return 0.0, 0.0
-            if self._open_reverse() and not self._shell_clips(-0.10, 0.0):
+            if self._open_reverse() and not _behind_blocked(self.grid, self.odometry.pose()):
                 self._relief = "reverse"
                 self._relief_until = self.t_s + 0.45
                 log_decision({"t": round(self.t_s, 2), "kind": "stuck", "response": "reverse"})
@@ -992,8 +999,10 @@ class Explorer:
         v, w = self._commit
         turning = abs(w) > TURN_W_RAD_S
         blocked = live_veto(v, w, view) is not None
-        if not blocked and (turning or v < -0.02):
+        if not blocked and turning:
             blocked = footprint_clips(self.grid, pose, v, w)
+        if not blocked and v < -0.02 and not turning and _behind_blocked(self.grid, pose):
+            blocked = True
         if not blocked and v > 0.02 and not turning and _ahead_blocked(self.grid, pose):
             blocked = True
         if blocked:
@@ -1005,7 +1014,7 @@ class Explorer:
         rear = None if self._bubble_view is None else self._bubble_view.rear
         if rear is not None and float(rear) <= 0.06:
             return True
-        return footprint_clips(self.grid, pose, -0.10, 0.0)
+        return _behind_blocked(self.grid, pose)
 
     def _begin_back(self, pose) -> tuple[float, float] | None:
         if self._reverse_closed(pose):

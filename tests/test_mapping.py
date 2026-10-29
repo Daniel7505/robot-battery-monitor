@@ -405,6 +405,28 @@ def test_a_mapped_wall_behind_is_not_a_backup():
     assert any(item["sensor"] == "map:rear" for item in choice.vetoes)
 
 
+def test_a_rear_corner_graze_still_backs_out():
+    """One cell on the tail corner is not a wall behind the robot."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.22, -0.28, -0.16, -0.20, grid.l_max)
+    view = BubbleView(0.05, 0.40, 0.40, 0.40, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.4,
+        right_clear=0.4,
+    )
+    assert choice.v < 0.0 and abs(choice.w) < 0.12
+    assert not any(item["sensor"] == "map:rear" and item["motion"] == "reverse" for item in choice.vetoes)
+
+
 def test_a_mapped_wall_ahead_is_not_driven_straight():
     """The centreline veto stops a beeline. It does not close a side gap."""
     from src.mapping.bubble import BubbleView

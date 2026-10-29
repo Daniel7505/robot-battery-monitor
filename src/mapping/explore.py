@@ -962,6 +962,11 @@ class Explorer:
             return relief
         if self.phase != "go":
             return 0.0, 0.0
+        # An empty path with a future replan time is a wait, not another
+        # plan. Calling it every step flooded the log and stalled the sim.
+        if not self.path_xy and self.t_s < self._replan_at:
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
         if self.t_s >= self._replan_at or not self.path_xy:
             self._plan()
         if self.phase != "go" or self.done or not self.path_xy:

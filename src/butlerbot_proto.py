@@ -25,7 +25,7 @@ EXTERNPROTO_LINE = 'EXTERNPROTO "../protos/ButlerBot.proto"'
 # ring and floor camera sit in a procedural block that expand_robot strips
 # unless the instance sets mappingSensors TRUE, so warehouse worlds still
 # expand to this hash. Their controller does not enable oak_* either.
-SHIPPED_ROBOT_MD5 = "80548bfff8795fe72cd0b98407345041"
+SHIPPED_ROBOT_MD5 = "51e36562e28c5e63331a024caa87fde0"
 
 _MAPPING_BEGIN = "%< if (fields.mappingSensors.value) { >%"
 _MAPPING_END = "%< } >%"

@@ -4,9 +4,12 @@ Webots applies the gyro lookup table itself. The apartment controller
 does not call this module. The kinematic stand-in and the unit tests do,
 so a run without Webots is still noisy.
 
-Depth error grows with range squared, the stereo model. The proto's
-RangeFinder noise stays a constant fraction of max range because the
-warehouse robot shares that node and never enables it.
+Depth error grows with range squared. σ(3 m) is 2% of range, the
+Luxonis median bound for an OAK-D Lite (480P, 75 mm baseline):
+https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+The device noise on oak_depth is 0. Webots cannot express a
+range-squared fraction, so this function is the noise, in the
+kinematic stand-in and in the apartment controller.
 """
 
 from __future__ import annotations

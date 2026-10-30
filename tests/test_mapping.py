@@ -1545,7 +1545,8 @@ def test_proto_depth_camera_matches_the_body_constants():
     text = (ROOT / "webots" / "protos" / "ButlerBot.proto").read_text(encoding="utf-8")
     assert 'name "oak_depth"' in text
     assert "fieldOfView 1.396" in text
-    assert "noise 0.002" in text
+    oak = text[text.index('name "oak_depth"') : text.index('name "oak_depth"') + 500]
+    assert "\n      noise 0\n" in oak
     assert "0.0873" in text
     assert OAK_DEPTH.fov_rad == pytest_approx(1.396)
     assert OAK_DEPTH.rotation[3] == pytest_approx(0.0873)
@@ -1891,9 +1892,13 @@ def test_the_rear_camera_looks_behind_the_tail():
 
 
 def test_depth_error_grows_with_range_squared():
-    assert depth_sigma_m(1.0) == pytest_approx(0.01)
-    assert depth_sigma_m(2.0) == pytest_approx(0.04)
-    assert depth_sigma_m(0.5) == pytest_approx(0.0025)
+    # Luxonis OAK-D Lite, 480P, 75 mm: below 2% under 3 m.
+    # https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+    assert depth_sigma_m(3.0) == pytest_approx(0.06)
+    assert depth_sigma_m(3.0) / 3.0 == pytest_approx(0.02)
+    assert depth_sigma_m(1.0) == pytest_approx(0.06 / 9.0)
+    assert depth_sigma_m(2.0) == pytest_approx(4.0 * depth_sigma_m(1.0))
+    assert depth_sigma_m(5.0) / 5.0 < 0.04
     near = np.array(
         [noisy_depth(np.array([[1.0]]), np.random.default_rng(i), 8.0)[0, 0] for i in range(60)]
     )
@@ -1925,6 +1930,27 @@ def test_a_far_return_does_not_close_a_doorway():
     for _ in range(2):
         firm.integrate(origin, far, np.zeros((0, 2)))
     assert firm.labels()[end] == 1
+
+
+def test_a_mid_range_hit_occupies_only_after_repeated_views():
+    """4–5 m is still a wall, at lower odds. One frame must not close the gap."""
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.6, 2.2, 0.6, grid.l_min)
+    origin = (0.2, 0.0)
+    far = np.array([[1.2, 0.0]])
+    end = grid.cell_of(1.2, 0.0)
+    assert end is not None
+    grid.log[end] = 0.0
+    grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] != 1
+    free = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(1.8, 0.0)
+    assert start is not None and goal is not None
+    assert astar(free, start, goal, step_cost=grid.res) is not None
+    for _ in range(5):
+        grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] == 1
 
 
 def test_a_viewpoint_stands_one_to_three_metres_back():

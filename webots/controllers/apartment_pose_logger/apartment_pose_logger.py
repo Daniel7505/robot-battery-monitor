@@ -129,6 +129,12 @@ def main() -> None:
     next_try = 0.0
     wall_events = 0
     prev = None
+    movie = False
+    shot = False
+    frame_i = 0
+    next_frame = 8.0
+    record = os.environ.get("RBM_MOVIE") == "1"
+    viewpoint = None
     while supervisor.step(timestep) != -1:
         now = float(supervisor.getTime())
         if robot is None:
@@ -175,6 +181,10 @@ def main() -> None:
             walls = open(os.path.join(folder, "wall_contacts.csv"), "w", encoding="utf-8", newline="\n")
             walls.write("t_s,x_m,y_m,z_m,yaw_rad,left_wall,right_wall,caster_wall\n")
             print(f"POSE LOG {path}")
+            if record and not movie:
+                os.makedirs(os.path.join(folder, "frames"), exist_ok=True)
+                movie = True
+                print(f"POSE LOG frames {folder}/frames")
         if handle is None or robot is None or physics is None or walls is None:
             continue
         pos = robot.getPosition()
@@ -207,6 +217,25 @@ def main() -> None:
             f"{left_f},{right_f},{caster_f},{left_w},{right_w},{caster_w},"
             f"{left_z:.5f},{right_z:.5f},{contact_z:.5f}\n"
         )
+        if record:
+            if viewpoint is None:
+                viewpoint = supervisor.getFromDef("VIEWPOINT")
+            if viewpoint is not None:
+                # Straight down over the shell. The mapper never reads this node.
+                # Absolute eye position. follow is off, so this is the world point.
+                pos = viewpoint.getField("position")
+                if pos is not None:
+                    pos.setSFVec3f([x, y, 4.5])
+            if now >= next_frame:
+                frame = os.path.join(folder, "frames", f"frame_{frame_i:04d}.png")
+                supervisor.exportImage(frame, 85)
+                frame_i += 1
+                next_frame = now + 0.5
+                if not shot and now >= 20.0:
+                    still = os.path.join(folder, "follow.png")
+                    supervisor.exportImage(still, 90)
+                    shot = True
+                    print(f"POSE LOG screenshot {still}")
         if left_w or right_w or caster_w:
             wall_events += 1
             walls.write(

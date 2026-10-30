@@ -159,15 +159,13 @@ WorldInfo {
 }
 
 DEF VIEWPOINT Viewpoint {
-  # Top-down follow, same idea as the warehouse cam, low enough to read rooms.
-  follow "ButlerBot"
-  followType "Tracking Shot"
-  followSmoothness 0.2
+  # Straight down. The pose logger sets this over the robot when a clip
+  # is recorded. The mapper does not read the viewpoint.
   orientation 0 1 0 1.5708
-  position 0 0 14
-  fieldOfView 0.75
-  near 0.2
-  far 50
+  position 6.1 4.7 4.5
+  fieldOfView 0.9
+  near 0.05
+  far 30
 }
 
 Background {

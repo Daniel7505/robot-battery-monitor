@@ -150,4 +150,5 @@ def test_warehouse_gyro_and_wheel_encoders_stay_clean():
     assert 'PositionSensor {\n          name "left_wheel_sensor"\n        }' in text
     assert 'PositionSensor {\n          name "right_wheel_sensor"\n        }' in text
     assert 'name "oak_depth"' in text
-    assert "noise 0.002" in text
+    oak = text[text.index('name "oak_depth"') : text.index('name "oak_depth"') + 500]
+    assert "\n      noise 0\n" in oak

@@ -39,6 +39,9 @@ class OccupancyGrid:
         self.probable = np.zeros((self.n, self.n), dtype=bool)
         self.l_occ = 0.85
         self.l_free = -0.35
+        # A 4–5 m hit. Four frames are needed to cross occ_thresh, so one
+        # noisy return cannot close a doorway.
+        self.l_soft = 0.28
         self.l_min = -3.5
         self.l_max = 3.5
         self.occ_thresh = 1.20
@@ -124,24 +127,31 @@ class OccupancyGrid:
         hits_xy: np.ndarray,
         floors_xy: np.ndarray,
         probable_xy: np.ndarray | None = None,
+        soft_xy: np.ndarray | None = None,
     ) -> None:
         """Ray-cast free space to every endpoint. Hits also occupy the end cell.
 
         Free and occupied votes share one mask so a hit wins over a floor
-        ray that crossed the same cell in this frame. ``probable_xy`` are
-        far returns: the ray is free, the end cell is recorded, and it
-        does not become occupied.
+        ray that crossed the same cell in this frame. ``soft_xy`` are
+        mid-range returns: the end cell gets a smaller occupied vote.
+        ``probable_xy`` are far returns: the ray is free, the end cell is
+        recorded, and it does not become occupied.
         """
         mark = np.zeros(self.n * self.n, dtype=np.int8)
         self._paint(origin_xy, floors_xy, occupied=False, mark=mark)
         self._paint(origin_xy, hits_xy, occupied=True, mark=mark)
+        if soft_xy is not None:
+            self._paint(origin_xy, soft_xy, occupied=True, mark=mark, soft=True)
         if probable_xy is not None:
             self._paint(origin_xy, probable_xy, occupied=False, mark=mark, probable=True)
         log = self.log.ravel()
         # A latched contact decays under a free ray. A real wall is
         # repainted by the hit, which outvotes the free mark in this frame.
+        # Mark 3 is the lower-confidence far hit and must not outvote a
+        # firm hit (mark 2) in the same frame.
         log[mark == 1] += self.l_free
         log[mark == 2] += self.l_occ
+        log[mark == 3] += self.l_soft
         np.clip(log, self.l_min, self.l_max, out=log)
         self.latch[self.log < self.occ_thresh] = False
 
@@ -153,12 +163,13 @@ class OccupancyGrid:
         occupied: bool,
         mark: np.ndarray,
         probable: bool = False,
+        soft: bool = False,
     ) -> None:
         ends = np.asarray(ends_xy, dtype=np.float64).reshape(-1, 2)
         if ends.shape[0] == 0:
             return
         for start in range(0, ends.shape[0], 400):
-            self._paint_chunk(origin_xy, ends[start : start + 400], occupied, mark, probable)
+            self._paint_chunk(origin_xy, ends[start : start + 400], occupied, mark, probable, soft)
 
     def _paint_chunk(
         self,
@@ -167,6 +178,7 @@ class OccupancyGrid:
         occupied: bool,
         mark: np.ndarray,
         probable: bool = False,
+        soft: bool = False,
     ) -> None:
         ox, oy = float(origin_xy[0]), float(origin_xy[1])
         delta = ends - np.array([ox, oy], dtype=np.float64)
@@ -192,7 +204,17 @@ class OccupancyGrid:
             lin = rr.ravel()[mask] * self.n + cc.ravel()[mask]
             mark[lin] = np.maximum(mark[lin], value)
 
-        if occupied:
+        if occupied and soft:
+            splat(rows[:, :-1], cols[:, :-1], inside[:, :-1], 1)
+            # Do not replace a firm hit already written this frame.
+            end_rows = rows[:, -1]
+            end_cols = cols[:, -1]
+            end_ok = inside[:, -1]
+            if np.any(end_ok):
+                lin = end_rows[end_ok].astype(np.int64) * self.n + end_cols[end_ok].astype(np.int64)
+                keep = mark[lin] < 2
+                mark[lin[keep]] = 3
+        elif occupied:
             splat(rows[:, :-1], cols[:, :-1], inside[:, :-1], 1)
             splat(rows[:, -1:], cols[:, -1:], inside[:, -1:], 2)
         elif probable:

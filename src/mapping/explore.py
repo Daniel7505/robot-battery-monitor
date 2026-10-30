@@ -23,6 +23,7 @@ from src.mapping.body import (
     CRUISE_M_S,
     OAK_DEPTH,
     OAK_FIRM_RANGE_M,
+    OAK_SOFT_RANGE_M,
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
     REAR_DEPTH,
@@ -107,20 +108,26 @@ REASON_FRONTIER_BAN = "frontier_ban"
 REASON_FRONTIER_CLEAR = "frontier_clear"
 
 
-def _split_firm(hits: np.ndarray, sensor: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Points inside the firm range, and points past it.
+def _split_ranges(
+    hits: np.ndarray, sensor: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Firm hits, lower-confidence hits, and probable hits.
 
-    Past ``OAK_FIRM_RANGE_M`` the stereo error is too large to occupy a
-    cell. Those points still carve free space; they do not block a path.
+    Firm is inside ``OAK_FIRM_RANGE_M`` and can occupy at the normal odds.
+    Soft is out to ``OAK_SOFT_RANGE_M`` and occupies only after repeated
+    views. Farther than that is probable: free space along the ray, and
+    the end cell never blocks a path.
     """
     empty = np.zeros((0, 3), dtype=np.float64)
     if hits.size == 0:
-        return empty, empty
+        return empty, empty, empty
     origin = np.asarray(sensor, dtype=np.float64).reshape(1, 3)
     delta = np.asarray(hits, dtype=np.float64) - origin
     dist = np.sqrt(delta[:, 0] ** 2 + delta[:, 1] ** 2 + delta[:, 2] ** 2)
     firm = dist <= OAK_FIRM_RANGE_M
-    return hits[firm], hits[~firm]
+    soft = (dist > OAK_FIRM_RANGE_M) & (dist <= OAK_SOFT_RANGE_M)
+    probable = dist > OAK_SOFT_RANGE_M
+    return hits[firm], hits[soft], hits[probable]
 
 
 class _FrontierRegion:
@@ -334,6 +341,7 @@ class Explorer:
         clearance = left_clear = right_clear = 99.0
         hits = floors = sensor = None
         probable = None
+        soft = None
         if depth is not None:
             hits, floors, sensor = body_points(
                 self.camera,
@@ -342,7 +350,7 @@ class Explorer:
                 pitch_rad=pitch_rad,
                 stride=self.stride,
             )
-            hits, probable = _split_firm(hits, sensor)
+            hits, soft, probable = _split_ranges(hits, sensor)
             clearance, left_clear, right_clear = forward_clearance(hits)
             self._held_clear = (clearance, left_clear, right_clear)
             # Two empty frames, not one glitch. Held until a usable frame
@@ -560,16 +568,17 @@ class Explorer:
         self.grid.stamp_footprint(x, y)
         if hits is not None and sensor is not None and floors is not None:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
-            probable_xy = (
-                to_odom(probable, (x, y, yaw))
-                if probable is not None and probable.size
-                else np.zeros((0, 2))
-            )
+            def _xy(cloud) -> np.ndarray:
+                if cloud is not None and getattr(cloud, "size", 0):
+                    return to_odom(cloud, (x, y, yaw))
+                return np.zeros((0, 2))
+
             self.grid.integrate(
                 origin,
                 to_odom(hits, (x, y, yaw)),
                 to_odom(floors, (x, y, yaw)),
-                probable_xy=probable_xy,
+                probable_xy=_xy(probable),
+                soft_xy=_xy(soft),
             )
         self._last_clear = (clearance, left_clear, right_clear)
         # A depth hit at 1.5 m is the far side of the room, not a press.

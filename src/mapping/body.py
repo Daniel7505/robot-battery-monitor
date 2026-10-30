@@ -38,12 +38,19 @@ HEIGHT_MAX_M = 1.50
 OAK_DEPTH_NOISE = 0.002
 OAK_DEPTH_MAX_M = 8.0
 OAK_DEPTH_MIN_M = 0.35
-# Stereo disparity error makes range error grow with distance squared.
-# σ(1 m) = 1 cm, so 0.5–3 m stays a few centimetres (OAK-D Lite band).
-OAK_DEPTH_SIGMA_AT_1M = 0.01
-# Past this, a return is only a probable surface. It must not occupy a
-# cell: a far smear was closing doorways the shell can still fit through.
-OAK_FIRM_RANGE_M = 3.0
+# Stereo error grows with range squared. Calibrated to the Luxonis median
+# OAK-D Lite figure (480P, 75 mm baseline): below 3 m, below 2% absolute
+# depth error; from 3 m to 6 m, below 4%.
+# https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+# σ(3 m) = 0.02 × 3 m, so σ(1 m) = 6.7 mm. σ(5 m) is 3.3%, inside the 4% band.
+# The same page's half-pixel theory (focal length 440 px) is 1.5 cm at 1 m;
+# the measured ceiling is the tighter number, so the model uses that.
+OAK_DEPTH_SIGMA_AT_1M = 0.06 / 9.0
+# Full-confidence hits out to 4 m. 4–5 m still occupy, at a lower log-odds,
+# because the published error is still a few percent there. Past 5 m the
+# return is only probable and must not close a doorway.
+OAK_FIRM_RANGE_M = 4.0
+OAK_SOFT_RANGE_M = 5.0
 # Share of the forward view with no usable range. A surface closer than
 # minRange fills the frame with empty pixels, and that is contact.
 BLIND_VIEW_FRACTION = 0.65

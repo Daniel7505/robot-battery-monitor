@@ -159,15 +159,13 @@ WorldInfo {
 }
 
 DEF VIEWPOINT Viewpoint {
-  # Top-down follow, same idea as the warehouse cam, low enough to read rooms.
-  follow "ButlerBot"
-  followType "Tracking Shot"
-  followSmoothness 0.2
+  # Straight down. The pose logger sets this over the robot when a clip
+  # is recorded. The mapper does not read the viewpoint.
   orientation 0 1 0 1.5708
-  position 0 0 14
-  fieldOfView 0.75
-  near 0.2
-  far 50
+  position 6.1 4.7 4.5
+  fieldOfView 0.9
+  near 0.05
+  far 30
 }
 
 Background {
@@ -587,6 +585,16 @@ DEF APT_FLOOR_LIVING Solid {
     Shape {
       appearance DEF APT_APP_LAMINATE PBRAppearance {
         baseColor 0.45 0.38 0.30
+        baseColorMap ImageTexture {
+          url [
+            "textures/laminate_grain.png"
+          ]
+          repeatS TRUE
+          repeatT TRUE
+        }
+        textureTransform TextureTransform {
+          scale 36 36
+        }
         roughness 0.55
         metalness 0
       }
@@ -727,6 +735,16 @@ DEF APT_FLOOR_BEDROOM Solid {
     Shape {
       appearance DEF APT_APP_CARPET PBRAppearance {
         baseColor 0.52 0.48 0.42
+        baseColorMap ImageTexture {
+          url [
+            "textures/carpet_pile.png"
+          ]
+          repeatS TRUE
+          repeatT TRUE
+        }
+        textureTransform TextureTransform {
+          scale 48 48
+        }
         roughness 0.95
         metalness 0
       }
@@ -807,6 +825,10 @@ DEF APT_FLOOR_BRIDGE_ENTRY Solid {
     size 0.101600 1.016000 0.020000
   }
 }
+# 0.5 in carpet step. A vertical face stops the casters, and a 10 cm
+# ramp stalls a slow shell because the nose casters unload the drive
+# wheels. The collision ramp starts on the laminate and rises to the
+# carpet top. The visual slab and the bedroom floor height stay put.
 DEF APT_FLOOR_CARPET_EDGE Solid {
   translation 3.708400 5.130800 0.002700
   name "apt_floor_carpet_edge"
@@ -820,8 +842,27 @@ DEF APT_FLOOR_CARPET_EDGE Solid {
       }
     }
   ]
-  boundingObject Box {
-    size 0.105600 0.812800 0.020000
+  boundingObject IndexedFaceSet {
+    coord Coordinate {
+      point [
+        0.252000 -0.406400 -0.010000
+        0.252000 0.406400 -0.010000
+        0.252000 -0.406400 -0.002700
+        0.252000 0.406400 -0.002700
+        -0.052800 -0.406400 -0.010000
+        -0.052800 0.406400 -0.010000
+        -0.052800 -0.406400 0.010000
+        -0.052800 0.406400 0.010000
+      ]
+    }
+    coordIndex [
+      0 1 3 2 -1
+      4 6 7 5 -1
+      0 4 5 1 -1
+      2 3 7 6 -1
+      0 2 6 4 -1
+      1 5 7 3 -1
+    ]
   }
 }
 DEF APT_FLOOR_CARPET_EDGE_BATH Solid {
@@ -837,8 +878,27 @@ DEF APT_FLOOR_CARPET_EDGE_BATH Solid {
       }
     }
   ]
-  boundingObject Box {
-    size 0.812800 0.105600 0.020000
+  boundingObject IndexedFaceSet {
+    coord Coordinate {
+      point [
+        -0.406400 -0.252000 -0.010000
+        0.406400 -0.252000 -0.010000
+        -0.406400 -0.252000 -0.002700
+        0.406400 -0.252000 -0.002700
+        -0.406400 0.052800 -0.010000
+        0.406400 0.052800 -0.010000
+        -0.406400 0.052800 0.010000
+        0.406400 0.052800 0.010000
+      ]
+    }
+    coordIndex [
+      0 1 3 2 -1
+      4 6 7 5 -1
+      0 4 5 1 -1
+      2 3 7 6 -1
+      0 2 6 4 -1
+      1 5 7 3 -1
+    ]
   }
 }
 # --- furniture. Every size and position is an estimate. ---
@@ -1254,11 +1314,24 @@ DEF APT_FURN_VANITY Solid {
 
 ButlerBot {
   # Main room, clear of the sofas and the island. Facing the patio wall (+Y).
+  # apartment_mapper explores from sensors. It does not load this file.
   translation 6.1 4.7 0
   rotation 0 0 1 1.5708
   name "ButlerBot"
-  controller "butlerbot_controller"
+  controller "apartment_mapper"
   controllerArgs [
     "--dashboard-url=http://127.0.0.1:5000"
+  ]
+  mappingSensors TRUE
+}
+
+# Scores a run after the fact. Not a device the mapper reads.
+# Sits under the floor so it does not land in a room.
+Robot {
+  translation 0 0 -2
+  name "apartment_pose_logger"
+  supervisor TRUE
+  controller "apartment_pose_logger"
+  children [
   ]
 }

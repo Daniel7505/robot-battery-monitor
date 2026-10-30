@@ -38,6 +38,8 @@ logs/*.log
 logs/speed_trace_*.csv
 logs/mission_summary_*.json
 logs/laps/
+# Apartment mapping runs (map.npy, pose logs, comparison PNG). Never commit.
+logs/mapping_runs/
 # Overnight optimizer transcripts (KNOWLEDGE.md learnings are kept on purpose)
 optimizer/runs/
 archives/

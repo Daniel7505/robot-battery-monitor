@@ -20,8 +20,15 @@ from pathlib import Path
 
 PROTO_PATH = Path(__file__).resolve().parent.parent / "webots" / "protos" / "ButlerBot.proto"
 EXTERNPROTO_LINE = 'EXTERNPROTO "../protos/ButlerBot.proto"'
-# The pasted Robot node this PROTO was cut from (no trailing newline).
-SHIPPED_ROBOT_MD5 = "f7e514cd3e70cad39251257e4207c006"
+# md5 of expand_robot() for a default instance (no trailing newline).
+# Moves when the shared Robot body changes. The apartment-only close-range
+# ring and floor camera sit in a procedural block that expand_robot strips
+# unless the instance sets mappingSensors TRUE, so warehouse worlds still
+# expand to this hash. Their controller does not enable oak_* either.
+SHIPPED_ROBOT_MD5 = "51e36562e28c5e63331a024caa87fde0"
+
+_MAPPING_BEGIN = "%< if (fields.mappingSensors.value) { >%"
+_MAPPING_END = "%< } >%"
 
 _FLOOR_EXTERN = (
     'EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/'
@@ -259,6 +266,8 @@ def _coerce_fields(raw: dict) -> dict:
             while len(nums) < 6:
                 nums.append(0.0)
             out["bodyInertia"] = tuple(float(v) for v in nums[:6])
+    if "mappingSensors" in raw:
+        out["mappingSensors"] = str(raw["mappingSensors"]).strip().upper() == "TRUE"
     return out
 
 
@@ -318,13 +327,40 @@ def expand_robot(overrides: dict | None = None) -> str:
         "bodyInertia": _SHIPPED_INERTIA,
     }
     if overrides:
-        values.update(overrides)
+        values.update({key: overrides[key] for key in values if key in overrides})
+        if "mappingSensors" in overrides:
+            values["mappingSensors"] = bool(overrides["mappingSensors"])
+    values.setdefault("mappingSensors", False)
     for field, token in _IS_TOKEN.items():
         rendered = _render(field, values[field])
         if token not in body:
             raise ValueError(f"PROTO is missing {token}")
         body = body.replace(token, rendered, 1)
-    return body
+    return _apply_mapping_sensors(body, bool(values.get("mappingSensors", False)))
+
+
+def _apply_mapping_sensors(body: str, enabled: bool) -> str:
+    """Keep or drop the apartment-only sensor block.
+
+    The markers are Webots procedural PROTO lines. A default instance
+    (every warehouse world) expands to the bytes from before that block
+    existed. An instance with mappingSensors TRUE keeps the devices and
+    drops the markers.
+    """
+    begin = body.find(_MAPPING_BEGIN)
+    if begin < 0:
+        return body
+    end = body.find(_MAPPING_END, begin)
+    if end < 0:
+        raise ValueError("mappingSensors block is not closed")
+    line_start = body.rfind("\n", 0, begin) + 1
+    end_nl = body.find("\n", end)
+    end_nl = len(body) if end_nl < 0 else end_nl + 1
+    if not enabled:
+        return body[:line_start] + body[end_nl:]
+    begin_nl = body.find("\n", begin)
+    end_line = body.rfind("\n", 0, end) + 1
+    return body[:line_start] + body[begin_nl + 1 : end_line] + body[end_nl:]
 
 
 def expand_world_text(text: str) -> str:

@@ -51,6 +51,10 @@ DEVICE_NAMES = (
     "gps",
     "imu",
     "gyro",
+    "oak_depth",
+    "oak_rgb",
+    "oak_gyro",
+    "oak_imu",
 )
 
 
@@ -122,3 +126,29 @@ def test_is_fields_match_r2025a_node_field_types():
     for node_field, proto_field in links:
         assert node_field in _R2025A_IS_FIELD_TYPE
         assert declared[proto_field] == _R2025A_IS_FIELD_TYPE[node_field]
+
+
+def test_mapping_sensors_are_opt_in_and_do_not_change_the_warehouse_robot():
+    from src.butlerbot_proto import expand_robot, expand_world_text
+
+    warehouse = expand_robot()
+    assert hashlib.md5(warehouse.encode("utf-8")).hexdigest() == SHIPPED_ROBOT_MD5
+    assert "us_front" not in warehouse
+    assert "floor_cam" not in warehouse
+    apartment = (ROOT / "webots" / "worlds" / "apartment.wbt").read_text(encoding="utf-8")
+    expanded = expand_world_text(apartment)
+    assert 'name "us_left"' in expanded
+    assert 'name "floor_cam"' in expanded
+    assert "mappingSensors.value" not in expanded
+
+
+def test_warehouse_gyro_and_wheel_encoders_stay_clean():
+    """Mapping noise lives on oak_* devices. The hubs and the lane gyro do not change."""
+    text = (ROOT / "webots" / "protos" / "ButlerBot.proto").read_text(encoding="utf-8")
+    assert 'Gyro {\n      name "gyro"\n    }' in text
+    assert 'InertialUnit {\n      name "imu"\n    }' in text
+    assert 'PositionSensor {\n          name "left_wheel_sensor"\n        }' in text
+    assert 'PositionSensor {\n          name "right_wheel_sensor"\n        }' in text
+    assert 'name "oak_depth"' in text
+    oak = text[text.index('name "oak_depth"') : text.index('name "oak_depth"') + 500]
+    assert "\n      noise 0\n" in oak

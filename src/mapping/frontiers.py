@@ -14,9 +14,18 @@ import math
 
 import numpy as np
 
-from src.mapping.body import MIN_FRONTIER_M, ROBOT_RADIUS_M
+from src.mapping.body import GRID_RESOLUTION_M, MIN_FRONTIER_M, ROBOT_RADIUS_M
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import crossing_bonus
+
+# Stand far enough back that the depth camera can see the frontier.
+# Closer than about 0.75 m is inside the near blind zone (lens at
+# z = 0.78 m, pitched down, minimum range 0.35 m).
+VIEW_MIN_M = 1.0
+VIEW_MAX_M = 3.0
+# Close enough that a corner is in the depth image, far enough to be
+# outside the near blind zone. Travel is only a tie break.
+VIEW_SWEET_M = 1.15
 
 _NEIGHBORS = (
     (1, 0, 1.0),
@@ -101,51 +110,84 @@ def viewpoint(
     cells: list[tuple[int, int]],
     reach: int = 6,
     occupied: np.ndarray | None = None,
+    res: float = GRID_RESOLUTION_M,
+    pose: tuple[int, int] | None = None,
 ) -> tuple[int, int] | None:
-    """A traversable cell on or just inside a frontier.
+    """A traversable cell that can see a frontier.
 
-    The frontier cell itself often sits inside the inflated obstacle, so
-    the robot cannot path to it. Standing a few cells back still sees it.
-    When the map has walls, the cell is the one nearest the middle of the
-    cluster with the most room on both sides, so a doorway is aimed at
-    its centre instead of the jamb.
+    Prefer a cell 1–3 m back with a clear line on the map, so the depth
+    camera is outside its near blind zone. A small room or a tight
+    doorway has no such cell: the nearest standable cell is the fallback,
+    which is what keeps the robot from stranding itself with no goal.
     """
-    nearest = _viewpoint_nearest(free, cells, reach)
-    if occupied is None or not np.any(occupied) or not cells:
-        return nearest
-    h, w = free.shape
-    cy = float(np.mean([p[0] for p in cells]))
-    cx = float(np.mean([p[1] for p in cells]))
-    pad = reach + 2
-    y0 = max(0, int(math.floor(cy)) - pad)
-    y1 = min(h, int(math.floor(cy)) + pad + 1)
-    x0 = max(0, int(math.floor(cx)) - pad)
-    x1 = min(w, int(math.floor(cx)) + pad + 1)
-    if y1 <= y0 or x1 <= x0:
-        return nearest
-    near = np.zeros((h, w), dtype=bool)
+    ranged = _viewpoint_ranged(free, cells, occupied, res, pose)
+    if ranged is not None:
+        return ranged
+    return _viewpoint_nearest(free, cells, reach)
+
+
+def _line_clear(occupied: np.ndarray, y0: int, x0: int, y1: int, x1: int) -> bool:
+    """True when the cells strictly between the two ends are not occupied."""
+    dy = int(y1) - int(y0)
+    dx = int(x1) - int(x0)
+    steps = max(abs(dy), abs(dx))
+    if steps <= 1:
+        return True
+    height, width = occupied.shape
+    for i in range(1, steps):
+        y = int(round(y0 + dy * i / steps))
+        x = int(round(x0 + dx * i / steps))
+        if y < 0 or x < 0 or y >= height or x >= width or occupied[y, x]:
+            return False
+    return True
+
+
+def _viewpoint_ranged(
+    free: np.ndarray,
+    cells: list[tuple[int, int]],
+    occupied: np.ndarray | None,
+    res: float,
+    pose: tuple[int, int] | None = None,
+) -> tuple[int, int] | None:
+    """Standable cell between ``VIEW_MIN_M`` and ``VIEW_MAX_M`` with line of sight."""
+    if not cells or res <= 0.0:
+        return None
+    height, width = free.shape
     sample = cells
-    if len(cells) > 40:
-        sample = cells[:: max(1, len(cells) // 40)]
-    for y, x in sample:
-        near[max(0, y - reach) : min(h, y + reach + 1), max(0, x - reach) : min(w, x + reach + 1)] = True
-    cand = free[y0:y1, x0:x1] & near[y0:y1, x0:x1]
-    if not np.any(cand):
-        return nearest
-    cys, cxs = np.nonzero(cand)
-    cys = cys + y0
-    cxs = cxs + x0
-    oys, oxs = np.nonzero(occupied)
-    keep = (oys >= y0 - 16) & (oys < y1 + 16) & (oxs >= x0 - 16) & (oxs < x1 + 16)
-    oys, oxs = oys[keep], oxs[keep]
-    if len(oys) == 0:
-        clear = np.full(len(cys), 16.0)
-    else:
-        d2 = (cys[:, None] - oys[None, :]) ** 2 + (cxs[:, None] - oxs[None, :]) ** 2
-        clear = np.sqrt(np.min(d2, axis=1))
-    dist2 = (cys - cy) ** 2 + (cxs - cx) ** 2
-    i = int(np.argmax(clear * 1000.0 - dist2))
-    return int(cys[i]), int(cxs[i])
+    if len(cells) > 24:
+        sample = cells[:: max(1, len(cells) // 24)]
+    mean_y = float(np.mean([p[0] for p in sample]))
+    mean_x = float(np.mean([p[1] for p in sample]))
+    # The middle of the cluster, so a doorway is seen from in front of the
+    # gap rather than from beside one jamb.
+    anchor = min(sample, key=lambda p: (p[0] - mean_y) ** 2 + (p[1] - mean_x) ** 2)
+    best: tuple[int, int] | None = None
+    best_score = -1e18
+    y, x = anchor
+    for dist_m in (1.0, 1.4, 1.8, 2.2, 2.6, 3.0):
+        radius = dist_m / res
+        for k in range(16):
+            ang = k * math.pi / 8.0
+            cy = int(round(y + math.sin(ang) * radius))
+            cx = int(round(x + math.cos(ang) * radius))
+            if cy < 0 or cx < 0 or cy >= height or cx >= width or not free[cy, cx]:
+                continue
+            near_y, near_x = min(sample, key=lambda p: (cy - p[0]) ** 2 + (cx - p[1]) ** 2)
+            dist = math.hypot(cy - near_y, cx - near_x) * res
+            if dist < VIEW_MIN_M - 1e-6 or dist > VIEW_MAX_M + 0.08:
+                continue
+            if occupied is not None and not _line_clear(occupied, cy, cx, near_y, near_x):
+                continue
+            # Prefer the heading that looks at the middle of the cluster.
+            off = math.hypot(near_y - mean_y, near_x - mean_x) * res
+            # A stand-off near 1.15 m sees a corner the room centre misses.
+            # A little travel cost keeps two equal views from picking the far one.
+            travel = 0.0 if pose is None else math.hypot(cy - pose[0], cx - pose[1]) * res
+            score = -abs(dist - VIEW_SWEET_M) - 0.05 * travel - 0.15 * off
+            if score > best_score:
+                best_score = score
+                best = (cy, cx)
+    return best
 
 
 def _viewpoint_nearest(free: np.ndarray, cells: list[tuple[int, int]], reach: int) -> tuple[int, int] | None:
@@ -524,6 +566,7 @@ def select_goal(
     prefer_xy: tuple[float, float] | None = None,
     rooms: dict | None = None,
     heading_xy: tuple[float, float] | None = None,
+    report: dict | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -554,19 +597,27 @@ def select_goal(
     if start is None:
         return None
     banned = banned or set()
-    best: tuple[float, tuple[float, float], list[tuple[float, float]]] | None = None
+    best: tuple[float, tuple[float, float], list[tuple[float, float]], list] | None = None
     for group in ranked:
         cells = [c for c in group if c not in banned]
         if not cells:
             continue
         # Prefer a cell the robot can stand on. The score still uses the
         # whole cluster's length, so a long wall beats a speck.
-        target = viewpoint(free, cells, occupied=(labels == 1))
+        target = viewpoint(free, cells, occupied=(labels == 1), res=grid.res, pose=start)
         if target is None:
             continue
         path_cells = astar(free, start, target, step_cost=grid.res)
         if not path_cells:
-            continue
+            # The far stand-off can sit across a wall. The nearest safe
+            # cell is still a goal, so a tight doorway is not abandoned.
+            nearest = _viewpoint_nearest(free, cells, 6)
+            if nearest is None or nearest == target:
+                continue
+            path_cells = astar(free, start, nearest, step_cost=grid.res)
+            if not path_cells:
+                continue
+            target = nearest
         length = 0.0
         pts = [grid.cell_center(*rc) for rc in path_cells]
         for a, b in zip(pts, pts[1:]):
@@ -598,7 +649,7 @@ def select_goal(
             if ahead < -0.05:
                 score *= 0.25
         if best is None or score > best[0]:
-            best = (score, goal, pts)
+            best = (score, goal, pts, cells)
     # A room already painted free, with the threshold smeared shut, is
     # not a frontier. Score it by its area and aim through the gap.
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
@@ -632,10 +683,36 @@ def select_goal(
                 score *= 0.25
         pts = [*pts, far]
         if best is None or score > best[0]:
-            best = (score, goal, pts)
+            best = (score, goal, pts, [mouth])
     if best is None:
         return None
-    pts = line_up_with_openings(grid, best[2])
+    pre = best[2]
+    pts = line_up_with_openings(grid, pre)
     if not pts:
         return None
+    # Lining up must not drag the stand-off into a wall or onto the frontier.
+    # A shift of a few decimetres still centres a gap the path already crosses.
+    end = grid.cell_of(pts[-1][0], pts[-1][1])
+    stand = end is not None and free[end]
+    # A shove into a wall, or onto the frontier itself, puts the lens in
+    # the near blind zone. A shove through the gap into the next room stays:
+    # that end is still a metre or more from this frontier.
+    onto_frontier = _within_m(grid, pts[-1], best[3], VIEW_MIN_M) and not _within_m(
+        grid, pre[-1], best[3], VIEW_MIN_M
+    )
+    if not stand or onto_frontier:
+        pts = pre
+    if report is not None:
+        report["cells"] = list(best[3])
     return pts[-1], pts
+
+
+def _within_m(grid: OccupancyGrid, xy: tuple[float, float], cells: list, limit_m: float) -> bool:
+    if not cells:
+        return False
+    cell = grid.cell_of(xy[0], xy[1])
+    if cell is None:
+        return False
+    limit = (limit_m / grid.res) ** 2
+    y, x = cell
+    return any((y - cy) ** 2 + (x - cx) ** 2 <= limit for cy, cx in cells)

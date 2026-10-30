@@ -33,9 +33,17 @@ MIN_FRONTIER_M = 0.30
 HEIGHT_MIN_M = 0.05
 HEIGHT_MAX_M = 1.50
 # Webots RangeFinder.noise is a fraction of maxRange, not of the reading.
+# The proto keeps this value. Warehouse laps never enable the device.
+# The kinematic depth path uses the quadratic model below instead.
 OAK_DEPTH_NOISE = 0.002
 OAK_DEPTH_MAX_M = 8.0
 OAK_DEPTH_MIN_M = 0.35
+# Stereo disparity error makes range error grow with distance squared.
+# σ(1 m) = 1 cm, so 0.5–3 m stays a few centimetres (OAK-D Lite band).
+OAK_DEPTH_SIGMA_AT_1M = 0.01
+# Past this, a return is only a probable surface. It must not occupy a
+# cell: a far smear was closing doorways the shell can still fit through.
+OAK_FIRM_RANGE_M = 3.0
 # Share of the forward view with no usable range. A surface closer than
 # minRange fills the frame with empty pixels, and that is contact.
 BLIND_VIEW_FRACTION = 0.65

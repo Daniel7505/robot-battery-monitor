@@ -1,8 +1,12 @@
 """Sensor noise models that match the oak_* devices.
 
-Webots applies RangeFinder noise and the gyro lookup table itself.
-The apartment controller does not call this module. The kinematic
-stand-in and the unit tests do, so a run without Webots is still noisy.
+Webots applies the gyro lookup table itself. The apartment controller
+does not call this module. The kinematic stand-in and the unit tests do,
+so a run without Webots is still noisy.
+
+Depth error grows with range squared, the stereo model. The proto's
+RangeFinder noise stays a constant fraction of max range because the
+warehouse robot shares that node and never enables it.
 """
 
 from __future__ import annotations
@@ -15,22 +19,34 @@ from src.mapping.body import (
     GYRO_BIAS_RAD_S,
     GYRO_NOISE_RAD_S,
     IMU_NOISE_FIELD,
-    OAK_DEPTH_NOISE,
+    OAK_DEPTH_SIGMA_AT_1M,
 )
 
 
-def depth_sigma_m(max_range_m: float, fraction: float = OAK_DEPTH_NOISE) -> float:
-    """Webots R2025a: RangeFinder noise 1.0 means σ = maxRange."""
-    return float(fraction) * float(max_range_m)
+def depth_sigma_m(range_m: float, at_1m: float = OAK_DEPTH_SIGMA_AT_1M) -> float:
+    """σ at ``range_m``. Stereo error scales with range squared.
+
+    ``at_1m`` is σ at 1 m. At 0.5 m the error is a quarter of that, at
+    2 m it is four times, and at 3 m it is nine times.
+    """
+    z = max(0.0, float(range_m))
+    return float(at_1m) * z * z
 
 
 def noisy_depth(depth: np.ndarray, rng: np.random.Generator, max_range_m: float) -> np.ndarray:
-    """Add gaussian depth noise. Non-finite pixels (no return) stay non-finite."""
-    sigma = depth_sigma_m(max_range_m)
+    """Add range-squared gaussian depth noise.
+
+    Non-finite pixels (no return) stay non-finite. ``max_range_m`` caps
+    the range the quadratic is evaluated at, so a glitch past the sensor
+    maximum does not explode the draw.
+    """
     out = np.array(depth, dtype=np.float64, copy=True)
     finite = np.isfinite(out)
-    if sigma > 0.0 and np.any(finite):
-        out[finite] += rng.normal(0.0, sigma, size=int(np.count_nonzero(finite)))
+    if not np.any(finite):
+        return out
+    z = np.clip(out[finite], 0.0, float(max_range_m))
+    sigma = float(OAK_DEPTH_SIGMA_AT_1M) * np.square(z)
+    out[finite] += rng.normal(0.0, 1.0, size=int(z.shape[0])) * sigma
     return out
 
 

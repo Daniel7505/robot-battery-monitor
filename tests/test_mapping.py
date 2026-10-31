@@ -1525,6 +1525,66 @@ def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():
     assert not footprint_clips(grid, pose, v, w)
 
 
+def test_a_pivot_whose_corner_sweeps_into_the_map_backs_up():
+    """Centre clearance can be 0.30 m while the tire corner still swings into a wall.
+
+    The 0.20 m planning disk is not this check. The rectangle is.
+    """
+    from src.mapping.footprint import footprint_clips
+    from src.mapping.frontiers import approach_command
+
+    grid = OccupancyGrid()
+    cell = grid.cell_of(0.125, 0.275)
+    assert cell is not None
+    grid.log[cell] = grid.l_max
+    pose = (0.0, 0.0, 0.0)
+    path = [(-0.20, 0.0), (0.10, 0.0), (0.10, 0.90)]
+    assert footprint_clips(grid, pose, 0.0, 0.70)
+    command = approach_command(grid, pose, path)
+    assert command is not None and command[2] == "back" and command[0] < 0.0 and command[1] == 0.0
+
+
+def test_a_finished_pivot_drives_and_a_small_error_does_not_restart_it(monkeypatch):
+    """12° is close enough to drive. The pivot stays off until 25°."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import PIVOT_ENTER_RAD, PIVOT_EXIT_RAD, Explorer
+
+    assert math.radians(10) < PIVOT_EXIT_RAD < math.radians(15)
+    assert PIVOT_ENTER_RAD > PIVOT_EXIT_RAD + math.radians(8)
+
+    def _pivot(*_args, **_kwargs):
+        return (0.0, 0.70, "pivot")
+
+    monkeypatch.setattr("src.mapping.explore.approach_command", _pivot)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot._bubble_view = BubbleView(2.0, 1.0, 1.0, 1.0, 1.0)
+    bot._bubble_gap = 2.0
+
+    def go(path):
+        bot.path_xy = path
+        left, right = bot._go(False, 0.28, 1.0, 1.0)
+        v = 0.5 * (left + right) * WHEEL_RADIUS_M
+        return v
+
+    # About 40° off the nose: a real corner, so the pivot starts.
+    assert go([(0.2, 0.0), (1.2, 1.0)]) == 0.0
+    assert bot._pivot_hold
+    # Still turning, 18° left: do not drop it yet.
+    bot.path_xy = [(0.2, 0.0), (1.6, 0.52)]
+    assert go(bot.path_xy) == 0.0
+    # Inside 12°: hand back to driving.
+    assert go([(0.2, 0.0), (2.0, 0.25)]) > 0.02
+    assert not bot._pivot_hold
+    # 18° again is the wobble of one cell. It must not restart the pivot.
+    assert go([(0.2, 0.0), (1.6, 0.52)]) > 0.02
+    assert not bot._pivot_hold
+
+
 def test_a_yawed_door_approach_lines_up_then_drives_straight():
     """A heading error is a cost. Live air still produces a forward command.
 

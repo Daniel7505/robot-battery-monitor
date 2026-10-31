@@ -917,7 +917,12 @@ def approach_command(
                         if wide is not None:
                             return wide
                         return (-0.10, 0.0, "back")
-                    return (0.0, math.copysign(0.70, err), "pivot")
+                    spin = math.copysign(0.70, err)
+                    # Centre clearance is a disk. The tire corner sticks out
+                    # past it and swings through the turn.
+                    if footprint_clips(grid, pose, 0.0, spin):
+                        return (-0.10, 0.0, "back")
+                    return (0.0, spin, "pivot")
         prev, here = here, nxt
         if travelled > 1.1:
             break

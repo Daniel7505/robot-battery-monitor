@@ -119,6 +119,14 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
+# Leave a pivot once the nose is this close to the path. 12° puts the
+# 0.19 m nose 4 cm off the axis, inside one grid cell, so a centred
+# crossing still clears the jamb. 15° is a full cell and clips it.
+PIVOT_EXIT_RAD = math.radians(12.0)
+# Do not start another pivot until the error is past one cell of path
+# wobble (about 10° at the 0.28 m turn) on top of that exit. A real
+# corner in this planner is above 57°.
+PIVOT_ENTER_RAD = math.radians(25.0)
 # Same patch of frontier. One bump still fades through the attempt
 # weight. The third failure on that patch stays banned until the camera
 # sees the unknown beside it or a nearby wall disappears.
@@ -275,6 +283,7 @@ class Explorer:
         self._regions: list[_FrontierRegion] = []
         self._held: set[tuple[int, int]] = set()
         self._prefer_near = False
+        self._pivot_hold = False
         self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
@@ -1428,15 +1437,33 @@ class Explorer:
             return 0.0, 0.0
         pose = self.odometry.pose()
         approach = approach_command(self.grid, pose, self.path_xy)
+        heading_err = wrap_rad(self._segment_heading() - pose[2])
         if approach is not None and approach[2] == "pivot":
-            # A pivot is v = 0. Giving up into a forward arc is how the
-            # shell drove into a jamb while the log still said pivot.
-            self._backing = False
-            self._commit = None
-            _v, w, _why = approach
-            self._body_v, self._body_w = 0.0, w
-            self._note_approach("pivot", 0.0, w)
-            return wheel_speeds(0.0, w)
+            err = abs(heading_err)
+            # Already turning: stop once the nose is inside 12° and drive.
+            # Not turning: ignore a small leftover so the pivot does not
+            # restart on the next cell.
+            release = (self._pivot_hold and err < PIVOT_EXIT_RAD) or (
+                not self._pivot_hold and err < PIVOT_ENTER_RAD
+            )
+            if release:
+                self._pivot_hold = False
+                approach = None
+            elif footprint_clips(self.grid, pose, 0.0, approach[1]):
+                self._pivot_hold = False
+                approach = (-0.10, 0.0, "back")
+            else:
+                # A pivot is v = 0. Giving up into a forward arc is how the
+                # shell drove into a jamb while the log still said pivot.
+                self._pivot_hold = True
+                self._backing = False
+                self._commit = None
+                _v, w, _why = approach
+                self._body_v, self._body_w = 0.0, w
+                self._note_approach("pivot", 0.0, w)
+                return wheel_speeds(0.0, w)
+        elif abs(heading_err) < PIVOT_ENTER_RAD:
+            self._pivot_hold = False
         if approach is not None and approach[2] == "back":
             # Backing here is to make room. It is not the way out when the
             # goal is still in front; a corner contact has its own reverse.
@@ -1450,6 +1477,10 @@ class Explorer:
         if approach is not None and approach[2] == "wide":
             if approach[0] < 0.0 and self._goal_ahead(pose):
                 approach = None
+            elif footprint_clips(self.grid, pose, approach[0], approach[1]):
+                # The arc's corner meets the map. The back-up rule below
+                # decides whether reversing is legal.
+                approach = None if self._goal_ahead(pose) else (-0.10, 0.0, "back")
             else:
                 return self._issue_wide(approach)
         v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
@@ -1493,14 +1524,23 @@ class Explorer:
         view = self._bubble_view
         if view is None and self._bubble_gap is not None:
             view = BubbleView(self._bubble_gap, None, None, None, self._min_gap)
-        heading_err = wrap_rad(self._segment_heading() - pose[2])
         if approach is not None and approach[2] == "straight":
             v, w = approach[0], approach[1]
             heading_err = 0.0
             self._note_approach("straight", v, w)
-        elif self._needs_room(pose, heading_err) and not self._goal_ahead(pose):
+        else:
+            heading_err = wrap_rad(self._segment_heading() - pose[2])
+        if (
+            (approach is None or approach[2] != "straight")
+            and self._needs_room(pose, heading_err)
+            and not self._goal_ahead(pose)
+        ):
             wide = wide_escape(self.grid, pose)
-            if wide is not None and not (wide[0] < 0.0 and self._goal_ahead(pose)):
+            if (
+                wide is not None
+                and not (wide[0] < 0.0 and self._goal_ahead(pose))
+                and not footprint_clips(self.grid, pose, wide[0], wide[1])
+            ):
                 return self._issue_wide(wide)
             cmd = self._begin_back(pose)
             if cmd is not None:

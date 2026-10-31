@@ -2148,6 +2148,39 @@ def test_boxed_room_explores_until_the_frontiers_are_gone():
     assert outside is not None and labels[outside] < 0
 
 
+def test_visited_is_the_shell_sweep_and_seen_is_the_labelled_floor():
+    from eval.apartment_gt_grid import GtGrid, Solid
+    from eval.score_apartment_map import floor_coverage, shell_visited
+
+    labels = np.zeros((30, 40), dtype=np.int8)
+    gt = GtGrid(labels=labels, origin_xy=(0.0, 0.0), resolution_m=0.05)
+    mask = shell_visited(gt, np.array([[0.4, 0.5, 0.0], [0.8, 0.5, 0.0]]))
+
+    def marked(x: float, y: float) -> bool:
+        col = int(math.floor(x / 0.05))
+        row = int(math.floor(y / 0.05))
+        return bool(mask[row, col])
+
+    assert marked(0.6, 0.5)
+    assert not marked(0.6, 1.2)
+    pred = np.full(labels.shape, -1, dtype=np.int8)
+    pred[:, :20] = 0
+    rows = floor_coverage(
+        gt,
+        pred,
+        mask,
+        [
+            Solid("APT_FLOOR_LIVING", 0.0, 1.0, 0.0, 1.5, 0.0, 0.01),
+            Solid("APT_FLOOR_BATH", 1.2, 2.0, 0.0, 1.5, 0.0, 0.01),
+        ],
+    )
+    by_room = {row["room"]: row for row in rows}
+    assert by_room["living"]["seen_pct"] == pytest_approx(100.0)
+    assert by_room["living"]["visited_pct"] > 0.0
+    assert by_room["bath"]["visited_pct"] == pytest_approx(0.0)
+    assert by_room["bath"]["seen_pct"] == pytest_approx(0.0)
+
+
 def test_scorer_matches_a_perfect_copy_and_a_blank_map():
     gt = rasterize()
     perfect = score_labels(gt, gt.labels.copy())
@@ -2609,6 +2642,98 @@ def test_an_open_pivot_does_not_strike_the_frontier():
     bot._body_w = 0.0
     bot._body_v = 0.1
     assert bot._frontier_fail_ok()
+
+
+def test_a_blind_room_with_no_translation_counts_as_a_frontier_failure():
+    """The camera is inside min range and the shell is still. That look failed."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot._view_blind = True
+    bot._slip_debt_m = 0.2
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    assert bot._place_tag() == "room"
+    assert bot._frontier_fail_ok()
+    # A moving shell keeps the blind exception. Slip and a blind view are not a bad frontier.
+    bot._still_from = (4.8, 0.0, 0.0)
+    assert not bot._frontier_fail_ok()
+
+
+def test_a_doorway_crossing_is_not_a_frontier_failure():
+    """Only the crossing is exempt. Sitting in the opening with a clear view counts."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.room_doors = np.ones(bot.grid.labels().shape, dtype=bool)
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._approach_why = "straight"
+    bot._body_v = 0.12
+    assert bot._place_tag() == "doorway"
+    assert not bot._frontier_fail_ok()
+    bot._approach_why = ""
+    bot._body_v = 0.0
+    bot._body_w = 0.0
+    bot._view_blind = False
+    assert bot._frontier_fail_ok()
+
+
+def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved():
+    from src.mapping.explore import BLIND_EXIT_MARGIN_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._view_blind = True
+    bot._last_clear = (0.12, 99.0, 99.0)
+    # The goal is straight ahead. The backup still reverses.
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    assert bot.goal_xy is None
+    assert bot._goal_hold is not None
+    bot.odometry.x_m = -0.05
+    bot.t_s = 6.2
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    nose = bot.camera.translation[0] + bot.camera.min_range_m + BLIND_EXIT_MARGIN_M + 0.02
+    bot._view_blind = False
+    bot._last_clear = (nose, 1.0, 1.0)
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    bot.odometry.x_m = -0.35
+    bot._go(False, 0.28)
+    assert not bot._blind_back
+    assert bot._goal_hold is None
+
+
+def test_a_held_goal_is_not_rescored_until_the_shell_moves(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    cell = bot.grid.cell_of(1.2, 0.0)
+    assert cell is not None
+    bot._goal_hold = (1.2, 0.0, 0.0, 0.0, [cell])
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        lambda *_args, **_kwargs: ((1.2, 0.0), [(0.0, 0.0), (1.2, 0.0)]),
+    )
+    bot._plan()
+    assert bot.goal_xy is None
+    bot.odometry.x_m = 0.35
+    bot._plan()
+    assert bot.goal_xy == (1.2, 0.0)
 
 
 def test_solids_include_the_closed_doors():

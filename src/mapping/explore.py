@@ -135,6 +135,17 @@ FRONTIER_REGION_M = 0.80
 FRONTIER_PATCH_M = 1.00
 # Occupied cells in the local window. Smaller than a whole-map flicker.
 MAP_CHANGE_CELLS = 12
+# Past the depth camera's minimum. A return on the minimum itself is still
+# the blind edge; the backup keeps going until the wall is this far outside it.
+BLIND_EXIT_MARGIN_M = 0.05
+# The same goal is not scored again until the shell has left the stuck pose.
+GOAL_HOLD_M = 0.30
+# Straight reverse out of a blind corner. The 0.45 s relief reverse is shorter
+# than the blind zone, so it is not used for this case. 1 m matches the
+# ordinary backup cap so a dead camera cannot reverse across the apartment.
+BLIND_BACK_CAP_M = 1.0
+STILL_M = 0.04
+STILL_S = 0.50
 
 
 def _split_ranges(
@@ -284,6 +295,14 @@ class Explorer:
         self._held: set[tuple[int, int]] = set()
         self._prefer_near = False
         self._pivot_hold = False
+        self._still_from: tuple[float, float, float] | None = None
+        self._blind_back = False
+        self._blind_back_from: tuple[float, float] | None = None
+        self._blind_back_t0 = -1.0
+        self._blind_back_until = -1.0
+        self._blind_counted = False
+        # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
+        self._goal_hold: tuple[float, float, float, float, list] | None = None
         self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
@@ -581,6 +600,7 @@ class Explorer:
                 soft_xy=_xy(soft),
             )
         self._last_clear = (clearance, left_clear, right_clear)
+        self._note_translation()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -904,18 +924,159 @@ class Explorer:
     def _remember_attempt(self, x: float, y: float, weight: float = 2.0) -> None:
         self._attempts.append((float(x), float(y), self.t_s, float(weight)))
 
-    def _frontier_fail_ok(self) -> bool:
-        """A stuck look counts. A doorway backup and an open-floor pivot do not.
+    def _note_translation(self) -> None:
+        """Remember the last time the odometry actually moved."""
+        x, y, _yaw = self.odometry.pose()
+        if self._still_from is None:
+            self._still_from = (self.t_s, x, y)
+            return
+        _t0, x0, y0 = self._still_from
+        if math.hypot(x - x0, y - y0) >= STILL_M:
+            self._still_from = (self.t_s, x, y)
 
-        Those two are the motion stack leaving a jamb or finishing a turn.
-        Counting them banned the crossing the robot was already on, and
-        banned a frontier whose only fault was a pivot that had not yawed
-        yet. Wheel slip is the same kind of miss: the frontier is fine and
-        the hubs are not. The one-bump avoid weight still expires on its own.
+    def _not_translating(self) -> bool:
+        if self._still_from is None:
+            return False
+        t0, x0, y0 = self._still_from
+        x, y, _yaw = self.odometry.pose()
+        return (self.t_s - t0) >= STILL_S and math.hypot(x - x0, y - y0) < STILL_M
+
+    def _pivoting(self) -> bool:
+        return abs(self._body_v) < 0.02 and abs(self._body_w) > 0.2
+
+    def _doorway_crossing(self) -> bool:
+        """A lined-up drive through a mapped doorway. A sit in the opening is not one.
+
+        The place tag alone used to skip every stuck event in a doorway,
+        including a robot that was not crossing. The straight approach and
+        a forward command are the crossing. An open-floor pivot is separate.
         """
+        if self._place_tag() != "doorway":
+            return False
+        if self._approach_why == "straight":
+            return True
+        return self._body_v > 0.03
+
+    def _blind_room_still(self) -> bool:
+        """Blind, tagged room, and the shell is not translating. A pivot is not this."""
+        if not self._view_blind or self._place_tag() != "room" or self._pivoting():
+            return False
+        return self._not_translating()
+
+    def _depth_real(self) -> bool:
+        """A forward return past min range, not the blind placeholder."""
+        if self._view_blind:
+            return False
+        nose = float(self._last_clear[0])
+        if not math.isfinite(nose):
+            return False
+        # No hit inside max range. The corridor is open, which is a real view.
+        if nose >= 90.0:
+            return True
+        sensor = nose - float(self.camera.translation[0])
+        return sensor >= float(self.camera.min_range_m) + BLIND_EXIT_MARGIN_M
+
+    def _goal_released(self) -> bool:
+        if self._goal_hold is None:
+            return True
+        x, y, _yaw = self.odometry.pose()
+        if math.hypot(x - self._goal_hold[2], y - self._goal_hold[3]) >= GOAL_HOLD_M:
+            self._goal_hold = None
+            return True
+        return False
+
+    def _goal_on_hold(self, goal: tuple[float, float]) -> bool:
+        if self._goal_released():
+            return False
+        assert self._goal_hold is not None
+        gx, gy = self._goal_hold[0], self._goal_hold[1]
+        return math.hypot(float(goal[0]) - gx, float(goal[1]) - gy) < 0.45
+
+    def _held_cells(self) -> set[tuple[int, int]]:
+        if self._goal_released() or self._goal_hold is None:
+            return set()
+        cells = list(self._goal_hold[4])
+        if cells:
+            return set(cells)
+        return self._patch_cells(self._goal_hold[0], self._goal_hold[1], None)
+
+    def _end_blind_back(self, cooldown: float) -> None:
+        self._blind_back = False
+        self._blind_back_from = None
+        self._blind_counted = False
+        self._blind_back_until = self.t_s + cooldown
+
+    def _begin_blind_back(self, pose) -> None:
+        x, y = float(pose[0]), float(pose[1])
+        self._blind_back = True
+        self._blind_back_from = (x, y)
+        self._blind_back_t0 = self.t_s
+        self._backing = False
+        self._commit = None
+        self._pivot_hold = False
+        if self.goal_xy is not None and not self._blind_counted:
+            cells = list(self._goal_cells)
+            self._goal_hold = (float(self.goal_xy[0]), float(self.goal_xy[1]), x, y, cells)
+            self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
+            if self._frontier_fail_ok():
+                self._note_frontier_fail(self.goal_xy[0], self.goal_xy[1], cells)
+            self._blind_counted = True
+        self.goal_xy = None
+        self._goal_cells = []
+        self.path_xy = []
+        self._pocket = False
+        self._log("blind corner, backing out")
+        self._major("back", "cant_see_behind_backing_out")
+
+    def _blind_backup(self, pose) -> tuple[float, float] | None:
+        """Reverse while a room view is blind and the shell is not moving.
+
+        Stops when depth is past min range and the shell has moved, or the
+        tail meets the map, or the reverse itself does not move. A doorway
+        crossing keeps the short relief reverse. The goal-ahead rule does
+        not apply here: the goal is what pointed the nose into the wall.
+        """
+        if self._doorway_crossing():
+            return None
+        if not self._blind_back:
+            if self.t_s < self._blind_back_until or not self._blind_room_still():
+                return None
+            if self._reverse_closed(pose):
+                return None
+            self._begin_blind_back(pose)
+        else:
+            origin = self._blind_back_from
+            dist = 0.0 if origin is None else math.hypot(float(pose[0]) - origin[0], float(pose[1]) - origin[1])
+            if self.t_s - self._blind_back_t0 > 0.8 and dist < 0.02:
+                self._end_blind_back(2.0)
+                self._reverse_failed = True
+                return None
+            if self._reverse_closed(pose) or dist >= BLIND_BACK_CAP_M:
+                self._end_blind_back(1.0)
+                return None
+            if self._depth_real() and dist >= GOAL_HOLD_M:
+                self._end_blind_back(0.0)
+                self._replan_at = self.t_s
+                return None
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
+
+    def _frontier_fail_ok(self) -> bool:
+        """A stuck look counts. A doorway crossing and an open-floor pivot do not.
+
+        A blind view used to skip every failure. That hid a room corner where
+        the camera was inside min range and the shell was not translating.
+        That case counts. A lined-up doorway crossing still does not: counting
+        it banned the opening the robot was already driving through. Wheel
+        slip is the same kind of miss when the view is not that corner. The
+        one-bump avoid weight still expires on its own.
+        """
+        if self._blind_room_still():
+            return True
         if self._slip_debt_m >= 0.15 or self._view_blind:
             return False
-        if self._place_tag() == "doorway":
+        if self._doorway_crossing():
             return False
         if abs(self._body_v) < 0.02 and abs(self._body_w) > 0.2:
             x, y, _yaw = self.odometry.pose()
@@ -1143,8 +1304,9 @@ class Explorer:
         x, y, _yaw = self.odometry.pose()
         if self.goal_xy is not None:
             self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
-            # A doorway backup and an open-floor pivot are the motion stack,
-            # not a bad frontier. The attempt weight above still expires.
+            # A doorway crossing and an open-floor pivot are the motion stack,
+            # not a bad frontier. A blind room with no translation does count.
+            # The attempt weight above still expires.
             if self._frontier_fail_ok():
                 self._note_frontier_fail(self.goal_xy[0], self.goal_xy[1], self._goal_cells)
         else:
@@ -1407,6 +1569,13 @@ class Explorer:
         if self.done:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
+        pose = self.odometry.pose()
+        self._note_translation()
+        blind = self._blind_backup(pose)
+        if blind is not None:
+            # The timed relief reverse is 0.45 s. This backup replaces it.
+            self._relief = None
+            return blind
         relief = self._relief_command()
         if relief is not None:
             return relief
@@ -1635,11 +1804,12 @@ class Explorer:
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
         report: dict = {}
+        banned = set(self._ban_set()) | self._held_cells()
         chosen = select_goal(
             self.grid,
             (x, y),
             radius_m=ROBOT_RADIUS_M,
-            banned=self._ban_set(),
+            banned=banned,
             avoid=self._avoid_now(),
             rooms=rooms,
             heading_xy=(math.cos(yaw), math.sin(yaw)),
@@ -1652,6 +1822,13 @@ class Explorer:
             return
         goal, path = chosen
         pending = list(report.get("cells") or [])
+        if self._goal_on_hold(goal):
+            # Moved less than GOAL_HOLD_M. Leave it out until the shell does.
+            self.goal_xy = None
+            self._goal_cells = []
+            self.path_xy = []
+            self._replan_at = self.t_s + 1.0
+            return
         if math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
             self._remember_attempt(goal[0], goal[1], 1.5)
             if self.t_s - self._last_spin_t > 12.0:

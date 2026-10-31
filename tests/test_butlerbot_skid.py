@@ -61,6 +61,33 @@ def test_skid_proto_has_four_rolled_tires_and_no_casters():
     assert 'name "floor_cam"' in text
 
 
+def test_skid_depth_device_noise_is_zero():
+    text = SKID.read_text(encoding="utf-8")
+    oak = text[text.index('name "oak_depth"') : text.index('name "oak_depth"') + 500]
+    assert "\n      noise 0\n" in oak
+    assert "ButlerBotSkid" in MAPPER.read_text(encoding="utf-8")
+
+
+def test_a_caster_world_is_refused_and_a_swapped_one_is_not():
+    from src.mapping.world_guard import require_skid_world, swap_caster_instance, world_uses_skid
+
+    world = (ROOT / "webots" / "worlds" / "apartment.wbt").read_text(encoding="utf-8")
+    assert not world_uses_skid(world)
+    try:
+        require_skid_world(world, "apartment.wbt")
+    except SystemExit as exc:
+        assert "ButlerBotSkid" in str(exc)
+    else:
+        raise AssertionError("caster world was launched")
+    swapped = swap_caster_instance(world)
+    assert world_uses_skid(swapped)
+    require_skid_world(swapped, "seed")
+    warehouse = (ROOT / "webots" / "worlds" / "butlerbot_warehouse.wbt").read_text(encoding="utf-8")
+    from src.mapping.world_guard import require_mapping_world_is_skid
+
+    require_mapping_world_is_skid(warehouse, "warehouse")
+
+
 def test_baseline_proto_and_apartment_world_are_unchanged():
     base = BASE.read_text(encoding="utf-8")
     assert "PROTO ButlerBot [" in base

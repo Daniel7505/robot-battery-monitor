@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from eval.apartment_gt_grid import load_solids
+from src.mapping.world_guard import require_skid_world, swap_caster_instance
 
 
 WORLD = ROOT / "webots" / "worlds" / "apartment.wbt"
@@ -362,10 +363,9 @@ def run_scenarios(names: list[str] | None = None) -> list[tuple[str, bool, str]]
     try:
         for scenario in chosen:
             world_path = WORLDS / f"_scenario_{scenario.name}.wbt"
-            world_path.write_text(
-                _patch_world(source, scenario.x, scenario.y, scenario.yaw),
-                encoding="utf-8",
-            )
+            text = swap_caster_instance(_patch_world(source, scenario.x, scenario.y, scenario.yaw))
+            require_skid_world(text, world_path.name)
+            world_path.write_text(text, encoding="utf-8")
             worlds.append(world_path)
             folder = root / scenario.name
             procs.append((scenario, _run_one(scenario, folder, world_path), folder))

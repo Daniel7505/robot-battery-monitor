@@ -34,6 +34,36 @@ def _run_dir() -> str:
     return line
 
 
+def _assert_skid(supervisor, robot) -> bool:
+    """Stop the world unless this node is the four-wheel skid-steer."""
+    kind = ""
+    try:
+        kind = robot.getTypeName() or ""
+    except Exception:
+        kind = ""
+    if kind == "ButlerBot":
+        print("ERROR: world uses caster ButlerBot, not ButlerBotSkid. Aborting.", flush=True)
+        supervisor.simulationQuit(1)
+        return False
+    custom = ""
+    field = robot.getField("customData")
+    if field is not None:
+        try:
+            custom = field.getSFString() or ""
+        except Exception:
+            custom = ""
+    if kind == "ButlerBotSkid" or "ButlerBotSkid" in custom:
+        return True
+    if robot.getFromProtoDef("FRONT_LEFT_WHEEL_JOINT") is None:
+        print(
+            "ERROR: world is not ButlerBotSkid (no front drive wheel). Aborting.",
+            flush=True,
+        )
+        supervisor.simulationQuit(1)
+        return False
+    return True
+
+
 def _find_robot(supervisor):
     named = supervisor.getFromDef("ButlerBot")
     if named is not None:
@@ -138,12 +168,21 @@ def main() -> None:
     next_try = 0.0
     wall_events = 0
     prev = None
+    checked = False
+    movie = os.environ.get("RBM_MOVIE") == "1"
+    frame_i = 0
+    next_frame = 8.0
+    shot = False
     while supervisor.step(timestep) != -1:
         now = float(supervisor.getTime())
         if robot is None:
             robot = _find_robot(supervisor)
             if robot is None:
                 continue
+        if not checked:
+            checked = True
+            if not _assert_skid(supervisor, robot):
+                return
         if parts is None and robot is not None:
             parts = {
                 "left": _endpoint(robot, "LEFT_WHEEL_JOINT"),
@@ -188,7 +227,10 @@ def main() -> None:
                 "front_left_wall,front_right_wall\n"
             )
             walls = open(os.path.join(folder, "wall_contacts.csv"), "w", encoding="utf-8", newline="\n")
-            walls.write("t_s,x_m,y_m,z_m,yaw_rad,left_wall,right_wall,caster_wall\n")
+            walls.write(
+                "t_s,x_m,y_m,z_m,yaw_rad,left_wall,right_wall,caster_wall,"
+                "front_left_wall,front_right_wall\n"
+            )
             print(f"POSE LOG {path}")
         if handle is None or robot is None or physics is None or walls is None:
             continue
@@ -236,10 +278,30 @@ def main() -> None:
             f"{front_f.get('front_left', 0)},{front_f.get('front_right', 0)},"
             f"{front_w.get('front_left', 0)},{front_w.get('front_right', 0)}\n"
         )
-        if left_w or right_w or caster_w:
+        if movie and folder and now >= next_frame:
+            frame = os.path.join(folder, "frames", f"frame_{frame_i:04d}.png")
+            os.makedirs(os.path.dirname(frame), exist_ok=True)
+            try:
+                supervisor.exportImage(frame, 80)
+            except Exception:
+                pass
+            frame_i += 1
+            next_frame = now + 2.0
+            if not shot and now >= 20.0:
+                still = os.path.join(folder, "follow.png")
+                try:
+                    supervisor.exportImage(still, 90)
+                except Exception:
+                    pass
+                shot = True
+                print(f"POSE LOG screenshot {still}", flush=True)
+        fl_w = int(front_w.get("front_left", 0) or 0)
+        fr_w = int(front_w.get("front_right", 0) or 0)
+        if left_w or right_w or caster_w or fl_w or fr_w:
             wall_events += 1
             walls.write(
-                f"{now:.4f},{x:.5f},{y:.5f},{z:.5f},{yaw:.6f},{left_w},{right_w},{caster_w}\n"
+                f"{now:.4f},{x:.5f},{y:.5f},{z:.5f},{yaw:.6f},"
+                f"{left_w},{right_w},{caster_w},{fl_w},{fr_w}\n"
             )
         if int(now * 4) != int((now - timestep / 1000.0) * 4):
             handle.flush()

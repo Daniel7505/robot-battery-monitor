@@ -569,12 +569,10 @@ Robot {
       minDetectableSignal -90
     }
     # OAK-D-like depth for apartment mapping. The warehouse controller never
-    # enables these, so warehouse laps do not pay the render and do not see
-    # the noise. RangeFinder.noise is a fraction of maxRange (R2025a): 0.002
-    # gives σ = 1.6 cm at maxRange 8 m, the same centimetre band as an OAK-D
-    # stereo depth error around a couple of metres. Pitch is 5° down
-    # (0.0873 rad). The 20° stereo pair looks at the floor and misses walls
-    # past about 2 m; this beam still meets them. HFOV 1.396 rad is 80°.
+    # enables the caster proto's copy, so warehouse laps do not pay the render.
+    # Device noise is 0: RangeFinder.noise is a fraction of maxRange, not of
+    # distance. The mapper adds the OAK-D Lite quadratic (src/mapping/body.py).
+    # Pitch is 5° down (0.0873 rad). HFOV 1.396 rad is 80°.
     # Sampling period is set in the mapper (96 ms), not in this node.
     DEF OAK_DEPTH RangeFinder {
       translation 0.14 0 0.78
@@ -586,7 +584,7 @@ Robot {
       near 0.2
       minRange 0.35
       maxRange 8
-      noise 0.002
+      noise 0
     }
     # Co-located colour camera for a later RGB-D stage. Left disabled until
     # then so it does not render.

@@ -26,6 +26,7 @@ if _PROJECT_ROOT not in sys.path:
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
+from src.mapping.noise import noisy_depth
 from src.mapping.run_log import RunLog, default_run_dir, publish_current
 
 
@@ -273,6 +274,16 @@ def main() -> None:
     timestep = int(robot.getBasicTimeStep())
     dt = timestep / 1000.0
     hubs = _Drive(robot)
+    # The caster proto has no front drive motors. _Drive only attaches a
+    # motor whose name is already in the device list, so an empty list
+    # means this world is not ButlerBotSkid.
+    if not hubs._extra:
+        print(
+            "ERROR: this world is not ButlerBotSkid (no front drive wheels). "
+            "The caster ButlerBot must not run this mapper.",
+            flush=True,
+        )
+        return
     _hold_upper(robot)
     left_enc = robot.getDevice("left_wheel_sensor")
     right_enc = robot.getDevice("right_wheel_sensor")
@@ -320,6 +331,8 @@ def main() -> None:
         _straight_probe(robot, timestep, log, folder, straight_s, hubs)
         return
     print(f"MAPPING depth {width}x{height} stride {explorer.stride} period {_DEPTH_PERIOD_S:.3f}s")
+    # Device noise is 0. This is the OAK-D Lite quadratic, same as the kinematic path.
+    depth_rng = np.random.default_rng(int(os.environ.get("RBM_DEPTH_SEED") or "1"))
     next_depth = _DEPTH_PERIOD_S
     next_save = 5.0
     next_note = 2.0
@@ -370,6 +383,8 @@ def main() -> None:
             rear_color = None
             if now + 1e-6 >= next_depth:
                 image = _depth_image(depth, width, height)
+                if image is not None:
+                    image = noisy_depth(image, depth_rng, OAK_DEPTH.max_range_m)
                 if rear_depth_dev is not None:
                     rw = int(rear_depth_dev.getWidth()) if hasattr(rear_depth_dev, "getWidth") else 80
                     rh = int(rear_depth_dev.getHeight()) if hasattr(rear_depth_dev, "getHeight") else 48

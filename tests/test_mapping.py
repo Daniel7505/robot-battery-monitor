@@ -26,10 +26,18 @@ from src.mapping.body import (
 )
 from src.mapping.depth_cloud import body_points, forward_clearance
 from src.mapping.drive import pure_pursuit, wheel_speeds
-from src.mapping.frontiers import astar, dilate_disk, frontier_mask, line_up_with_openings, select_goal, traversable
+from src.mapping.frontiers import (
+    astar,
+    dilate_disk,
+    frontier_mask,
+    line_up_with_openings,
+    select_goal,
+    traversable,
+    viewpoint,
+)
 from src.mapping.scan_match import pose_correction, scan_fit
 from src.mapping.grid import OccupancyGrid
-from src.mapping.noise import noisy_yaw_rate
+from src.mapping.noise import depth_sigma_m, noisy_depth, noisy_yaw_rate
 from src.mapping.odometry import WheelGyroOdometry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -283,10 +291,17 @@ def test_path_aims_through_the_middle_of_a_doorway():
     assert chosen is not None
     _goal, path = chosen
     through = [p for p in path if p[0] > 0.9]
-    assert through
-    assert max(abs(p[1]) for p in through) < 0.20
-    # The goal is past the opening, so arrival does not spin in the doorway.
-    assert _goal[0] > 1.6
+    # A path that enters the opening stays on the centre line. The
+    # viewpoint itself stands 1–3 m back when that cell can see the
+    # frontier, so the goal is not required to be past the jamb.
+    if through:
+        assert max(abs(p[1]) for p in through) < 0.20
+    frontier = [
+        grid.cell_center(int(y), int(x))
+        for y, x in zip(*np.nonzero(frontier_mask(grid.labels())))
+    ]
+    gap = min(math.hypot(_goal[0] - fx, _goal[1] - fy) for fx, fy in frontier)
+    assert gap <= 3.2 or _goal[0] > 1.6
 
 
 def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
@@ -1690,7 +1705,7 @@ def test_an_uncommitted_goal_is_not_held():
 
     rooms = segment_map(grid.labels(), grid.res)
     plain = select_goal(grid, (0.6, 0.0), heading_xy=(-1.0, 0.0), rooms=rooms)
-    assert plain is not None and plain[0][0] < 0.0
+    assert plain is not None and abs(plain[0][1]) < 0.7 and plain[0][0] < 1.5
     report: dict = {}
     shifted = select_goal(
         grid,
@@ -1701,8 +1716,10 @@ def test_an_uncommitted_goal_is_not_held():
         report=report,
     )
     assert shifted is not None
-    assert shifted[0][0] > 0.0
-    assert report["runner_up"] is not None
+    assert math.hypot(shifted[0][0] - plain[0][0], shifted[0][1] - plain[0][1]) > 0.6
+    runner = report["runner_up"]
+    assert runner is not None
+    assert math.hypot(runner[0] - plain[0][0], runner[1] - plain[0][1]) < 0.3
 
 
 def test_a_spin_command_does_not_integrate_translation():
@@ -2317,7 +2334,10 @@ def test_the_opening_ahead_beats_a_long_frontier_beside_it():
     )
     assert chosen is not None
     goal, _path = chosen
-    assert goal[0] < 0.0
+    # In front of the opening, where the depth camera can see it. Not the
+    # long wall beside the robot, and not already through the gap.
+    assert abs(goal[1]) < 0.7
+    assert goal[0] < 1.5
 
 
 def test_a_smeared_threshold_is_still_a_way_into_the_room_beyond():
@@ -2360,6 +2380,175 @@ def test_the_rear_camera_looks_behind_the_tail():
     assert hits[0, 0] < -1.0
     gap = rear_clearance_m(hits)
     assert gap is not None and 0.8 < gap < 1.2
+
+
+def test_depth_error_grows_with_range_squared():
+    # Luxonis OAK-D Lite, 480P, 75 mm: below 2% under 3 m.
+    # https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+    assert depth_sigma_m(3.0) == pytest_approx(0.06)
+    assert depth_sigma_m(3.0) / 3.0 == pytest_approx(0.02)
+    assert depth_sigma_m(1.0) == pytest_approx(0.06 / 9.0)
+    assert depth_sigma_m(2.0) == pytest_approx(4.0 * depth_sigma_m(1.0))
+    assert depth_sigma_m(5.0) / 5.0 < 0.04
+    near = np.array(
+        [noisy_depth(np.array([[1.0]]), np.random.default_rng(i), 8.0)[0, 0] for i in range(60)]
+    )
+    far = np.array(
+        [noisy_depth(np.array([[3.0]]), np.random.default_rng(1000 + i), 8.0)[0, 0] for i in range(60)]
+    )
+    assert float(np.std(far)) > float(np.std(near)) * 4.0
+
+
+def test_a_far_return_does_not_close_a_doorway():
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.6, 2.2, 0.6, grid.l_min)
+    origin = (0.2, 0.0)
+    far = np.array([[1.2, 0.0]])
+    for _ in range(4):
+        grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), probable_xy=far)
+    end = grid.cell_of(1.2, 0.0)
+    assert end is not None
+    assert grid.labels()[end] != 1
+    assert grid.probable[end]
+    free = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(1.8, 0.0)
+    assert start is not None and goal is not None
+    assert astar(free, start, goal, step_cost=grid.res) is not None
+    firm = OccupancyGrid()
+    _fill(firm, 0.0, -0.6, 2.2, 0.6, firm.l_min)
+    firm.log[end] = 0.0
+    for _ in range(2):
+        firm.integrate(origin, far, np.zeros((0, 2)))
+    assert firm.labels()[end] == 1
+
+
+def test_a_mid_range_hit_occupies_only_after_four_views():
+    """4–5 m is still a wall, at lower odds. Three frames must not close the gap."""
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.6, 2.2, 0.6, grid.l_min)
+    origin = (0.2, 0.0)
+    far = np.array([[1.2, 0.0]])
+    end = grid.cell_of(1.2, 0.0)
+    assert end is not None
+    grid.log[end] = 0.0
+    for _ in range(3):
+        grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] != 1
+    free = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(1.8, 0.0)
+    assert start is not None and goal is not None
+    assert astar(free, start, goal, step_cost=grid.res) is not None
+    grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] == 1
+    assert ROBOT_RADIUS_M == pytest_approx(0.20)
+
+
+def test_a_viewpoint_stands_one_to_three_metres_back():
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -1.5, 6.0, 1.5, grid.l_min)
+    _fill(grid, -0.3, -1.8, 0.0, 1.8, grid.l_max)
+    _fill(grid, 0.0, -1.8, 6.2, -1.5, grid.l_max)
+    _fill(grid, 0.0, 1.5, 6.2, 1.8, grid.l_max)
+    chosen = select_goal(grid, (1.0, 0.0))
+    assert chosen is not None
+    goal, _path = chosen
+    assert 3.0 <= goal[0] <= 5.3
+    assert abs(goal[1]) < 1.3
+
+
+def test_a_tight_room_keeps_the_nearest_viewpoint():
+    grid = OccupancyGrid()
+    grid.stamp_footprint(0.0, 0.0, radius_m=0.45)
+    labels = grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    cells = [(int(y), int(x)) for y, x in zip(ys, xs)]
+    assert cells
+    free = traversable(labels, grid.res, ROBOT_RADIUS_M)
+    stood = viewpoint(free, cells, occupied=(labels == 1), res=grid.res)
+    assert stood is not None
+    nearest = min(math.hypot(stood[0] - y, stood[1] - x) for y, x in cells) * grid.res
+    assert nearest < 1.0
+
+
+def test_three_failures_ban_a_frontier_until_it_is_seen(tmp_path, monkeypatch):
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    labels = bot.grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    assert len(patch) >= 3
+    for _ in range(FRONTIER_FAILS - 1):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert not bot._held
+    bot._note_frontier_fail(1.2, 0.0, patch)
+    assert bot._held
+    bot.t_s = 80.0
+    assert patch[0] in bot._ban_set()
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8")
+    assert lines.count("reason=frontier_ban") == 1
+    assert "frontier_ban 1" in (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    region = bot._regions[0]
+    assert region.watch
+    for cell in region.watch:
+        bot.grid.log[cell] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+    assert "reason=frontier_clear" in (tmp_path / "decisions.txt").read_text(encoding="utf-8")
+
+
+def test_a_local_wall_change_lifts_the_frontier_ban():
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    ys, xs = np.nonzero(frontier_mask(bot.grid.labels()))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    anchor = bot.grid.cell_of(1.2, 0.0)
+    assert anchor is not None
+    for i in range(14):
+        bot.grid.log[anchor[0] + i, anchor[1]] = bot.grid.l_max
+    bot._regions.clear()
+    bot._held.clear()
+    for _ in range(FRONTIER_FAILS):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert patch[0] in bot._ban_set()
+    for i in range(14):
+        bot.grid.log[anchor[0] + i, anchor[1]] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+
+
+def test_an_open_pivot_does_not_strike_the_frontier():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.goal_xy = (1.0, 0.0)
+    bot._goal_cells = [bot.grid.cell_of(1.2, 0.0)]
+    bot._body_v = 0.0
+    bot._body_w = 0.7
+    assert not bot._frontier_fail_ok()
+    bot._body_w = 0.0
+    bot._body_v = 0.1
+    assert bot._frontier_fail_ok()
 
 
 def test_solids_include_the_closed_doors():

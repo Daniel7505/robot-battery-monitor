@@ -278,23 +278,53 @@ def main() -> None:
             f"{front_f.get('front_left', 0)},{front_f.get('front_right', 0)},"
             f"{front_w.get('front_left', 0)},{front_w.get('front_right', 0)}\n"
         )
-        if movie and folder and now >= next_frame:
-            frame = os.path.join(folder, "frames", f"frame_{frame_i:04d}.png")
-            os.makedirs(os.path.dirname(frame), exist_ok=True)
-            try:
-                supervisor.exportImage(frame, 80)
-            except Exception:
-                pass
-            frame_i += 1
-            next_frame = now + 2.0
-            if not shot and now >= 20.0:
-                still = os.path.join(folder, "follow.png")
+        if movie and folder:
+            # The world's tracking shot sits 14 m up and the robot is a speck.
+            # This puts the eye a few metres over the shell. The mapper never
+            # reads the viewpoint.
+            viewpoint = supervisor.getFromDef("VIEWPOINT")
+            if viewpoint is not None:
+                follow = viewpoint.getField("follow")
+                if follow is not None:
+                    try:
+                        follow.setSFString("")
+                    except Exception:
+                        pass
+                orient = viewpoint.getField("orientation")
+                if orient is not None:
+                    try:
+                        orient.setSFRotation([0, 1, 0, 1.5708])
+                    except Exception:
+                        pass
+                pos = viewpoint.getField("position")
+                if pos is not None:
+                    try:
+                        pos.setSFVec3f([x, y, 5.5])
+                    except Exception:
+                        pass
+                fov = viewpoint.getField("fieldOfView")
+                if fov is not None:
+                    try:
+                        fov.setSFFloat(0.9)
+                    except Exception:
+                        pass
+            if now >= next_frame:
+                frame = os.path.join(folder, "frames", f"frame_{frame_i:04d}.png")
+                os.makedirs(os.path.dirname(frame), exist_ok=True)
                 try:
-                    supervisor.exportImage(still, 90)
+                    supervisor.exportImage(frame, 80)
                 except Exception:
                     pass
-                shot = True
-                print(f"POSE LOG screenshot {still}", flush=True)
+                frame_i += 1
+                next_frame = now + 2.0
+                if not shot and now >= 20.0:
+                    still = os.path.join(folder, "follow.png")
+                    try:
+                        supervisor.exportImage(still, 90)
+                    except Exception:
+                        pass
+                    shot = True
+                    print(f"POSE LOG screenshot {still}", flush=True)
         fl_w = int(front_w.get("front_left", 0) or 0)
         fr_w = int(front_w.get("front_right", 0) or 0)
         if left_w or right_w or caster_w or fl_w or fr_w:

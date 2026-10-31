@@ -22,6 +22,8 @@ from src.mapping.body import (
     BLIND_VIEW_FRACTION,
     CRUISE_M_S,
     OAK_DEPTH,
+    OAK_FIRM_RANGE_M,
+    OAK_SOFT_RANGE_M,
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
     REAR_DEPTH,
@@ -46,6 +48,7 @@ from src.mapping.frontiers import (
     _pose_clearance,
     approach_command,
     free_behind_m,
+    frontier_mask,
     select_goal,
     spin_fits,
     wide_escape,
@@ -116,6 +119,50 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
+# Same patch of frontier. One bump still fades through the attempt
+# weight. The third failure on that patch stays banned until the camera
+# sees the unknown beside it or a nearby wall disappears.
+FRONTIER_FAILS = 3
+FRONTIER_REGION_M = 0.80
+FRONTIER_PATCH_M = 1.00
+# Occupied cells in the local window. Smaller than a whole-map flicker.
+MAP_CHANGE_CELLS = 12
+
+
+def _split_ranges(
+    hits: np.ndarray, sensor: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Firm hits, lower-confidence hits, and probable hits.
+
+    Firm is inside ``OAK_FIRM_RANGE_M`` and can occupy at the normal odds.
+    Soft is out to ``OAK_SOFT_RANGE_M`` and occupies only after repeated
+    views. Farther than that is probable: free space along the ray, and
+    the end cell never blocks a path.
+    """
+    empty = np.zeros((0, 3), dtype=np.float64)
+    if hits.size == 0:
+        return empty, empty, empty
+    origin = np.asarray(sensor, dtype=np.float64).reshape(1, 3)
+    delta = np.asarray(hits, dtype=np.float64) - origin
+    dist = np.sqrt(delta[:, 0] ** 2 + delta[:, 1] ** 2 + delta[:, 2] ** 2)
+    firm = dist <= OAK_FIRM_RANGE_M
+    soft = (dist > OAK_FIRM_RANGE_M) & (dist <= OAK_SOFT_RANGE_M)
+    probable = dist > OAK_SOFT_RANGE_M
+    return hits[firm], hits[soft], hits[probable]
+
+
+class _FrontierRegion:
+    """One failed frontier patch and the unknown cells that would clear it."""
+
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+        self.fails = 0
+        self.cells: set[tuple[int, int]] = set()
+        self.watch: set[tuple[int, int]] = set()
+        self.banned = False
+        self.logged = False
+        self.occ = 0
 
 
 class Explorer:
@@ -224,6 +271,10 @@ class Explorer:
         self._proximity: dict = {}
         self._refused: set[tuple] = set()
         self._goal_score = 0.0
+        self._goal_cells: list[tuple[int, int]] = []
+        self._regions: list[_FrontierRegion] = []
+        self._held: set[tuple[int, int]] = set()
+        self._prefer_near = False
         self._pocket = False
         self._radar_blocked = False
         self.room_labels = None
@@ -308,6 +359,7 @@ class Explorer:
         ds = self.odometry.pending_translation(left_wheel_rad, right_wheel_rad)
         clearance = left_clear = right_clear = 99.0
         hits = floors = sensor = None
+        soft = probable = None
         if depth is not None:
             hits, floors, sensor = body_points(
                 self.camera,
@@ -316,6 +368,11 @@ class Explorer:
                 pitch_rad=pitch_rad,
                 stride=self.stride,
             )
+            # Stopping uses the firm band. A 4–5 m smear must not look like
+            # a wall in the stop distance, and a return past 5 m must not
+            # either. Both still update the map, at lower confidence.
+            firm, soft, probable = _split_ranges(hits, sensor)
+            hits = firm
             clearance, left_clear, right_clear = forward_clearance(hits)
             self._held_clear = (clearance, left_clear, right_clear)
             # Two empty frames, not one glitch. Held until a usable frame
@@ -501,7 +558,19 @@ class Explorer:
         self.grid.stamp_footprint(x, y)
         if hits is not None and sensor is not None and floors is not None:
             origin = to_odom(sensor.reshape(1, 3), (x, y, yaw))[0]
-            self.grid.integrate(origin, to_odom(hits, (x, y, yaw)), to_odom(floors, (x, y, yaw)))
+
+            def _xy(cloud) -> np.ndarray:
+                if cloud is not None and getattr(cloud, "size", 0):
+                    return to_odom(cloud, (x, y, yaw))
+                return np.zeros((0, 2))
+
+            self.grid.integrate(
+                origin,
+                to_odom(hits, (x, y, yaw)),
+                to_odom(floors, (x, y, yaw)),
+                probable_xy=_xy(probable),
+                soft_xy=_xy(soft),
+            )
         self._last_clear = (clearance, left_clear, right_clear)
         self._watch_motion()
         if self._script is not None:
@@ -535,6 +604,7 @@ class Explorer:
             self.phase = "go"
             self._replan_at = -1.0
             self.goal_xy = None
+            self._goal_cells = []
             if then == "settle":
                 self._log("final scan finished")
                 self._plan()
@@ -825,6 +895,158 @@ class Explorer:
     def _remember_attempt(self, x: float, y: float, weight: float = 2.0) -> None:
         self._attempts.append((float(x), float(y), self.t_s, float(weight)))
 
+    def _frontier_fail_ok(self) -> bool:
+        """A stuck look counts. A doorway backup and an open-floor pivot do not.
+
+        Those two are the motion stack leaving a jamb or finishing a turn.
+        Counting them banned the crossing the robot was already on, and
+        banned a frontier whose only fault was a pivot that had not yawed
+        yet. Wheel slip is the same kind of miss: the frontier is fine and
+        the hubs are not. The one-bump avoid weight still expires on its own.
+        """
+        if self._slip_debt_m >= 0.15 or self._view_blind:
+            return False
+        if self._place_tag() == "doorway":
+            return False
+        if abs(self._body_v) < 0.02 and abs(self._body_w) > 0.2:
+            x, y, _yaw = self.odometry.pose()
+            if _pose_clearance(self.grid, x, y) >= TURN_AIM_M:
+                return False
+        return True
+
+    def _ban_set(self) -> set[tuple[int, int]]:
+        """Frontier cells on their third failure. One-bump weights are separate."""
+        self._lift_regions()
+        return set(self._held)
+
+    def _note_frontier_fail(
+        self,
+        x: float,
+        y: float,
+        cells: list[tuple[int, int]] | None = None,
+    ) -> None:
+        """Count a failed approach. The third one bans that frontier patch."""
+        region = None
+        for item in self._regions:
+            if math.hypot(item.x - x, item.y - y) <= FRONTIER_REGION_M:
+                region = item
+                break
+        if region is None:
+            region = _FrontierRegion(x, y)
+            self._regions.append(region)
+        if region.banned:
+            return
+        region.fails += 1
+        region.x = float(x)
+        region.y = float(y)
+        if region.fails < FRONTIER_FAILS:
+            return
+        found = self._patch_cells(x, y, cells)
+        if not found:
+            cell = self.grid.cell_of(x, y)
+            found = set() if cell is None else {cell}
+        region.cells = found
+        region.watch = self._unknown_beside(found)
+        region.banned = True
+        region.occ = self._occupied_near(x, y)
+        self._held.update(found)
+        if not region.logged:
+            region.logged = True
+            self._log("frontier_ban")
+            self._major("frontier_ban", "frontier_ban")
+
+    def _patch_cells(
+        self,
+        x: float,
+        y: float,
+        saved: list[tuple[int, int]] | None,
+    ) -> set[tuple[int, int]]:
+        """Frontier cells the failed goal was looking at, not the whole wall.
+
+        The viewpoint stands 1–3 m back, so the patch is the bit of the
+        chosen frontier nearest that goal, within ``FRONTIER_PATCH_M``.
+        """
+        pool = list(saved or [])
+        if not pool:
+            here = self.grid.cell_of(x, y)
+            if here is None:
+                return set()
+            ys, xs = np.nonzero(frontier_mask(self.grid.labels()))
+            if len(ys) == 0:
+                return set()
+            d2 = (ys - here[0]) ** 2 + (xs - here[1]) ** 2
+            i = int(np.argmin(d2))
+            ny, nx = int(ys[i]), int(xs[i])
+            limit = (FRONTIER_PATCH_M / self.grid.res) ** 2
+            return {
+                (int(ys[j]), int(xs[j]))
+                for j in range(len(ys))
+                if (int(ys[j]) - ny) ** 2 + (int(xs[j]) - nx) ** 2 <= limit
+            }
+        here = self.grid.cell_of(x, y)
+        if here is None:
+            return set(pool)
+        ny, nx = min(pool, key=lambda p: (p[0] - here[0]) ** 2 + (p[1] - here[1]) ** 2)
+        limit = (FRONTIER_PATCH_M / self.grid.res) ** 2
+        return {p for p in pool if (p[0] - ny) ** 2 + (p[1] - nx) ** 2 <= limit}
+
+    def _unknown_beside(self, cells: set[tuple[int, int]]) -> set[tuple[int, int]]:
+        labels = self.grid.labels()
+        height, width = labels.shape
+        found: set[tuple[int, int]] = set()
+        for y, x in cells:
+            for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+                if 0 <= ny < height and 0 <= nx < width and int(labels[ny, nx]) < 0:
+                    found.add((ny, nx))
+        return found
+
+    def _occupied_near(self, x: float, y: float, radius_m: float = 1.2) -> int:
+        here = self.grid.cell_of(x, y)
+        if here is None:
+            return 0
+        labels = self.grid.labels()
+        rc = int(math.ceil(radius_m / self.grid.res))
+        r0 = max(0, here[0] - rc)
+        r1 = min(labels.shape[0], here[0] + rc + 1)
+        c0 = max(0, here[1] - rc)
+        c1 = min(labels.shape[1], here[1] + rc + 1)
+        window = labels[r0:r1, c0:c1]
+        return int(np.count_nonzero(window == 1))
+
+    def _lift_regions(self) -> None:
+        """Drop a region ban once the camera has seen it, or the wall moved."""
+        if not self._held and not any(item.banned for item in self._regions):
+            return
+        labels = self.grid.labels()
+        alive: list[_FrontierRegion] = []
+        for region in self._regions:
+            if region.banned and self._region_resolved(region, labels):
+                for cell in region.cells:
+                    self._held.discard(cell)
+                if region.logged:
+                    self._log("frontier_clear")
+                    self._major("frontier_clear", "frontier_clear")
+                    region.logged = False
+                continue
+            alive.append(region)
+        self._regions = alive
+
+    def _region_resolved(self, region: _FrontierRegion, labels: np.ndarray) -> bool:
+        if region.watch:
+            known = 0
+            height, width = labels.shape
+            for y, x in region.watch:
+                if 0 <= y < height and 0 <= x < width and int(labels[y, x]) != -1:
+                    known += 1
+            if known * 5 >= len(region.watch) * 3:
+                return True
+        # A wall that disappears (a smear clearing) is a new opening.
+        # Fresh occupied cells are the camera doing its job, not a reason
+        # to walk back into the same patch.
+        if self._occupied_near(region.x, region.y) <= region.occ - MAP_CHANGE_CELLS:
+            return True
+        return False
+
     def _watch_motion(self) -> None:
         """Stuck and contact are the same fact: a command the odometry did not follow."""
         if self._relief is not None or self.phase != "go" or self.done:
@@ -912,11 +1134,17 @@ class Explorer:
         x, y, _yaw = self.odometry.pose()
         if self.goal_xy is not None:
             self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
+            # A doorway backup and an open-floor pivot are the motion stack,
+            # not a bad frontier. The attempt weight above still expires.
+            if self._frontier_fail_ok():
+                self._note_frontier_fail(self.goal_xy[0], self.goal_xy[1], self._goal_cells)
         else:
             self._remember_attempt(x, y, 2.2)
         self.goal_xy = None
+        self._goal_cells = []
         self.path_xy = []
         self._replan_at = self.t_s
+        self._prefer_near = True
         self._relief = None
         self._motion_anchor = None
         self._backing = False
@@ -1229,7 +1457,10 @@ class Explorer:
             if self._pocket:
                 if self.goal_xy is not None:
                     self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 1.5)
+                    if self._frontier_fail_ok():
+                        self._note_frontier_fail(self.goal_xy[0], self.goal_xy[1], self._goal_cells)
                 self.goal_xy = None
+                self._goal_cells = []
                 self.path_xy = []
                 self._pocket = False
                 self._commit = None
@@ -1353,6 +1584,8 @@ class Explorer:
 
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 4.0
+        prefer_near = self._prefer_near
+        self._prefer_near = False
         x, y, yaw = self.odometry.pose()
         if depth > 6:
             self._no_frontier()
@@ -1366,16 +1599,19 @@ class Explorer:
             self.grid,
             (x, y),
             radius_m=ROBOT_RADIUS_M,
+            banned=self._ban_set(),
             avoid=self._avoid_now(),
             rooms=rooms,
             heading_xy=(math.cos(yaw), math.sin(yaw)),
             report=report,
+            prefer_near=prefer_near,
         )
         self._note_refusals(report)
         if chosen is None:
             self._no_frontier()
             return
         goal, path = chosen
+        pending = list(report.get("cells") or [])
         if math.hypot(goal[0] - x, goal[1] - y) < ARRIVE_M:
             self._remember_attempt(goal[0], goal[1], 1.5)
             if self.t_s - self._last_spin_t > 12.0:
@@ -1383,9 +1619,15 @@ class Explorer:
                 self.phase = "spin"
                 self._spin_start = None
                 self.goal_xy = None
+                self._goal_cells = []
                 self.path_xy = []
                 self._log_goal(goal, report)
                 return
+            # Already looked. A second spin on the same patch is the loop
+            # between two pieces of furniture. That is a failure. The
+            # one-bump weight above still expires.
+            if self._frontier_fail_ok():
+                self._note_frontier_fail(goal[0], goal[1], pending)
             self._plan(depth + 1)
             return
         if self.goal_xy is not None and self.path_xy:
@@ -1395,6 +1637,8 @@ class Explorer:
             if shift < 0.45:
                 self.path_xy = path
                 self._pocket = bool(report.get("tight"))
+                if pending:
+                    self._goal_cells = pending
                 return
             if self.t_s - self._goal_since < 8.0:
                 return
@@ -1406,6 +1650,7 @@ class Explorer:
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
         )
         self.goal_xy, self.path_xy = goal, path
+        self._goal_cells = pending
         self._goal_score = float(report.get("score") or 0.0)
         self._pocket = bool(report.get("tight"))
         self.frontiers_left = 1
@@ -1423,6 +1668,7 @@ class Explorer:
         if not self._confident():
             self._log("frontiers hidden, pose not trusted, not done")
             self.goal_xy = None
+            self._goal_cells = []
             self.path_xy = []
             self.phase = "go"
             self.done = False
@@ -1433,6 +1679,7 @@ class Explorer:
             self._did_final_scan = True
             self._log("no frontier, final scan")
             self.goal_xy = None
+            self._goal_cells = []
             self.path_xy = []
             self.phase = "spin"
             self._spin_start = None
@@ -1441,6 +1688,7 @@ class Explorer:
             return
         self.frontiers_left = 0
         self.goal_xy = None
+        self._goal_cells = []
         self.path_xy = []
         self.phase = "settle"
         self.done = False
@@ -1466,6 +1714,7 @@ class Explorer:
             self.grid,
             (x, y),
             radius_m=ROBOT_RADIUS_M,
+            banned=self._ban_set(),
             avoid=self._avoid_now(),
             rooms=rooms,
             heading_xy=(math.cos(yaw), math.sin(yaw)),
@@ -1478,6 +1727,7 @@ class Explorer:
             self.phase = "go"
             goal, path = chosen
             self.goal_xy, self.path_xy = goal, path
+            self._goal_cells = list(report.get("cells") or [])
             self._goal_score = float(report.get("score") or 0.0)
             self._pocket = bool(report.get("tight"))
             self._goal_since = self.t_s

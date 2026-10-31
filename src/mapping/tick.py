@@ -63,6 +63,8 @@ REASONS = (
     "step_too_high",
     "contact_bump",
     "goal_changed",
+    "frontier_ban",
+    "frontier_clear",
     "unknown",
 )
 _major_state: dict[str, dict] = {}

@@ -23,7 +23,7 @@ import numpy as np
 from src.mapping.body import GRID_RESOLUTION_M, MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
 from src.mapping.footprint import footprint_clips
 from src.mapping.grid import OccupancyGrid
-from src.mapping.rooms import crossing_bonus
+from src.mapping.rooms import _nearby_region, crossing_bonus
 
 # Stand far enough back that the depth camera can see the frontier.
 # Closer than about 0.75 m is inside the near blind zone (lens at
@@ -934,12 +934,14 @@ def _unvisited_stand(
     visited: np.ndarray | None,
     res: float,
     here: tuple[int, int],
+    rooms: dict | None = None,
 ) -> tuple[tuple[int, int], float] | None:
     """A stand in free floor the shell has not driven, and that floor's area.
 
     Depth through a doorway paints the next room free, which removes the
-    frontier. The shell still has not been there. None when visited is
-    unknown or the unvisited patch is only a fringe.
+    frontier. Prefer a cell in another region of this robot's own map, at
+    least a metre in, so the goal is inside the room rather than on the
+    threshold. None when visited is unknown or the patch is only a fringe.
     """
     if visited is None or visited.shape != labels.shape:
         return None
@@ -947,14 +949,15 @@ def _unvisited_stand(
     y0, x0 = here
     if not (0 <= y0 < height and 0 <= x0 < width):
         return None
-    limit = int(6.0 / res)
-    near = int(1.2 / res)
-    far = int(3.5 / res)
+    region = None if rooms is None else rooms.get("labels")
+    start_id = _nearby_region(region, y0, x0) if region is not None else 0
+    limit = int(8.0 / res)
+    inside = int(1.0 / res)
     queue = [(y0, x0)]
     dist = {(y0, x0): 0}
     head = 0
-    best: tuple[int, int] | None = None
-    best_n = 0
+    other: tuple[int, int] | None = None
+    other_d = limit + 1
     unvisited = 0
     while head < len(queue):
         y, x = queue[head]
@@ -971,23 +974,18 @@ def _unvisited_stand(
                 continue
             dist[(ny, nx)] = d + 1
             queue.append((ny, nx))
-            if not bool(visited[ny, nx]) and near <= d + 1 <= far:
-                n = 0
-                for dy in range(-4, 5):
-                    yy = ny + dy
-                    if yy < 0 or yy >= height:
-                        continue
-                    for dx in range(-4, 5):
-                        xx = nx + dx
-                        if 0 <= xx < width and int(labels[yy, xx]) == 0 and not bool(visited[yy, xx]):
-                            n += 1
-                if n > best_n:
-                    best_n = n
-                    best = (ny, nx)
+            if bool(visited[ny, nx]) or d + 1 < inside or other is not None and d + 1 >= other_d:
+                continue
+            if region is None or start_id <= 0:
+                continue
+            gid = _nearby_region(region, ny, nx)
+            if gid > 0 and gid != start_id:
+                other = (ny, nx)
+                other_d = d + 1
     area = unvisited * res * res
-    if best is None or area < 0.8 or best_n < 20:
+    if other is None or area < 0.8:
         return None
-    return best, area
+    return other, area
 
 
 def select_goal(
@@ -1171,7 +1169,7 @@ def select_goal(
                 score *= 0.25
         pts = [*pts, far]
         _keep(score, goal, pts, [mouth])
-    stand = _unvisited_stand(labels, visited, grid.res, here)
+    stand = _unvisited_stand(labels, visited, grid.res, here, rooms)
     if stand is not None:
         target, area = stand
         if bool(free[target]):

@@ -310,6 +310,11 @@ class Explorer:
         self._escape_phase_t = -1.0
         self._escape_yaw = 0.0
         self._escape_spin = 0.70
+        # t, x, y of the last time the shell was 0.45 m from here. The pile
+        # guard trips at PILE_LIMIT_S and stays tripped until that move.
+        self._pile_anchor: tuple[float, float, float] | None = None
+        self._pile_forced = False
+        self._pile_logged = False
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -613,6 +618,7 @@ class Explorer:
         self._last_clear = (clearance, left_clear, right_clear)
         self._note_translation()
         self._note_progress()
+        self._note_pile()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -1072,6 +1078,67 @@ class Explorer:
             self._log("stall, backing out")
         self._major("back", "cant_see_behind_backing_out")
 
+    def _note_pile(self) -> None:
+        """Arm the hard stop once the shell has sat inside 0.45 m for 60 s."""
+        x, y, _yaw = self.odometry.pose()
+        if self._pile_anchor is None:
+            self._pile_anchor = (self.t_s, x, y)
+            return
+        t0, x0, y0 = self._pile_anchor
+        if math.hypot(x - x0, y - y0) > 0.45:
+            self._pile_anchor = (self.t_s, x, y)
+            self._pile_forced = False
+            self._pile_logged = False
+            return
+        if self.t_s - t0 < PILE_LIMIT_S:
+            return
+        self._pile_forced = True
+        if self._pile_logged:
+            return
+        self._pile_logged = True
+        self._log("pile, leaving the spot")
+        self._major("back", "cant_see_behind_backing_out")
+
+    def _spin_safe(self, w: float) -> bool:
+        """A pivot whose corner stays out of the map and the live side gap."""
+        if self._shell_clips(0.0, w):
+            return False
+        view = self._bubble_view
+        if view is None:
+            return True
+        side = view.left if w > 0 else view.right
+        return side is None or float(side) >= TURN_CLEAR_M
+
+    def _straight_leave(self, pose) -> tuple[float, float] | None:
+        """Creep forward or back. No spin. None when both ways meet the shell."""
+        view = self._bubble_view
+        nose = float(self._last_clear[0])
+        forward_gap = None if view is None else view.forward
+        rear_gap = None if view is None else view.rear
+        forward_ok = (
+            not self._view_blind
+            and nose >= 0.50
+            and not self._shell_clips(0.12, 0.0)
+            and (forward_gap is None or float(forward_gap) >= 0.30)
+        )
+        back_ok = not self._reverse_closed(pose) and not self._shell_clips(-0.10, 0.0)
+        prefer_forward = forward_ok and (
+            not back_ok or rear_gap is None or forward_gap is None or float(forward_gap) >= float(rear_gap)
+        )
+        if prefer_forward:
+            self._body_v, self._body_w = 0.12, 0.0
+            self._note_approach("wide", 0.12, 0.0)
+            return wheel_speeds(0.12, 0.0)
+        if back_ok:
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("back", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
+        if forward_ok:
+            self._body_v, self._body_w = 0.12, 0.0
+            self._note_approach("wide", 0.12, 0.0)
+            return wheel_speeds(0.12, 0.0)
+        return None
+
     def _clear_heading(self) -> bool:
         """The forward camera has a real range, so a turn has found open floor."""
         if self._view_blind:
@@ -1116,13 +1183,6 @@ class Explorer:
             self._replan_at = self.t_s
             self._progress_from = (self.t_s, float(pose[0]), float(pose[1]), False)
             return None
-        if self.t_s - self._blind_back_t0 >= PILE_LIMIT_S:
-            self._log("pile, still here, turning out")
-            self._escape_phase = "turn"
-            self._escape_spin = -float(self._escape_spin)
-            self._escape_phase_t = self.t_s
-            self._escape_yaw = float(pose[2])
-            self._blind_back_t0 = self.t_s
         if self._escape_phase == "back":
             phase_age = self.t_s - self._escape_phase_t
             if (
@@ -1140,10 +1200,19 @@ class Explorer:
                 return wheel_speeds(-0.10, 0.0)
         if self._escape_phase == "turn":
             turned = abs(wrap_rad(float(pose[2]) - self._escape_yaw))
-            blocked = self._shell_clips(0.0, self._escape_spin)
-            if blocked:
+            if not self._spin_safe(self._escape_spin):
                 self._escape_spin = -float(self._escape_spin)
-                blocked = self._shell_clips(0.0, self._escape_spin)
+            # Both pivots meet a corner. Back straight instead of driving
+            # the sweep into the wall.
+            if not self._spin_safe(self._escape_spin):
+                self._escape_phase = "back"
+                self._escape_phase_t = self.t_s
+                if self._reverse_closed(pose):
+                    self._body_v, self._body_w = 0.0, 0.0
+                    return 0.0, 0.0
+                self._body_v, self._body_w = -0.10, 0.0
+                self._note_approach("back", -0.10, 0.0)
+                return wheel_speeds(-0.10, 0.0)
             # A spin the gyro did not follow is slip. Keep turning instead of
             # driving the false wheel travel into the pose.
             yaw_stuck = self.t_s - self._escape_phase_t > 4.0 and turned < 0.2
@@ -1153,7 +1222,7 @@ class Explorer:
                 self._escape_spin = -float(self._escape_spin)
             elif (turned >= 0.8 and self._clear_heading()) or (
                 not self._view_blind and self.t_s - self._escape_phase_t > 4.0
-            ) or blocked:
+            ):
                 self._escape_phase = "drive"
                 self._escape_phase_t = self.t_s
             else:
@@ -1695,6 +1764,16 @@ class Explorer:
         pose = self.odometry.pose()
         self._note_translation()
         self._note_progress()
+        self._note_pile()
+        if self._pile_forced:
+            # Sixty seconds in the same 0.45 m ball. Straight only.
+            self._relief = None
+            self._blind_back = False
+            leaving = self._straight_leave(pose)
+            if leaving is not None:
+                return leaving
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
         blind = self._stall_escape(pose)
         if blind is not None:
             # The timed relief reverse is 0.45 s. A stall replaces it.
@@ -2061,6 +2140,7 @@ class Explorer:
             rooms=rooms,
             heading_xy=(math.cos(yaw), math.sin(yaw)),
             report=report,
+            visited=self.visited,
         )
         self._note_refusals(report)
         if chosen is not None:

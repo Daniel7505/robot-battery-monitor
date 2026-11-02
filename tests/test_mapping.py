@@ -2715,6 +2715,25 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     assert bot._goal_hold is None
 
 
+def test_a_sixty_second_pile_drives_straight_out():
+    """The guard trips at 60 s and does not spin the corner into the wall."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert bot._pile_forced
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 0.3
+
+
 def test_a_visible_stall_turns_away_and_holds_the_goal():
     """Nose still sees the hall. No translation for the window is a failure.
 

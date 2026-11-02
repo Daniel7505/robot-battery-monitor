@@ -26,22 +26,23 @@ def test_stop_distance_grows_with_speed():
 
 
 def test_the_body_fits_an_81cm_door_with_the_inflation():
-    """0.39 m across the tires, 0.81 m doorway, 0.20 m planner inflation.
+    """Sonar faces at ±0.227 m, tire faces at ±0.19 m, 0.81 m doorway.
 
-    The inflated corridor is still wider than nothing, and a robot held
-    on the centre line keeps air beside each tire.
+    The sweep shell is that outline. The planner disk stays 0.20 m so one
+    extra jamb cell does not seal the opening.
     """
     from src.mapping.body import ROBOT_RADIUS_M
-    from src.mapping.bubble import SHELL_HALF_M
+    from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M, SHELL_TAIL_M
 
-    door = 0.81
-    width = 2.0 * SHELL_HALF_M
-    assert width == pytest.approx(0.39)
+    door = 0.8128
+    assert 2.0 * SHELL_HALF_M == pytest.approx(0.454)
+    assert SHELL_NOSE_M == pytest.approx(0.19)
+    assert SHELL_TAIL_M == pytest.approx(0.19)
     free = door - 2.0 * ROBOT_RADIUS_M
     assert free > 0.05
     air = door / 2.0 - SHELL_HALF_M
     assert air > 0.15
-    assert SHELL_HALF_M <= ROBOT_RADIUS_M < door / 2.0
+    assert ROBOT_RADIUS_M < door / 2.0
 
 
 def test_three_still_sensors_are_a_pin_and_one_missing_is_not():

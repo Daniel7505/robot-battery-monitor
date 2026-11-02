@@ -20,6 +20,7 @@ import math
 import numpy as np
 
 from src.mapping.body import HEIGHT_MAX_M, HEIGHT_MIN_M, DepthCamera
+from src.mapping.bubble import SHELL_HALF_M, SHELL_TAIL_M
 
 
 def axis_angle_matrix(rotation: tuple[float, float, float, float]) -> np.ndarray:
@@ -213,7 +214,9 @@ def forward_clearance(hits_body: np.ndarray) -> tuple[float, float, float]:
     return (_min(centre), _min(left), _min(right))
 
 
-def rear_clearance_m(hits_body: np.ndarray, *, tail_m: float = 0.16, half_m: float = 0.195) -> float | None:
+def rear_clearance_m(
+    hits_body: np.ndarray, *, tail_m: float = SHELL_TAIL_M, half_m: float = SHELL_HALF_M
+) -> float | None:
     """Air from the tail shell to the nearest point behind the robot."""
     if hits_body is None or hits_body.size == 0:
         return None

@@ -318,6 +318,8 @@ class Explorer:
         # Recent odom poses the shell actually drove. The pile leave reverses
         # along these when a straight sweep is closed. Not a map of the rooms.
         self._crumbs: list[tuple[float, float]] = []
+        # t, x, y, yaw when the picture and the pose last changed together.
+        self._perceive_from: tuple[float, float, float, float] | None = None
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -623,6 +625,7 @@ class Explorer:
         self._note_progress()
         self._note_pile()
         self._note_crumb()
+        self._note_perceive()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -1107,6 +1110,38 @@ class Explorer:
         self._log("pile, leaving the spot")
         self._major("back", "cant_see_behind_backing_out")
 
+    def _note_perceive(self) -> None:
+        x, y, yaw = self.odometry.pose()
+        if self._perceive_from is None:
+            self._perceive_from = (self.t_s, x, y, yaw)
+            return
+        t0, x0, y0, yaw0 = self._perceive_from
+        moved = math.hypot(x - x0, y - y0) >= 0.04 or abs(wrap_rad(yaw - yaw0)) >= 0.12
+        if moved:
+            self._perceive_from = (self.t_s, x, y, yaw)
+
+    def _perception_stuck(self) -> bool:
+        """Commanded motion, and neither the pose nor the picture is changing.
+
+        A spin command is not a turn if the yaw and the depth view stay
+        still. Ground truth is not read.
+        """
+        if self._perceive_from is None:
+            return False
+        # A drive that the picture does not support is the existing slip
+        # path. This is only a spin the body did not yaw, with the nose
+        # still inside minimum range. That was the north wedge.
+        if abs(self._body_v) >= 0.03 or abs(self._body_w) < 0.15:
+            return False
+        t0, _x0, _y0, _yaw0 = self._perceive_from
+        if self.t_s - t0 < 1.2:
+            return False
+        return self._view_blind
+
+    def _rear_measured_close(self) -> bool:
+        view = self._bubble_view
+        return view is not None and view.rear is not None and float(view.rear) <= 0.08
+
     def _note_crumb(self) -> None:
         x, y, _yaw = self.odometry.pose()
         if self._crumbs and math.hypot(x - self._crumbs[-1][0], y - self._crumbs[-1][1]) < 0.25:
@@ -1115,14 +1150,17 @@ class Explorer:
         if len(self._crumbs) > 16:
             del self._crumbs[0]
 
-    def _trail_reverse(self, pose) -> tuple[float, float] | None:
+    def _trail_reverse(self, pose, trust_trail: bool = False) -> tuple[float, float] | None:
         """Reverse toward a pose the shell already drove, if the rear sensor is open.
 
         The map sweep can close both straights while the trail behind is
-        still clear. Reversing into an unseen gap is not this. No crumb and
-        a closed rear returns None.
+        still clear. ``trust_trail`` ignores that map smear and still
+        refuses a measured rear hit. Reversing into an unseen gap is not this.
         """
-        if self._reverse_closed(pose):
+        if trust_trail:
+            if self._rear_measured_close():
+                return None
+        elif self._reverse_closed(pose):
             return None
         x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
         back = yaw + math.pi
@@ -1823,33 +1861,46 @@ class Explorer:
         self._note_translation()
         self._note_progress()
         self._note_pile()
+        self._note_perceive()
+        if self._perception_stuck():
+            # Commanded spin or drive, picture and yaw still. Not a turn.
+            self._relief = None
+            self._blind_back = False
+            self._pivot_hold = False
+            along = self._trail_reverse(pose, trust_trail=True)
+            if along is not None:
+                return along
+            if not self._rear_measured_close():
+                self._body_v, self._body_w = -0.10, 0.0
+                self._note_approach("back", -0.10, 0.0)
+                return wheel_speeds(-0.10, 0.0)
         if self._pile_forced:
             # Sixty seconds in the same 0.45 m ball. Never stop in place.
             self._relief = None
             self._blind_back = False
             leaving = self._straight_leave(pose)
             if leaving is None:
-                leaving = self._trail_reverse(pose)
+                leaving = self._trail_reverse(pose, trust_trail=True)
             if leaving is None and not self._view_blind and float(self._last_clear[0]) >= 0.50:
                 self._body_v, self._body_w = 0.10, 0.0
                 self._note_approach("wide", 0.10, 0.0)
                 leaving = wheel_speeds(0.10, 0.0)
             if leaving is not None:
                 return leaving
-            view = self._bubble_view
-            left = 0.0 if view is None or view.left is None else float(view.left)
-            right = 0.0 if view is None or view.right is None else float(view.right)
-            turn = 0.30 if left >= right else -0.30
-            if self._spin_safe(turn) or left >= TURN_CLEAR_M or right >= TURN_CLEAR_M:
-                if not self._spin_safe(turn) and (left >= TURN_CLEAR_M or right >= TURN_CLEAR_M):
-                    turn = 0.30 if left >= right else -0.30
-                self._body_v, self._body_w = 0.0, turn
-                self._note_approach("pivot", 0.0, turn)
-                return wheel_speeds(0.0, turn)
-            # Both live sides are tight and the rear sensor is closed.
-            # Turn toward the larger gap anyway. Stopping is the pile.
-            self._body_v, self._body_w = 0.0, turn
-            return wheel_speeds(0.0, turn)
+            # A blind wedge does not get another spin. That spin was the
+            # north seed: command (-0.64, 0.64), nose 0.12, pose frozen.
+            if not self._view_blind and not self._perception_stuck():
+                view = self._bubble_view
+                left = 0.0 if view is None or view.left is None else float(view.left)
+                right = 0.0 if view is None or view.right is None else float(view.right)
+                turn = 0.30 if left >= right else -0.30
+                if self._spin_safe(turn):
+                    self._body_v, self._body_w = 0.0, turn
+                    self._note_approach("pivot", 0.0, turn)
+                    return wheel_speeds(0.0, turn)
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("back", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
         blind = self._stall_escape(pose)
         if blind is not None:
             # The timed relief reverse is 0.45 s. A stall replaces it.

@@ -782,6 +782,47 @@ def _wrap(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+def wedge_entry(grid: OccupancyGrid, x: float, y: float, yaw: float) -> bool:
+    """Nose toward one mapped wall and a side against another, with no pivot out.
+
+    The skid footprint cannot turn in place there. The check uses this
+    robot's map only.
+    """
+    pose = (float(x), float(y), float(yaw))
+    if spin_fits(grid, pose):
+        return False
+    labels = grid.labels()
+
+    def _hits(dx: float, dy: float, reach: float) -> bool:
+        dist = float(grid.res)
+        while dist <= reach + 1e-9:
+            cell = grid.cell_of(x + dx * dist, y + dy * dist)
+            if cell is not None and int(labels[cell]) == 1:
+                return True
+            dist += float(grid.res)
+        return False
+
+    fx, fy = math.cos(yaw), math.sin(yaw)
+    lx, ly = -fy, fx
+    nose = _hits(fx, fy, 0.45)
+    side = _hits(lx, ly, 0.32) or _hits(-lx, -ly, 0.32)
+    return bool(nose and side)
+
+
+def _trim_wedge(
+    grid: OccupancyGrid, pts: list[tuple[float, float]]
+) -> list[tuple[float, float]] | None:
+    """Drop the end of a path that would drive the nose into a wedge."""
+    trimmed = list(pts)
+    while len(trimmed) >= 2:
+        a, b = trimmed[-2], trimmed[-1]
+        yaw = math.atan2(b[1] - a[1], b[0] - a[0])
+        if not wedge_entry(grid, b[0], b[1], yaw):
+            return trimmed
+        trimmed.pop()
+    return None
+
+
 def spin_fits(grid: OccupancyGrid, pose: tuple[float, float, float]) -> bool:
     """True when a half-turn in place stays off mapped obstacles.
 
@@ -1048,6 +1089,11 @@ def select_goal(
         cells: list,
     ) -> None:
         nonlocal best
+        trimmed = _trim_wedge(grid, pts)
+        if trimmed is None:
+            return
+        pts = trimmed
+        goal = pts[-1]
         adjusted = score * _region_factor(goal, avoid)
         ranked_scores.append((adjusted, goal))
         if best is None or adjusted > best[0]:

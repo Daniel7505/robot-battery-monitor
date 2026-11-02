@@ -2715,6 +2715,23 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     assert bot._goal_hold is None
 
 
+def test_a_blind_spin_with_a_still_picture_reverses_along_the_trail():
+    """The command is a turn. The yaw and the depth view are not changing."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_w = 0.30
+    bot._view_blind = True
+    bot._last_clear = (0.12, 0.50, 99.0)
+    bot._perceive_from = (0.0, 0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+
+
 def test_a_closed_sweep_reverses_along_the_driven_trail(monkeypatch):
     """Both map straights are closed. The rear is open. Do not stop."""
     from src.mapping.explore import Explorer

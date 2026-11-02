@@ -1,7 +1,7 @@
 """Headless 600 s seeds on ButlerBotSkid. Worlds are deleted. Logs stay in /tmp.
 
-The apartment world is copied and the robot instance is swapped to
-ButlerBotSkid. ButlerBot.proto and apartment.wbt are not modified.
+The apartment world already instances ButlerBotSkid. A seed copies it
+and changes only the spawn. ButlerBot.proto stays for the warehouse.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.mapping.world_guard import require_skid_world, swap_caster_instance
+from src.mapping.world_guard import require_skid_world
 WEBOTS = ROOT / "webots"
 WORLDS = WEBOTS / "worlds"
 SOURCE = (WORLDS / "apartment.wbt").read_text(encoding="utf-8")
@@ -38,9 +38,8 @@ def patch(x: float, y: float, yaw: float) -> str:
     text = SOURCE
     old_t = "  translation 6.1 4.7 0\n"
     old_r = "  rotation 0 0 1 1.5708\n"
-    if old_t not in text or old_r not in text or "\nButlerBot {\n" not in text:
+    if old_t not in text or old_r not in text or "\nButlerBotSkid {\n" not in text:
         raise SystemExit("apartment spawn or proto block missing")
-    text = swap_caster_instance(text)
     text = text.replace(old_t, f"  translation {x:.4f} {y:.4f} 0\n", 1)
     text = text.replace(old_r, f"  rotation 0 0 1 {yaw:.4f}\n", 1)
     require_skid_world(text, "apartment seed world")

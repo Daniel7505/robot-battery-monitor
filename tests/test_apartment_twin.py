@@ -407,7 +407,7 @@ def solids(world_text: str) -> dict:
 
 def test_world_is_r2025a_and_does_not_steer_a_track(world_text: str):
     assert world_text.startswith("#VRML_SIM R2025a utf8\n")
-    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in world_text
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in world_text
     assert "\n# STEER_TRACK off\n" in world_text
     assert "\n# TRACK_FILE " not in world_text
     from src.track_geometry import steer_track_enabled, track_file_from_world
@@ -541,7 +541,7 @@ def world_text_pendants() -> int:
 def test_spawn_is_in_the_main_room_on_a_24_inch_path(world_text: str, solids: dict):
     gt = _ground_truth()
     match = re.search(
-        r"ButlerBot\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        r"ButlerBot(?:Skid)?\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
         _strip_comments(world_text),
         re.S,
     )

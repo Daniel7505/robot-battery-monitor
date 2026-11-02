@@ -929,6 +929,67 @@ def approach_command(
     return None
 
 
+def _unvisited_stand(
+    labels: np.ndarray,
+    visited: np.ndarray | None,
+    res: float,
+    here: tuple[int, int],
+) -> tuple[tuple[int, int], float] | None:
+    """A stand in free floor the shell has not driven, and that floor's area.
+
+    Depth through a doorway paints the next room free, which removes the
+    frontier. The shell still has not been there. None when visited is
+    unknown or the unvisited patch is only a fringe.
+    """
+    if visited is None or visited.shape != labels.shape:
+        return None
+    height, width = labels.shape
+    y0, x0 = here
+    if not (0 <= y0 < height and 0 <= x0 < width):
+        return None
+    limit = int(6.0 / res)
+    near = int(1.2 / res)
+    far = int(3.5 / res)
+    queue = [(y0, x0)]
+    dist = {(y0, x0): 0}
+    head = 0
+    best: tuple[int, int] | None = None
+    best_n = 0
+    unvisited = 0
+    while head < len(queue):
+        y, x = queue[head]
+        head += 1
+        d = dist[(y, x)]
+        if int(labels[y, x]) == 0 and not bool(visited[y, x]):
+            unvisited += 1
+        if d >= limit:
+            continue
+        for ny, nx in ((y + 1, x), (y - 1, x), (y, x + 1), (y, x - 1)):
+            if not (0 <= ny < height and 0 <= nx < width) or (ny, nx) in dist:
+                continue
+            if int(labels[ny, nx]) != 0:
+                continue
+            dist[(ny, nx)] = d + 1
+            queue.append((ny, nx))
+            if not bool(visited[ny, nx]) and near <= d + 1 <= far:
+                n = 0
+                for dy in range(-4, 5):
+                    yy = ny + dy
+                    if yy < 0 or yy >= height:
+                        continue
+                    for dx in range(-4, 5):
+                        xx = nx + dx
+                        if 0 <= xx < width and int(labels[yy, xx]) == 0 and not bool(visited[yy, xx]):
+                            n += 1
+                if n > best_n:
+                    best_n = n
+                    best = (ny, nx)
+    area = unvisited * res * res
+    if best is None or area < 0.8 or best_n < 20:
+        return None
+    return best, area
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -942,6 +1003,7 @@ def select_goal(
     avoid: list[tuple[float, float, float]] | None = None,
     report: dict | None = None,
     prefer_near: bool = False,
+    visited: np.ndarray | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -1109,6 +1171,23 @@ def select_goal(
                 score *= 0.25
         pts = [*pts, far]
         _keep(score, goal, pts, [mouth])
+    stand = _unvisited_stand(labels, visited, grid.res, here)
+    if stand is not None:
+        target, area = stand
+        if bool(free[target]):
+            path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
+            if path_cells:
+                pts = [grid.cell_center(*rc) for rc in path_cells]
+                length = 0.0
+                for a, b in zip(pts, pts[1:]):
+                    length += math.hypot(b[0] - a[0], b[1] - a[1])
+                # Capped so the unscanned rest of this room does not beat a
+                # real frontier. A path into another region still gets the
+                # doorway bonus below.
+                score = min(float(area), 4.0) / (length + 0.25) * 0.45
+                score *= crossing_bonus(path_cells, rooms, start)
+                goal = grid.cell_center(*target)
+                _keep(score, goal, pts, [target])
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])

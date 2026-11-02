@@ -2345,7 +2345,7 @@ def test_scenario_world_changes_only_the_butlerbot_pose():
     assert "translation 4.4000 1.7780 0" in patched
     assert "rotation 0 0 1 3.141593" in patched
     assert "translation 6.1 4.7 0" not in patched
-    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in patched
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in patched
     assert "apartment_pose_logger" in patched
 
 
@@ -2713,6 +2713,34 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     bot._go(False, 0.28)
     assert not bot._blind_back
     assert bot._goal_hold is None
+
+
+def test_a_visible_stall_turns_away_and_holds_the_goal():
+    """Nose still sees the hall. No translation for the window is a failure.
+
+    The escape turns. A reverse that the wheels follow on a frozen picture
+    is the slip the pose must not integrate.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._view_blind = False
+    bot._last_clear = (1.0, 1.0, 1.0)
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    assert bot.goal_xy is None
+    assert bot._goal_hold is not None
+    assert bot._regions and bot._regions[0].fails >= 1
+    bot.t_s = 6.1
+    left, right = bot._go(False, 0.28)
+    assert left * right < 0.0
 
 
 def test_a_held_goal_is_not_rescored_until_the_shell_moves(monkeypatch):

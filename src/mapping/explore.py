@@ -138,8 +138,13 @@ MAP_CHANGE_CELLS = 12
 # Past the depth camera's minimum. A return on the minimum itself is still
 # the blind edge; the backup keeps going until the wall is this far outside it.
 BLIND_EXIT_MARGIN_M = 0.05
-# The same goal is not scored again until the shell has left the stuck pose.
+# The same goal region is not scored again until the shell has left the stuck pose.
 GOAL_HOLD_M = 0.30
+# Commanded translation that does not cover that distance in this long is a
+# stall, blind or not. It is far under the 60 s a seed is allowed to sit
+# inside 0.45 m.
+STALL_WINDOW_S = 2.0
+PILE_LIMIT_S = 60.0
 # Straight reverse out of a blind corner. The 0.45 s relief reverse is shorter
 # than the blind zone, so it is not used for this case. 1 m matches the
 # ordinary backup cap so a dead camera cannot reverse across the apartment.
@@ -301,6 +306,12 @@ class Explorer:
         self._blind_back_t0 = -1.0
         self._blind_back_until = -1.0
         self._blind_counted = False
+        self._escape_phase = "back"
+        self._escape_phase_t = -1.0
+        self._escape_yaw = 0.0
+        self._escape_spin = 0.70
+        # t, x, y, commanded translation while still. Resets once the shell moves.
+        self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
         self._goal_hold: tuple[float, float, float, float, list] | None = None
         self._pocket = False
@@ -601,6 +612,7 @@ class Explorer:
             )
         self._last_clear = (clearance, left_clear, right_clear)
         self._note_translation()
+        self._note_progress()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -874,6 +886,12 @@ class Explorer:
             anchor["lifted"] = True
             self.wheels_lifted += 1
             self._log("wheels lifted, shell pitched, drive wheels spinning free")
+        # The floor picture did not shift while the hubs claimed travel.
+        # On the hall pile the shell's true pose was still, so this rewind
+        # matched the body. A blank, low-texture frame takes the branch
+        # above and does not freeze. Leaving is the stall escape, which
+        # keeps backing or turns to a clear heading instead of scoring
+        # another goal on the frozen pose.
         # Hubs that are not claiming motion have nothing to undo and
         # nothing to back away from. The pose freeze above is the update.
         if claimed < 0.02 and spun < 0.08:
@@ -923,6 +941,29 @@ class Explorer:
 
     def _remember_attempt(self, x: float, y: float, weight: float = 2.0) -> None:
         self._attempts.append((float(x), float(y), self.t_s, float(weight)))
+
+    def _note_progress(self) -> None:
+        """Clock commanded translation that the odometry did not follow."""
+        x, y, _yaw = self.odometry.pose()
+        commanded = abs(self._body_v) > 0.03
+        if self._progress_from is None:
+            self._progress_from = (self.t_s, x, y, commanded)
+            return
+        t0, x0, y0, saw = self._progress_from
+        if math.hypot(x - x0, y - y0) >= 0.04:
+            self._progress_from = (self.t_s, x, y, False)
+            return
+        self._progress_from = (t0, x0, y0, saw or commanded)
+
+    def _translation_stalled(self) -> bool:
+        """Commands asked for translation and the shell has not covered 0.30 m."""
+        if self._progress_from is None or self._pivoting() or self._doorway_crossing():
+            return False
+        t0, x0, y0, saw = self._progress_from
+        if not saw or self.t_s - t0 < STALL_WINDOW_S:
+            return False
+        x, y, _yaw = self.odometry.pose()
+        return math.hypot(x - x0, y - y0) < GOAL_HOLD_M
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""
@@ -990,7 +1031,7 @@ class Explorer:
             return False
         assert self._goal_hold is not None
         gx, gy = self._goal_hold[0], self._goal_hold[1]
-        return math.hypot(float(goal[0]) - gx, float(goal[1]) - gy) < 0.45
+        return math.hypot(float(goal[0]) - gx, float(goal[1]) - gy) < FRONTIER_REGION_M
 
     def _held_cells(self) -> set[tuple[int, int]]:
         if self._goal_released() or self._goal_hold is None:
@@ -1025,58 +1066,137 @@ class Explorer:
         self._goal_cells = []
         self.path_xy = []
         self._pocket = False
-        self._log("blind corner, backing out")
+        if self._view_blind:
+            self._log("blind corner, backing out")
+        else:
+            self._log("stall, backing out")
         self._major("back", "cant_see_behind_backing_out")
 
-    def _blind_backup(self, pose) -> tuple[float, float] | None:
-        """Reverse while a room view is blind and the shell is not moving.
+    def _clear_heading(self) -> bool:
+        """The forward camera has a real range, so a turn has found open floor."""
+        if self._view_blind:
+            return False
+        nose = float(self._last_clear[0])
+        return nose >= 90.0 or nose >= 0.50
 
-        Stops when depth is past min range and the shell has moved, or the
-        tail meets the map, or the reverse itself does not move. A doorway
-        crossing keeps the short relief reverse. The goal-ahead rule does
-        not apply here: the goal is what pointed the nose into the wall.
+    def _stall_escape(self, pose) -> tuple[float, float] | None:
+        """Leave a stall by backing, then turning to a heading the camera can see.
+
+        A blind room starts immediately. Any other commanded translation that
+        has not moved the shell 0.30 m in STALL_WINDOW_S starts the same
+        escape. The reverse stops on a tail contact, on 0.8 s with no motion,
+        or at 1 m, and a turn follows. The goal region stays unscored until
+        the shell has moved. A doorway crossing is left to the short relief.
         """
-        if self._doorway_crossing():
+        if self._doorway_crossing() and not self._blind_back:
             return None
         if not self._blind_back:
-            if self.t_s < self._blind_back_until or not self._blind_room_still():
+            if self.t_s < self._blind_back_until:
                 return None
-            if self._reverse_closed(pose):
+            blind = self._blind_room_still()
+            stalled = self._translation_stalled()
+            if not blind and not stalled:
+                return None
+            if blind and not stalled and self._reverse_closed(pose):
                 return None
             self._begin_blind_back(pose)
-        else:
-            origin = self._blind_back_from
-            dist = 0.0 if origin is None else math.hypot(float(pose[0]) - origin[0], float(pose[1]) - origin[1])
-            if self.t_s - self._blind_back_t0 > 0.8 and dist < 0.02:
-                self._end_blind_back(2.0)
-                self._reverse_failed = True
-                return None
-            if self._reverse_closed(pose) or dist >= BLIND_BACK_CAP_M:
-                self._end_blind_back(1.0)
-                return None
-            if self._depth_real() and dist >= GOAL_HOLD_M:
-                self._end_blind_back(0.0)
-                self._replan_at = self.t_s
-                return None
-        self._body_v, self._body_w = -0.10, 0.0
-        self._note_approach("back", -0.10, 0.0)
-        return wheel_speeds(-0.10, 0.0)
+            # Back out first. If that does not move the shell, the turn below
+            # takes over. Driving starts only after the yaw actually changes,
+            # so a frozen picture cannot be integrated as travel.
+            self._escape_phase = "turn" if self._reverse_closed(pose) else "back"
+            self._escape_phase_t = self.t_s
+            self._escape_yaw = float(pose[2])
+            self._escape_spin = self._relief_spin()
+        origin = self._blind_back_from
+        dist = 0.0 if origin is None else math.hypot(float(pose[0]) - origin[0], float(pose[1]) - origin[1])
+        # Blind still needs a real range. A visible stall only needs the move.
+        seen = (not self._view_blind) or self._depth_real()
+        if dist >= GOAL_HOLD_M and seen:
+            self._end_blind_back(0.0)
+            self._replan_at = self.t_s
+            self._progress_from = (self.t_s, float(pose[0]), float(pose[1]), False)
+            return None
+        if self.t_s - self._blind_back_t0 >= PILE_LIMIT_S:
+            self._log("pile, still here, turning out")
+            self._escape_phase = "turn"
+            self._escape_spin = -float(self._escape_spin)
+            self._escape_phase_t = self.t_s
+            self._escape_yaw = float(pose[2])
+            self._blind_back_t0 = self.t_s
+        if self._escape_phase == "back":
+            phase_age = self.t_s - self._escape_phase_t
+            if (
+                self._reverse_closed(pose)
+                or dist >= BLIND_BACK_CAP_M
+                or (phase_age > 0.8 and dist < 0.02)
+            ):
+                self._escape_phase = "turn"
+                self._escape_phase_t = self.t_s
+                self._escape_yaw = float(pose[2])
+                self._escape_spin = self._relief_spin()
+            else:
+                self._body_v, self._body_w = -0.10, 0.0
+                self._note_approach("back", -0.10, 0.0)
+                return wheel_speeds(-0.10, 0.0)
+        if self._escape_phase == "turn":
+            turned = abs(wrap_rad(float(pose[2]) - self._escape_yaw))
+            blocked = self._shell_clips(0.0, self._escape_spin)
+            if blocked:
+                self._escape_spin = -float(self._escape_spin)
+                blocked = self._shell_clips(0.0, self._escape_spin)
+            # A spin the gyro did not follow is slip. Keep turning instead of
+            # driving the false wheel travel into the pose.
+            yaw_stuck = self.t_s - self._escape_phase_t > 4.0 and turned < 0.2
+            if yaw_stuck:
+                self._escape_phase_t = self.t_s
+                self._escape_yaw = float(pose[2])
+                self._escape_spin = -float(self._escape_spin)
+            elif (turned >= 0.8 and self._clear_heading()) or (
+                not self._view_blind and self.t_s - self._escape_phase_t > 4.0
+            ) or blocked:
+                self._escape_phase = "drive"
+                self._escape_phase_t = self.t_s
+            else:
+                self._body_v, self._body_w = 0.0, float(self._escape_spin)
+                self._note_approach("pivot", 0.0, float(self._escape_spin))
+                return wheel_speeds(0.0, float(self._escape_spin))
+        if self._view_blind:
+            self._escape_phase = "back"
+            self._escape_phase_t = self.t_s
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("back", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
+        if self.t_s - self._escape_phase_t > 0.8 and dist < 0.05:
+            self._escape_phase = "turn"
+            self._escape_phase_t = self.t_s
+            self._escape_yaw = float(pose[2])
+            self._escape_spin = -self._relief_spin()
+            self._body_v, self._body_w = 0.0, float(self._escape_spin)
+            return wheel_speeds(0.0, float(self._escape_spin))
+        nose = float(self._last_clear[0])
+        if not self._view_blind and nose < 0.40:
+            self._escape_phase = "turn"
+            self._escape_phase_t = self.t_s
+            self._escape_yaw = float(pose[2])
+            self._escape_spin = -self._relief_spin()
+            self._body_v, self._body_w = 0.0, float(self._escape_spin)
+            return wheel_speeds(0.0, float(self._escape_spin))
+        self._body_v, self._body_w = 0.12, 0.0
+        return wheel_speeds(0.12, 0.0)
 
     def _frontier_fail_ok(self) -> bool:
         """A stuck look counts. A doorway crossing and an open-floor pivot do not.
 
-        A blind view used to skip every failure. That hid a room corner where
-        the camera was inside min range and the shell was not translating.
-        That case counts. A lined-up doorway crossing still does not: counting
-        it banned the opening the robot was already driving through. Wheel
-        slip is the same kind of miss when the view is not that corner. The
-        one-bump avoid weight still expires on its own.
+        A blind view used to skip every failure, and so did wheel slip. A
+        room corner and a visible stall both count: the shell was commanded
+        to move and did not. A lined-up doorway crossing still does not.
+        The one-bump avoid weight still expires on its own.
         """
-        if self._blind_room_still():
+        if self._doorway_crossing():
+            return False
+        if self._blind_room_still() or self._translation_stalled():
             return True
         if self._slip_debt_m >= 0.15 or self._view_blind:
-            return False
-        if self._doorway_crossing():
             return False
         if abs(self._body_v) < 0.02 and abs(self._body_w) > 0.2:
             x, y, _yaw = self.odometry.pose()
@@ -1219,6 +1339,9 @@ class Explorer:
 
     def _watch_motion(self) -> None:
         """Stuck and contact are the same fact: a command the odometry did not follow."""
+        if self._blind_back:
+            self._motion_anchor = None
+            return
         if self._relief is not None or self.phase != "go" or self.done:
             return
         translating = abs(self._body_v) > 0.03
@@ -1571,9 +1694,10 @@ class Explorer:
             return 0.0, 0.0
         pose = self.odometry.pose()
         self._note_translation()
-        blind = self._blind_backup(pose)
+        self._note_progress()
+        blind = self._stall_escape(pose)
         if blind is not None:
-            # The timed relief reverse is 0.45 s. This backup replaces it.
+            # The timed relief reverse is 0.45 s. A stall replaces it.
             self._relief = None
             return blind
         relief = self._relief_command()
@@ -1815,6 +1939,7 @@ class Explorer:
             heading_xy=(math.cos(yaw), math.sin(yaw)),
             report=report,
             prefer_near=prefer_near,
+            visited=self.visited,
         )
         self._note_refusals(report)
         if chosen is None:

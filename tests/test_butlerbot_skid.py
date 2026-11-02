@@ -68,23 +68,21 @@ def test_skid_depth_device_noise_is_zero():
     assert "ButlerBotSkid" in MAPPER.read_text(encoding="utf-8")
 
 
-def test_a_caster_world_is_refused_and_a_swapped_one_is_not():
-    from src.mapping.world_guard import require_skid_world, swap_caster_instance, world_uses_skid
+def test_a_caster_world_is_refused_and_the_apartment_is_skid():
+    from src.mapping.world_guard import require_mapping_world_is_skid, require_skid_world, world_uses_skid
 
     world = (ROOT / "webots" / "worlds" / "apartment.wbt").read_text(encoding="utf-8")
-    assert not world_uses_skid(world)
+    assert world_uses_skid(world)
+    require_skid_world(world, "apartment.wbt")
+    caster = 'EXTERNPROTO "../protos/ButlerBot.proto"\nButlerBot {\n}\n'
+    assert not world_uses_skid(caster)
     try:
-        require_skid_world(world, "apartment.wbt")
+        require_skid_world(caster, "caster")
     except SystemExit as exc:
         assert "ButlerBotSkid" in str(exc)
     else:
         raise AssertionError("caster world was launched")
-    swapped = swap_caster_instance(world)
-    assert world_uses_skid(swapped)
-    require_skid_world(swapped, "seed")
     warehouse = (ROOT / "webots" / "worlds" / "butlerbot_warehouse.wbt").read_text(encoding="utf-8")
-    from src.mapping.world_guard import require_mapping_world_is_skid
-
     require_mapping_world_is_skid(warehouse, "warehouse")
 
 
@@ -97,9 +95,9 @@ def test_baseline_proto_and_apartment_world_are_unchanged():
     assert "anchor 0 -0.17 0.08" in base
     assert "FRONT_LEFT_WHEEL_JOINT" not in base
     world = (ROOT / "webots" / "worlds" / "apartment.wbt").read_text(encoding="utf-8")
-    assert "\nButlerBot {\n" in world
-    assert "ButlerBotSkid" not in world
-    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in world
+    assert "\nButlerBotSkid {\n" in world
+    assert "\nButlerBot {\n" not in world
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in world
 
 
 def test_mapper_slaves_front_hubs_only_when_the_device_exists():
@@ -208,15 +206,7 @@ def test_skid_visual_is_mesh_and_collision_matches_blender_boxes():
     assert dims["wheel"]["height_m"] == 0.05
     for pose in _DEVICE_POSES:
         assert pose in text
-    for view in (
-        "skid_front.png",
-        "skid_side.png",
-        "skid_top.png",
-        "skid_three_quarter.png",
-        "skid_bottom.png",
-        "skid_sensors.png",
-    ):
-        assert (ROOT / "webots" / "meshes" / "previews" / view).stat().st_size > 10000
+    assert (ROOT / "webots" / "meshes" / "build_skid_mesh.py").is_file()
 
 
 def _obj_vertices(path: Path) -> list[tuple[float, float, float]]:

@@ -40,7 +40,7 @@
 # carpet. Grip is the same on both. Carpet rolling drag is about 2.5x
 # laminate. The energy model is not wired to either floor.
 
-EXTERNPROTO "../protos/ButlerBot.proto"
+EXTERNPROTO "../protos/ButlerBotSkid.proto"
 
 WorldInfo {
   basicTimeStep 8
@@ -1207,7 +1207,7 @@ DEF APT_FURN_VANITY Solid {
   }
 }
 
-ButlerBot {
+ButlerBotSkid {
   # Main room, clear of the sofas and the island. Facing the patio wall (+Y).
   # apartment_mapper explores from sensors. It does not load this file.
   translation 6.1 4.7 0

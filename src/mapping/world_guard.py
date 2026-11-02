@@ -35,12 +35,3 @@ def require_mapping_world_is_skid(text: str, source: str) -> None:
     if _MAPPING not in text:
         return
     require_skid_world(text, source)
-
-
-def swap_caster_instance(text: str) -> str:
-    """Point one caster robot instance at ButlerBotSkid. The proto file is not edited."""
-    old_proto = 'EXTERNPROTO "../protos/ButlerBot.proto"\n'
-    skid_proto = 'EXTERNPROTO "../protos/ButlerBotSkid.proto"\n'
-    if old_proto in text and skid_proto not in text:
-        text = text.replace(old_proto, old_proto + skid_proto, 1)
-    return re.sub(r"(?m)^ButlerBot \{", "ButlerBotSkid {", text, count=1)

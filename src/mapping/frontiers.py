@@ -952,12 +952,13 @@ def _unvisited_stand(
     region = None if rooms is None else rooms.get("labels")
     start_id = _nearby_region(region, y0, x0) if region is not None else 0
     limit = int(8.0 / res)
-    inside = int(1.0 / res)
+    inside = int(1.2 / res)
+    want = int(2.0 / res)
     queue = [(y0, x0)]
     dist = {(y0, x0): 0}
     head = 0
     other: tuple[int, int] | None = None
-    other_d = limit + 1
+    other_miss = want + limit
     unvisited = 0
     while head < len(queue):
         y, x = queue[head]
@@ -974,14 +975,15 @@ def _unvisited_stand(
                 continue
             dist[(ny, nx)] = d + 1
             queue.append((ny, nx))
-            if bool(visited[ny, nx]) or d + 1 < inside or other is not None and d + 1 >= other_d:
+            if bool(visited[ny, nx]) or d + 1 < inside:
                 continue
             if region is None or start_id <= 0:
                 continue
             gid = _nearby_region(region, ny, nx)
-            if gid > 0 and gid != start_id:
+            miss = abs((d + 1) - want)
+            if gid > 0 and gid != start_id and miss < other_miss:
                 other = (ny, nx)
-                other_d = d + 1
+                other_miss = miss
     area = unvisited * res * res
     if other is None or area < 0.8:
         return None

@@ -315,6 +315,9 @@ class Explorer:
         self._pile_anchor: tuple[float, float, float] | None = None
         self._pile_forced = False
         self._pile_logged = False
+        # Recent odom poses the shell actually drove. The pile leave reverses
+        # along these when a straight sweep is closed. Not a map of the rooms.
+        self._crumbs: list[tuple[float, float]] = []
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -619,6 +622,7 @@ class Explorer:
         self._note_translation()
         self._note_progress()
         self._note_pile()
+        self._note_crumb()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -965,6 +969,10 @@ class Explorer:
         """Commands asked for translation and the shell has not covered 0.30 m."""
         if self._progress_from is None or self._pivoting() or self._doorway_crossing():
             return False
+        # Lining up on an opening looks like a stall. Dropping the goal there
+        # is how a kitchen or bath target was abandoned on the threshold.
+        if self._approach_why in ("straight", "pivot"):
+            return False
         t0, x0, y0, saw = self._progress_from
         if not saw or self.t_s - t0 < STALL_WINDOW_S:
             return False
@@ -1099,6 +1107,47 @@ class Explorer:
         self._log("pile, leaving the spot")
         self._major("back", "cant_see_behind_backing_out")
 
+    def _note_crumb(self) -> None:
+        x, y, _yaw = self.odometry.pose()
+        if self._crumbs and math.hypot(x - self._crumbs[-1][0], y - self._crumbs[-1][1]) < 0.25:
+            return
+        self._crumbs.append((float(x), float(y)))
+        if len(self._crumbs) > 16:
+            del self._crumbs[0]
+
+    def _trail_reverse(self, pose) -> tuple[float, float] | None:
+        """Reverse toward a pose the shell already drove, if the rear sensor is open.
+
+        The map sweep can close both straights while the trail behind is
+        still clear. Reversing into an unseen gap is not this. No crumb and
+        a closed rear returns None.
+        """
+        if self._reverse_closed(pose):
+            return None
+        x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+        back = yaw + math.pi
+        best_err = None
+        for cx, cy in self._crumbs[:-1]:
+            if math.hypot(cx - x, cy - y) < 0.35:
+                continue
+            err = abs(wrap_rad(math.atan2(cy - y, cx - x) - back))
+            if best_err is None or err < best_err:
+                best_err = err
+        # A crumb off to the side is not a reverse. Turn toward it only when
+        # the corner sweep allows, then the next call lines the tail up.
+        if best_err is not None and best_err > 0.6:
+            turn = math.copysign(0.50, wrap_rad(math.atan2(
+                self._crumbs[-2][1] - y, self._crumbs[-2][0] - x
+            ) - back)) if len(self._crumbs) >= 2 else 0.50
+            if self._spin_safe(turn):
+                self._body_v, self._body_w = 0.0, turn
+                self._note_approach("pivot", 0.0, turn)
+                return wheel_speeds(0.0, turn)
+            return None
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
+
     def _spin_safe(self, w: float) -> bool:
         """A pivot whose corner stays out of the map and the live side gap."""
         if self._shell_clips(0.0, w):
@@ -1207,9 +1256,18 @@ class Explorer:
             if not self._spin_safe(self._escape_spin):
                 self._escape_phase = "back"
                 self._escape_phase_t = self.t_s
+                along = self._trail_reverse(pose)
+                if along is not None:
+                    return along
                 if self._reverse_closed(pose):
-                    self._body_v, self._body_w = 0.0, 0.0
-                    return 0.0, 0.0
+                    turn = 0.40 if self._spin_safe(0.40) else -0.40
+                    if not self._spin_safe(turn):
+                        view = self._bubble_view
+                        left = 0.0 if view is None or view.left is None else float(view.left)
+                        right = 0.0 if view is None or view.right is None else float(view.right)
+                        turn = 0.30 if left >= right else -0.30
+                    self._body_v, self._body_w = 0.0, turn
+                    return wheel_speeds(0.0, turn)
                 self._body_v, self._body_w = -0.10, 0.0
                 self._note_approach("back", -0.10, 0.0)
                 return wheel_speeds(-0.10, 0.0)
@@ -1766,14 +1824,32 @@ class Explorer:
         self._note_progress()
         self._note_pile()
         if self._pile_forced:
-            # Sixty seconds in the same 0.45 m ball. Straight only.
+            # Sixty seconds in the same 0.45 m ball. Never stop in place.
             self._relief = None
             self._blind_back = False
             leaving = self._straight_leave(pose)
+            if leaving is None:
+                leaving = self._trail_reverse(pose)
+            if leaving is None and not self._view_blind and float(self._last_clear[0]) >= 0.50:
+                self._body_v, self._body_w = 0.10, 0.0
+                self._note_approach("wide", 0.10, 0.0)
+                leaving = wheel_speeds(0.10, 0.0)
             if leaving is not None:
                 return leaving
-            self._body_v, self._body_w = 0.0, 0.0
-            return 0.0, 0.0
+            view = self._bubble_view
+            left = 0.0 if view is None or view.left is None else float(view.left)
+            right = 0.0 if view is None or view.right is None else float(view.right)
+            turn = 0.30 if left >= right else -0.30
+            if self._spin_safe(turn) or left >= TURN_CLEAR_M or right >= TURN_CLEAR_M:
+                if not self._spin_safe(turn) and (left >= TURN_CLEAR_M or right >= TURN_CLEAR_M):
+                    turn = 0.30 if left >= right else -0.30
+                self._body_v, self._body_w = 0.0, turn
+                self._note_approach("pivot", 0.0, turn)
+                return wheel_speeds(0.0, turn)
+            # Both live sides are tight and the rear sensor is closed.
+            # Turn toward the larger gap anyway. Stopping is the pile.
+            self._body_v, self._body_w = 0.0, turn
+            return wheel_speeds(0.0, turn)
         blind = self._stall_escape(pose)
         if blind is not None:
             # The timed relief reverse is 0.45 s. A stall replaces it.

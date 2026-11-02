@@ -2715,6 +2715,34 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     assert bot._goal_hold is None
 
 
+def test_a_closed_sweep_reverses_along_the_driven_trail(monkeypatch):
+    """Both map straights are closed. The rear is open. Do not stop."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (0.2, 0.2, 0.2)
+    monkeypatch.setattr(bot, "_straight_leave", lambda _pose: None)
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_doorway_lineup_is_not_a_stall():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._body_v = 0.12
+    bot._approach_why = "straight"
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    assert not bot._translation_stalled()
+
+
 def test_a_sixty_second_pile_drives_straight_out():
     """The guard trips at 60 s and does not spin the corner into the wall."""
     from src.mapping.explore import Explorer

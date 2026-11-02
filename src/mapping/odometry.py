@@ -41,6 +41,8 @@ class WheelGyroOdometry:
         self.wheel_yaw = 0.0
         self.still_s = 0.0
         self.moving_s = 0.0
+        self.last_ds_m = 0.0
+        self.last_wheel_dyaw_rad = 0.0
         self._prev_left: float | None = None
         self._prev_right: float | None = None
 
@@ -86,6 +88,8 @@ class WheelGyroOdometry:
         if self._prev_left is None or dt_s <= 0.0:
             self._prev_left = left_q
             self._prev_right = right_q
+            self.last_ds_m = 0.0
+            self.last_wheel_dyaw_rad = 0.0
             return self.pose()
         d_left = left_q - self._prev_left
         d_right = right_q - self._prev_right
@@ -93,6 +97,8 @@ class WheelGyroOdometry:
         self._prev_right = right_q
         ds = 0.5 * (d_left + d_right) * self.radius_m
         wheel_dyaw = (d_right - d_left) * self.radius_m / self.track_m
+        self.last_ds_m = ds
+        self.last_wheel_dyaw_rad = wheel_dyaw
         rate_in = float(yaw_rate_rad_s)
         dt = float(dt_s)
         self.gyro_raw_yaw += rate_in * dt

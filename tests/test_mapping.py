@@ -2715,8 +2715,12 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     assert bot._goal_hold is None
 
 
-def test_a_blind_spin_with_a_still_picture_reverses_along_the_trail():
-    """The command is a turn. The yaw and the depth view are not changing."""
+def test_a_still_picture_with_commanded_motion_reverses_along_the_trail():
+    """The command is a turn. The depth picture has not changed for a few seconds.
+
+    The nose value is not the trigger. An empty frame and a blind frame
+    are the same kind of still picture. Ground truth is not read.
+    """
     from src.mapping.explore import Explorer
 
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
@@ -2724,12 +2728,52 @@ def test_a_blind_spin_with_a_still_picture_reverses_along_the_trail():
     bot.phase = "go"
     bot.t_s = 5.0
     bot._body_w = 0.30
-    bot._view_blind = True
-    bot._last_clear = (0.12, 0.50, 99.0)
-    bot._perceive_from = (0.0, 0.0, 0.0, 0.0)
+    bot._last_clear = (99.0, 99.0, 99.0)
+    bot._view_sig = (None, 0.0, ())
+    bot._view_still_from = 0.0
     bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
     left, right = bot._go(False, 0.28)
     assert left < -0.5 and right < -0.5
+
+
+def test_a_changing_depth_picture_is_not_camera_stuck():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._view_sig = (1.2, 0.4, ())
+    bot._view_still_from = 4.8
+    assert bot._stuck_reason() is None
+
+
+def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
+    """Encoder yaw without a matching gyro rate is slip or a wedge."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 2.5
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot._stuck_reason() == "imu_stuck"
+
+
+def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    bot._imu_samples.append((0.0, 0.0, 0.0, 0.0, 0.01))
+    bot._imu_samples.append((2.2, 0.0, 0.0, 0.0, 0.01))
+    bot._imu_samples.append((2.5, 0.0, 0.0, 0.12, 0.02))
+    assert bot._imu_stuck()
+    bot._imu_samples[-1] = (2.5, 0.0, 0.0, 0.12, 0.80)
+    assert not bot._imu_stuck()
 
 
 def test_a_closed_sweep_reverses_along_the_driven_trail(monkeypatch):

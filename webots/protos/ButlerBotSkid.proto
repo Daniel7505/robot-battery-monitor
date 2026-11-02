@@ -618,6 +618,24 @@ Robot {
       name "oak_imu"
       noise 0.01
     }
+    # Accelerometer next to oak_gyro. Together with the wheel position
+    # sensors (quantized in the mapper at 0.0015 rad, about 4096 counts
+    # per revolution) this is a cheap encoder-plus-IMU pair, on the order
+    # of an MPU-6050 and two magnetic encoders. Lookup columns are input
+    # m/s^2, output m/s^2, and noise as a fraction of the output. A
+    # near-zero axis has almost no fractional noise, so the mapper adds
+    # an absolute 0.04 m/s^2 floor and a slow drift on top of the 0.03
+    # m/s^2 bias in the output column. Gravity stays on Z. No bounding
+    # object: it does not change contact. The noiseless "gyro" and "imu"
+    # later in this proto are the warehouse devices and are not this part.
+    Accelerometer {
+      name "oak_accel"
+      lookupTable [
+        -40 -39.97 0.004
+        0 0.03 0.004
+        40 40.03 0.004
+      ]
+    }
     # Shoulder HUDs only.
     DEF HUD_NADIR Display {
       name "hud_nadir"

@@ -13,6 +13,7 @@ object reports.
 from __future__ import annotations
 
 import math
+from collections import deque
 
 import numpy as np
 
@@ -30,6 +31,8 @@ from src.mapping.body import (
     STOP_CLEARANCE_M,
     TURN_AIM_M,
     TURN_CLEAR_M,
+    WHEEL_RADIUS_M,
+    WHEEL_TRACK_M,
     DepthCamera,
 )
 from src.mapping.bubble import SIGHT_M, BubbleView, assess_bubble, corner_bump, corner_gap
@@ -76,6 +79,20 @@ from src.mapping.wall_line import wall_yaw_delta
 # turn. A pure pivot sits above it. The floor camera is on the spin axis,
 # so that picture stays still and must not freeze the gyro.
 _GYRO_REST_RAD_S = 0.02
+# Commanded motion whose own depth picture does not change. Two to three
+# seconds: long enough that a slow creep moves the ranges, short enough
+# that a wedge does not sit for a minute.
+_VIEW_STUCK_S = 2.5
+_VIEW_RANGE_EPS_M = 0.05
+_VIEW_FRAC_EPS = 0.08
+# Wheels turning, gyro not. Or wheel speed changing with no accelerometer
+# pulse. Same window as the camera check.
+_IMU_STUCK_S = 2.5
+_IMU_WHEEL_W_MIN = 0.18
+_IMU_GYRO_W_MAX = 0.08
+_IMU_DV_MIN_M_S = 0.08
+_IMU_DV_WINDOW_S = 0.40
+_IMU_ACCEL_MAX_M_S2 = 0.20
 
 def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
     """True when two frames are the same picture, not a shifted one.
@@ -318,8 +335,13 @@ class Explorer:
         # Recent odom poses the shell actually drove. The pile leave reverses
         # along these when a straight sweep is closed. Not a map of the rooms.
         self._crumbs: list[tuple[float, float]] = []
-        # t, x, y, yaw when the picture and the pose last changed together.
-        self._perceive_from: tuple[float, float, float, float] | None = None
+        # Depth signature and the time it last changed. The stuck check
+        # uses this picture, not the odometry pose.
+        self._view_sig: tuple | None = None
+        self._view_still_from: float | None = None
+        # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
+        self._imu_samples: deque = deque()
+        self._accel_bias = [0.0, 0.0]
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -392,6 +414,7 @@ class Explorer:
         yaw_rate_rad_s: float,
         roll_rad: float = 0.0,
         pitch_rad: float = 0.0,
+        accel_m_s2: tuple[float, float, float] | None = None,
         depth=None,
         radar_blocked: bool = False,
         proximity: dict | None = None,
@@ -454,6 +477,8 @@ class Explorer:
         # hubs actually follow is the robot leaving the wall, so it counts.
         # Ordinary braking (a visible wall inside the stop range) still
         # counts too, or the pose would sit a halt short of every wall.
+        if depth is not None:
+            self._note_view(depth)
         forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
         in_contact = stalled or (self._view_blind and forward_cmd) or self.t_s < self._pin_until
         drop = False
@@ -465,6 +490,12 @@ class Explorer:
             if self._motion.events > before and self.phase == "go":
                 self._note_slip()
             drop = slip_drop or in_contact
+        # A visible picture that has not moved is not travel, including a
+        # reverse the hubs followed. A blind reverse still counts: the
+        # range comes back once the nose clears minimum range, and that
+        # distance is how the pose leaves the jamb.
+        if self._view_frozen() and not self._view_blind and abs(ds) > 1e-4:
+            drop = True
         # A commanded spin should leave the axle where it is. Encoder
         # translation on that command is one wheel scrubbing, which walked
         # the pose while the body pivoted in a few centimetres.
@@ -489,6 +520,7 @@ class Explorer:
             trust_yaw=not held_yaw,
         )
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
+        self._note_imu(dt, yaw_rate_rad_s, accel_m_s2)
         self._mark_visited()
         applied = 0.0 if drop or spin_cmd else ds
         self._path_m += abs(applied)
@@ -625,7 +657,6 @@ class Explorer:
         self._note_progress()
         self._note_pile()
         self._note_crumb()
-        self._note_perceive()
         self._watch_motion()
         if self._script is not None:
             speeds = self._script.command(
@@ -1110,33 +1141,179 @@ class Explorer:
         self._log("pile, leaving the spot")
         self._major("back", "cant_see_behind_backing_out")
 
-    def _note_perceive(self) -> None:
-        x, y, yaw = self.odometry.pose()
-        if self._perceive_from is None:
-            self._perceive_from = (self.t_s, x, y, yaw)
-            return
-        t0, x0, y0, yaw0 = self._perceive_from
-        moved = math.hypot(x - x0, y - y0) >= 0.04 or abs(wrap_rad(yaw - yaw0)) >= 0.12
-        if moved:
-            self._perceive_from = (self.t_s, x, y, yaw)
+    def _motion_commanded(self) -> bool:
+        if abs(self._body_v) >= 0.03 or abs(self._body_w) >= 0.15:
+            return True
+        cmd_l, cmd_r = self._commanded
+        v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+        w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+        return abs(v) >= 0.03 or abs(w) >= 0.15
 
-    def _perception_stuck(self) -> bool:
-        """Commanded motion, and neither the pose nor the picture is changing.
+    def _depth_signature(self, depth) -> tuple:
+        """Median range, finite fraction, and a coarse block grid.
 
-        A spin command is not a turn if the yaw and the depth view stay
-        still. Ground truth is not read.
+        An empty frame (no return, or everything inside minimum range) is
+        a stable signature. That is the nose-99 spin as well as the
+        blind placeholder. Ground truth is not read.
         """
-        if self._perceive_from is None:
+        image = np.asarray(depth, dtype=np.float64)
+        if image.ndim != 2 or image.size == 0:
+            return (None, 0.0, ())
+        sampled = image[::4, ::4]
+        lo = self.camera.min_range_m
+        hi = self.camera.max_range_m
+        finite = np.isfinite(sampled) & (sampled >= lo) & (sampled <= hi)
+        count = int(sampled.size)
+        frac = 0.0 if count == 0 else float(np.count_nonzero(finite) / float(count))
+        med = None if frac < 0.08 else float(np.median(sampled[finite]))
+        height, width = sampled.shape
+        blocks: list[float | None] = []
+        for br in range(3):
+            for bc in range(4):
+                r0, r1 = br * height // 3, max(br * height // 3 + 1, (br + 1) * height // 3)
+                c0, c1 = bc * width // 4, max(bc * width // 4 + 1, (bc + 1) * width // 4)
+                tile = sampled[r0:r1, c0:c1]
+                ok = np.isfinite(tile) & (tile >= lo) & (tile <= hi)
+                if int(np.count_nonzero(ok)) < 3:
+                    blocks.append(None)
+                else:
+                    blocks.append(float(np.median(tile[ok])))
+        return (med, frac, tuple(blocks))
+
+    def _signature_changed(self, previous: tuple, current: tuple) -> bool:
+        med_a, frac_a, blocks_a = previous
+        med_b, frac_b, blocks_b = current
+        if abs(float(frac_a) - float(frac_b)) >= _VIEW_FRAC_EPS:
+            return True
+        if med_a is None and med_b is None:
             return False
-        # A drive that the picture does not support is the existing slip
-        # path. This is only a spin the body did not yaw, with the nose
-        # still inside minimum range. That was the north wedge.
-        if abs(self._body_v) >= 0.03 or abs(self._body_w) < 0.15:
+        if med_a is None or med_b is None:
+            return True
+        if abs(float(med_a) - float(med_b)) >= _VIEW_RANGE_EPS_M:
+            return True
+        diffs = []
+        for left, right in zip(blocks_a, blocks_b):
+            if left is None and right is None:
+                continue
+            if left is None or right is None:
+                diffs.append(0.2)
+                continue
+            diffs.append(abs(float(left) - float(right)))
+        if diffs and float(np.median(diffs)) >= _VIEW_RANGE_EPS_M:
+            return True
+        return False
+
+    def _note_view(self, depth) -> None:
+        sig = self._depth_signature(depth)
+        if self._view_sig is None or self._signature_changed(self._view_sig, sig):
+            self._view_sig = sig
+            self._view_still_from = self.t_s
+            return
+        if self._view_still_from is None:
+            self._view_still_from = self.t_s
+
+    def _view_frozen(self) -> bool:
+        if self._view_sig is None or self._view_still_from is None:
             return False
-        t0, _x0, _y0, _yaw0 = self._perceive_from
-        if self.t_s - t0 < 1.2:
+        return self.t_s - self._view_still_from >= _VIEW_STUCK_S
+
+    def _camera_stuck(self) -> bool:
+        """Motion is commanded and this robot's depth picture is not changing.
+
+        Odometry yaw is not a vote. A spin the gyro thinks is happening
+        still counts when the picture stays put.
+        """
+        if not self._view_frozen():
             return False
-        return self._view_blind
+        if not self._motion_commanded():
+            self._view_still_from = self.t_s
+            return False
+        return True
+
+    def _note_imu(self, dt: float, yaw_rate_rad_s: float, accel) -> None:
+        if dt <= 0.0:
+            return
+        wheel_w = self.odometry.last_wheel_dyaw_rad / dt
+        wheel_v = self.odometry.last_ds_m / dt
+        gyro_w = float(yaw_rate_rad_s) - self.odometry.bias_rad_s
+        horiz = None
+        if accel is not None and len(accel) >= 2:
+            ax = float(accel[0])
+            ay = float(accel[1])
+            if abs(wheel_v) < 0.02 and abs(wheel_w) < 0.05:
+                self._accel_bias[0] = 0.98 * self._accel_bias[0] + 0.02 * ax
+                self._accel_bias[1] = 0.98 * self._accel_bias[1] + 0.02 * ay
+            horiz = math.hypot(ax - self._accel_bias[0], ay - self._accel_bias[1])
+        self._imu_samples.append((self.t_s, wheel_w, gyro_w, wheel_v, horiz))
+        while self._imu_samples and self.t_s - self._imu_samples[0][0] > _IMU_STUCK_S:
+            self._imu_samples.popleft()
+
+    def _imu_stuck(self) -> bool:
+        """Encoders or the command say the wheels are moving; the IMU does not.
+
+        A pure spin is the gyro. A change in wheel speed is the
+        accelerometer. Constant-speed slip has no acceleration to see;
+        the camera check covers that. Ground truth is not read.
+        """
+        samples = self._imu_samples
+        if len(samples) < 2:
+            return False
+        span = samples[-1][0] - samples[0][0]
+        if span < _IMU_STUCK_S - 0.3:
+            return False
+        wheel_w = sum(abs(row[1]) for row in samples) / len(samples)
+        gyro_w = sum(abs(row[2]) for row in samples) / len(samples)
+        if wheel_w >= _IMU_WHEEL_W_MIN and gyro_w < _IMU_GYRO_W_MAX:
+            return True
+        if any(row[4] is None for row in samples):
+            return False
+        peak = max(float(row[4]) for row in samples)
+        max_dv = 0.0
+        start = 0
+        for i, row in enumerate(samples):
+            while samples[start][0] < row[0] - _IMU_DV_WINDOW_S:
+                start += 1
+            max_dv = max(max_dv, abs(row[3] - samples[start][3]))
+        return max_dv >= _IMU_DV_MIN_M_S and peak < _IMU_ACCEL_MAX_M_S2
+
+    def _stuck_reason(self) -> str | None:
+        camera = self._camera_stuck()
+        imu = self._imu_stuck()
+        if camera and imu:
+            return "camera_imu_stuck"
+        if camera:
+            return "camera_stuck"
+        if imu:
+            return "imu_stuck"
+        return None
+
+    def _stuck_escape(self, pose) -> tuple[float, float] | None:
+        """Reverse along the trail. Do not spin in place: that was the wedge."""
+        why = self._stuck_reason()
+        if why is None:
+            return None
+        self._major("stuck", why)
+        self._relief = None
+        self._blind_back = False
+        self._pivot_hold = False
+        if not self._rear_measured_close():
+            self._body_v, self._body_w = -0.10, 0.0
+            self._note_approach("back", -0.10, 0.0)
+            return wheel_speeds(-0.10, 0.0)
+        along = self._trail_reverse(pose, trust_trail=True)
+        if along is not None and along[0] < -0.2 and along[1] < -0.2:
+            return along
+        if (
+            not self._view_blind
+            and float(self._last_clear[0]) >= 0.50
+            and not self._shell_clips(0.10, 0.0)
+        ):
+            self._body_v, self._body_w = 0.10, 0.0
+            self._note_approach("wide", 0.10, 0.0)
+            return wheel_speeds(0.10, 0.0)
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
 
     def _rear_measured_close(self) -> bool:
         view = self._bubble_view
@@ -1861,19 +2038,9 @@ class Explorer:
         self._note_translation()
         self._note_progress()
         self._note_pile()
-        self._note_perceive()
-        if self._perception_stuck():
-            # Commanded spin or drive, picture and yaw still. Not a turn.
-            self._relief = None
-            self._blind_back = False
-            self._pivot_hold = False
-            along = self._trail_reverse(pose, trust_trail=True)
-            if along is not None:
-                return along
-            if not self._rear_measured_close():
-                self._body_v, self._body_w = -0.10, 0.0
-                self._note_approach("back", -0.10, 0.0)
-                return wheel_speeds(-0.10, 0.0)
+        stuck = self._stuck_escape(pose)
+        if stuck is not None:
+            return stuck
         if self._pile_forced:
             # Sixty seconds in the same 0.45 m ball. Never stop in place.
             self._relief = None
@@ -1887,9 +2054,10 @@ class Explorer:
                 leaving = wheel_speeds(0.10, 0.0)
             if leaving is not None:
                 return leaving
-            # A blind wedge does not get another spin. That spin was the
-            # north seed: command (-0.64, 0.64), nose 0.12, pose frozen.
-            if not self._view_blind and not self._perception_stuck():
+            # A wedge does not get another spin. The camera and the IMU
+            # already took the reverse above when the picture or the gyro
+            # disagreed with the wheels.
+            if not self._view_blind and self._stuck_reason() is None:
                 view = self._bubble_view
                 left = 0.0 if view is None or view.left is None else float(view.left)
                 right = 0.0 if view is None or view.right is None else float(view.right)

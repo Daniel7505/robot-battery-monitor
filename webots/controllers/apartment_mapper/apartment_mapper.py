@@ -1,10 +1,10 @@
 """Explore the apartment and build a 2D occupancy grid.
 
-Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, the two wheel
-position sensors, a ring of short-range sonars, and a downward floor
-camera. Wheel angles are quantized in the odometry module. The inertial
-unit's yaw is not used for heading. A separate controller records the
-simulator pose for scoring; this process does not.
+Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, oak_accel,
+the two wheel position sensors, a ring of short-range sonars, and a
+downward floor camera. Wheel angles are quantized in the odometry
+module. The inertial unit's yaw is not used for heading. A separate
+controller records the simulator pose for scoring; this process does not.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
@@ -26,7 +26,7 @@ if _PROJECT_ROOT not in sys.path:
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
-from src.mapping.noise import noisy_depth
+from src.mapping.noise import noisy_accel, noisy_depth
 from src.mapping.run_log import RunLog, default_run_dir, publish_current
 
 
@@ -293,6 +293,8 @@ def main() -> None:
     gyro.enable(timestep)
     imu = robot.getDevice("oak_imu")
     imu.enable(timestep)
+    accel = _enable(robot, "oak_accel", timestep)
+    accel_bias = [0.0, 0.0, 0.0]
     depth = robot.getDevice("oak_depth")
     depth.enable(int(_DEPTH_PERIOD_S * 1000))
     width = int(depth.getWidth()) if hasattr(depth, "getWidth") else OAK_DEPTH.width
@@ -404,6 +406,15 @@ def main() -> None:
                 yaw_rate = float(gyro.getValues()[2])
             except Exception:
                 yaw_rate = 0.0
+            accel_m_s2 = None
+            if accel is not None:
+                try:
+                    raw = accel.getValues()
+                    accel_m_s2 = noisy_accel(
+                        float(raw[0]), float(raw[1]), float(raw[2]), depth_rng, accel_bias, dt
+                    )
+                except Exception:
+                    accel_m_s2 = None
             left_cmd, right_cmd = explorer.step(
                 dt_s=dt,
                 left_wheel_rad=float(left_enc.getValue()),
@@ -411,6 +422,7 @@ def main() -> None:
                 yaw_rate_rad_s=yaw_rate,
                 roll_rad=roll,
                 pitch_rad=pitch,
+                accel_m_s2=accel_m_s2,
                 depth=image,
                 radar_blocked=_radar_blocked(radar),
                 proximity=_proximity(prox_devices),

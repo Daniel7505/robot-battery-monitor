@@ -16,6 +16,10 @@ import math
 import numpy as np
 
 from src.mapping.body import (
+    ACCEL_BIAS_M_S2,
+    ACCEL_DRIFT_LIMIT_M_S2,
+    ACCEL_DRIFT_M_S2_PER_SQRT_S,
+    ACCEL_NOISE_M_S2,
     GYRO_BIAS_RAD_S,
     GYRO_NOISE_RAD_S,
     IMU_NOISE_FIELD,
@@ -54,6 +58,30 @@ def noisy_depth(depth: np.ndarray, rng: np.random.Generator, max_range_m: float)
 def noisy_yaw_rate(yaw_rate_rad_s: float, rng: np.random.Generator) -> float:
     """Bias plus white noise on a yaw rate, in rad/s."""
     return float(yaw_rate_rad_s) + GYRO_BIAS_RAD_S + float(rng.normal(0.0, GYRO_NOISE_RAD_S))
+
+
+def noisy_accel(
+    ax: float,
+    ay: float,
+    az: float,
+    rng: np.random.Generator,
+    bias: list[float],
+    dt_s: float,
+) -> tuple[float, float, float]:
+    """Bias, white noise, and a slow drift on a 3-axis accelerometer.
+
+    ``bias`` is a three-element list the caller keeps. Each call walks it
+    by a random step and clamps it. The device lookup already shifts the
+    raw sample; this is the absolute noise a fractional lookup cannot
+    put on a near-zero axis.
+    """
+    step = ACCEL_DRIFT_M_S2_PER_SQRT_S * math.sqrt(max(0.0, float(dt_s)))
+    noisy = []
+    for i, raw in enumerate((float(ax), float(ay), float(az))):
+        bias[i] = float(bias[i]) + float(rng.normal(0.0, step))
+        bias[i] = max(-ACCEL_DRIFT_LIMIT_M_S2, min(ACCEL_DRIFT_LIMIT_M_S2, bias[i]))
+        noisy.append(raw + ACCEL_BIAS_M_S2 + bias[i] + float(rng.normal(0.0, ACCEL_NOISE_M_S2)))
+    return (noisy[0], noisy[1], noisy[2])
 
 
 def noisy_tilt(roll_rad: float, pitch_rad: float, rng: np.random.Generator) -> tuple[float, float]:

@@ -65,6 +65,14 @@ GYRO_BIAS_RAD_S = 0.001
 GYRO_NOISE_RAD_S = 0.005
 # Webots InertialUnit.noise of 1.0 is σ = π/2. 0.01 is about 0.9°.
 IMU_NOISE_FIELD = 0.01
+# Cheap 6-axis IMU (MPU-6050 class, about twenty dollars with the
+# encoders). The accelerometer lookup adds a few cm/s² of bias. Fractional
+# lookup noise vanishes at zero, so the mapper also adds this absolute
+# floor and a slow random-walk drift, clamped so it cannot walk off.
+ACCEL_BIAS_M_S2 = 0.03
+ACCEL_NOISE_M_S2 = 0.04
+ACCEL_DRIFT_M_S2_PER_SQRT_S = 0.004
+ACCEL_DRIFT_LIMIT_M_S2 = 0.08
 CRUISE_M_S = 0.28
 SPIN_RAD_S = 0.70
 LOOKAHEAD_M = 0.25

@@ -65,6 +65,9 @@ REASONS = (
     "goal_changed",
     "frontier_ban",
     "frontier_clear",
+    "camera_stuck",
+    "imu_stuck",
+    "camera_imu_stuck",
     "unknown",
 )
 _major_state: dict[str, dict] = {}

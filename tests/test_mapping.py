@@ -2736,6 +2736,49 @@ def test_a_still_picture_with_commanded_motion_reverses_along_the_trail():
     assert left < -0.5 and right < -0.5
 
 
+def test_a_stuck_spin_phase_reverses_and_leaves_the_spin():
+    """The survey spin is a motion phase. A still picture there is stuck."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak()
+    bot = Explorer(camera=cam, fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot.phase = "spin"
+    bot._spin_start = 0.0
+    bot._view_sig = bot._depth_signature(depth)
+    bot._view_still_from = 0.0
+    bot.t_s = 3.0
+    bot._commanded = ( -1.49, 1.49)
+    left, right = bot.step(
+        dt_s=0.05,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.001,
+        depth=depth,
+    )
+    assert left < -0.5 and right < -0.5
+    assert bot.phase == "go"
+    assert bot._escape_block is not None
+
+
+def test_a_blocked_heading_does_not_drive_straight_back_in():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    left, right = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert left < -0.5 and right < -0.5
+    bot.odometry.yaw_rad = 1.2
+    bot.odometry.yaw_unwrapped_rad = 1.2
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+
+
 def test_a_changing_depth_picture_is_not_camera_stuck():
     from src.mapping.explore import Explorer
 

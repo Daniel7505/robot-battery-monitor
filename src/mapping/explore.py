@@ -93,6 +93,11 @@ _IMU_GYRO_W_MAX = 0.08
 _IMU_DV_MIN_M_S = 0.08
 _IMU_DV_WINDOW_S = 0.40
 _IMU_ACCEL_MAX_M_S2 = 0.20
+# After an escape, do not drive back along the same heading while the
+# shell is still on that spot. Reverse and a turn away stay legal.
+_ESCAPE_BLOCK_S = 18.0
+_ESCAPE_BLOCK_M = 0.70
+_ESCAPE_BLOCK_YAW = 0.9
 
 def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
     """True when two frames are the same picture, not a shifted one.
@@ -342,6 +347,10 @@ class Explorer:
         # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
         self._imu_samples: deque = deque()
         self._accel_bias = [0.0, 0.0]
+        # until, x, y, yaw. The heading that was stuck. Forward along it
+        # is refused until the cooldown or until the shell has left.
+        self._escape_block: tuple[float, float, float, float] | None = None
+        self._block_log_at = -1.0
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -658,6 +667,12 @@ class Explorer:
         self._note_pile()
         self._note_crumb()
         self._watch_motion()
+        # Spin, settle, and go all command motion. A wedge in the survey
+        # spin never reached this check when it lived only in _go.
+        if not self.done:
+            stuck = self._stuck_escape(self.odometry.pose())
+            if stuck is not None:
+                return self._remember(stuck)
         if self._script is not None:
             speeds = self._script.command(
                 ds_m=ds,
@@ -699,9 +714,52 @@ class Explorer:
         return wheel_speeds(0.0, SPIN_RAD_S)
 
     def _remember(self, speeds: tuple[float, float]) -> tuple[float, float]:
+        speeds = self._respect_escape_block(speeds)
         self._commanded = (float(speeds[0]), float(speeds[1]))
         self._mark_xy = self.odometry.pose()[:2]
         return speeds
+
+    def _arm_escape_block(self) -> None:
+        """Remember this spot and heading so the next command cannot drive back in."""
+        x, y, yaw = self.odometry.pose()
+        if self._escape_block is not None:
+            until, x0, y0, _yaw0 = self._escape_block
+            if self.t_s < until and math.hypot(x - x0, y - y0) < _ESCAPE_BLOCK_M:
+                return
+        self._escape_block = (self.t_s + _ESCAPE_BLOCK_S, x, y, yaw)
+        self._remember_attempt(x, y, 4.0)
+        if self.goal_xy is not None:
+            cells = list(self._goal_cells)
+            self._goal_hold = (float(self.goal_xy[0]), float(self.goal_xy[1]), x, y, cells)
+            self.goal_xy = None
+            self._goal_cells = []
+            self.path_xy = []
+        if self.phase == "spin":
+            self._spin_start = None
+            self._spin_then = None
+            self.phase = "go"
+            self._replan_at = self.t_s
+
+    def _respect_escape_block(self, speeds: tuple[float, float]) -> tuple[float, float]:
+        """A forward command along the stuck heading becomes a reverse."""
+        block = self._escape_block
+        if block is None:
+            return speeds
+        until, x0, y0, yaw0 = block
+        x, y, yaw = self.odometry.pose()
+        if self.t_s >= until or math.hypot(x - x0, y - y0) >= _ESCAPE_BLOCK_M:
+            self._escape_block = None
+            return speeds
+        left, right = float(speeds[0]), float(speeds[1])
+        v = 0.5 * (left + right) * WHEEL_RADIUS_M
+        if v <= 0.02 or abs(wrap_rad(yaw - yaw0)) > _ESCAPE_BLOCK_YAW:
+            return speeds
+        if self.t_s >= self._block_log_at:
+            self._block_log_at = self.t_s + 2.0
+            self._log("blocked heading, not driving back in")
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
 
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
         """A translation command the hubs did not follow. A spin in place is not a stall.
@@ -1292,6 +1350,7 @@ class Explorer:
         why = self._stuck_reason()
         if why is None:
             return None
+        self._arm_escape_block()
         self._major("stuck", why)
         self._relief = None
         self._blind_back = False

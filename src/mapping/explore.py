@@ -35,7 +35,7 @@ from src.mapping.body import (
     WHEEL_TRACK_M,
     DepthCamera,
 )
-from src.mapping.bubble import SIGHT_M, BubbleView, assess_bubble, corner_bump, corner_gap
+from src.mapping.bubble import SIGHT_M, SHELL_HALF_M, BubbleView, assess_bubble, corner_bump, corner_gap
 from src.mapping.depth_cloud import (
     blind_fraction,
     body_points,
@@ -141,6 +141,10 @@ def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
 # Through a doorway, not down an open room. Half of cruise, so a jamb
 # correction has time to finish before the tire meets the frame.
 DOOR_SPEED_M_S = 0.12
+# Side face plus 2 cm. A creep through a throat the camera and the map
+# both see uses this instead of the 0.30 m pivot aim. Cruise still uses
+# the full aim, so a fast arc does not take the tighter line.
+CREEP_CLEAR_M = SHELL_HALF_M + 0.02
 # Leave a pivot once the nose is this close to the path. 12° puts the
 # 0.19 m nose 4 cm off the axis, inside one grid cell, so a centred
 # crossing still clears the jamb. 15° is a full cell and clips it.
@@ -351,6 +355,14 @@ class Explorer:
         # is refused until the cooldown or until the shell has left.
         self._escape_block: tuple[float, float, float, float] | None = None
         self._block_log_at = -1.0
+        self._block_refusals = 0
+        self._last_escape_xy: tuple[float, float] | None = None
+        self._escape_repeats = 0
+        # Back out to here, then take a different goal. The old spot is
+        # low priority until the avoid weight fades.
+        self._leave_xy: tuple[float, float] | None = None
+        self._quarantine: tuple[float, float, float] | None = None
+        self._narrow_logged = False
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
         # gx, gy, x0, y0, frontier cells. Held until the shell moves GOAL_HOLD_M.
@@ -673,6 +685,9 @@ class Explorer:
             stuck = self._stuck_escape(self.odometry.pose())
             if stuck is not None:
                 return self._remember(stuck)
+            leaving = self._leaving_command(self.odometry.pose())
+            if leaving is not None:
+                return self._remember(leaving)
         if self._script is not None:
             speeds = self._script.command(
                 ds_m=ds,
@@ -726,8 +741,16 @@ class Explorer:
             until, x0, y0, _yaw0 = self._escape_block
             if self.t_s < until and math.hypot(x - x0, y - y0) < _ESCAPE_BLOCK_M:
                 return
+        if self._last_escape_xy is not None and math.hypot(x - self._last_escape_xy[0], y - self._last_escape_xy[1]) < 0.45:
+            self._escape_repeats += 1
+        else:
+            self._escape_repeats = 1
+            self._block_refusals = 0
+        self._last_escape_xy = (x, y)
         self._escape_block = (self.t_s + _ESCAPE_BLOCK_S, x, y, yaw)
         self._remember_attempt(x, y, 4.0)
+        if self._escape_repeats >= 2:
+            self._begin_pile_leave((x, y, yaw))
         if self.goal_xy is not None:
             cells = list(self._goal_cells)
             self._goal_hold = (float(self.goal_xy[0]), float(self.goal_xy[1]), x, y, cells)
@@ -757,9 +780,91 @@ class Explorer:
         if self.t_s >= self._block_log_at:
             self._block_log_at = self.t_s + 2.0
             self._log("blocked heading, not driving back in")
+        self._block_refusals += 1
+        if self._block_refusals >= 4:
+            self._begin_pile_leave(self.odometry.pose())
         self._body_v, self._body_w = -0.10, 0.0
         self._note_approach("back", -0.10, 0.0)
         return wheel_speeds(-0.10, 0.0)
+
+    def _begin_pile_leave(self, pose) -> None:
+        """The same spot again. Reverse along the trail and drop that goal."""
+        if self._leave_xy is not None:
+            return
+        x, y = float(pose[0]), float(pose[1])
+        self._leave_xy = (x, y)
+        self._quarantine = (x, y, self.t_s)
+        if self.goal_xy is not None:
+            self._remember_attempt(float(self.goal_xy[0]), float(self.goal_xy[1]), 6.0)
+        self.goal_xy = None
+        self._goal_cells = []
+        self.path_xy = []
+        self._escape_block = None
+        self._block_refusals = 0
+        self._major("leave", "pile_leave")
+        self._log("pile again, leaving for another goal")
+
+    def _leaving_command(self, pose) -> tuple[float, float] | None:
+        """Reverse along the trail until the shell is out of the quarantined spot."""
+        if self._leave_xy is None:
+            return None
+        if math.hypot(float(pose[0]) - self._leave_xy[0], float(pose[1]) - self._leave_xy[1]) >= 0.70:
+            self._leave_xy = None
+            self._escape_repeats = 0
+            self._replan_at = self.t_s
+            return None
+        along = self._trail_reverse(pose, trust_trail=True)
+        if along is not None and along[0] < -0.2 and along[1] < -0.2:
+            return along
+        if self._rear_measured_close():
+            return None
+        self._body_v, self._body_w = -0.10, 0.0
+        self._note_approach("back", -0.10, 0.0)
+        return wheel_speeds(-0.10, 0.0)
+
+    def _narrow_gap(self, pose) -> bool:
+        """A throat this robot can see, tighter than the pivot aim and wider than the body.
+
+        Both the map and a live shoulder range have to agree. An open hall
+        (both shoulders at the no-return sentinel) is not a doorway. Ground
+        truth is not read.
+        """
+        _nose, left, right = self._last_clear
+        if float(left) >= 90.0 and float(right) >= 90.0:
+            return False
+        if not any(0.15 <= float(side) < 90.0 for side in (left, right)):
+            return False
+        x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+        for dist in (0.0, 0.35):
+            clearance = _pose_clearance(
+                self.grid,
+                x + dist * math.cos(yaw),
+                y + dist * math.sin(yaw),
+            )
+            if CREEP_CLEAR_M <= clearance < TURN_AIM_M:
+                return True
+        return False
+
+    def _note_narrow_gap(self) -> None:
+        if self._narrow_logged:
+            return
+        self._narrow_logged = True
+        self._major("creep", "narrow_gap", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
+        self._log("narrow gap, creeping")
+
+    def _creep_through_gap(self, pose, v: float, w: float, heading_err: float) -> tuple[float, float] | None:
+        """Full buffer at cruise. Through a seen throat, creep at the body margin."""
+        if v <= 0.02 or abs(heading_err) > 0.50 or not self._narrow_gap(pose):
+            self._narrow_logged = False
+            return None
+        creep_v = min(float(v), DOOR_SPEED_M_S)
+        creep_w = max(-0.20, min(0.20, float(w)))
+        if self._shell_clips(creep_v, creep_w):
+            return None
+        self._note_narrow_gap()
+        self._body_v, self._body_w = creep_v, creep_w
+        self._note_approach("straight", creep_v, creep_w)
+        return wheel_speeds(creep_v, creep_w)
 
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
         """A translation command the hubs did not follow. A spin in place is not a stall.
@@ -2256,6 +2361,9 @@ class Explorer:
             self._note_approach("straight", v, w)
         else:
             heading_err = wrap_rad(self._segment_heading() - pose[2])
+        through = self._creep_through_gap(pose, v, w, heading_err)
+        if through is not None:
+            return through
         if (
             (approach is None or approach[2] != "straight")
             and self._needs_room(pose, heading_err)
@@ -2362,6 +2470,7 @@ class Explorer:
         self.room_doors = rooms["doors"]
         report: dict = {}
         banned = set(self._ban_set()) | self._held_cells()
+        aim = CREEP_CLEAR_M if self._narrow_gap((x, y, yaw)) else None
         chosen = select_goal(
             self.grid,
             (x, y),
@@ -2373,12 +2482,21 @@ class Explorer:
             report=report,
             prefer_near=prefer_near,
             visited=self.visited,
+            turn_aim_m=aim,
         )
         self._note_refusals(report)
         if chosen is None:
             self._no_frontier()
             return
         goal, path = chosen
+        if self._quarantine is not None:
+            qx, qy, qt = self._quarantine
+            if self.t_s - qt > 30.0:
+                self._quarantine = None
+            elif math.hypot(goal[0] - qx, goal[1] - qy) < 0.80 and depth < 4:
+                self._remember_attempt(float(goal[0]), float(goal[1]), 6.0)
+                self._plan(depth + 1)
+                return
         pending = list(report.get("cells") or [])
         if self._goal_on_hold(goal):
             # Moved less than GOAL_HOLD_M. Leave it out until the shell does.

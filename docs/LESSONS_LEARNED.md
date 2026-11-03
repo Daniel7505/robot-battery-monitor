@@ -4,7 +4,9 @@ Read this before changing apartment mapping. Append what the latest sim actually
 
 ## What this robot is
 
-The apartment machine is `ButlerBotSkid`: four driven wheels, no casters. Hubs at y = ±0.17 m (track 0.34 m), wheel radius 0.08 m, nose and tail 0.19 m, side face 0.227 m. Planning inflation stays 0.20 m. The depth camera is an OAK-D Lite at (0.14, 0, 0.78), pitched 5°, minimum range 0.35 m. A reading of nose = 0.12 m is the blind placeholder, not a measured gap.
+The apartment machine is `ButlerBotSkid`: four driven wheels, no casters. Hubs at y = ±0.17 m (track 0.34 m), wheel radius 0.08 m, nose and tail 0.19 m, side face 0.227 m. The side faces are 0.454 m apart (17.9 in). The tires stick out to about 0.195 m from the centreline, 0.390 m across (15.4 in). Planning inflation stays 0.20 m at cruise. A creep through a throat the robot itself sees uses the side face plus 2 cm (0.247 m) instead of the 0.30 m pivot aim. The depth camera is an OAK-D Lite at (0.14, 0, 0.78), pitched 5°, minimum range 0.35 m. A reading of nose = 0.12 m is the blind placeholder, not a measured gap.
+
+A centred path through a common US door, spare on each side of the 0.454 m side-face width: a 24 in door (0.610 m) leaves 0.078 m, a 30 in door (0.762 m) leaves 0.154 m, and a 32 in ADA clear opening (0.813 m) leaves 0.180 m. The bath opening in this apartment is 0.81 m, about that 32 in clear width. The 0.30 m pivot aim wants the centre 0.30 m from a mapped wall, so a centred path needs about 0.60 m of gap before a smeared cell. A 24 in door does not keep that aim. The creep aim of 0.247 m still fits a centred 24 in door.
 
 The warehouse still uses the caster `ButlerBot`. That proto keeps its casters and its device depth noise. Do not edit it to fix the apartment.
 
@@ -140,6 +142,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Round 6, 2026-11-02. A path that ends with the nose in one mapped wall and a side against another is cut back to the last pose where a pivot fits. A spin with no yaw change and nose 0.12 m reverses along the trail. Two seeds only, bar missed. The `(-0.64,0.64)` command is gone (0 lines). North's pile is now `cmd=(1.06,-1.06)` with nose 99, 193 phase lines, pose frozen, pile 446 s at (3.90, 4.97) from t=154 s, stuck 193, kitchen/bath visited 0. −0.35 pile 361 s, kitchen 0, bath 0, bedroom visited 15%, corner steps 0. Unconfirmed: that nose 99 means the depth frame is empty rather than inside minimum range. Confirmed: the body is not yawing under that spin, and the new detector only fires when the nose is the 0.12 m placeholder, so this spin is invisible to it. Four seeds not run. The path trim and the nose check were deleted in round 7.
 - Round 7, 2026-11-02. See the entry below. Two seeds only. Bar missed. Four seeds not run. Warehouse lap passed.
 - Round 8, 2026-11-02. See the entry below. An 80% body was a diagnostic only and was deleted. Two full-size seeds. North beat the round 5 bar. −0.35 did not. Four seeds not run. Warehouse lap passed.
+- Round 9, 2026-11-03. Creep through a seen throat, and leave a repeated pile for another goal. Two seeds. North beat the round 5 bar. −0.35 did not (visited 10.5%, pile 417 s, kitchen 0). Four seeds not run. Warehouse lap passed.
 
 ## One stuck check, not one pose
 
@@ -182,3 +185,20 @@ Result, two full-size seeds, round 5 in parentheses. Both had to beat round 5 on
 - North: seen 78.2% (69.6), visited 7.4% (3.4), pile 372 s at (3.18, 5.28) from t=228 s (383 s). Kitchen 0, bedroom 22, bath 0, living 7, hall 0. Corner steps 0. Wall steps 485. Detectors: `camera_stuck` 15, `imu_stuck` 19, `unknown` 109. `blocked heading` 117 lines. Phase `spin` lines 25, against the long spin in round 7. This seed beat the round 5 bar. The pile is still most of the run, inside the bedroom edge, with the block refusing the drive back in.
 
 Dead ends: do not ship the 80% proto. Do not read the kitchen 26% as a stuck-detector bug on open floor. Do not put the stuck check back into go only. Do not treat the heading block as having left the 0.45 m ball. North's block fired through a 372 s stay. The warehouse caster lap still reached the 201 m cap and printed `MISSION complete`.
+
+## Creep the throat, leave a repeated pile
+
+Symptom: the 80% body visited 26% of the kitchen on −0.35. The full-size round 8 path nicked that kitchen (6%) and north's blocked-heading line fired 117 times without leaving the bedroom edge.
+
+How it was diagnosed: the size run is in the entry above. The body width against 24 / 30 / 32 in doors is in the opening section. Round 8's wall steps were 143 on −0.35 and 485 on north, with 0 corner steps. Those are the contact numbers this round has to stay near.
+
+Fix chosen: when the robot's own map puts the centre in a throat (clearance under the 0.30 m pivot aim and at least the side face plus 2 cm) and a live shoulder sees a surface, a forward command is capped at the 0.12 m/s creep. The path aim for that plan drops from 0.30 m to 0.247 m. A cruise arc still uses 0.30 m. The footprint sweep is unchanged, so a creep that would hit a mapped cell is not sent. The reason code is `narrow_gap`. A second escape within 0.45 m of the last one, or a fourth blocked-heading refusal, drops that goal, marks it low priority, and reverses along the driven trail until the shell is 0.70 m away. The reason code is `pile_leave`. The short heading block remains for a single refusal.
+
+Why not the alternatives: shrinking the shipped body was the diagnostic, not the robot. Dropping the 0.20 m inflation below the tire would plan through cells the wheels hit. Using the tight aim at cruise is how a fast arc clips a jamb.
+
+Result, two full-size seeds, round 5 in parentheses. Both had to beat round 5 on visited % and pile time. −0.35 did not. Four seeds were not run. The 26% kitchen figure was not repeated on the full-size −0.35 seed.
+
+- −0.35: seen 91.9% (89.5), visited 10.5% (23.4), pile 417 s at (1.36, 4.81) from t=183 s (71 s). Kitchen visited 0, bedroom 23, bath 4, living 13, hall 0. Corner steps 0. Wall steps 477. Bumps (`contact_bump`) 0. `narrow_gap` 2, `pile_leave` 3, `camera_stuck` 11, `imu_stuck` 4, `unknown` 180. Blocked-heading lines 8. The three `narrow gap` lines are at t=50, 51, and 177 s. All 477 wall steps are in the 200–300 s window, during the bedroom pile, after those creeps.
+- North: seen 86.6% (69.6), visited 14.4% (3.4), pile 146 s at (2.92, 1.06) from t=453 s (383 s). Kitchen visited 16, bedroom 10, bath 0, living 17, hall 51. Corner steps 0. Wall steps 528. Bumps 10. `narrow_gap` 16, `pile_leave` 4, `camera_stuck` 8, `imu_stuck` 2, `unknown` 37. Blocked-heading lines 46, down from 117. This seed beat the round 5 bar. Wall steps are 528 against round 8's 485, all in the last 100 s. Round 8 kitchen visited on this seed was 0.
+
+Dead ends: do not read the −0.35 wall-step rise as the creep. The creep lines are earlier than every wall step on that seed. Do not treat north's 16% kitchen as the 80% diagnostic's 26%, and do not claim the creep caused it without a trace that those `narrow_gap` lines are the kitchen entry. The full-size −0.35 kitchen is still 0. Do not lower the cruise aim to 0.247 m. The warehouse caster lap still reached the 201 m cap and printed `MISSION complete`.

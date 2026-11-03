@@ -2762,6 +2762,53 @@ def test_a_stuck_spin_phase_reverses_and_leaves_the_spin():
     assert bot._escape_block is not None
 
 
+def test_a_seen_throat_is_crept_and_an_open_hall_is_not():
+    """The pivot aim stays at cruise. A throat the robot can see is a slow creep."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.4, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._last_clear = (0.8, 0.5, 0.5)
+    left, right = bot._go(False, 0.28)
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 1.2
+    assert max(left, right) < 2.2
+    bot._last_clear = (2.0, 99.0, 99.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        bot.grid.log[cell] = bot.grid.l_min
+    left, right = bot._go(False, 0.28)
+    assert left > 2.2 and right > 2.2
+
+
+def test_a_repeated_block_leaves_for_another_goal():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.t_s = 10.0
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    bot._block_refusals = 3
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy is None
+    assert bot._leave_xy == (0.0, 0.0)
+    assert bot._quarantine is not None
+
+
 def test_a_blocked_heading_does_not_drive_straight_back_in():
     from src.mapping.drive import wheel_speeds
     from src.mapping.explore import Explorer

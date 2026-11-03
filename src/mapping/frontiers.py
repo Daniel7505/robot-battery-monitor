@@ -675,13 +675,18 @@ def _clearance_at(grid: OccupancyGrid, dist: np.ndarray, x: float, y: float) -> 
 
 
 def hold_turning_clearance(
-    grid: OccupancyGrid, path_xy: list[tuple[float, float]]
+    grid: OccupancyGrid,
+    path_xy: list[tuple[float, float]],
+    *,
+    aim_m: float = TURN_AIM_M,
+    floor_m: float = TURN_CLEAR_M,
 ) -> list[tuple[float, float]]:
     """Move path points out to the turning aim, except a doorway centre.
 
     The first point is the robot and stays. A point already on an opening
     centre stays, so the crossing is straight. Anything else closer than
-    the aim is pushed away from the nearest mapped obstacle.
+    the aim is pushed away from the nearest mapped obstacle. A creep
+    through a seen throat passes a lower aim, the body plus a small margin.
     """
     if len(path_xy) < 2:
         return list(path_xy)
@@ -697,7 +702,7 @@ def hold_turning_clearance(
         if opening is not None and math.hypot(here[0] - opening[0], here[1] - opening[1]) < 0.20:
             point = (opening[0], opening[1])
         else:
-            point = _push_clear(grid, dist, here[0], here[1])
+            point = _push_clear(grid, dist, here[0], here[1], aim_m=aim_m, floor_m=floor_m)
             if point is None:
                 continue
         if math.hypot(point[0] - out[-1][0], point[1] - out[-1][1]) < 0.05:
@@ -707,10 +712,16 @@ def hold_turning_clearance(
 
 
 def _push_clear(
-    grid: OccupancyGrid, dist: np.ndarray, x: float, y: float
+    grid: OccupancyGrid,
+    dist: np.ndarray,
+    x: float,
+    y: float,
+    *,
+    aim_m: float = TURN_AIM_M,
+    floor_m: float = TURN_CLEAR_M,
 ) -> tuple[float, float] | None:
     have = _clearance_at(grid, dist, x, y)
-    if have >= TURN_AIM_M:
+    if have >= aim_m:
         return (x, y)
     cell = grid.cell_of(x, y)
     if cell is None:
@@ -726,17 +737,17 @@ def _push_clear(
             nearest = float(dist[rr, cc])
             away_r, away_c = -dr, -dc
     if away_r == 0 and away_c == 0:
-        return (x, y) if have >= TURN_CLEAR_M else None
+        return (x, y) if have >= floor_m else None
     step = grid.res
-    best = (x, y) if have >= TURN_CLEAR_M else None
+    best = (x, y) if have >= floor_m else None
     px, py = x, y
     for _ in range(12):
         px += away_c * step
         py += away_r * step
         got = _clearance_at(grid, dist, px, py)
-        if got >= TURN_CLEAR_M:
+        if got >= floor_m:
             best = (px, py)
-        if got >= TURN_AIM_M:
+        if got >= aim_m:
             return (px, py)
     return best
 
@@ -1004,6 +1015,7 @@ def select_goal(
     report: dict | None = None,
     prefer_near: bool = False,
     visited: np.ndarray | None = None,
+    turn_aim_m: float | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -1038,6 +1050,7 @@ def select_goal(
         return None
     banned = banned or set()
     avoid = list(avoid or [])
+    aim_m = TURN_AIM_M if turn_aim_m is None else float(turn_aim_m)
     best: tuple[float, tuple[float, float], list[tuple[float, float]], list] | None = None
     ranked_scores: list[tuple[float, tuple[float, float]]] = []
 
@@ -1078,7 +1091,7 @@ def select_goal(
         # is tried before the frontier is refused, so a look from the open
         # floor is not dropped because the sweet spot sat in the corner.
         size_m = len(group) * grid.res
-        if clear is not None and float(clear[target]) < TURN_AIM_M and size_m < 0.80:
+        if clear is not None and float(clear[target]) < aim_m and size_m < 0.80:
             safer = _viewpoint_clearest(free, cells, labels == 1)
             nearest = _viewpoint_nearest(free, cells, 6)
             if safer is not None and float(clear[safer]) >= TURN_AIM_M:
@@ -1191,7 +1204,7 @@ def select_goal(
     if best is None:
         return None
     pts = line_up_with_openings(grid, best[2])
-    pts = hold_turning_clearance(grid, pts)
+    pts = hold_turning_clearance(grid, pts, aim_m=aim_m)
     if not pts:
         return None
     if report is not None:

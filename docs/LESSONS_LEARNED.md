@@ -1,6 +1,6 @@
 # Lessons learned
 
-Read this before changing apartment mapping. Append what the latest sim actually showed. Do not write a cause the logs did not support.
+Read this before changing apartment mapping. Append what the latest sim actually showed. Do not write a cause the logs did not support. The choice that followed a lesson goes in [`docs/DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md). Update that file at the end of every round.
 
 ## What this robot is
 

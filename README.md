@@ -1,7 +1,7 @@
 # ButlerBot (repo: robot-battery-monitor)
 
 **A simulated delivery robot plus a live "car dashboard" for its battery and power use.**
-Owner: [Daniel7505](https://github.com/Daniel7505) · Co-built with Grok Build · Standing goals: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) · Mapping lessons (read first): [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) · Review rules: [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) · Project story: [`JOURNEY.md`](JOURNEY.md)
+Owner: [Daniel7505](https://github.com/Daniel7505) · Co-built with Grok Build · Standing goals: [`docs/NORTH_STAR.md`](docs/NORTH_STAR.md) · Mapping lessons (read first): [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) · Design decisions: [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) · Review rules: [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) · Project story: [`JOURNEY.md`](JOURNEY.md)
 
 > **About the name.** The repo is still called "robot-battery-monitor" because that is how it started. It has grown into a full robot simulation project. The name is leftover.
 
@@ -770,7 +770,7 @@ Same as C, with these differences:
 
 ### E. Developer / contributor workflow
 
-**Before you change anything** read [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) (apartment mapping failures and standing rules) and [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) (stop/ABS and power core, and how credits are recorded).
+**Before you change anything** read [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) (apartment mapping failures and standing rules), [`docs/DESIGN_DECISIONS.md`](docs/DESIGN_DECISIONS.md) (hardware and decision choices, with the sim evidence), and [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md) (stop/ABS and power core, and how credits are recorded).
 
 1. **Set up** as in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) (venv, `pip install -r requirements.txt pytest`, Postgres up).
 2. **Branch** from `main` with a descriptive name, following the existing pattern:

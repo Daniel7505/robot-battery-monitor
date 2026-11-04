@@ -2962,6 +2962,44 @@ def test_a_held_goal_is_not_rescored_until_the_shell_moves(monkeypatch):
     assert bot.goal_xy == (1.2, 0.0)
 
 
+def test_oracle_pose_is_for_the_planner_and_the_map_stays_on_the_estimate():
+    """Ground-truth pose, in the odometry frame, drives planning only."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.odometry.x_m = 1.0
+    bot.odometry.y_m = -0.5
+    bot.odometry.yaw_rad = 0.4
+    assert bot.plan_pose() == pytest_approx(bot.odometry.pose())
+    assert bot.plan_yaw_unwrapped() == pytest_approx(bot.odometry.yaw_unwrapped_rad)
+    yaw0 = math.pi / 2.0
+    assert bot.note_oracle_world(6.1, 4.7, yaw0) is True
+    assert bot.plan_pose() == pytest_approx((0.0, 0.0, 0.0))
+    # Spawn faces +Y. One metre along that heading is +1 x in the odometry frame.
+    assert bot.note_oracle_world(6.1, 5.7, yaw0) is False
+    assert bot.plan_pose() == pytest_approx((1.0, 0.0, 0.0))
+    assert bot.odometry.pose()[:2] == pytest_approx((1.0, -0.5))
+    bot.note_oracle_world(6.1, 5.7, yaw0 + 3.0)
+    bot.note_oracle_world(6.1, 5.7, yaw0 - 3.0)
+    assert bot.plan_yaw_unwrapped() == pytest_approx(3.0 + math.atan2(math.sin(-6.0), math.cos(-6.0)))
+    bot.t_s = 1.0
+    bot._note_pile()
+    assert bot._pile_anchor[1] == pytest_approx(1.0)
+    assert bot._pile_anchor[2] == pytest_approx(0.0)
+    bot._mark_visited()
+    est = bot.grid.cell_of(1.0, -0.5)
+    ora = bot.grid.cell_of(1.0, 0.0)
+    assert est is not None and ora is not None and est != ora
+    assert bot.visited[est]
+    assert not bot.visited[ora]
+    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    stamped = bot.grid.cell_of(1.0, -0.5)
+    other = bot.grid.cell_of(1.0, 0.0)
+    assert stamped is not None and other is not None
+    assert float(bot.grid.log[stamped]) < 0.0
+    assert float(bot.grid.log[other]) == pytest_approx(0.0)
+
+
 def test_solids_include_the_closed_doors():
     names = {solid.name for solid in load_solids()}
     assert "APT_DOOR_FRONT" in names

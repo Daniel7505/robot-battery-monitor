@@ -6,8 +6,9 @@ allows. Sweep, doorway, and footprint checks are costs. A command that
 does not move the odometry waits once, reverses once, and tries the
 next goal. Depth closer than the stop distance is the only veto.
 
-This module does not know the apartment. Pose is whatever the odometry
-object reports.
+This module does not know the apartment. Planning uses the odometry
+pose unless ``note_oracle_world`` has been fed. The grid is always
+integrated on the odometry pose.
 """
 
 from __future__ import annotations
@@ -391,9 +392,52 @@ class Explorer:
         self._pitch_rest: float | None = None
         self.zupt_events = 0
         self.wheels_lifted = 0
+        # Planner pose in the odometry frame. None keeps the estimate.
+        self._oracle_origin: tuple[float, float, float] | None = None
+        self._oracle_local: tuple[float, float, float] | None = None
+        self._oracle_yaw_prev = 0.0
+        self._oracle_yaw_unwrapped = 0.0
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
+
+    def plan_pose(self) -> tuple[float, float, float]:
+        """Pose the explorer plans with. The estimate, unless an oracle was handed in."""
+        if self._oracle_local is None:
+            return self.odometry.pose()
+        return self._oracle_local
+
+    def plan_yaw_unwrapped(self) -> float:
+        if self._oracle_local is None:
+            return self.odometry.yaw_unwrapped_rad
+        return self._oracle_yaw_unwrapped
+
+    def note_oracle_world(self, x_m: float, y_m: float, yaw_rad: float) -> bool:
+        """Store the simulator pose for planning. The first sample is the origin.
+
+        Later samples are expressed in the odometry frame: start at (0, 0)
+        with heading 0. The occupancy grid is not moved. Returns True only
+        on that first sample.
+        """
+        x = float(x_m)
+        y = float(y_m)
+        yaw = float(yaw_rad)
+        if self._oracle_origin is None:
+            self._oracle_origin = (x, y, yaw)
+            self._oracle_yaw_prev = 0.0
+            self._oracle_yaw_unwrapped = 0.0
+            self._oracle_local = (0.0, 0.0, 0.0)
+            return True
+        ox, oy, oyaw = self._oracle_origin
+        c = math.cos(oyaw)
+        s = math.sin(oyaw)
+        dx = x - ox
+        dy = y - oy
+        local_yaw = wrap_rad(yaw - oyaw)
+        self._oracle_yaw_unwrapped += wrap_rad(local_yaw - self._oracle_yaw_prev)
+        self._oracle_yaw_prev = local_yaw
+        self._oracle_local = (c * dx + s * dy, -s * dx + c * dy, local_yaw)
+        return False
 
     def observed_room_labels(self):
         """Room ids on cells the shell has covered. Rays through a door do not count."""
@@ -682,10 +726,10 @@ class Explorer:
         # Spin, settle, and go all command motion. A wedge in the survey
         # spin never reached this check when it lived only in _go.
         if not self.done:
-            stuck = self._stuck_escape(self.odometry.pose())
+            stuck = self._stuck_escape(self.plan_pose())
             if stuck is not None:
                 return self._remember(stuck)
-            leaving = self._leaving_command(self.odometry.pose())
+            leaving = self._leaving_command(self.plan_pose())
             if leaving is not None:
                 return self._remember(leaving)
         if self._script is not None:
@@ -709,7 +753,7 @@ class Explorer:
         return self._remember((0.0, 0.0))
 
     def _spin(self) -> tuple[float, float]:
-        yaw_u = self.odometry.yaw_unwrapped_rad
+        yaw_u = self.plan_yaw_unwrapped()
         if self._spin_start is None:
             self._spin_start = yaw_u
         if abs(yaw_u - self._spin_start) >= 2.0 * math.pi - 0.08:
@@ -736,7 +780,7 @@ class Explorer:
 
     def _arm_escape_block(self) -> None:
         """Remember this spot and heading so the next command cannot drive back in."""
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         if self._escape_block is not None:
             until, x0, y0, _yaw0 = self._escape_block
             if self.t_s < until and math.hypot(x - x0, y - y0) < _ESCAPE_BLOCK_M:
@@ -769,7 +813,7 @@ class Explorer:
         if block is None:
             return speeds
         until, x0, y0, yaw0 = block
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         if self.t_s >= until or math.hypot(x - x0, y - y0) >= _ESCAPE_BLOCK_M:
             self._escape_block = None
             return speeds
@@ -782,7 +826,7 @@ class Explorer:
             self._log("blocked heading, not driving back in")
         self._block_refusals += 1
         if self._block_refusals >= 4:
-            self._begin_pile_leave(self.odometry.pose())
+            self._begin_pile_leave(self.plan_pose())
         self._body_v, self._body_w = -0.10, 0.0
         self._note_approach("back", -0.10, 0.0)
         return wheel_speeds(-0.10, 0.0)
@@ -849,7 +893,7 @@ class Explorer:
         if self._narrow_logged:
             return
         self._narrow_logged = True
-        self._major("creep", "narrow_gap", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
+        self._major("creep", "narrow_gap", clearance_m=_pose_clearance(self.grid, *self.plan_pose()[:2]))
         self._log("narrow gap, creeping")
 
     def _creep_through_gap(self, pose, v: float, w: float, heading_err: float) -> tuple[float, float] | None:
@@ -1151,7 +1195,7 @@ class Explorer:
 
     def _note_progress(self) -> None:
         """Clock commanded translation that the odometry did not follow."""
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         commanded = abs(self._body_v) > 0.03
         if self._progress_from is None:
             self._progress_from = (self.t_s, x, y, commanded)
@@ -1173,12 +1217,12 @@ class Explorer:
         t0, x0, y0, saw = self._progress_from
         if not saw or self.t_s - t0 < STALL_WINDOW_S:
             return False
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         return math.hypot(x - x0, y - y0) < GOAL_HOLD_M
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         if self._still_from is None:
             self._still_from = (self.t_s, x, y)
             return
@@ -1190,7 +1234,7 @@ class Explorer:
         if self._still_from is None:
             return False
         t0, x0, y0 = self._still_from
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         return (self.t_s - t0) >= STILL_S and math.hypot(x - x0, y - y0) < STILL_M
 
     def _pivoting(self) -> bool:
@@ -1231,7 +1275,7 @@ class Explorer:
     def _goal_released(self) -> bool:
         if self._goal_hold is None:
             return True
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         if math.hypot(x - self._goal_hold[2], y - self._goal_hold[3]) >= GOAL_HOLD_M:
             self._goal_hold = None
             return True
@@ -1285,7 +1329,7 @@ class Explorer:
 
     def _note_pile(self) -> None:
         """Arm the hard stop once the shell has sat inside 0.45 m for 60 s."""
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         if self._pile_anchor is None:
             self._pile_anchor = (self.t_s, x, y)
             return
@@ -1484,7 +1528,7 @@ class Explorer:
         return view is not None and view.rear is not None and float(view.rear) <= 0.08
 
     def _note_crumb(self) -> None:
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         if self._crumbs and math.hypot(x - self._crumbs[-1][0], y - self._crumbs[-1][1]) < 0.25:
             return
         self._crumbs.append((float(x), float(y)))
@@ -1705,7 +1749,7 @@ class Explorer:
         if self._slip_debt_m >= 0.15 or self._view_blind:
             return False
         if abs(self._body_v) < 0.02 and abs(self._body_w) > 0.2:
-            x, y, _yaw = self.odometry.pose()
+            x, y, _yaw = self.plan_pose()
             if _pose_clearance(self.grid, x, y) >= TURN_AIM_M:
                 return False
         return True
@@ -1855,7 +1899,7 @@ class Explorer:
         if not translating and not spinning:
             self._motion_anchor = None
             return
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         if self._motion_anchor is None:
             self._motion_anchor = (self.t_s, x, y, yaw)
             return
@@ -1902,7 +1946,7 @@ class Explorer:
             if (
                 self._open_reverse()
                 and not self._reverse_failed
-                and not _behind_blocked(self.grid, self.odometry.pose())
+                and not _behind_blocked(self.grid, self.plan_pose())
             ):
                 self._relief = "reverse"
                 self._relief_until = self.t_s + 0.45
@@ -1930,7 +1974,7 @@ class Explorer:
         return None
 
     def _finish_relief(self) -> None:
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         if self.goal_xy is not None:
             self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
             # A doorway crossing and an open-floor pivot are the motion stack,
@@ -1955,7 +1999,7 @@ class Explorer:
         self._log("stuck, next goal")
 
     def _segment_heading(self) -> float:
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         path = self.path_xy
         if not path:
             return yaw
@@ -1983,7 +2027,7 @@ class Explorer:
 
     def _place_tag(self) -> str:
         """doorway, hallway, or room from this robot's own map. Not the floor plan."""
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         cell = self.grid.cell_of(x, y)
         if cell is None:
             return "room"
@@ -1999,7 +2043,7 @@ class Explorer:
         return "room"
 
     def _major(self, action: str, reason: str, **numbers: float) -> None:
-        x, y, _yaw = self.odometry.pose()
+        x, y, _yaw = self.plan_pose()
         log_major(self.t_s, x, y, self._place_tag(), action, reason, **numbers)
 
     def _note_approach(self, why: str, v: float, w: float) -> None:
@@ -2010,8 +2054,8 @@ class Explorer:
             return
         self._approach_why = why
         self._approach_log_at = self.t_s + 1.0
-        err = abs(wrap_rad(self._segment_heading() - self.odometry.pose()[2]))
-        clear = _pose_clearance(self.grid, *self.odometry.pose()[:2])
+        err = abs(wrap_rad(self._segment_heading() - self.plan_pose()[2]))
+        clear = _pose_clearance(self.grid, *self.plan_pose()[:2])
         if why == "pivot":
             self._major("pivot", "heading_off", heading_err_deg=math.degrees(err), clearance_m=clear)
         elif why == "back":
@@ -2029,12 +2073,12 @@ class Explorer:
         self._last_motion = choice.name
         self._motion_log_at = self.t_s + 1.0
         if choice.name == "doorway_refusal":
-            self._major("stop", "too_tight_to_fit", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
+            self._major("stop", "too_tight_to_fit", clearance_m=_pose_clearance(self.grid, *self.plan_pose()[:2]))
         elif choice.name in ("back_out", "doorway_rescan"):
-            self._major("back", "cant_see_behind_backing_out", clearance_m=_pose_clearance(self.grid, *self.odometry.pose()[:2]))
+            self._major("back", "cant_see_behind_backing_out", clearance_m=_pose_clearance(self.grid, *self.plan_pose()[:2]))
 
     def _shell_clips(self, v: float, w: float) -> bool:
-        return footprint_clips(self.grid, self.odometry.pose(), v, w)
+        return footprint_clips(self.grid, self.plan_pose(), v, w)
 
     def _remember_command(self, v: float, w: float) -> None:
         if abs(v) < 0.02 and abs(w) < 0.05:
@@ -2198,7 +2242,7 @@ class Explorer:
         if self.done:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
-        pose = self.odometry.pose()
+        pose = self.plan_pose()
         self._note_translation()
         self._note_progress()
         self._note_pile()
@@ -2243,7 +2287,7 @@ class Explorer:
             return relief
         if self.phase != "go":
             return 0.0, 0.0
-        pose = self.odometry.pose()
+        pose = self.plan_pose()
         contact = self._corner_contact()
         if self._recover or (contact is not None and not self._reverse_closed(pose)):
             recover = self._begin_recover(pose) if not self._recover else self._recover_command(pose)
@@ -2266,7 +2310,7 @@ class Explorer:
         if self.phase != "go" or self.done or not self.path_xy:
             self._body_v, self._body_w = 0.0, 0.0
             return 0.0, 0.0
-        pose = self.odometry.pose()
+        pose = self.plan_pose()
         approach = approach_command(self.grid, pose, self.path_xy)
         heading_err = wrap_rad(self._segment_heading() - pose[2])
         if approach is not None and approach[2] == "pivot":
@@ -2347,7 +2391,7 @@ class Explorer:
             if self.phase != "go" or not self.path_xy:
                 self._body_v, self._body_w = 0.0, 0.0
                 return 0.0, 0.0
-            pose = self.odometry.pose()
+            pose = self.plan_pose()
             v, w, arrived = pure_pursuit(pose, self.path_xy, arrive_m=ARRIVE_M)
             if arrived:
                 self._body_v, self._body_w = 0.0, 0.0
@@ -2460,7 +2504,7 @@ class Explorer:
         self._replan_at = self.t_s + 4.0
         prefer_near = self._prefer_near
         self._prefer_near = False
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         if depth > 6:
             self._no_frontier()
             return
@@ -2597,7 +2641,7 @@ class Explorer:
         if self.t_s < self._settle_check:
             return 0.0, 0.0
         self._settle_check = self.t_s + 0.5
-        x, y, yaw = self.odometry.pose()
+        x, y, yaw = self.plan_pose()
         rooms = segment_map(self.grid.labels(), self.grid.res)
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]

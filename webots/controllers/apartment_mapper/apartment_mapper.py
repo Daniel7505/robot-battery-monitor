@@ -4,7 +4,9 @@ Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, oak_accel,
 the two wheel position sensors, a ring of short-range sonars, and a
 downward floor camera. Wheel angles are quantized in the odometry
 module. The inertial unit's yaw is not used for heading. A separate
-controller records the simulator pose for scoring; this process does not.
+controller records the simulator pose for scoring. This process does not
+read that log. ``RBM_ORACLE_POSE=1`` hands the planner its own pose from
+``oracle_pose.txt``. The grid still integrates the estimate.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
@@ -91,6 +93,30 @@ def _flag(name: str, default: bool = True) -> bool:
     if raw is None or not str(raw).strip():
         return default
     return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _read_oracle_pose(folder: str):
+    """Latest simulator pose, or None when the logger has not published one."""
+    path = os.path.join(folder, "oracle_pose.txt")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            parts = handle.read().split()
+    except OSError:
+        return None
+    if len(parts) < 3:
+        return None
+    try:
+        return float(parts[0]), float(parts[1]), float(parts[2])
+    except ValueError:
+        return None
+
+
+def _feed_oracle(explorer, folder: str) -> bool:
+    """Hand the planner its own pose. True only on the first sample."""
+    sample = _read_oracle_pose(folder)
+    if sample is None:
+        return False
+    return explorer.note_oracle_world(*sample)
 
 
 def _enable(robot, name: str, period: int):
@@ -327,6 +353,9 @@ def main() -> None:
         floor=use_floor,
         loop=_flag("RBM_LOOP", True),
     )
+    oracle_on = _flag("RBM_ORACLE_POSE", False)
+    if oracle_on:
+        print("MAPPING oracle pose for the planner; the map still uses the estimate")
     print(f"MAPPING run folder: {folder}")
     straight_s = _env_float("RBM_STRAIGHT_S")
     if straight_s is not None and straight_s > 0.0:
@@ -338,6 +367,7 @@ def main() -> None:
     next_depth = _DEPTH_PERIOD_S
     next_save = 5.0
     next_note = 2.0
+    next_oracle_miss = 5.0
     saved = False
     # The hubs almost never sit still once exploration starts, and the
     # gyro bias is a rest reading. Hold for a few seconds so that
@@ -349,6 +379,12 @@ def main() -> None:
     try:
         while robot.step(timestep) != -1:
             now = float(robot.getTime())
+            if oracle_on:
+                if _feed_oracle(explorer, folder):
+                    print("MAPPING oracle pose latched for the planner", flush=True)
+                elif explorer._oracle_local is None and now >= next_oracle_miss:
+                    print("MAPPING oracle pose missing", flush=True)
+                    next_oracle_miss = now + 10.0
             if now < calibrate_s:
                 try:
                     yaw_rate = float(gyro.getValues()[2])

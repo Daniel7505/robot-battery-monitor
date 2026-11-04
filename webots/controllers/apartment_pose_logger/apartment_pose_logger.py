@@ -83,6 +83,21 @@ def _find_robot(supervisor):
     return None
 
 
+def _oracle_enabled() -> bool:
+    raw = (os.environ.get("RBM_ORACLE_POSE") or "").strip().lower()
+    return raw not in ("", "0", "false", "no", "off")
+
+
+def _publish_oracle(folder: str, x: float, y: float, yaw: float) -> None:
+    """One line, the robot's own pose. Not the floor plan. Off unless asked."""
+    path = os.path.join(folder, "oracle_pose.txt")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(f"{x:.5f} {y:.5f} {yaw:.6f}\n")
+        handle.flush()
+    os.replace(tmp, path)
+
+
 def _yaw(node) -> float:
     matrix = node.getOrientation()
     return math.atan2(float(matrix[3]), float(matrix[0]))
@@ -170,6 +185,9 @@ def main() -> None:
     prev = None
     checked = False
     movie = os.environ.get("RBM_MOVIE") == "1"
+    oracle = _oracle_enabled()
+    if oracle:
+        print("POSE LOG oracle pose file on", flush=True)
     frame_i = 0
     next_frame = 8.0
     shot = False
@@ -238,6 +256,8 @@ def main() -> None:
         yaw = _yaw(robot)
         x, y, z = float(pos[0]), float(pos[1]), float(pos[2])
         handle.write(f"{now:.4f},{x:.5f},{y:.5f},{z:.5f},{yaw:.6f}\n")
+        if oracle and folder:
+            _publish_oracle(folder, x, y, yaw)
         speed = 0.0
         if prev is not None:
             dt = now - prev[0]

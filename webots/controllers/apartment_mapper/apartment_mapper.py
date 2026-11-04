@@ -502,8 +502,8 @@ def main() -> None:
             if timed_out and not explorer.done:
                 explorer.done = True
                 explorer.phase = "done"
-                print(f"MAPPING time cap {max_s:.1f}s")
-                print("MAPPING end_run reason=time_cap")
+                print(f"MAPPING time cap {max_s:.1f}s", flush=True)
+                print("MAPPING end_run reason=time_cap", flush=True)
             if explorer.done and not saved:
                 explorer._publish_frontier_counts()
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())

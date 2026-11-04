@@ -201,3 +201,27 @@ Plan/veto disagreements, as paths issued then rejected by the map footprint. −
 **Rejected.** Turning the flag on in the harness. Reading the 4.4 point north gap as a gain. Reading the lower north pile mean as the sit ending: three north runs and four −0.35 runs stopped before 600 s, and a short run cannot grow a long pile. Treating one −0.35 pile of 53 s as the typical run.
 
 **Outcome.** One shared footprint does not end the stall. The −0.35 visited mean matches the variance mean. The north visited gap is inside the noise. A full-length run still sat 520 s on −0.35 and 356 s on north. Issued paths are still rejected by the map veto. The flag stays off.
+
+## 2026-11-04 — Quit reasons before another explorer patch
+
+**Mission parameter.** Two reviews, read independently, agreed on one list: the start cell can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, A* can hit 25,000 expansions, and the map veto refuses about a third of planned paths. Agreement is not a measurement. A visited-floor change under about 6 points is noise. The run may not hand the robot the floor plan or its own simulator pose.
+
+**Change.** A quit line, always on, logging only. It fires when `select_goal` returns None and at the end of `_no_frontier` and `_settle`. The line carries the start cell, the jump from the robot cell, whether the longest frontier shares that component, raw frontier cells, clusters of at least 6 before and after the top-8 plus door cut, clusters dropped by bans, banned cells and regions, clusters with a viewpoint, A* attempts, failures, and cap hits, and which return fired. `reason` is `start_component`, `all_banned`, `astar_cap`, `cut`, or `other`. `frontier_ban` and `frontier_clear` event counts go to the run summary. Commit `3472086`.
+
+`RBM_SHARED_FOOTPRINT` is off unless set. On, the planner's inflated free mask is the map test. The veto rejects a swept centre that has left that mask, and live range still rejects a real obstacle. The rectangle is not applied again. No new clearance. Goal scores, the recovery stack, and the oracle are unchanged.
+
+**Why.** The rectangle flag made the planner use the veto's shape and the refusals remained. This trial makes the veto use the planner's mask, and records why a search returns nothing, before either mechanism is edited.
+
+**Evidence.** Five runs of −0.35 and five of north, flag on, then two of each seed with the flag off. Code commit `3472086`. Oracle off. `RBM_RECOVERY_MODE` and `RBM_FOOTPRINT_ALIGN` unset. Depth-noise seeds 63 and 64. Ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. All fourteen runs wrote 75,000 pose rows and `mapping_done` is 600 s. Sample standard deviation divides by 4. Counts are in `docs/LESSONS_LEARNED.md`.
+
+Flag on, −0.35 visited %: 24.08, 5.94, 25.45, 15.92, 9.72. Mean 16.2, sample sd 8.6, range 19.5 points. The variance mean was 14.7. The gap is 1.5 points. The rectangle-flag mean was 13.9. Pile mean 259 s, range 80 s to 517 s. Map veto rejected 48 of 206 issued paths (23%).
+
+Flag on, north visited %: 10.13, 11.10, 11.95, 5.25, 14.14. Mean 10.5, sample sd 3.3, range 8.9 points. The variance mean was 9.0. The gap is 1.5 points. The rectangle-flag mean was 13.4. Pile mean 363 s, range 291 s to 524 s. Map veto rejected 47 of 164 issued paths (29%). One run rejected 20 of 30.
+
+Flag off, two runs each, for the dump. −0.35 visited 18.65 and 9.51, veto 11 of 41 and 3 of 13. North visited 22.69 and 7.42, veto 19 of 52 and 8 of 30.
+
+Early-quit count: 0. The eleven `select_goal` misses (ten with the flag on, one with it off) are all `reason=start_component`. Each of those lines also shows the top-8 cut (26 to 43 clusters before, 11 or 12 kept) and `astar_cap=0`. None is `all_banned`, `astar_cap`, or `cut`. `banned_drop` is 0 on all eleven. The searches resumed. The body was still driving at 600 s.
+
+**Rejected.** Editing `_nearest_free`, the ban lifetime, the top-8 cut, or the expansion cap from this sample. The label was the component split, and it did not end a run. Turning the mask flag on. Reading either 1.5 point visited gap as an effect. Reading 23% and 29% rejected paths as the veto having lined up with the planner.
+
+**Outcome.** The mask flag stays off. The quit line stays, so the next patch has a measured label. This sample's label is the start component, with the cut visible on the same line and the cap unhit, and the robot still ran to the cap.

@@ -189,3 +189,15 @@ A straight command does not use the rectangle. It is refused only when a mapped 
 **Change.** `RBM_FOOTPRINT_ALIGN` is off unless set. On, a planner step is legal only when that same rectangle, at the step's heading, does not cover a mapped occupied cell. A turn of more than about 57° is legal only when the rectangle stays clear through the yaw change. Straight commands use the rectangle sweep as well (`map:footprint`), not the 0.12 m bar. The 0.02 m clearance is the one the sweep already had. The 2.5 and 6.0 clearance weights, the goal score, the recovery stack, and the oracle are unchanged.
 
 **Why.** If the stall is "plan says yes, executor says no", one shape should cut the refusals and the time spent sitting. If the visited floor does not move by more than the noise, the two shapes are not the stall.
+
+**Evidence.** Five runs of −0.35 and five of north, flag on, code commit `9ed7ff2`. Oracle off. `RBM_RECOVERY_MODE` unset, so the recovery stack ran. Depth-noise seeds 63 and 64. Ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. The cap is 600 s. The mapper still writes `mapping_done` when it finds no reachable frontier, and the pose logger then quits, so a run can end sooner. Sample standard deviation divides by 4. The visited figures are the scorer's percent to two decimals. The mean and the sample sd use those figures. Counts are in `docs/LESSONS_LEARNED.md`. The variance run folders are not on this machine, so there is no flag-off plan/veto count.
+
+−0.35 visited %: 24.99, 6.01, 9.88, 11.00, 17.57. Mean 13.9, sample sd 7.5, range 19.0 points (6.0 to 25.0). The variance mean was 14.7. The gap is 0.8 points. Pile: 52.7 s, 519.9 s, 34.0 s, 114.2 s, 142.1 s. Mean 173 s, range 34 s to 520 s. The variance pile mean was 213 s, and its longest pile was 459.5 s. Run lengths (`mapping_done`): 576 s, 600 s, 127 s, 336 s, 488 s.
+
+North visited %: 5.73, 10.90, 6.09, 22.84, 21.52. Mean 13.4, sample sd 8.3, range 17.1 points (5.7 to 22.8). The variance mean was 9.0. The gap is 4.4 points. Pile: 65.0 s, 355.6 s, 43.5 s, 56.1 s, 80.6 s. Mean 120 s, range 44 s to 356 s. The variance pile mean was 389 s. Run lengths: 134 s, 600 s, 161 s, 484 s, 600 s. The two north runs that lasted 600 s had piles of 356 s and 81 s.
+
+Plan/veto disagreements, as paths issued then rejected by the map footprint. −0.35: 24 of 61, 3 of 9, 3 of 11, 5 of 13, 7 of 31. North: 6 of 12, 4 of 26, 1 of 13, 13 of 43, 18 of 55. Live range is not in that count.
+
+**Rejected.** Turning the flag on in the harness. Reading the 4.4 point north gap as a gain. Reading the lower north pile mean as the sit ending: three north runs and four −0.35 runs stopped before 600 s, and a short run cannot grow a long pile. Treating one −0.35 pile of 53 s as the typical run.
+
+**Outcome.** One shared footprint does not end the stall. The −0.35 visited mean matches the variance mean. The north visited gap is inside the noise. A full-length run still sat 520 s on −0.35 and 356 s on north. Issued paths are still rejected by the map veto. The flag stays off.

@@ -131,3 +131,23 @@ Published overall visited % in rounds 5–9. −0.35: 23.4, 17.0, 14.1, 19.3, 10
 **Rejected.** Another Explorer rule on one run per seed. Treating round 9's north pile of 146 s as the typical outcome of this code. Reading the climb from north's round 5 visited 3.4% to round 9's 14.4% as the effect of the creep or of `pile_leave`.
 
 **Outcome.** A one-run swing of about 10–14 visited points is the size of the noise on this controller. −0.35 pile time runs from 52 s, under the 60 s bar, to 460 s, with no code change. Stripping the stacked recovery rules is not done. Outcome of that strip: pending.
+
+## 2026-11-04 — Oracle pose for the planner, map left on the estimate
+
+**Mission parameter.** Poor coverage is either the pose the planner believes or the choices it makes with that pose. The test may hand the planner the robot's own simulator pose. It may not hand over the floor plan, the room rectangles, or any other map. The occupancy grid stays on the wheel and gyro estimate. A visited-floor change under about 6 points is the same-code noise measured above.
+
+**Change.** `RBM_ORACLE_POSE` is off unless set. When it is on, the pose logger writes `oracle_pose.txt` (the robot's own x, y, yaw). The mapper reads that file and converts it into the odometry frame, using the first sample as the origin. Goal choice, path following, the survey spin, and the stuck and pile clocks use that pose. Occupancy integration, the footprint stamp, the visited-cell mask, fusion, wall nudge, loop closure, pin, and the zero-velocity update stay on the estimate. The default path does not open the file.
+
+**Why.** The same controller visits about 15% of the floor on −0.35 and about 9% on north, and it sits for minutes. If a true pose fixed that, the estimate would be the flaw. If it did not, the decision logic would be.
+
+**Evidence.** Five 600 s runs of −0.35 and five of north, oracle on, flag commit `234734e`, same seeds and depth-noise seeds as the variance entry (63 and 64). Every run latched the oracle and wrote 75,000 ground-truth pose rows (`mapping_done` is 600 s). Sample standard deviation divides by 4. Run figures are rounded; the mean and the sample sd use the unrounded scores. Counts are in `docs/LESSONS_LEARNED.md`.
+
+−0.35 visited %: 5.5, 11.5, 16.4, 11.5, 9.7. Mean 10.9, sample sd 3.9, range 10.9 points (5.5 to 16.4). The variance mean was 14.7. The gap is 3.8 points. Pile: 483.4 s, 211.1 s, 97.3 s, 371.5 s, 366.4 s. Mean 306 s, range 97 s to 483 s. The variance pile mean was 213 s.
+
+North visited %: 11.2, 11.2, 3.3, 6.6, 8.0. Mean 8.1, sample sd 3.3, range 7.9 points (3.3 to 11.2). The variance mean was 9.0. The gap is 0.9 points. Pile: 292.1 s, 279.1 s, 470.4 s, 507.5 s, 270.4 s. Mean 364 s, range 270 s to 507 s. The variance pile mean was 389 s.
+
+The estimate was not already the true pose. End position error, estimate transformed by the seed spawn against the true body: −0.35 0.4 m, 1.2 m, 0.3 m, 3.1 m, 1.6 m. North 30.1 m, 0.4 m, 0.3 m, 1.4 m, 1.4 m. North run 1 was also reversed in heading. That run still visited 11.2%.
+
+**Rejected.** Building the occupancy grid from the true pose. That would answer a different question, and the no-foresight rule for the map would not hold. Shipping the flag on. Treating the 3.8 point drop on −0.35 as a real loss.
+
+**Outcome.** A true pose for the planner does not fix coverage and does not end the piles. Every oracle pile was over the 60 s bar. The decision logic is the flaw. The flag stays off.

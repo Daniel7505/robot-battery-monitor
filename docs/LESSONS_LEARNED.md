@@ -143,7 +143,8 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Round 7, 2026-11-02. See the entry below. Two seeds only. Bar missed. Four seeds not run. Warehouse lap passed.
 - Round 8, 2026-11-02. See the entry below. An 80% body was a diagnostic only and was deleted. Two full-size seeds. North beat the round 5 bar. −0.35 did not. Four seeds not run. Warehouse lap passed.
 - Round 9, 2026-11-03. Creep through a seen throat, and leave a repeated pile for another goal. Two seeds. North beat the round 5 bar. −0.35 did not (visited 10.5%, pile 417 s, kitchen 0). Four seeds not run. Warehouse lap passed.
-- Variance check, 2026-11-04. No controller change. Five repeats of −0.35 and five of north on the round 9 code. Visited % spanned 12.5 points on −0.35 (mean 14.7, sample sd 5.4) and 10.2 points on north (mean 9.0, sample sd 3.9). See "Hitting the wall: idea debt." Outcome of stripping the recovery rules: pending.
+- Variance check, 2026-11-04. No controller change. Five repeats of −0.35 and five of north on the round 9 code. Visited % spanned 12.5 points on −0.35 (mean 14.7, sample sd 5.4) and 10.2 points on north (mean 9.0, sample sd 3.9). See "Hitting the wall: idea debt."
+- One recovery rule, 2026-11-04. Flag `RBM_RECOVERY_MODE`, commit `d264bfa`. Five repeats of each seed in `one_rule`, then five in `trail_only`. The one rule visits less floor on −0.35 than the stack and sits longer. The cost mark does not change that. See "One recovery rule."
 
 ## One stuck check, not one pose
 
@@ -208,7 +209,7 @@ Dead ends: do not read the −0.35 wall-step rise as the creep. The creep lines 
 
 Idea debt here means a stack of recovery rules, about 15 of them, each added to fix the last failure. Fixing one side of a pile has been breaking the other side. Rounds 5–9 each ran a seed once, then patched Explorer again. Visited floor moved by about 10–14 percentage points from round to round. Visited floor is the share of open floor the robot's body actually drove over. A pile is the longest time the true body stayed inside a circle of radius 0.45 m. The bar on a pile is 60 s. A bump is a `contact_bump` line in `summary.txt`. Stuck events are `camera_stuck`, `imu_stuck`, and `camera_imu_stuck`. `unknown` is the older relief and is counted on its own.
 
-The reusable pattern is identify, adapt, overcome. Identify the stall: the rules now fight each other, and a one-run score cannot separate an edit from noise. Adapt: take a fresh outside review, and measure the run-to-run spread before the next patch. Overcome: strip the recovery rules back to a smaller set and remeasure. The third-party review said stop patching Explorer and measure first. That measurement is this entry. The strip is not done.
+The reusable pattern is identify, adapt, overcome. Identify the stall: the rules now fight each other, and a one-run score cannot separate an edit from noise. Adapt: take a fresh outside review, and measure the run-to-run spread before the next patch. Overcome: strip the recovery rules back to a smaller set and remeasure. The third-party review said stop patching Explorer and measure first. That measurement is this entry. The strip is recorded in "One recovery rule."
 
 How it was measured: commit `00dae73`, the round 9 controller, unchanged. Five 600 s runs of −0.35 (harness name `m35`, yaw 1.2208) and five of north, through `eval/run_skid_seeds.py`. Settings matched the recent rounds: `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`, Webots R2025a fast and headless. The depth-noise seed stayed fixed per spawn (63 on −0.35, 64 on north), so the spread is the simulator's own run-to-run difference. Every scored run reached 600 s (75,000 rows in `gt_pose_log.csv`). Sample standard deviation divides by 4. The run figures below are rounded; the mean and the sample sd use the unrounded scores. Logs stayed out of git, one folder per seed and repeat, with `summary.txt`, `decisions.txt`, and `webots.log`.
 
@@ -224,7 +225,7 @@ Wall steps are 8 ms physics steps with a tire on a wall, so a long lean inflates
 
 Dead ends: do not add another recovery rule from one seed. Do not read a 10 point visited change between rounds as an effect of the last patch. Do not treat round 9's north pile of 146 s as what this code usually does.
 
-Outcome: pending. The strip of the stacked recovery rules has not been done, and it has not been remeasured.
+Outcome: the strip was measured. See "One recovery rule." One rule visits less of the −0.35 floor than this stack and sits longer. The cost mark does not close that gap.
 
 ## True pose for the planner, same map
 
@@ -240,4 +241,28 @@ The estimate was still wrong, so the flag was not a no-op. End position error of
 
 Dead ends: do not build the grid from the true pose and call that this test. Do not turn the flag on in the harness. Do not read the 3.8 point visited gap on −0.35 as a loss. Do not add a localization patch to chase these piles.
 
-Outcome: the decision logic is the flaw. A true pose did not raise visited floor above the noise and did not bring a pile under 60 s. The flag stays off. The recovery-rule strip is still not done.
+Outcome: the decision logic is the flaw. A true pose did not raise visited floor above the noise and did not bring a pile under 60 s. The flag stays off.
+
+## One recovery rule
+
+Symptom: the same controller sits inside 0.45 m for minutes, and a true pose did not stop it. The remaining suspect was the stack of recovery rules, about 15 of them, each added after the last failure.
+
+How it was diagnosed: an opt-in flag, `RBM_RECOVERY_MODE`, empty unless set. Empty is the stack. The scored code is commit `d264bfa`. `one_rule` has one trigger and one response. The trigger is the body: it has stayed inside 0.45 m for 60 s, or a translation command or a spin command has not moved it for 2 s. A survey spin that changes yaw does not count. The response is a reverse along the trail the robot drove, which is known-clear space. `one_rule` also raises the planner cost of that 0.45 m disk for the whole 600 s run, and the next goal has to sit outside the disk. The occupancy grid is not painted. `trail_only` reverses the same way and does not mark the disk. Camera and IMU escapes, the pile-forced branch, the blocked heading, the unknown relief, the contact recover, the creep, the stall escape, the wide escape, and the dead-end back remain in the file and do not run. No floor plan is read. Oracle pose stays off.
+
+Five 600 s runs of −0.35 (harness name `m35`) and five of north, for `one_rule`, then the same ten for `trail_only`. Depth-noise seeds 63 and 64, ports 1711 and 1712. Settings: `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. The main view was not drawn. The sensors still updated. Every run wrote 75,000 rows and `mapping_done` is 600 s. Sample standard deviation divides by 4. The visited figures below are the scorer's percent to two decimals. The mean and the sample sd are computed from those figures. A gap under about 6 visited points is the noise from the variance entry. The pile is the longest time the true body stayed inside 0.45 m of a pose it occupied, checked every 0.25 s. Logs stayed out of git.
+
+An earlier clock treated the survey sit as a stall and quarantined the spawn. Those two partial runs were deleted. They are not in the tables.
+
+`one_rule`, −0.35, runs 1–5. Visited % 3.45, 7.78, 5.65, 3.46, 7.77 (mean 5.6, sample sd 2.2, range 4.3). The variance mean was 14.7. The gap is 9.1 points. Pile 567.3 s at (4.00, 4.84) from t=33, 519.1 s at (1.57, 5.87) from t=81, 528.1 s at (4.93, 3.16) from t=72, 552.4 s at (4.44, 5.06) from t=48, 490.4 s at (1.10, 6.16) from t=110 (mean 531 s, range 490 s to 567 s). The variance pile mean was 213 s. Its longest pile was 459.5 s. Bumps 0. Stuck events 0. Blocked-heading lines 0. `one_rule` 1, 3, 2, 2, 2. `camera_stuck` 0. `imu_stuck` 0. `camera_imu_stuck` 0. `unknown` 0. `narrow_gap` 0. `pile_leave` 0. `contact_bump` 0. `heading_off` 30, 36, 19, 4, 46. `goal_changed` 2, 5, 4, 2, 6. `no_room_to_turn` 2, 2, 2, 2, 2. `too_tight_to_fit` 0, 0, 1, 1, 0. `cant_see_behind_backing_out` 0.
+
+`one_rule`, north, runs 1–5. Visited % 2.94, 3.58, 4.08, 4.83, 5.08 (mean 4.1, sample sd 0.9, range 2.1). The variance mean was 9.0. The gap is 4.9 points. Pile 505.0 s at (5.15, 5.78) from t=95, 549.6 s at (3.47, 5.16) from t=50, 454.2 s at (4.48, 5.90) from t=146, 547.9 s at (2.43, 4.98) from t=52, 474.0 s at (5.26, 6.28) from t=126 (mean 506 s, range 454 s to 550 s). The variance pile mean was 389 s. Bumps 0. Stuck events 0. Blocked-heading lines 0. `one_rule` 3, 1, 3, 2, 2. `camera_stuck` 0. `imu_stuck` 0. `camera_imu_stuck` 0. `unknown` 0. `narrow_gap` 0. `pile_leave` 0. `contact_bump` 0. `heading_off` 4, 7, 60, 21, 35. `goal_changed` 4, 3, 5, 4, 6. `no_room_to_turn` 1, 2, 1, 1, 2. `too_tight_to_fit` 10, 0, 0, 0, 0. `cant_see_behind_backing_out` 0, 1, 0, 0, 0.
+
+`trail_only`, −0.35, runs 1–5. Visited % 6.91, 4.60, 3.89, 3.07, 8.12 (mean 5.3, sample sd 2.1, range 5.1). The variance mean was 14.7. The gap is 9.4 points. The gap to `one_rule` is 0.3 points. Pile 510.5 s at (0.87, 6.19) from t=90, 464.1 s at (4.56, 5.56) from t=136, 526.6 s at (4.13, 5.05) from t=73, 569.2 s at (4.24, 4.83) from t=31, 426.1 s at (4.30, 2.27) from t=174 (mean 499 s, range 426 s to 569 s). Bumps 0. Stuck events 0. Blocked-heading lines 0. `trail_only` 2, 3, 2, 2, 3. `camera_stuck` 0. `imu_stuck` 0. `camera_imu_stuck` 0. `unknown` 0. `narrow_gap` 0. `pile_leave` 0. `contact_bump` 0. `heading_off` 23, 20, 21, 6, 40. `goal_changed` 4, 4, 2, 1, 6. `no_room_to_turn` 2, 2, 2, 2, 2. `too_tight_to_fit` 0. `cant_see_behind_backing_out` 0.
+
+`trail_only`, north, runs 1–5. Visited % 5.29, 5.91, 8.19, 5.03, 3.43 (mean 5.6, sample sd 1.7, range 4.8). The variance mean was 9.0. The gap is 3.4 points. The gap to `one_rule` is 1.5 points. Pile 520.1 s at (3.19, 5.17) from t=80, 336.9 s at (3.47, 5.05) from t=263, 476.2 s at (4.48, 3.26) from t=124, 509.0 s at (3.39, 5.15) from t=91, 485.9 s at (4.42, 5.57) from t=114 (mean 466 s, range 337 s to 520 s). Bumps 0. Stuck events 0. Blocked-heading lines 0. `trail_only` 3, 7, 1, 1, 4. `camera_stuck` 0. `imu_stuck` 0. `camera_imu_stuck` 0. `unknown` 0. `narrow_gap` 0. `pile_leave` 0. `contact_bump` 0. `heading_off` 7, 40, 19, 15, 14. `goal_changed` 4, 4, 7, 4, 3. `no_room_to_turn` 1, 2, 2, 1, 1. `too_tight_to_fit` 1, 0, 0, 0, 0. `cant_see_behind_backing_out` 1, 0, 0, 0, 0.
+
+`heading_off` is still counted because an ordinary pivot logs it. The blocked-heading recovery is the separate log line, and that line is 0.
+
+Dead ends: do not delete the stack from this result. Do not turn the flag on in the harness. Do not read the 4.9 point north gap, or the 3.4 point `trail_only` north gap, as a loss. Do not read the 0.3 and 1.5 point gaps between `one_rule` and `trail_only` as an effect of the cost mark. Do not add another recovery rule on top of the stack from one of these sits.
+
+Outcome: one rule does not match the stack and does not beat it. On −0.35 the robot covers less floor and sits longer. Marking the spot it failed in does not send it somewhere else. The reverse fires a few times, and the body stays inside 0.45 m for most of the run. The flag stays off.

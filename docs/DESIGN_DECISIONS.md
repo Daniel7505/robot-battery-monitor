@@ -130,7 +130,7 @@ Published overall visited % in rounds 5–9. −0.35: 23.4, 17.0, 14.1, 19.3, 10
 
 **Rejected.** Another Explorer rule on one run per seed. Treating round 9's north pile of 146 s as the typical outcome of this code. Reading the climb from north's round 5 visited 3.4% to round 9's 14.4% as the effect of the creep or of `pile_leave`.
 
-**Outcome.** A one-run swing of about 10–14 visited points is the size of the noise on this controller. −0.35 pile time runs from 52 s, under the 60 s bar, to 460 s, with no code change. Stripping the stacked recovery rules is not done. Outcome of that strip: pending.
+**Outcome.** A one-run swing of about 10–14 visited points is the size of the noise on this controller. −0.35 pile time runs from 52 s, under the 60 s bar, to 460 s, with no code change. The recovery strip was measured afterward. See "One recovery rule."
 
 ## 2026-11-04 — Oracle pose for the planner, map left on the estimate
 
@@ -151,3 +151,27 @@ The estimate was not already the true pose. End position error, estimate transfo
 **Rejected.** Building the occupancy grid from the true pose. That would answer a different question, and the no-foresight rule for the map would not hold. Shipping the flag on. Treating the 3.8 point drop on −0.35 as a real loss.
 
 **Outcome.** A true pose for the planner does not fix coverage and does not end the piles. Every oracle pile was over the 60 s bar. The decision logic is the flaw. The flag stays off.
+
+## 2026-11-04 — One recovery rule
+
+**Mission parameter.** The limit cycle may be the stack of recovery rules fighting itself. The test replaces that stack with one rule, behind a flag, and repeats the variance seeds. The occupancy grid still comes from the wheel and gyro estimate. The run may not hand the robot the floor plan or its own simulator pose. A visited-floor change under about 6 points is noise.
+
+**Change.** `RBM_RECOVERY_MODE` is empty unless set. Empty is the current stack. `one_rule` treats a stuck body as the only trigger: the shell has stayed inside 0.45 m for 60 s, or a translation or a spin command has not moved the body for 2 s. It reverses along the driven trail, raises the cost of that 0.45 m disk for the whole 600 s run, and the next goal has to lie outside the disk. `trail_only` does the same reverse and does not mark the disk. Camera and IMU stuck escapes, the pile-forced branch, the blocked heading, the unknown relief, the contact recover, the creep, the stall escape, the wide escape, and the dead-end back stay in the file and do not run in either mode. The default path is unchanged. Commit `d264bfa`.
+
+**Why.** Rounds 5–9 each added a recovery after one run per seed. The variance check showed that a 10 point visited swing is what the same code does by itself. A true pose did not fix the sit. The remaining suspect is the decision stack.
+
+**Evidence.** Five 600 s runs of −0.35 and five of north, for `one_rule`, then the same ten for `trail_only`. Oracle off. Depth-noise seeds 63 and 64. Ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. Every run wrote 75,000 pose rows. Sample standard deviation divides by 4. Counts are in `docs/LESSONS_LEARNED.md`.
+
+`one_rule`, −0.35 visited %: 3.45, 7.78, 5.65, 3.46, 7.77. Mean 5.6, sample sd 2.2, range 4.3 points. The variance mean was 14.7. The gap is 9.1 points. Pile: 567.3 s, 519.1 s, 528.1 s, 552.4 s, 490.4 s. Mean 531 s, range 490 s to 567 s. The variance pile mean was 213 s, and its longest pile was 459.5 s.
+
+`one_rule`, north visited %: 2.94, 3.58, 4.08, 4.83, 5.08. Mean 4.1, sample sd 0.9, range 2.1 points. The variance mean was 9.0. The gap is 4.9 points. Pile: 505.0 s, 549.6 s, 454.2 s, 547.9 s, 474.0 s. Mean 506 s, range 454 s to 550 s. The variance pile mean was 389 s.
+
+`trail_only`, −0.35 visited %: 6.91, 4.60, 3.89, 3.07, 8.12. Mean 5.3, sample sd 2.1, range 5.1 points. The gap to the variance mean is 9.4 points. The gap to `one_rule` is 0.3 points. Pile mean 499 s, range 426 s to 569 s.
+
+`trail_only`, north visited %: 5.29, 5.91, 8.19, 5.03, 3.43. Mean 5.6, sample sd 1.7, range 4.8 points. The gap to the variance mean is 3.4 points. The gap to `one_rule` is 1.5 points. Pile mean 466 s, range 337 s to 520 s.
+
+Bumps, stuck events, and blocked-heading lines are 0 on all twenty runs. `camera_stuck`, `imu_stuck`, `camera_imu_stuck`, `unknown`, `narrow_gap`, and `pile_leave` are 0. The one rule itself fires 1 to 7 times in a run.
+
+**Rejected.** Deleting the old recovery code before this measurement. Turning the flag on in the harness. Reading the 4.9 point north gap as a loss. Reading the 0.3 and 1.5 point gaps between `one_rule` and `trail_only` as an effect of the cost mark.
+
+**Outcome.** One rule does not match the stack and does not beat it. On −0.35 the visited floor drops by more than the noise, and every pile is longer than the stack's longest pile on that seed. Marking the failed spot does not change the result. The flag stays off. The old recovery code stays.

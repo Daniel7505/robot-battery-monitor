@@ -37,6 +37,17 @@ STEP_SPIN_RAD = 0.10
 _REACH_M = math.hypot(max(NOSE_M, TAIL_M), HALF_M)
 
 
+def shared_footprint_enabled() -> bool:
+    """True when the map veto uses the planner's inflated free mask.
+
+    Off unless ``RBM_SHARED_FOOTPRINT`` is set. The planner is unchanged.
+    The veto then rejects a swept pose whose centre has left that mask.
+    Live range still applies. No extra clearance is introduced.
+    """
+    raw = (os.environ.get("RBM_SHARED_FOOTPRINT") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def footprint_align_enabled() -> bool:
     """True when the planner and the map veto share this rectangle.
 

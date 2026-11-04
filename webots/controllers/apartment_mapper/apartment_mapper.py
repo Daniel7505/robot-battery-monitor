@@ -503,7 +503,9 @@ def main() -> None:
                 explorer.done = True
                 explorer.phase = "done"
                 print(f"MAPPING time cap {max_s:.1f}s")
+                print("MAPPING end_run reason=time_cap")
             if explorer.done and not saved:
+                explorer._publish_frontier_counts()
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 log.save_rooms(explorer.observed_room_labels(), explorer.room_names)
                 saved = True

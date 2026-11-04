@@ -3277,6 +3277,195 @@ def test_a_sharp_turn_the_rectangle_rejects_is_not_planned():
     assert astar(free, start, goal, step_cost=0.05, yaw_masks=masks) is None
 
 
+def test_quit_dump_marks_a_start_component_the_frontier_cannot_reach():
+    """The snapped start can sit in a free room that does not touch the frontier."""
+    from src.mapping.frontiers import format_quit
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.5, -1.5, 1.5, 1.5, grid.l_max)
+    _fill(grid, -1.1, -1.1, 1.1, 1.1, grid.l_min)
+    _fill(grid, 2.0, -1.0, 3.6, 1.0, grid.l_min)
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["start_none"] == 0
+    assert quit_info["jump_cells"] == 0.0
+    assert quit_info["same_component"] == 0
+    assert quit_info["raw_cells"] > 0
+    assert quit_info["clusters_ge6"] >= 1
+    assert quit_info["return"] == "no_candidate"
+    assert quit_info["reason"] == "start_component"
+    line = format_quit(quit_info)
+    assert "reason=start_component" in line
+    assert "same_component=0" in line
+    assert "astar_attempts=" in line
+
+
+def test_quit_dump_marks_frontiers_that_are_all_banned():
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.6, 1.6, grid.l_min)
+    labels = grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    banned = {(int(y), int(x)) for y, x in zip(ys, xs)}
+    assert len(banned) >= 6
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), banned=banned, report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["banned_drop"] == quit_info["clusters_kept"]
+    assert quit_info["banned_cells"] == len(banned)
+    assert quit_info["astar_attempts"] == 0
+    assert quit_info["reason"] == "all_banned"
+    assert quit_info["return"] == "no_candidate"
+
+
+def test_quit_class_names_the_top8_cut_before_the_search():
+    from src.mapping.frontiers import _classify_quit
+
+    assert _classify_quit(
+        {
+            "return": "no_candidate",
+            "same_component": 1,
+            "clusters_kept": 8,
+            "clusters_ge6": 12,
+            "banned_drop": 0,
+            "astar_attempts": 8,
+            "astar_cap": 0,
+        }
+    ) == "cut"
+    assert _classify_quit(
+        {
+            "return": "start_none",
+            "same_component": None,
+            "clusters_kept": 3,
+            "clusters_ge6": 3,
+            "banned_drop": 3,
+            "astar_attempts": 0,
+            "astar_cap": 0,
+        }
+    ) == "other"
+
+
+def test_no_frontier_logs_the_quit_line(monkeypatch, capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 30.0
+
+    def _none(*_args, **kwargs):
+        report = kwargs.get("report")
+        if report is not None:
+            report["quit"] = {
+                "reason": "all_banned",
+                "return": "no_candidate",
+                "start_none": 0,
+                "same_component": 1,
+                "jump_cells": 0.0,
+                "jump_m": 0.0,
+                "raw_cells": 12,
+                "clusters_ge6": 1,
+                "clusters_kept": 1,
+                "banned_drop": 1,
+                "banned_cells": 8,
+                "viewpoint": 0,
+                "astar_attempts": 0,
+                "astar_fail": 0,
+                "astar_cap": 0,
+            }
+        return None
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _none)
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "where=select_goal" in out
+    assert "where=no_frontier" in out
+    assert "reason=all_banned" in out
+    assert "banned_regions=" in out
+
+
+def test_quit_dump_counts_an_astar_expansion_cap(monkeypatch):
+    from src.mapping import frontiers as frontiers_mod
+
+    monkeypatch.setattr(frontiers_mod, "_ASTAR_CAP", 2)
+    grid = OccupancyGrid()
+    _fill(grid, -0.4, -0.4, 4.0, 0.4, grid.l_min)
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["astar_cap"] >= 1
+    assert quit_info["astar_fail"] >= 1
+    assert quit_info["reason"] == "astar_cap"
+
+
+def test_shared_footprint_uses_the_planner_mask_and_keeps_live_range(monkeypatch):
+    """A spin the rectangle refuses stays legal when the centre is still free."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.footprint import footprint_clips, shared_footprint_enabled
+    from src.mapping.frontiers import swept_leaves_free
+    from src.mapping.tick import choose_motion, map_veto
+
+    monkeypatch.delenv("RBM_SHARED_FOOTPRINT", raising=False)
+    assert not shared_footprint_enabled()
+    grid = OccupancyGrid()
+    _fill(grid, -1.5, -1.5, 1.5, 1.5, grid.l_min)
+    cell = grid.cell_of(0.125, 0.275)
+    assert cell is not None
+    grid.log[cell] = grid.l_max
+    pose = (0.0, 0.0, 0.0)
+    assert footprint_clips(grid, pose, 0.0, 0.70)
+    assert not swept_leaves_free(grid, pose, 0.0, 0.70)
+    assert map_veto(grid, pose, 0.0, 0.70) == "map:corner"
+    monkeypatch.setenv("RBM_SHARED_FOOTPRINT", "1")
+    assert shared_footprint_enabled()
+    assert map_veto(grid, pose, 0.0, 0.70) is None
+    _fill(grid, 0.20, -0.20, 0.55, 0.20, grid.l_max)
+    assert map_veto(grid, pose, 0.28, 0.0) == "map:mask"
+    view = BubbleView(0.04, 0.40, 0.40, 0.40, 0.04)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.28,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(str(item["sensor"]).startswith("forward:") for item in choice.vetoes)
+    assert choice.v <= 0.02
+
+
+def test_frontier_ban_and_clear_counts_reach_the_run_summary(tmp_path, monkeypatch):
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    labels = bot.grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    for _ in range(FRONTIER_FAILS):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert bot.frontier_ban_n == 1
+    for cell in bot._regions[0].watch:
+        bot.grid.log[cell] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+    assert bot.frontier_clear_n == 1
+    summary = (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    assert "frontier_ban_events 1" in summary
+    assert "frontier_clear_events 1" in summary
+    counts = (tmp_path / "plan_veto.txt").read_text(encoding="utf-8")
+    assert "frontier_ban 1" in counts
+    assert "frontier_clear 1" in counts
+
+
 def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_path):
     from src.mapping.explore import Explorer
 

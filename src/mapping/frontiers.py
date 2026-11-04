@@ -23,7 +23,15 @@ import math
 import numpy as np
 
 from src.mapping.body import GRID_RESOLUTION_M, MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
-from src.mapping.footprint import HALF_M, NOSE_M, TAIL_M, footprint_align_enabled, footprint_clips
+from src.mapping.footprint import (
+    HALF_M,
+    NOSE_M,
+    TAIL_M,
+    _trajectory,
+    footprint_align_enabled,
+    footprint_clips,
+    shared_footprint_enabled,
+)
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import _nearby_region, crossing_bonus
 
@@ -35,6 +43,10 @@ VIEW_MAX_M = 3.0
 # Close enough that a corner is in the depth image, far enough to be
 # outside the near blind zone. Travel is only a tie break.
 VIEW_SWEET_M = 1.15
+
+# Expansion limit inside one frontier search. A hit is a failed search,
+# not a longer path. The quit dump counts how often this fires.
+_ASTAR_CAP = 25000
 
 _NEIGHBORS = (
     (1, 0, 1.0),
@@ -52,6 +64,7 @@ _YAW_STEP = 0.10
 _YAW_COUNT = int(round(2.0 * math.pi / _YAW_STEP))
 _OFFSETS: dict[tuple[float, float], tuple[tuple[int, int], ...]] = {}
 _MASK_CACHE: dict[str, object] = {"key": None, "masks": None}
+_FREE_CACHE: dict[str, object] = {"key": None, "mask": None}
 # Set when a planned pivot is replaced because the rectangle clips.
 _approach_reject = False
 
@@ -542,6 +555,7 @@ def astar(
     heading_block: np.ndarray | None = None,
     yaw_masks: np.ndarray | None = None,
     start_yaw: float | None = None,
+    stats: dict | None = None,
 ) -> list[tuple[int, int]] | None:
     """8-connected A* on a boolean free grid. ``start`` may sit just off the grid.
 
@@ -577,7 +591,9 @@ def astar(
             path.reverse()
             return path
         seen += 1
-        if seen > 25000:
+        if seen > _ASTAR_CAP:
+            if stats is not None:
+                stats["cap"] = int(stats.get("cap", 0)) + 1
             return None
         for index, (dy, dx, mul) in enumerate(_NEIGHBORS):
             ny, nx = y + dy, x + dx
@@ -985,7 +1001,7 @@ def spin_fits(grid: OccupancyGrid, pose: tuple[float, float, float]) -> bool:
         heading = yaw
         clear = True
         for _ in range(6):
-            if footprint_clips(grid, (x, y, heading), 0.0, sign * 0.70):
+            if motion_blocked(grid, (x, y, heading), 0.0, sign * 0.70):
                 clear = False
                 break
             heading += sign * 0.45
@@ -1044,11 +1060,11 @@ def wide_escape(
     _score, px, py = best
     err = _wrap(math.atan2(py - y, px - x) - yaw)
     if abs(err) > 1.4:
-        if footprint_clips(grid, pose, -0.10, 0.0):
+        if motion_blocked(grid, pose, -0.10, 0.0):
             return None
         return (-0.10, 0.0, "wide")
     w = max(-0.40, min(0.40, float(err)))
-    if footprint_clips(grid, pose, 0.12, w):
+    if motion_blocked(grid, pose, 0.12, w):
         return None
     return (0.12, w, "wide")
 
@@ -1103,7 +1119,7 @@ def approach_command(
             if _pose_clearance(grid, x, y) < TURN_AIM_M:
                 return (-0.10, 0.0, "back")
             spin = math.copysign(0.70, err)
-            if footprint_clips(grid, pose, 0.0, spin):
+            if motion_blocked(grid, pose, 0.0, spin):
                 _approach_reject = True
                 return (-0.10, 0.0, "back")
             return (0.0, spin, "pivot")
@@ -1123,7 +1139,7 @@ def approach_command(
                     spin = math.copysign(0.70, err)
                     # Centre clearance is a disk. The tire corner sticks out
                     # past it and swings through the turn.
-                    if footprint_clips(grid, pose, 0.0, spin):
+                    if motion_blocked(grid, pose, 0.0, spin):
                         _approach_reject = True
                         return (-0.10, 0.0, "back")
                     return (0.0, spin, "pivot")
@@ -1194,6 +1210,188 @@ def _unvisited_stand(
     return other, area
 
 
+def planner_free_mask(grid: OccupancyGrid) -> np.ndarray:
+    """The free mask ``select_goal`` plans on, cached while the grid is unchanged."""
+    log = grid.log
+    key = (
+        id(log),
+        int(log.shape[0]),
+        round(float(log.sum()), 3),
+        int(np.count_nonzero(log >= grid.occ_thresh)),
+    )
+    if _FREE_CACHE["key"] == key:
+        return _FREE_CACHE["mask"]  # type: ignore[return-value]
+    mask = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    _FREE_CACHE["key"] = key
+    _FREE_CACHE["mask"] = mask
+    return mask
+
+
+def swept_leaves_free(
+    grid: OccupancyGrid,
+    pose: tuple[float, float, float],
+    v_m_s: float,
+    w_rad_s: float,
+) -> bool:
+    """True when the existing sweep carries the centre off the planner mask.
+
+    The sweep distances are the ones ``footprint_clips`` already uses
+    (0.35 m of travel, or the spin arc). The mask is the inflated free
+    grid the planner searched. A cell the grid has not seen is not a hit.
+    Live range remains the check for that space. The rectangle is not
+    applied again: it is a second shape, and it is why a path the disk
+    accepted was then refused.
+    """
+    v = float(v_m_s)
+    w = float(w_rad_s)
+    if abs(v) < 1e-4 and abs(w) < 1e-4:
+        return False
+    labels = grid.labels()
+    free = planner_free_mask(grid)
+    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
+    for px, py, _pyaw in _trajectory(x, y, yaw, v, w):
+        cell = grid.cell_of(px, py)
+        if cell is None:
+            return True
+        if bool(free[cell]):
+            continue
+        if int(labels[cell]) < 0:
+            continue
+        return True
+    return False
+
+
+def motion_blocked(
+    grid: OccupancyGrid,
+    pose: tuple[float, float, float],
+    v_m_s: float,
+    w_rad_s: float,
+) -> bool:
+    """Map rejection of one commanded arc.
+
+    The rectangle sweep, unless ``RBM_SHARED_FOOTPRINT`` is on. Then the
+    planner free mask is the only map test.
+    """
+    if shared_footprint_enabled():
+        return swept_leaves_free(grid, pose, v_m_s, w_rad_s)
+    return footprint_clips(grid, pose, v_m_s, w_rad_s)
+
+
+def _same_free_component(
+    free: np.ndarray,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+) -> bool:
+    """True when ``goal`` is reachable from ``start`` on the planner mask.
+
+    The neighbour rule matches A*: eight-connected, and a diagonal step
+    needs both orthogonal neighbours free.
+    """
+    if goal == start:
+        return True
+    height, width = free.shape
+    gy, gx = goal
+    if not (0 <= gy < height and 0 <= gx < width) or not bool(free[gy, gx]):
+        return False
+    seen = np.zeros(free.shape, dtype=bool)
+    seen[start] = True
+    stack = [start]
+    while stack:
+        y, x = stack.pop()
+        for dy, dx, _mul in _NEIGHBORS:
+            ny, nx = y + dy, x + dx
+            if ny < 0 or nx < 0 or ny >= height or nx >= width or bool(seen[ny, nx]):
+                continue
+            if not bool(free[ny, nx]):
+                continue
+            if dy != 0 and dx != 0 and (not bool(free[y + dy, x]) or not bool(free[y, x + dx])):
+                continue
+            if ny == gy and nx == gx:
+                return True
+            seen[ny, nx] = True
+            stack.append((ny, nx))
+    return False
+
+
+def _frontier_same_component(
+    free: np.ndarray,
+    start: tuple[int, int],
+    group: list[tuple[int, int]],
+    labels: np.ndarray,
+    res: float,
+) -> int:
+    """1 when the longest frontier has a stand cell in ``start``'s component."""
+    target = viewpoint(free, group, occupied=(labels == 1), res=res, pose=start)
+    if target is None:
+        for cell in group:
+            if bool(free[cell]):
+                target = cell
+                break
+    if target is None:
+        return 0
+    return 1 if _same_free_component(free, start, target) else 0
+
+
+def _classify_quit(diag: dict) -> str:
+    """One label for a ``select_goal`` miss. Raw counts stay on the line.
+
+    ``start_component`` is a measured split between the snapped start and
+    the longest frontier. ``all_banned`` is every scored cluster banned,
+    and nothing left past the top-8 cut. ``astar_cap`` is the expansion
+    limit. ``cut`` is that top-8 cut dropping clusters before the search.
+    Anything else, including a missing start cell, is ``other``.
+    """
+    if diag.get("return") != "no_candidate":
+        return "other"
+    if diag.get("same_component") == 0:
+        return "start_component"
+    kept = int(diag.get("clusters_kept") or 0)
+    dropped = int(diag.get("banned_drop") or 0)
+    before = int(diag.get("clusters_ge6") or 0)
+    fully = kept > 0 and dropped == kept and int(diag.get("astar_attempts") or 0) == 0
+    no_cut = before <= kept
+    if fully and no_cut:
+        return "all_banned"
+    if int(diag.get("astar_cap") or 0) > 0:
+        return "astar_cap"
+    if not no_cut:
+        return "cut"
+    return "other"
+
+
+def format_quit(diag: dict) -> str:
+    """One parseable line. Missing numbers are ``na``."""
+
+    def field(key: str) -> str:
+        value = diag.get(key)
+        if value is None:
+            return "na"
+        if isinstance(value, float):
+            return f"{value:.2f}"
+        return str(int(value))
+
+    keys = (
+        "start_none",
+        "jump_cells",
+        "jump_m",
+        "same_component",
+        "raw_cells",
+        "clusters_ge6",
+        "clusters_kept",
+        "banned_drop",
+        "banned_cells",
+        "banned_regions",
+        "viewpoint",
+        "astar_attempts",
+        "astar_fail",
+        "astar_cap",
+    )
+    parts = [f"{key}={field(key)}" for key in keys]
+    parts.append(f"return={diag.get('return') or 'na'}")
+    parts.append(f"reason={diag.get('reason') or 'other'}")
+    return " ".join(parts)
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -1214,11 +1412,10 @@ def select_goal(
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
     mask = frontier_mask(labels)
-    groups = clusters(mask)
+    grouped = clusters(mask)
     min_cells = max(1, int(math.ceil(min_frontier_m / grid.res)))
-    groups = [g for g in groups if len(g) >= min_cells]
-    if not groups:
-        return None
+    # On the 5 cm grid this is 6 cells (0.30 m). The top-8 cut sees this list.
+    groups = [g for g in grouped if len(g) >= min_cells]
     groups.sort(key=len, reverse=True)
     # The longest frontiers are usually the room the robot is already in.
     # A short frontier just past a doorway still has to be scored, or the
@@ -1232,6 +1429,37 @@ def select_goal(
             if _touches_door(group, rooms["doors"]):
                 ranked.append(group)
                 extra += 1
+    banned_set = set(banned or ())
+    diag: dict = {
+        "start_none": 1,
+        "jump_cells": None,
+        "jump_m": None,
+        "same_component": None,
+        "raw_cells": int(np.count_nonzero(mask)),
+        "clusters_ge6": len(groups),
+        "clusters_kept": len(ranked),
+        "banned_drop": sum(1 for group in ranked if not any(cell not in banned_set for cell in group)),
+        "banned_cells": len(banned_set),
+        "banned_regions": None,
+        "viewpoint": 0,
+        "astar_attempts": 0,
+        "astar_fail": 0,
+        "astar_cap": 0,
+        "return": "",
+        "reason": "other",
+    }
+    search_stats = {"cap": 0}
+
+    def _remember_none(fired: str):
+        diag["return"] = fired
+        diag["astar_cap"] = int(search_stats["cap"])
+        if diag["same_component"] is None and start is not None and groups:
+            diag["same_component"] = _frontier_same_component(free, start, groups[0], labels, grid.res)
+        diag["reason"] = _classify_quit(diag)
+        if report is not None:
+            report["quit"] = dict(diag)
+        return None
+
     yaw_masks = None
     heading_block = None
     start_yaw = None
@@ -1245,21 +1473,45 @@ def select_goal(
             start_yaw = math.atan2(float(heading_xy[1]), float(heading_xy[0]))
     else:
         free = traversable(labels, grid.res, radius_m)
+    here = grid.cell_of(pose_xy[0], pose_xy[1])
+    start = None if here is None else _nearest_free(free, here[0], here[1])
+    if start is not None and here is not None:
+        jump_cells = math.hypot(start[0] - here[0], start[1] - here[1])
+        diag["start_none"] = 0
+        diag["jump_cells"] = float(jump_cells)
+        diag["jump_m"] = float(jump_cells * grid.res)
+    if not groups:
+        return _remember_none("no_groups")
+    if here is None:
+        return _remember_none("pose_off_grid")
+    if start is None:
+        return _remember_none("start_none")
     occupied_now = labels == 1
     clear = clearance_m(occupied_now, grid.res) if np.any(occupied_now) else None
     costs = approach_costs(clear) if clear is not None else None
     costs = apply_zone_cost(costs, grid, zones)
-    here = grid.cell_of(pose_xy[0], pose_xy[1])
-    if here is None:
-        return None
-    start = _nearest_free(free, here[0], here[1])
-    if start is None:
-        return None
-    banned = banned or set()
+    banned = banned_set
     avoid = list(avoid or [])
     aim_m = TURN_AIM_M if turn_aim_m is None else float(turn_aim_m)
     best: tuple[float, tuple[float, float], list[tuple[float, float]], list] | None = None
     ranked_scores: list[tuple[float, tuple[float, float]]] = []
+
+    def _search(goal_cell: tuple[int, int]):
+        diag["astar_attempts"] += 1
+        found = astar(
+            free,
+            start,
+            goal_cell,
+            step_cost=grid.res,
+            costs=costs,
+            heading_block=heading_block,
+            yaw_masks=yaw_masks,
+            start_yaw=start_yaw,
+            stats=search_stats,
+        )
+        if not found:
+            diag["astar_fail"] += 1
+        return found
 
     def _keep(
         score: float,
@@ -1284,6 +1536,7 @@ def select_goal(
         target = viewpoint(free, cells, occupied=(labels == 1), res=grid.res, pose=start)
         if target is None:
             continue
+        diag["viewpoint"] += 1
         # Just failed to move. If the roomiest cell on this frontier is
         # already under the robot, look there. Driving out to the 1–3 m
         # stand-off is how a stalled wheel reading walked the pose along
@@ -1319,32 +1572,14 @@ def select_goal(
                         }
                     )
                 continue
-        path_cells = astar(
-            free,
-            start,
-            target,
-            step_cost=grid.res,
-            costs=costs,
-            heading_block=heading_block,
-            yaw_masks=yaw_masks,
-            start_yaw=start_yaw,
-        )
+        path_cells = _search(target)
         if not path_cells:
             # The far stand-off can sit across a wall. The nearest safe
             # cell is still a goal, so a tight doorway is not abandoned.
             nearest = _viewpoint_nearest(free, cells, 6)
             if nearest is None or nearest == target:
                 continue
-            path_cells = astar(
-                free,
-                start,
-                nearest,
-                step_cost=grid.res,
-                costs=costs,
-                heading_block=heading_block,
-                yaw_masks=yaw_masks,
-                start_yaw=start_yaw,
-            )
+            path_cells = _search(nearest)
             if not path_cells:
                 continue
             target = nearest
@@ -1383,16 +1618,7 @@ def select_goal(
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
         if mouth in banned:
             continue
-        path_cells = astar(
-            free,
-            start,
-            mouth,
-            step_cost=grid.res,
-            costs=costs,
-            heading_block=heading_block,
-            yaw_masks=yaw_masks,
-            start_yaw=start_yaw,
-        )
+        path_cells = _search(mouth)
         if not path_cells:
             continue
         pts = [grid.cell_center(*rc) for rc in path_cells]
@@ -1424,16 +1650,7 @@ def select_goal(
     if stand is not None:
         target, area = stand
         if bool(free[target]):
-            path_cells = astar(
-                free,
-                start,
-                target,
-                step_cost=grid.res,
-                costs=costs,
-                heading_block=heading_block,
-                yaw_masks=yaw_masks,
-                start_yaw=start_yaw,
-            )
+            path_cells = _search(target)
             if path_cells:
                 pts = [grid.cell_center(*rc) for rc in path_cells]
                 length = 0.0
@@ -1447,11 +1664,11 @@ def select_goal(
                 goal = grid.cell_center(*target)
                 _keep(score, goal, pts, [target])
     if best is None:
-        return None
+        return _remember_none("no_candidate")
     pts = line_up_with_openings(grid, best[2])
     pts = hold_turning_clearance(grid, pts, aim_m=aim_m)
     if not pts:
-        return None
+        return _remember_none("lineup_empty")
     if report is not None:
         report["score"] = best[0]
         report["tight"] = _pose_clearance(grid, best[1][0], best[1][1]) < TURN_AIM_M

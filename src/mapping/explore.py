@@ -15,6 +15,8 @@ and ``trail_only`` keep a single stuck response: reverse along the
 driven trail. ``one_rule`` also raises the cost of that 0.45 m spot.
 ``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
 veto share the skid rectangle. Goal scores stay as they are.
+``RBM_SHARED_FOOTPRINT`` is off unless set. On, the veto uses the
+planner free mask and live range, and the planner is unchanged.
 """
 
 from __future__ import annotations
@@ -54,13 +56,14 @@ from src.mapping.depth_cloud import (
 )
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
-from src.mapping.footprint import footprint_clips
 from src.mapping.frontiers import (
     _pose_clearance,
     approach_command,
     consume_approach_reject,
+    format_quit,
     free_behind_m,
     frontier_mask,
+    motion_blocked,
     select_goal,
     spin_fits,
     wide_escape,
@@ -71,6 +74,7 @@ from src.mapping.tick import (
     live_veto,
     log_major,
     map_veto,
+    set_frontier_counts,
     set_plan_counts,
 )
 from src.mapping.fuse import MotionFusion
@@ -277,6 +281,10 @@ class Explorer:
         # footprint then rejected. One rejection per issued path.
         self.plans_issued = 0
         self.plan_veto_disagree = 0
+        self.frontier_ban_n = 0
+        self.frontier_clear_n = 0
+        self._quit_reason = "other"
+        self._quit_line = ""
         self._plan_serial = 0
         self._veto_serial = -1
         self._spin_start: float | None = None
@@ -1952,6 +1960,8 @@ class Explorer:
         region.banned = True
         region.occ = self._occupied_near(x, y)
         self._held.update(found)
+        self.frontier_ban_n += 1
+        self._publish_frontier_counts()
         if not region.logged:
             region.logged = True
             self._log("frontier_ban")
@@ -2025,6 +2035,8 @@ class Explorer:
             if region.banned and self._region_resolved(region, labels):
                 for cell in region.cells:
                     self._held.discard(cell)
+                self.frontier_clear_n += 1
+                self._publish_frontier_counts()
                 if region.logged:
                     self._log("frontier_clear")
                     self._major("frontier_clear", "frontier_clear")
@@ -2245,7 +2257,25 @@ class Explorer:
             self._major("back", "cant_see_behind_backing_out", clearance_m=_pose_clearance(self.grid, *self.plan_pose()[:2]))
 
     def _shell_clips(self, v: float, w: float) -> bool:
-        return footprint_clips(self.grid, self.plan_pose(), v, w)
+        return motion_blocked(self.grid, self.plan_pose(), v, w)
+
+    def _publish_frontier_counts(self) -> None:
+        set_frontier_counts(self.frontier_ban_n, self.frontier_clear_n)
+        self._flush_plan_veto()
+
+    def _banned_regions(self) -> int:
+        return sum(1 for item in self._regions if item.banned)
+
+    def _log_quit(self, diag: dict | None, where: str, branch: str) -> None:
+        """One reason line. Logging only: the goal choice is unchanged."""
+        fields = dict(diag or {})
+        fields["banned_regions"] = self._banned_regions()
+        fields.setdefault("reason", "other")
+        fields.setdefault("return", "na")
+        self._quit_reason = str(fields.get("reason") or "other")
+        self._quit_diag = fields
+        self._quit_line = format_quit(fields)
+        self._log(f"quit where={where} branch={branch} {self._quit_line}")
 
     def _issue_path(self, path) -> None:
         """Hand a path to the follower and count it once."""
@@ -2272,6 +2302,8 @@ class Explorer:
         text = (
             f"plans_issued {self.plans_issued}\n"
             f"plan_veto_disagree {self.plan_veto_disagree}\n"
+            f"frontier_ban {self.frontier_ban_n}\n"
+            f"frontier_clear {self.frontier_clear_n}\n"
         )
         path = os.path.join(folder, "plan_veto.txt")
         temporary = path + ".tmp"
@@ -2538,7 +2570,7 @@ class Explorer:
             if release:
                 self._pivot_hold = False
                 approach = None
-            elif footprint_clips(self.grid, pose, 0.0, approach[1]):
+            elif motion_blocked(self.grid, pose, 0.0, approach[1]):
                 self._pivot_hold = False
                 self._count_path_veto()
                 approach = (-0.10, 0.0, "back")
@@ -2567,7 +2599,7 @@ class Explorer:
         if approach is not None and approach[2] == "wide":
             if approach[0] < 0.0 and self._goal_ahead(pose):
                 approach = None
-            elif footprint_clips(self.grid, pose, approach[0], approach[1]):
+            elif motion_blocked(self.grid, pose, approach[0], approach[1]):
                 # The arc's corner meets the map. The back-up rule below
                 # decides whether reversing is legal.
                 self._count_path_veto()
@@ -2635,7 +2667,7 @@ class Explorer:
             if (
                 wide is not None
                 and not (wide[0] < 0.0 and self._goal_ahead(pose))
-                and not footprint_clips(self.grid, pose, wide[0], wide[1])
+                and not motion_blocked(self.grid, pose, wide[0], wide[1])
             ):
                 return self._issue_wide(wide)
             cmd = self._begin_back(pose)
@@ -2757,6 +2789,7 @@ class Explorer:
         )
         self._note_refusals(report)
         if chosen is None:
+            self._log_quit(report.get("quit"), "select_goal", "none")
             self._no_frontier()
             return
         goal, path = chosen
@@ -2839,6 +2872,7 @@ class Explorer:
             self.done = False
             self._did_final_scan = False
             self._replan_at = self.t_s + 1.5
+            self._log_stop("no_frontier", "pose_untrusted")
             return
         if not self._did_final_scan:
             self._did_final_scan = True
@@ -2850,6 +2884,7 @@ class Explorer:
             self._spin_start = None
             self._spin_then = "settle"
             self.done = False
+            self._log_stop("no_frontier", "final_scan")
             return
         self.frontiers_left = 0
         self.goal_xy = None
@@ -2861,6 +2896,7 @@ class Explorer:
         self._settle_occ = int((self.grid.labels() == 1).sum())
         self._settle_check = self.t_s
         self._log("stopped, holding for a stable map")
+        self._log_stop("no_frontier", "settle_hold")
 
     def _settle(self) -> tuple[float, float]:
         if self._settle_since is None:
@@ -2888,6 +2924,8 @@ class Explorer:
             zones=self._failure_zone_args(),
         )
         self._note_refusals(report)
+        if chosen is None:
+            self._log_quit(report.get("quit"), "select_goal", "none")
         if chosen is not None:
             self._log("frontier open, resuming")
             self._did_final_scan = False
@@ -2901,16 +2939,31 @@ class Explorer:
             self._goal_since = self.t_s
             self._motion_anchor = None
             self._log(f"goal ({goal[0]:.2f},{goal[1]:.2f})")
+            self._log_stop("settle", "resume")
             return 0.0, 0.0
         count = int((self.grid.labels() == 1).sum())
         if self._settle_occ is None or abs(count - self._settle_occ) > 8:
             self._settle_occ = count
             self._settle_since = self.t_s
             self._log("map changed, reset done hold")
+            self._log_stop("settle", "map_changed")
             return 0.0, 0.0
         if self.t_s - self._settle_since >= 4.0 and self._confident():
             self.frontiers_left = 0
             self.phase = "done"
             self.done = True
             self._log("done: no reachable frontier after a final scan, map stable while stopped")
+            self._log_stop("settle", "done")
+            return 0.0, 0.0
+        self._log_stop("settle", "holding")
         return 0.0, 0.0
+
+    def _log_stop(self, where: str, branch: str) -> None:
+        """Repeat the quit fields when a no-frontier or settle branch ends."""
+        if branch == "resume":
+            self._log(f"stop where={where} branch={branch} reason=na")
+            return
+        diag = getattr(self, "_quit_diag", None)
+        self._log_quit(diag, where, branch)
+        if branch == "done":
+            self._log(f"end_run reason={self._quit_reason}")

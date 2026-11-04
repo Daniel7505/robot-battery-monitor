@@ -143,6 +143,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Round 7, 2026-11-02. See the entry below. Two seeds only. Bar missed. Four seeds not run. Warehouse lap passed.
 - Round 8, 2026-11-02. See the entry below. An 80% body was a diagnostic only and was deleted. Two full-size seeds. North beat the round 5 bar. −0.35 did not. Four seeds not run. Warehouse lap passed.
 - Round 9, 2026-11-03. Creep through a seen throat, and leave a repeated pile for another goal. Two seeds. North beat the round 5 bar. −0.35 did not (visited 10.5%, pile 417 s, kitchen 0). Four seeds not run. Warehouse lap passed.
+- Variance check, 2026-11-04. No controller change. Five repeats of −0.35 and five of north on the round 9 code. Visited % spanned 12.5 points on −0.35 (mean 14.7, sample sd 5.4) and 10.2 points on north (mean 9.0, sample sd 3.9). See "Hitting the wall: idea debt." Outcome of stripping the recovery rules: pending.
 
 ## One stuck check, not one pose
 
@@ -202,3 +203,25 @@ Result, two full-size seeds, round 5 in parentheses. Both had to beat round 5 on
 - North: seen 86.6% (69.6), visited 14.4% (3.4), pile 146 s at (2.92, 1.06) from t=453 s (383 s). Kitchen visited 16, bedroom 10, bath 0, living 17, hall 51. Corner steps 0. Wall steps 528. Bumps 10. `narrow_gap` 16, `pile_leave` 4, `camera_stuck` 8, `imu_stuck` 2, `unknown` 37. Blocked-heading lines 46, down from 117. This seed beat the round 5 bar. Wall steps are 528 against round 8's 485, all in the last 100 s. Round 8 kitchen visited on this seed was 0.
 
 Dead ends: do not read the −0.35 wall-step rise as the creep. The creep lines are earlier than every wall step on that seed. Do not treat north's 16% kitchen as the 80% diagnostic's 26%, and do not claim the creep caused it without a trace that those `narrow_gap` lines are the kitchen entry. The full-size −0.35 kitchen is still 0. Do not lower the cruise aim to 0.247 m. The warehouse caster lap still reached the 201 m cap and printed `MISSION complete`.
+
+## Hitting the wall: idea debt
+
+Idea debt here means a stack of recovery rules, about 15 of them, each added to fix the last failure. Fixing one side of a pile has been breaking the other side. Rounds 5–9 each ran a seed once, then patched Explorer again. Visited floor moved by about 10–14 percentage points from round to round. Visited floor is the share of open floor the robot's body actually drove over. A pile is the longest time the true body stayed inside a circle of radius 0.45 m. The bar on a pile is 60 s. A bump is a `contact_bump` line in `summary.txt`. Stuck events are `camera_stuck`, `imu_stuck`, and `camera_imu_stuck`. `unknown` is the older relief and is counted on its own.
+
+The reusable pattern is identify, adapt, overcome. Identify the stall: the rules now fight each other, and a one-run score cannot separate an edit from noise. Adapt: take a fresh outside review, and measure the run-to-run spread before the next patch. Overcome: strip the recovery rules back to a smaller set and remeasure. The third-party review said stop patching Explorer and measure first. That measurement is this entry. The strip is not done.
+
+How it was measured: commit `00dae73`, the round 9 controller, unchanged. Five 600 s runs of −0.35 (harness name `m35`, yaw 1.2208) and five of north, through `eval/run_skid_seeds.py`. Settings matched the recent rounds: `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`, Webots R2025a fast and headless. The depth-noise seed stayed fixed per spawn (63 on −0.35, 64 on north), so the spread is the simulator's own run-to-run difference. Every scored run reached 600 s (75,000 rows in `gt_pose_log.csv`). Sample standard deviation divides by 4. The run figures below are rounded; the mean and the sample sd use the unrounded scores. Logs stayed out of git, one folder per seed and repeat, with `summary.txt`, `decisions.txt`, and `webots.log`.
+
+One launch pair was killed near sim time 500 s by a wall-clock cutoff during a clock jump, then run again. Those partial folders are not in the five.
+
+−0.35, runs 1–5. Visited % 18.0, 9.6, 14.1, 9.9, 22.1 (mean 14.7, sample sd 5.4, range 12.5). Pile 68.6 s at (3.03, 4.99) from t=481, 349.8 s at (2.36, 1.82) from t=250, 52.0 s at (4.67, 3.22) from t=401, 459.5 s at (2.82, 1.24) from t=140, 135.6 s at (2.40, 6.44) from t=97 (mean 213 s, sample sd 182 s). Time in separate stays of at least 60 s: 136, 444, 0, 460, 276 s. The 0 belongs to the 52.0 s pile, which is under the bar, so it adds no 60 s stay. Bumps 30, 4, 5, 9, 62. `camera_stuck` 4, 6, 2, 15, 0. `imu_stuck` 5, 0, 0, 7, 0. `camera_imu_stuck` 0 on every run. `unknown` 7, 154, 13, 142, 18. `pile_leave` 4, 3, 3, 4, 2. `narrow_gap` 25, 20, 21, 5, 22. Blocked-heading lines 10, 154, 3, 37, 2. `stall, backing out` 13, 7, 9, 27, 9. Wall steps 0, 0, 336, 965, 0. Corner steps 0. Kitchen visited 0, 16, 1, 5, 0. Bedroom 49, 0, 22, 0, 36.
+
+North, runs 1–5. Visited % 3.7, 6.5, 10.7, 10.2, 13.9 (mean 9.0, sample sd 3.9, range 10.2). Pile 541.0 s at (4.01, 5.73) from t=59, 446.5 s at (1.40, 4.80) from t=153, 332.9 s at (4.13, 0.64) from t=267, 291.0 s at (3.02, 5.80) from t=309, 334.0 s at (4.30, 5.48) from t=266 (mean 389 s, sample sd 103 s). Time in separate stays of at least 60 s: 544, 446, 333, 356, 334 s. Bumps 3, 2, 0, 2, 2. `camera_stuck` 21, 15, 8, 12, 3. `imu_stuck` 0, 5, 1, 0, 6. `camera_imu_stuck` 0. `unknown` 226, 194, 158, 126, 138. `pile_leave` 1, 3, 2, 2, 4. `narrow_gap` 2, 16, 10, 12, 8. Blocked-heading lines 233, 11, 162, 135, 145. `stall, backing out` 21, 11, 12, 12, 11. Wall steps 55673, 16, 40014, 31369, 105. Corner steps 0. Kitchen visited 0, 0, 32, 0, 0. Bedroom 0, 18, 0, 17, 0.
+
+Published overall visited %, rounds 5–9, one run each. −0.35: 23.4, 17.0, 14.1, 19.3, 10.5 (span 12.9 points). North: 3.4, 5.6, 7.4, 14.4 (span 11.0 points; round 6 published no overall visited %). Those spans are the same size as the same-code ranges above. Round 9's −0.35 numbers (visited 10.5, pile 417 s) sit inside this −0.35 sample. Round 9's north pile of 146 s is shorter than all five north piles here, and its visited 14.4 sits just above this sample's high of 13.9.
+
+Wall steps are 8 ms physics steps with a tire on a wall, so a long lean inflates the count. Corner steps stayed 0 on all ten runs. A kitchen percentage from one run is a draw: north run 3 visited 32% of the kitchen, and the other four north runs visited 0.
+
+Dead ends: do not add another recovery rule from one seed. Do not read a 10 point visited change between rounds as an effect of the last patch. Do not treat round 9's north pile of 146 s as what this code usually does.
+
+Outcome: pending. The strip of the stacked recovery rules has not been done, and it has not been remeasured.

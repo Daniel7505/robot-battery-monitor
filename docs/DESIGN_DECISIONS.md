@@ -111,3 +111,23 @@ Append one entry at the end of every mapping round. Use the fields below. If the
 **Rejected.** A permanent ban of the heading. Deleting the short heading block and only switching goals. Treating `pile_leave` as proof the shell left the 0.45 m ball.
 
 **Outcome.** Repeated refusals now change the goal. They do not guarantee the shell leaves. −0.35 still sat 417 s.
+
+## 2026-11-04 — Same-code variance, before another explorer patch
+
+**Mission parameter.** A change in visited floor has to clear the spread of repeating the same program. Visited floor is the share of open floor the robot's body drove over. A pile is the longest time the true body stayed inside 0.45 m of one point. The 60 s pile bar stays the bar. No new sensor and no new rule in this step.
+
+**Change.** None in the mapper, the body, or the world. Five 600 s runs of seed −0.35 (spawn yaw 1.2208, harness name `m35`) and five of north (spawn 5.80, 5.60, yaw 2.2), on commit `00dae73`, the round 9 controller. Launch was `eval/run_skid_seeds.py`: `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`, Webots R2025a `--mode=fast`, headless. Each seed kept one depth-noise seed across its five runs (63 for −0.35, 64 for north), from the harness formula `1 + (port % 97)` on ports 1711 and 1712. The simulator's own run-to-run differences are what moved.
+
+**Why.** A third-party review said stop patching Explorer and measure first. Rounds 5–9, one run per seed, moved overall visited floor by about 10–14 percentage points from round to round. That gap might be the edit. It might be the spread of a single run.
+
+**Evidence.** All ten runs hit the 600 s cap (75,000 ground-truth pose rows). Sample standard deviation divides by 4. The run figures below are rounded; the mean and the sample sd use the unrounded scores. Per-run counts are in `docs/LESSONS_LEARNED.md`.
+
+−0.35 visited %: 18.0, 9.6, 14.1, 9.9, 22.1. Mean 14.7, sample sd 5.4, range 12.5 points (9.6 to 22.1). Pile: 68.6 s, 349.8 s, 52.0 s, 459.5 s, 135.6 s. Mean 213 s, sample sd 182 s.
+
+North visited %: 3.7, 6.5, 10.7, 10.2, 13.9. Mean 9.0, sample sd 3.9, range 10.2 points (3.7 to 13.9). Pile: 541.0 s, 446.5 s, 332.9 s, 291.0 s, 334.0 s. Mean 389 s, sample sd 103 s.
+
+Published overall visited % in rounds 5–9. −0.35: 23.4, 17.0, 14.1, 19.3, 10.5 (span 12.9 points). North: 3.4, 5.6, 7.4, 14.4 (span 11.0 points; round 6 did not publish an overall visited %). Those spans match the same-code ranges. Round 9's −0.35 run (visited 10.5, pile 417 s) sits inside this −0.35 sample. Round 9's north run (visited 14.4, pile 146 s) is a high visited draw and a short pile: 14.4 is just above this sample's 13.9 high, and 146 s is shorter than every north pile here (shortest 291 s).
+
+**Rejected.** Another Explorer rule on one run per seed. Treating round 9's north pile of 146 s as the typical outcome of this code. Reading the climb from north's round 5 visited 3.4% to round 9's 14.4% as the effect of the creep or of `pile_leave`.
+
+**Outcome.** A one-run swing of about 10–14 visited points is the size of the noise on this controller. −0.35 pile time runs from 52 s, under the 60 s bar, to 460 s, with no code change. Stripping the stacked recovery rules is not done. Outcome of that strip: pending.

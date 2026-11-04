@@ -3466,6 +3466,50 @@ def test_frontier_ban_and_clear_counts_reach_the_run_summary(tmp_path, monkeypat
     assert "frontier_clear 1" in counts
 
 
+def test_true_start_stays_on_the_robot_side_of_a_wall(monkeypatch):
+    """The straight-line snap can sit in the other room. The escape walk cannot."""
+    from src.mapping.frontiers import _nearest_free, _true_start, true_start_enabled
+
+    monkeypatch.delenv("RBM_TRUE_START", raising=False)
+    assert not true_start_enabled()
+    labels = np.full((40, 50), 1, dtype=np.int8)
+    labels[10:30, 0:12] = 0
+    labels[20, 12:22] = 0
+    labels[10:30, 23:45] = 0
+    free = traversable(labels, 0.05, 0.20)
+    here = (20, 21)
+    assert int(labels[here]) == 0
+    assert not bool(free[here])
+    nearest = _nearest_free(free, here[0], here[1])
+    walked = _true_start(free, labels, here)
+    assert nearest is not None and walked is not None
+    assert nearest[1] > 22
+    assert walked[1] < 12
+    monkeypatch.setenv("RBM_TRUE_START", "1")
+    assert true_start_enabled()
+
+
+def test_a_pile_logs_the_command_and_a_plain_summary(capsys):
+    from src.mapping.explore import PILE_LIMIT_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._note_pile()
+    bot.t_s = PILE_LIMIT_S + 5.0
+    bot._mark("follow")
+    bot._commanded = (1.0, 1.0)
+    bot._remember((1.0, 1.0))
+    bot.t_s += 1.0
+    bot.odometry.x_m = 2.0
+    bot._note_pile()
+    out = capsys.readouterr().out
+    assert "pile phase=" in out
+    assert "src=follow" in out
+    assert "cands=" in out
+    assert "pile_end" in out
+    assert "pile_why" in out
+    assert "Goal at the end" in out
+
+
 def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_path):
     from src.mapping.explore import Explorer
 

@@ -28,6 +28,27 @@ def wheel_speeds(
     return max(-limit, min(limit, left)), max(-limit, min(limit, right))
 
 
+def pursuit_target(
+    pose: tuple[float, float, float],
+    path_xy: list[tuple[float, float]],
+    *,
+    lookahead_m: float = LOOKAHEAD_M,
+) -> tuple[float, float] | None:
+    """The look-ahead point pure pursuit steers toward, or None with no path."""
+    if not path_xy:
+        return None
+    x, y, _yaw = pose
+    nearest = min(range(len(path_xy)), key=lambda i: math.hypot(path_xy[i][0] - x, path_xy[i][1] - y))
+    travelled = 0.0
+    target = path_xy[-1]
+    for left, right in zip(path_xy[nearest:], path_xy[nearest + 1 :]):
+        travelled += math.hypot(right[0] - left[0], right[1] - left[1])
+        target = right
+        if travelled >= lookahead_m:
+            break
+    return target
+
+
 def pure_pursuit(
     pose: tuple[float, float, float],
     path_xy: list[tuple[float, float]],
@@ -42,14 +63,9 @@ def pure_pursuit(
     x, y, yaw = pose
     # Follow the polyline. A straight look-ahead would cut the corner
     # and drive the body into a wall the grid path had already avoided.
-    nearest = min(range(len(path_xy)), key=lambda i: math.hypot(path_xy[i][0] - x, path_xy[i][1] - y))
-    travelled = 0.0
-    target = path_xy[-1]
-    for left, right in zip(path_xy[nearest:], path_xy[nearest + 1 :]):
-        travelled += math.hypot(right[0] - left[0], right[1] - left[1])
-        target = right
-        if travelled >= lookahead_m:
-            break
+    target = pursuit_target(pose, path_xy, lookahead_m=lookahead_m)
+    if target is None:
+        return 0.0, 0.0, True
     dx = target[0] - x
     dy = target[1] - y
     dist = math.hypot(dx, dy)

@@ -465,12 +465,22 @@ def _straight_reverse(view, grid, pose, vetoes: list[dict]) -> MotionChoice | No
 
 
 class MotionChoice:
-    def __init__(self, name: str, v: float, w: float, costs: dict[str, float], vetoes: list[dict]) -> None:
+    def __init__(
+        self,
+        name: str,
+        v: float,
+        w: float,
+        costs: dict[str, float],
+        vetoes: list[dict],
+        ballot: list[tuple[str, str]] | None = None,
+    ) -> None:
         self.name = name
         self.v = float(v)
         self.w = float(w)
         self.costs = costs
         self.vetoes = vetoes
+        # (candidate name, "ok" or the veto reason). Logging only.
+        self.ballot = list(ballot or [])
 
     def why(self) -> str:
         parts = [
@@ -498,6 +508,7 @@ def choose_motion(
         pursuit_v, pursuit_w, heading_err, view, left_clear, right_clear, radar_blocked
     )
     vetoes: list[dict] = []
+    ballot: list[tuple[str, str]] = []
     best_name = ""
     best_v = 0.0
     best_w = 0.0
@@ -508,14 +519,17 @@ def choose_motion(
             reason = map_veto(grid, pose, v, w)
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
+            ballot.append((name, reason))
             continue
+        ballot.append((name, "ok"))
         costs = _costs(v, w, v_des, w_des, view, left_clear, right_clear, radar_blocked)
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
     if best_costs is not None:
-        return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
+        return MotionChoice(best_name, best_v, best_w, best_costs, vetoes, ballot)
     escape = _straight_reverse(view, grid, pose, vetoes)
     if escape is not None:
+        escape.ballot = ballot
         return escape
     # A nose gap vetoes every spin, and a hold never becomes a stuck event,
     # so the robot would sit. A spin the map shows as clear is still a move.
@@ -527,7 +541,7 @@ def choose_motion(
                 else footprint_clips(grid, pose, 0.0, w)
             )
             if not blocked:
-                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
     # Sonar can sit at 6 cm on open floor the map has already marked free.
     # Holding there never counts as stuck, so the seed does not move.
     if _known_free_ahead(grid, pose):
@@ -537,5 +551,5 @@ def choose_motion(
             else footprint_clips(grid, pose, 0.06, 0.0)
         )
         if not creep_blocked:
-            return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes)
-    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)
+            return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
+    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes, ballot)

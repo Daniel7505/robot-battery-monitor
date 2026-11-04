@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import heapq
 import math
+import os
 
 import numpy as np
 
@@ -630,6 +631,77 @@ def astar(
     return None
 
 
+def true_start_enabled() -> bool:
+    """True when A* starts in the robot's own free component.
+
+    Off unless ``RBM_TRUE_START`` is set. The default keeps the straight-line
+    snap of ``_nearest_free``.
+    """
+    raw = (os.environ.get("RBM_TRUE_START") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _cell_blocked(labels: np.ndarray, row: int, col: int, here: tuple[int, int]) -> bool:
+    """Occupied cells block the escape. The robot's own cell does not."""
+    if (row, col) == here:
+        return False
+    return int(labels[row, col]) == 1
+
+
+def _true_start(
+    free: np.ndarray,
+    labels: np.ndarray,
+    here: tuple[int, int],
+    max_cells: int = 40,
+) -> tuple[int, int] | None:
+    """A planner-free cell in the robot's own component.
+
+    The robot cell is treated as free. The walk does not step on an
+    occupied cell, and it uses the same 8-connected corner rule as A*.
+    The limit is the 40-cell radius ``_nearest_free`` already uses.
+    """
+    height, width = free.shape
+    y0, x0 = here
+    if not (0 <= y0 < height and 0 <= x0 < width):
+        return None
+    if bool(free[y0, x0]):
+        return y0, x0
+    seen = {(y0, x0)}
+    queue: list[tuple[int, int, int]] = [(y0, x0, 0)]
+    head = 0
+    while head < len(queue):
+        y, x, dist = queue[head]
+        head += 1
+        if dist >= max_cells:
+            continue
+        for dy, dx, _mul in _NEIGHBORS:
+            ny, nx = y + dy, x + dx
+            if ny < 0 or nx < 0 or ny >= height or nx >= width or (ny, nx) in seen:
+                continue
+            if _cell_blocked(labels, ny, nx, here):
+                continue
+            if dy != 0 and dx != 0 and (
+                _cell_blocked(labels, y + dy, x, here) or _cell_blocked(labels, y, x + dx, here)
+            ):
+                continue
+            seen.add((ny, nx))
+            if bool(free[ny, nx]):
+                return ny, nx
+            queue.append((ny, nx, dist + 1))
+    return None
+
+
+def _planner_start(
+    free: np.ndarray,
+    labels: np.ndarray,
+    here: tuple[int, int],
+    max_cells: int = 40,
+) -> tuple[int, int] | None:
+    if true_start_enabled():
+        return _true_start(free, labels, here, max_cells)
+    return _nearest_free(free, here[0], here[1], max_cells)
+
+
 def _nearest_free(free: np.ndarray, row: int, col: int, max_cells: int = 40) -> tuple[int, int] | None:
     h, w = free.shape
     if 0 <= row < h and 0 <= col < w and free[row, col]:
@@ -659,7 +731,7 @@ def severed_mouths(
     """
     trav = traversable(labels, res, radius_m)
     height, width = labels.shape
-    start = _nearest_free(trav, here[0], here[1], max_cells=30)
+    start = _planner_start(trav, labels, here, max_cells=30)
     if start is None:
         return []
     reachable = np.zeros_like(trav)
@@ -1474,7 +1546,7 @@ def select_goal(
     else:
         free = traversable(labels, grid.res, radius_m)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
-    start = None if here is None else _nearest_free(free, here[0], here[1])
+    start = None if here is None else _planner_start(free, labels, here)
     if start is not None and here is not None:
         jump_cells = math.hypot(start[0] - here[0], start[1] - here[1])
         diag["start_none"] = 0

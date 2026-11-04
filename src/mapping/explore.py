@@ -17,6 +17,8 @@ driven trail. ``one_rule`` also raises the cost of that 0.45 m spot.
 veto share the skid rectangle. Goal scores stay as they are.
 ``RBM_SHARED_FOOTPRINT`` is off unless set. On, the veto uses the
 planner free mask and live range, and the planner is unchanged.
+``RBM_TRUE_START`` is off unless set. On, A* starts in the robot's own
+free component instead of the nearest straight-line free cell.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ from src.mapping.depth_cloud import (
     rear_clearance_m,
     to_odom,
 )
-from src.mapping.drive import pure_pursuit, wheel_speeds
+from src.mapping.drive import pure_pursuit, pursuit_target, wheel_speeds
 from src.mapping.floor_flow import ShortFloorTrack
 from src.mapping.frontiers import (
     _pose_clearance,
@@ -383,6 +385,13 @@ class Explorer:
         self._pile_anchor: tuple[float, float, float] | None = None
         self._pile_forced = False
         self._pile_logged = False
+        self._motion_source = "hold"
+        self._last_choice = None
+        self._choice_t = -1.0
+        self._pile_stats: dict | None = None
+        self._pile_log_at = -1.0
+        self._pile_prev: tuple[float, float, float, float] | None = None
+        self._pile_reported: tuple[float, float, float] | None = None
         # Recent odom poses the shell actually drove. The pile leave reverses
         # along these when a straight sweep is closed. Not a map of the rooms.
         self._crumbs: list[tuple[float, float]] = []
@@ -772,16 +781,20 @@ class Explorer:
         self._watch_motion()
         # Spin, settle, and go all command motion. A wedge in the survey
         # spin never reached this check when it lived only in _go.
+        self._mark("hold")
         if not self.done and self._simple_recovery():
             ruled = self._one_rule_command(self.plan_pose())
             if ruled is not None:
+                self._mark("one_rule" if self.recovery_mode == "one_rule" else "trail_only")
                 return self._remember(ruled)
         elif not self.done:
             stuck = self._stuck_escape(self.plan_pose())
             if stuck is not None:
+                self._mark("stuck")
                 return self._remember(stuck)
             leaving = self._leaving_command(self.plan_pose())
             if leaving is not None:
+                self._mark("pile_leave")
                 return self._remember(leaving)
         if self._script is not None:
             speeds = self._script.command(
@@ -796,8 +809,10 @@ class Explorer:
                 self.phase = "done"
             return self._remember(speeds)
         if self.phase == "settle":
+            self._mark("settle")
             return self._remember(self._settle())
         if self.phase == "spin":
+            self._mark("spin")
             return self._remember(self._spin())
         if self.phase == "go":
             return self._remember(self._go(False, 0.0, left_clear, right_clear))
@@ -828,7 +843,174 @@ class Explorer:
             speeds = self._respect_escape_block(speeds)
         self._commanded = (float(speeds[0]), float(speeds[1]))
         self._mark_xy = self.odometry.pose()[:2]
+        self._observe_pile()
         return speeds
+
+    def _mark(self, source: str) -> None:
+        """Name the command that this tick is about to send. Logging only."""
+        self._motion_source = source
+
+    def _wheel_vw(self) -> tuple[float, float]:
+        left, right = self._commanded
+        v = 0.5 * (left + right) * WHEEL_RADIUS_M
+        w = (right - left) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+        return v, w
+
+    def _fresh_pile_stats(self) -> dict:
+        return {
+            "n": 0,
+            "hold": 0,
+            "veto": 0,
+            "stuck": 0,
+            "rules": {},
+            "goal": "none",
+        }
+
+    def _observe_pile(self) -> None:
+        """Count this tick while the shell is inside the 0.45 m pile ball.
+
+        The 1 Hz line starts once the stay has lasted ``PILE_LIMIT_S``,
+        the same window that arms the pile guard. Leaving the ball writes
+        the summary. Logging does not change the command.
+        """
+        anchor = self._pile_anchor
+        if anchor is None or anchor == self._pile_reported:
+            return
+        t0, x0, y0 = anchor
+        x, y, yaw = self.plan_pose()
+        if math.hypot(x - x0, y - y0) > 0.45:
+            return
+        if self._pile_stats is None:
+            self._pile_stats = self._fresh_pile_stats()
+            self._pile_stats["hz_pose"] = (x, y)
+            self._pile_stats["hz_cmd"] = 0.0
+        v, w = self._wheel_vw()
+        stats = self._pile_stats
+        stats["n"] += 1
+        if abs(v) < 0.02 and abs(w) < 0.05:
+            stats["hold"] += 1
+        choice = self._last_choice if self._choice_t == self.t_s else None
+        if choice is not None and choice.ballot and all(reason != "ok" for _name, reason in choice.ballot):
+            stats["veto"] += 1
+        prev = self._pile_prev
+        dt = 0.0 if prev is None else max(0.0, self.t_s - prev[0])
+        if prev is not None and dt > 0.0:
+            _pt, px, py, pyaw = prev
+            moved = math.hypot(x - px, y - py)
+            turned = abs(wrap_rad(yaw - pyaw))
+            asked = False
+            missed = True
+            if abs(v) >= 0.02:
+                asked = True
+                if moved + 1e-6 >= 0.25 * abs(v) * dt:
+                    missed = False
+            if abs(w) >= 0.15:
+                asked = True
+                if turned + 1e-4 >= 0.25 * abs(w) * dt:
+                    missed = False
+            if asked and missed:
+                stats["stuck"] += 1
+        stats["hz_cmd"] = float(stats.get("hz_cmd", 0.0)) + abs(v) * dt
+        self._pile_prev = (self.t_s, x, y, yaw)
+        source = self._motion_source
+        if source not in ("follow", "hold", "spin", "settle", "pivot", "wide", "straight", "script"):
+            rules = stats["rules"]
+            rules[source] = int(rules.get(source, 0)) + 1
+        if self.goal_xy is not None:
+            stats["goal"] = f"({self.goal_xy[0]:.2f},{self.goal_xy[1]:.2f})"
+        if self.t_s - t0 < PILE_LIMIT_S:
+            return
+        if self.done and not stats.get("closed"):
+            self._finish_pile_dump(t0, x0, y0)
+            return
+        if self.t_s - self._pile_log_at < 1.0:
+            return
+        self._pile_log_at = self.t_s
+        hx, hy = stats.get("hz_pose", (x, y))
+        self._log_pile_line(v, w, math.hypot(x - hx, y - hy), float(stats.get("hz_cmd", 0.0)))
+        stats["hz_pose"] = (x, y)
+        stats["hz_cmd"] = 0.0
+
+    def _log_pile_line(self, v: float, w: float, odom_m: float, cmd_m: float) -> None:
+        goal = "none"
+        age = "na"
+        if self.goal_xy is not None:
+            cell = self.grid.cell_of(self.goal_xy[0], self.goal_xy[1])
+            goal = "na" if cell is None else f"{cell[0]},{cell[1]}"
+            age = f"{self.t_s - self._goal_since:.1f}"
+        attempts = len(self._attempts)
+        path_m = 0.0
+        nxt = "none"
+        for a, b in zip(self.path_xy, self.path_xy[1:]):
+            path_m += math.hypot(b[0] - a[0], b[1] - a[1])
+        if len(self.path_xy) >= 2:
+            nxt = f"{self.path_xy[1][0]:.2f},{self.path_xy[1][1]:.2f}"
+        elif self.path_xy:
+            nxt = f"{self.path_xy[0][0]:.2f},{self.path_xy[0][1]:.2f}"
+        target = pursuit_target(self.plan_pose(), self.path_xy)
+        pursuit = "none" if target is None else f"{target[0]:.2f},{target[1]:.2f}"
+        choice = self._last_choice if self._choice_t == self.t_s else None
+        if choice is None or not choice.ballot:
+            cands = "na"
+            live = "none"
+        else:
+            cands = ",".join(f"{name}:{reason}" for name, reason in choice.ballot)
+            live_bits = [reason for _name, reason in choice.ballot if reason != "ok" and not str(reason).startswith("map:")]
+            live = ",".join(live_bits) if live_bits else "none"
+        self._log(
+            f"pile phase={self.phase} goal={goal} age={age}s attempts={attempts} "
+            f"path_m={path_m:.2f} next={nxt} pursuit={pursuit} src={self._motion_source} "
+            f"v={v:.2f} w={w:.2f} odom_m={odom_m:.3f} cmd_m={cmd_m:.2f} live={live} cands={cands}"
+        )
+
+    def _finish_pile_dump(self, t0: float, x0: float, y0: float) -> None:
+        stats = self._pile_stats or self._fresh_pile_stats()
+        if stats.get("closed"):
+            return
+        stats["closed"] = True
+        n = int(stats["n"])
+        dur = max(0.0, self.t_s - t0)
+
+        def pct(count: int) -> float:
+            return 100.0 * count / n if n else 0.0
+
+        rules = stats["rules"]
+        rule_txt = "none" if not rules else ",".join(f"{name}:{count}" for name, count in sorted(rules.items()))
+        self._log(
+            f"pile_end dur={dur:.0f}s at=({x0:.2f},{y0:.2f}) from={t0:.0f} "
+            f"ticks={n} hold={pct(stats['hold']):.0f}% veto={pct(stats['veto']):.0f}% "
+            f"stuck={pct(stats['stuck']):.0f}% rules={rule_txt}"
+        )
+        self._log("pile_why " + self._pile_why(stats, dur))
+        self._pile_reported = (t0, x0, y0)
+        self._pile_stats = None
+        self._pile_log_at = -1.0
+
+    def _pile_why(self, stats: dict, dur: float) -> str:
+        n = int(stats["n"])
+        if n == 0:
+            return f"The shell stayed inside 0.45 m for {dur:.0f} s and this log has no command ticks."
+        hold = 100.0 * stats["hold"] / n
+        veto = 100.0 * stats["veto"] / n
+        stuck = 100.0 * stats["stuck"] / n
+        kind, share = max((("hold", hold), ("veto", veto), ("stuck", stuck)), key=lambda item: item[1])
+        if kind == "hold":
+            lead = f"Most of this {dur:.0f} s pile the command was hold or zero ({share:.0f}% of ticks)."
+        elif kind == "veto":
+            lead = f"Most of this {dur:.0f} s pile every motion candidate was vetoed ({share:.0f}% of ticks)."
+        else:
+            lead = (
+                f"Most of this {dur:.0f} s pile the wheels were commanded and the pose did not follow "
+                f"({share:.0f}% of ticks)."
+            )
+        rules = stats["rules"]
+        if rules:
+            top = sorted(rules.items(), key=lambda item: item[1], reverse=True)[:3]
+            fired = ", ".join(f"{name} ({count})" for name, count in top)
+            tail = f" Recovery that fired: {fired}."
+        else:
+            tail = " No recovery rule fired on the logged ticks."
+        return lead + tail + f" Goal at the end: {stats.get('goal') or 'none'}."
 
     def _arm_escape_block(self) -> None:
         """Remember this spot and heading so the next command cannot drive back in."""
@@ -1387,9 +1569,15 @@ class Explorer:
             return
         t0, x0, y0 = self._pile_anchor
         if math.hypot(x - x0, y - y0) > 0.45:
+            if self.t_s - t0 >= PILE_LIMIT_S:
+                self._finish_pile_dump(t0, x0, y0)
+            else:
+                self._pile_stats = None
             self._pile_anchor = (self.t_s, x, y)
             self._pile_forced = False
             self._pile_logged = False
+            self._pile_prev = None
+            self._pile_reported = None
             return
         if self.t_s - t0 < PILE_LIMIT_S:
             return
@@ -2472,6 +2660,7 @@ class Explorer:
         self._remember_command(v, w)
         self._note_approach("wide", v, w)
         self._body_v, self._body_w = v, w
+        self._mark("wide")
         return wheel_speeds(v, w)
 
     def _go(self, blocked: bool, cap: float, left_clear: float = 99.0, right_clear: float = 99.0) -> tuple[float, float]:
@@ -2503,6 +2692,7 @@ class Explorer:
                 self._note_approach("wide", 0.10, 0.0)
                 leaving = wheel_speeds(0.10, 0.0)
             if leaving is not None:
+                self._mark("pile_leave")
                 return leaving
             # A wedge does not get another spin. The camera and the IMU
             # already took the reverse above when the picture or the gyro
@@ -2515,18 +2705,22 @@ class Explorer:
                 if self._spin_safe(turn):
                     self._body_v, self._body_w = 0.0, turn
                     self._note_approach("pivot", 0.0, turn)
+                    self._mark("pile_leave")
                     return wheel_speeds(0.0, turn)
             self._body_v, self._body_w = -0.10, 0.0
             self._note_approach("back", -0.10, 0.0)
+            self._mark("pile_leave")
             return wheel_speeds(-0.10, 0.0)
         if not self._simple_recovery():
             blind = self._stall_escape(pose)
             if blind is not None:
                 # The timed relief reverse is 0.45 s. A stall replaces it.
                 self._relief = None
+                self._mark("stall")
                 return blind
             relief = self._relief_command()
             if relief is not None:
+                self._mark("relief")
                 return relief
         if self.phase != "go":
             return 0.0, 0.0
@@ -2536,6 +2730,7 @@ class Explorer:
             if self._recover or (contact is not None and not self._reverse_closed(pose)):
                 recover = self._begin_recover(pose) if not self._recover else self._recover_command(pose)
                 if recover is not None:
+                    self._mark("contact")
                     return recover
             elif contact is not None:
                 # Can't back off this corner. Sitting here is not a recovery.
@@ -2543,6 +2738,7 @@ class Explorer:
                 self._contact_until = self.t_s + 1.5
         backing = self._continue_back(pose)
         if backing is not None:
+            self._mark("back")
             return backing
         # An empty path with a future replan time is a wait, not another
         # plan. Calling it every step flooded the log and stalled the sim.
@@ -2583,6 +2779,7 @@ class Explorer:
                 _v, w, _why = approach
                 self._body_v, self._body_w = 0.0, w
                 self._note_approach("pivot", 0.0, w)
+                self._mark("pivot")
                 return wheel_speeds(0.0, w)
         elif abs(heading_err) < PIVOT_ENTER_RAD:
             self._pivot_hold = False
@@ -2594,6 +2791,7 @@ class Explorer:
             else:
                 cmd = self._begin_back(pose)
                 if cmd is not None:
+                    self._mark("back")
                     return cmd
                 approach = None
         if approach is not None and approach[2] == "wide":
@@ -2656,6 +2854,7 @@ class Explorer:
         if not self._simple_recovery():
             through = self._creep_through_gap(pose, v, w, heading_err)
             if through is not None:
+                self._mark("narrow_gap")
                 return through
         if (
             not self._simple_recovery()
@@ -2672,6 +2871,7 @@ class Explorer:
                 return self._issue_wide(wide)
             cmd = self._begin_back(pose)
             if cmd is not None:
+                self._mark("back")
                 return cmd
         if (
             not self._simple_recovery()
@@ -2693,10 +2893,12 @@ class Explorer:
             )
             cmd = self._begin_back(pose)
             if cmd is not None:
+                self._mark("back")
                 return cmd
         held = self._hold_command(pose, view)
         if held is not None:
             self._body_v, self._body_w = held
+            self._mark("hold")
             return wheel_speeds(*held)
         self._note_follow_veto(pose, v, w)
         choice = choose_motion(
@@ -2711,12 +2913,19 @@ class Explorer:
             radar_blocked=self._radar_blocked,
         )
         self._note_motion(choice)
+        self._last_choice = choice
+        self._choice_t = self.t_s
         if choice.name in ("back_out", "doorway_rescan"):
             cmd = self._begin_back(pose)
             if cmd is not None:
+                self._mark("back")
                 return cmd
         self._remember_command(choice.v, choice.w)
         self._body_v, self._body_w = choice.v, choice.w
+        if choice.name == "hold" or (abs(choice.v) < 0.02 and abs(choice.w) < 0.05):
+            self._mark("hold")
+        else:
+            self._mark("follow")
         return wheel_speeds(choice.v, choice.w)
 
     def sweep_summary(self) -> str:

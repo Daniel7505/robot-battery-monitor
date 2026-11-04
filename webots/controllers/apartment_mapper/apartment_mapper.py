@@ -9,6 +9,8 @@ read that log. ``RBM_ORACLE_POSE=1`` hands the planner its own pose from
 ``oracle_pose.txt``. The grid still integrates the estimate.
 ``RBM_RECOVERY_MODE`` is empty unless set. ``one_rule`` and ``trail_only``
 replace the stacked recoveries. The default is the stacked behavior.
+``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
+veto use one rectangle. Goal scores are unchanged.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.

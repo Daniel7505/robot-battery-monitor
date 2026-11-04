@@ -3172,6 +3172,130 @@ def test_one_rule_plan_hands_the_disk_to_the_goal_picker(monkeypatch):
     assert seen["zones"] == [(1.0, 2.0, 0.45)]
 
 
+def test_shared_rectangle_blocks_a_corner_the_disk_misses():
+    """A cell 0.25 m off the tire disk still sits inside the rectangle corner."""
+    from src.mapping.frontiers import _NEIGHBOR_INDEX, neighbor_blocks, rectangle_masks
+
+    occupied = np.zeros((20, 20), dtype=bool)
+    occupied[10, 10] = True
+    # Obstacle is 0.15 m ahead and 0.20 m to the side of the robot cell.
+    # hypot(0.15, 0.20) = 0.25 m, outside the 0.20 m disk. Facing +x, the
+    # body-frame point is inside the 0.21 m nose and the 0.247 m half-width.
+    robot = (6, 7)
+    disk = dilate_disk(occupied, 0.20, 0.05)
+    assert not disk[robot]
+    labels = np.zeros((20, 20), dtype=np.int8)
+    labels[10, 10] = 1
+    assert traversable(labels, 0.05)[robot]
+    blocks = neighbor_blocks(rectangle_masks(occupied, 0.05))
+    assert blocks[_NEIGHBOR_INDEX[(0, 1)], robot[0], robot[1]]
+    assert blocks.shape[0] == 8
+
+
+def test_aligned_planner_still_crosses_a_centred_door(monkeypatch):
+    """The shared rectangle is not a bigger disk. A 0.81 m opening stays open."""
+    from src.mapping.frontiers import approach_costs, neighbor_blocks, rectangle_masks
+
+    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.9, 3.2, 0.9, grid.l_min)
+    _fill(grid, 0.0, 0.405, 3.2, 0.9, grid.l_max)
+    _fill(grid, 0.0, -0.9, 3.2, -0.405, grid.l_max)
+    labels = grid.labels()
+    free = traversable(labels, grid.res)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(2.6, 0.0)
+    assert start is not None and goal is not None
+    assert free[start] and free[goal]
+    masks = rectangle_masks(labels == 1, grid.res)
+    blocks = neighbor_blocks(masks)
+    path = astar(
+        free,
+        start,
+        goal,
+        step_cost=grid.res,
+        heading_block=blocks,
+        yaw_masks=masks,
+        start_yaw=0.0,
+    )
+    assert path is not None and path[-1] == goal
+    # Clearance weights are the same numbers. A 0.25 m cell is 2.5, a 0.10 m cell is 6.
+    clear = np.full((5, 5), 1.0, dtype=np.float32)
+    clear[2, 2] = 0.25
+    assert float(approach_costs(clear)[2, 2]) == pytest_approx(2.5)
+    clear[2, 2] = 0.10
+    assert float(approach_costs(clear)[2, 2]) == pytest_approx(6.0)
+
+
+def test_aligned_veto_uses_the_rectangle_on_a_straight_command(monkeypatch):
+    """Flag off: a smear ahead is not a straight veto. Flag on: the rectangle is."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.25, -0.05, 0.40, 0.05, grid.l_max)
+    view = BubbleView(1.5, 1.5, 1.5, 1.5, 1.5)
+    pose = (0.0, 0.0, 0.0)
+    monkeypatch.delenv("RBM_FOOTPRINT_ALIGN", raising=False)
+    plain = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert plain.v > 0.02 and abs(plain.w) < 0.12
+    assert not any(item["sensor"] == "map:footprint" for item in plain.vetoes)
+    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
+    aligned = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(item["motion"] == "cruise" and item["sensor"] == "map:footprint" for item in aligned.vetoes)
+    assert not (aligned.v > 0.2 and abs(aligned.w) < 0.12)
+
+
+def test_a_sharp_turn_the_rectangle_rejects_is_not_planned():
+    """An L corridor has one 90° corner. A blocked spin leaves no path."""
+    free = np.zeros((12, 12), dtype=bool)
+    free[5, 2:7] = True
+    free[5:10, 6] = True
+    start = (5, 2)
+    goal = (9, 6)
+    assert astar(free, start, goal, step_cost=0.05) is not None
+    # Every yaw sample hits, so the 90° corner is refused and the L has no other route.
+    masks = np.ones((63, 12, 12), dtype=bool)
+    assert astar(free, start, goal, step_cost=0.05, yaw_masks=masks) is None
+
+
+def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_path):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._issue_path([(0.0, 0.0), (1.0, 0.0)])
+    bot._count_path_veto()
+    bot._count_path_veto()
+    assert bot.plans_issued == 1
+    assert bot.plan_veto_disagree == 1
+    text = (tmp_path / "plan_veto.txt").read_text(encoding="utf-8")
+    assert "plans_issued 1" in text
+    assert "plan_veto_disagree 1" in text
+    bot._issue_path([(0.0, 0.0), (2.0, 0.0)])
+    bot._count_path_veto()
+    assert bot.plans_issued == 2
+    assert bot.plan_veto_disagree == 2
+
+
 def test_solids_include_the_closed_doors():
     names = {solid.name for solid in load_solids()}
     assert "APT_DOOR_FRONT" in names

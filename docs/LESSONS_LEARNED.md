@@ -145,6 +145,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Round 9, 2026-11-03. Creep through a seen throat, and leave a repeated pile for another goal. Two seeds. North beat the round 5 bar. −0.35 did not (visited 10.5%, pile 417 s, kitchen 0). Four seeds not run. Warehouse lap passed.
 - Variance check, 2026-11-04. No controller change. Five repeats of −0.35 and five of north on the round 9 code. Visited % spanned 12.5 points on −0.35 (mean 14.7, sample sd 5.4) and 10.2 points on north (mean 9.0, sample sd 3.9). See "Hitting the wall: idea debt."
 - One recovery rule, 2026-11-04. Flag `RBM_RECOVERY_MODE`, commit `d264bfa`. Five repeats of each seed in `one_rule`, then five in `trail_only`. The one rule visits less floor on −0.35 than the stack and sits longer. The cost mark does not change that. See "One recovery rule."
+- Two footprints, 2026-11-04. Flag `RBM_FOOTPRINT_ALIGN`, off unless set. The planner disk and the veto rectangle are written up under "Planner disk and veto rectangle" in `docs/DESIGN_DECISIONS.md`. The scored runs are in "One footprint for the planner and the veto."
 
 ## One stuck check, not one pose
 
@@ -266,3 +267,11 @@ An earlier clock treated the survey sit as a stall and quarantined the spawn. Th
 Dead ends: do not delete the stack from this result. Do not turn the flag on in the harness. Do not read the 4.9 point north gap, or the 3.4 point `trail_only` north gap, as a loss. Do not read the 0.3 and 1.5 point gaps between `one_rule` and `trail_only` as an effect of the cost mark. Do not add another recovery rule on top of the stack from one of these sits.
 
 Outcome: one rule does not match the stack and does not beat it. On −0.35 the robot covers less floor and sits longer. Marking the spot it failed in does not send it somewhere else. The reverse fires a few times, and the body stays inside 0.45 m for most of the run. The flag stays off.
+
+## One footprint for the planner and the veto
+
+Symptom: the same controller sits inside 0.45 m for minutes, and neither a true pose nor one recovery rule fixed it. A path the planner accepts can still be a turn the veto refuses, because the two checks use different shapes.
+
+How the shapes differ, with the flag off. The planner inflates occupied cells by a disk of radius 0.20 m. That is the tire (0.195 m from the centreline) plus a centimetre, and it is round. The turn veto sweeps a rectangle: nose and tail 0.19 m, side face 0.227 m, plus 0.02 m on every side. The front corner of that rectangle is about 0.32 m from the centre, so it sticks out past the disk. A straight command does not use the rectangle. It looks for a wall that spans the centre and both points 0.12 m to the side. Live range is a separate sonar check.
+
+The flag `RBM_FOOTPRINT_ALIGN` is off unless set. On, the planner and the map veto both use that rectangle and that 0.02 m clearance. Goal scores are not changed. The recovery stack stays on. Oracle stays off. Five 600 s runs of −0.35 and five of north, flag on, are the measurement.

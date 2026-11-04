@@ -22,7 +22,7 @@ from src.mapping.bubble import (
     pivot_ready,
     stop_gap,
 )
-from src.mapping.footprint import footprint_clips
+from src.mapping.footprint import footprint_align_enabled, footprint_clips
 
 # Half of cruise. A doorway correction has to finish before the tire meets the frame.
 DOOR_CREEP_M_S = 0.12
@@ -75,6 +75,14 @@ REASONS = (
     "unknown",
 )
 _major_state: dict[str, dict] = {}
+_plan_counts = {"ready": False, "plans_issued": 0, "plan_veto_disagree": 0}
+
+
+def set_plan_counts(issued: int, disagree: int) -> None:
+    """Remember how many planned paths the map veto then rejected."""
+    _plan_counts["ready"] = True
+    _plan_counts["plans_issued"] = int(issued)
+    _plan_counts["plan_veto_disagree"] = int(disagree)
 
 
 def log_major(
@@ -128,6 +136,9 @@ def log_major(
     summary.extend(f"{name} {state['reasons'][name]}" for name in REASONS)
     summary.append("places")
     summary.extend(f"{name} {state['places'][name]}" for name in ("doorway", "hallway", "room"))
+    if _plan_counts["ready"]:
+        summary.append(f"plans_issued {_plan_counts['plans_issued']}")
+        summary.append(f"plan_veto_disagree {_plan_counts['plan_veto_disagree']}")
     with open(os.path.join(folder, "summary.txt"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(summary) + "\n")
 
@@ -272,6 +283,29 @@ def _costs(
         "side": round(side, 3),
         "total": round(total, 3),
     }
+
+
+def map_veto(grid, pose: tuple[float, float, float], v: float, w: float) -> str | None:
+    """Map footprint that rejects this command, or None when the shape fits.
+
+    The default checks a turn with the rectangle and a straight command
+    with a three-cell bar. ``RBM_FOOTPRINT_ALIGN`` uses the rectangle for
+    every command, the same outline the planner then inflates with.
+    """
+    if grid is None:
+        return None
+    if footprint_align_enabled():
+        if footprint_clips(grid, pose, v, w):
+            return "map:footprint"
+        return None
+    turning = abs(float(w)) > TURN_W_RAD_S
+    if turning and footprint_clips(grid, pose, v, w):
+        return "map:corner"
+    if float(v) < -0.02 and not turning and _behind_blocked(grid, pose):
+        return "map:rear"
+    if float(v) > 0.02 and not turning and _ahead_blocked(grid, pose):
+        return "map:ahead"
+    return None
 
 
 def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
@@ -448,14 +482,8 @@ def choose_motion(
     best_costs: dict[str, float] | None = None
     for name, v, w in CANDIDATES:
         reason = live_veto(v, w, view)
-        if reason is None and grid is not None:
-            turning = abs(w) > TURN_W_RAD_S
-            if turning and footprint_clips(grid, pose, v, w):
-                reason = "map:corner"
-            elif v < -0.02 and not turning and _behind_blocked(grid, pose):
-                reason = "map:rear"
-            elif v > 0.02 and not turning and _ahead_blocked(grid, pose):
-                reason = "map:ahead"
+        if reason is None:
+            reason = map_veto(grid, pose, v, w)
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
             continue

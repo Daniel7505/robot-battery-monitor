@@ -175,3 +175,17 @@ Bumps, stuck events, and blocked-heading lines are 0 on all twenty runs. `camera
 **Rejected.** Deleting the old recovery code before this measurement. Turning the flag on in the harness. Reading the 4.9 point north gap as a loss. Reading the 0.3 and 1.5 point gaps between `one_rule` and `trail_only` as an effect of the cost mark.
 
 **Outcome.** One rule does not match the stack and does not beat it. On −0.35 the visited floor drops by more than the noise, and every pile is longer than the stack's longest pile on that seed. Marking the failed spot does not change the result. The flag stays off. The old recovery code stays.
+
+## 2026-11-04 — Planner disk and veto rectangle
+
+**Mission parameter.** The stall may be two footprint models. The planner can accept a path the map veto then refuses. The test gives both the same outline and the same clearance. It does not change which goal wins, and it does not add a penalty. Recovery stays the stack (`RBM_RECOVERY_MODE` empty). Oracle stays off. A visited-floor change under about 6 points is noise.
+
+**How they differ with the flag off.** The planner's free cells are known-free cells outside a disk of radius 0.20 m (`ROBOT_RADIUS_M`, `traversable`). That radius is the tire, 0.195 m from the centreline, plus a centimetre. The disk is round, so the heading does not matter. Path costs still prefer 0.30 m of clearance and charge 6 times inside 0.23 m. Those weights are not the footprint.
+
+The turn veto sweeps a rectangle (`footprint_clips`). The outline is the ButlerBotSkid shell: nose 0.19 m, tail 0.19 m, side face 0.227 m. One clearance of 0.02 m is added on every side, so the box is 0.21 m forward, 0.21 m back, and 0.247 m to each side. The front corner of that box is about 0.32 m from the centre. A path whose centre stays 0.20 m off a mapped cell can still swing that corner into the cell. The veto drops the turn (`map:corner`).
+
+A straight command does not use the rectangle. It is refused only when a mapped wall spans the centre and both samples 0.12 m to either side. A smear narrower than the shell does not stop a straight pass. That bar is a third shape, narrower than the disk and narrower than the rectangle. Live range is a sonar bubble. It is not either footprint.
+
+**Change.** `RBM_FOOTPRINT_ALIGN` is off unless set. On, a planner step is legal only when that same rectangle, at the step's heading, does not cover a mapped occupied cell. A turn of more than about 57° is legal only when the rectangle stays clear through the yaw change. Straight commands use the rectangle sweep as well (`map:footprint`), not the 0.12 m bar. The 0.02 m clearance is the one the sweep already had. The 2.5 and 6.0 clearance weights, the goal score, the recovery stack, and the oracle are unchanged.
+
+**Why.** If the stall is "plan says yes, executor says no", one shape should cut the refusals and the time spent sitting. If the visited floor does not move by more than the noise, the two shapes are not the stall.

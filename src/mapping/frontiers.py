@@ -4,7 +4,9 @@ Yamauchi 1997: a frontier cell is free space next to unknown space.
 Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
 scored by size divided by the A* path length. The path is planned on
 the free grid with occupied cells inflated by the robot radius, so the
-robot does not try to squeeze through a door it cannot fit. Turns are
+robot does not try to squeeze through a door it cannot fit. With
+``RBM_FOOTPRINT_ALIGN`` the inflation is the same rectangle the map
+veto sweeps, not that disk. The score weights do not change. Turns are
 placed where the centre is at least ``TURN_CLEAR_M`` from a mapped
 obstacle, and the path prefers ``TURN_AIM_M``. A doorway is a straight
 crossing, not a turn. A frontier the robot cannot turn around in, and
@@ -21,7 +23,7 @@ import math
 import numpy as np
 
 from src.mapping.body import GRID_RESOLUTION_M, MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
-from src.mapping.footprint import footprint_clips
+from src.mapping.footprint import HALF_M, NOSE_M, TAIL_M, footprint_align_enabled, footprint_clips
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import _nearby_region, crossing_bonus
 
@@ -44,6 +46,14 @@ _NEIGHBORS = (
     (-1, 1, math.sqrt(2.0)),
     (-1, -1, math.sqrt(2.0)),
 )
+_NEIGHBOR_INDEX = {(dy, dx): i for i, (dy, dx, _mul) in enumerate(_NEIGHBORS)}
+# Same sample as the spin sweep. One mask per sample around the circle.
+_YAW_STEP = 0.10
+_YAW_COUNT = int(round(2.0 * math.pi / _YAW_STEP))
+_OFFSETS: dict[tuple[float, float], tuple[tuple[int, int], ...]] = {}
+_MASK_CACHE: dict[str, object] = {"key": None, "masks": None}
+# Set when a planned pivot is replaced because the rectangle clips.
+_approach_reject = False
 
 
 def dilate_disk(mask: np.ndarray, radius_m: float, res: float) -> np.ndarray:
@@ -416,7 +426,108 @@ def _march(
     return None
 
 
+def _yaw_index(yaw: float, n: int) -> int:
+    step = 2.0 * math.pi / n
+    return int(round((_wrap(yaw) + math.pi) / step)) % n
+
+
+def _rect_offsets(yaw: float, res: float) -> tuple[tuple[int, int], ...]:
+    """Cell offsets of an obstacle relative to a centre the rectangle covers."""
+    key = (round(float(yaw), 5), round(float(res), 5))
+    hit = _OFFSETS.get(key)
+    if hit is not None:
+        return hit
+    cos_y = math.cos(yaw)
+    sin_y = math.sin(yaw)
+    reach = int(math.ceil(math.hypot(max(NOSE_M, TAIL_M), HALF_M) / res)) + 1
+    found: list[tuple[int, int]] = []
+    for dr in range(-reach, reach + 1):
+        dy = dr * res
+        for dc in range(-reach, reach + 1):
+            dx = dc * res
+            bx = cos_y * dx + sin_y * dy
+            by = -sin_y * dx + cos_y * dy
+            if -TAIL_M <= bx <= NOSE_M and -HALF_M <= by <= HALF_M:
+                found.append((dr, dc))
+    packed = tuple(found)
+    _OFFSETS[key] = packed
+    return packed
+
+
+def _stamp_offsets(occupied: np.ndarray, offsets: tuple[tuple[int, int], ...]) -> np.ndarray:
+    height, width = occupied.shape
+    out = np.zeros((height, width), dtype=bool)
+    for dr, dc in offsets:
+        if dr >= 0:
+            src_r0, src_r1 = dr, height
+            dst_r0, dst_r1 = 0, height - dr
+        else:
+            src_r0, src_r1 = 0, height + dr
+            dst_r0, dst_r1 = -dr, height
+        if dc >= 0:
+            src_c0, src_c1 = dc, width
+            dst_c0, dst_c1 = 0, width - dc
+        else:
+            src_c0, src_c1 = 0, width + dc
+            dst_c0, dst_c1 = -dc, width
+        if src_r1 <= src_r0 or src_c1 <= src_c0:
+            continue
+        out[dst_r0:dst_r1, dst_c0:dst_c1] |= occupied[src_r0:src_r1, src_c0:src_c1]
+    return out
+
+
+def rectangle_masks(occupied: np.ndarray, res: float) -> np.ndarray:
+    """One mask per yaw sample. True where the shared rectangle hits occupied.
+
+    The outline is the skid shell plus ``FOOTPRINT_MARGIN_M``. A cell the
+    0.20 m disk still calls free can be true here, because the corner of
+    the rectangle sticks out past that disk.
+    """
+    key = (occupied.shape, round(float(res), 5), hash(occupied.tobytes()))
+    if _MASK_CACHE["key"] == key:
+        return _MASK_CACHE["masks"]  # type: ignore[return-value]
+    n = _YAW_COUNT
+    step = 2.0 * math.pi / n
+    masks = np.zeros((n, occupied.shape[0], occupied.shape[1]), dtype=bool)
+    if np.any(occupied):
+        for i in range(n):
+            yaw = -math.pi + i * step
+            masks[i] = _stamp_offsets(occupied, _rect_offsets(yaw, res))
+    _MASK_CACHE["key"] = key
+    _MASK_CACHE["masks"] = masks
+    return masks
+
+
+def neighbor_blocks(masks: np.ndarray) -> np.ndarray:
+    """The yaw masks gathered into ``_NEIGHBORS`` order."""
+    out = np.empty((len(_NEIGHBORS),) + masks.shape[1:], dtype=bool)
+    n = masks.shape[0]
+    for i, (dy, dx, _mul) in enumerate(_NEIGHBORS):
+        out[i] = masks[_yaw_index(math.atan2(dy, dx), n)]
+    return out
+
+
+def _turn_blocked(masks: np.ndarray, row: int, col: int, yaw_in: float, yaw_out: float) -> bool:
+    """True when the rectangle hits while yawing from ``yaw_in`` to ``yaw_out``.
+
+    A step under about 57° is the grid, not a pivot, and is not checked.
+    The samples match the spin sweep's 0.10 rad step.
+    """
+    err = _wrap(yaw_out - yaw_in)
+    if abs(err) <= 1.0:
+        return False
+    n = masks.shape[0]
+    steps = max(1, int(math.ceil(abs(err) / _YAW_STEP)))
+    for i in range(1, steps + 1):
+        if masks[_yaw_index(yaw_in + err * (i / steps), n), row, col]:
+            return True
+    return False
+
+
 def traversable(labels: np.ndarray, res: float, radius_m: float = ROBOT_RADIUS_M) -> np.ndarray:
+    if footprint_align_enabled():
+        blocks = neighbor_blocks(rectangle_masks(labels == 1, res))
+        return (labels == 0) & ~np.all(blocks, axis=0)
     blocked = dilate_disk(labels == 1, radius_m, res)
     return (labels == 0) & ~blocked
 
@@ -428,8 +539,16 @@ def astar(
     *,
     step_cost: float,
     costs: np.ndarray | None = None,
+    heading_block: np.ndarray | None = None,
+    yaw_masks: np.ndarray | None = None,
+    start_yaw: float | None = None,
 ) -> list[tuple[int, int]] | None:
-    """8-connected A* on a boolean free grid. ``start`` may sit just off the grid."""
+    """8-connected A* on a boolean free grid. ``start`` may sit just off the grid.
+
+    ``heading_block`` and ``yaw_masks`` are the shared rectangle. They are
+    absent unless ``RBM_FOOTPRINT_ALIGN`` is on, and they do not change the
+    step weights.
+    """
     h, w = free.shape
     sy, sx = start
     gy, gx = goal
@@ -460,15 +579,31 @@ def astar(
         seen += 1
         if seen > 25000:
             return None
-        for dy, dx, mul in _NEIGHBORS:
+        for index, (dy, dx, mul) in enumerate(_NEIGHBORS):
             ny, nx = y + dy, x + dx
             if ny < 0 or nx < 0 or ny >= h or nx >= w:
                 continue
             if (ny, nx) != start and not free[ny, nx]:
                 continue
+            if heading_block is not None and bool(heading_block[index, ny, nx]):
+                continue
             if dy != 0 and dx != 0:
                 if not free[y + dy, x] or not free[y, x + dx]:
                     continue
+                if heading_block is not None:
+                    side_y = _NEIGHBOR_INDEX[(dy, 0)]
+                    side_x = _NEIGHBOR_INDEX[(0, dx)]
+                    if bool(heading_block[side_y, y + dy, x]) or bool(heading_block[side_x, y, x + dx]):
+                        continue
+            if yaw_masks is not None:
+                if (y, x) in came:
+                    py, px = came[(y, x)]
+                    hin = math.atan2(y - py, x - px)
+                    if _turn_blocked(yaw_masks, y, x, hin, math.atan2(dy, dx)):
+                        continue
+                elif start_yaw is not None and (y, x) == start:
+                    if _turn_blocked(yaw_masks, y, x, float(start_yaw), math.atan2(dy, dx)):
+                        continue
             weight = 1.0 if costs is None else float(costs[ny, nx])
             ng = g + mul * step_cost * weight
             key = (ny, nx)
@@ -918,6 +1053,14 @@ def wide_escape(
     return (0.12, w, "wide")
 
 
+def consume_approach_reject() -> bool:
+    """True once after a planned pivot was replaced because the rectangle clips."""
+    global _approach_reject
+    flag = _approach_reject
+    _approach_reject = False
+    return flag
+
+
 def approach_command(
     grid: OccupancyGrid,
     pose: tuple[float, float, float],
@@ -928,6 +1071,8 @@ def approach_command(
     None means ordinary pursuit. The pivot happens in the open, before
     the shell is inside the turning radius. A doorway is not an arc.
     """
+    global _approach_reject
+    _approach_reject = False
     if len(path_xy) < 2:
         return None
     x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
@@ -959,6 +1104,7 @@ def approach_command(
                 return (-0.10, 0.0, "back")
             spin = math.copysign(0.70, err)
             if footprint_clips(grid, pose, 0.0, spin):
+                _approach_reject = True
                 return (-0.10, 0.0, "back")
             return (0.0, spin, "pivot")
         if travelled > 0.15:
@@ -978,6 +1124,7 @@ def approach_command(
                     # Centre clearance is a disk. The tire corner sticks out
                     # past it and swings through the turn.
                     if footprint_clips(grid, pose, 0.0, spin):
+                        _approach_reject = True
                         return (-0.10, 0.0, "back")
                     return (0.0, spin, "pivot")
         prev, here = here, nxt
@@ -1085,7 +1232,19 @@ def select_goal(
             if _touches_door(group, rooms["doors"]):
                 ranked.append(group)
                 extra += 1
-    free = traversable(labels, grid.res, radius_m)
+    yaw_masks = None
+    heading_block = None
+    start_yaw = None
+    if footprint_align_enabled():
+        # Same rectangle as the map veto. The 2.5 / 6.0 clearance weights
+        # below are unchanged. The disk radius is not used.
+        yaw_masks = rectangle_masks(labels == 1, grid.res)
+        heading_block = neighbor_blocks(yaw_masks)
+        free = (labels == 0) & ~np.all(heading_block, axis=0)
+        if heading_xy is not None:
+            start_yaw = math.atan2(float(heading_xy[1]), float(heading_xy[0]))
+    else:
+        free = traversable(labels, grid.res, radius_m)
     occupied_now = labels == 1
     clear = clearance_m(occupied_now, grid.res) if np.any(occupied_now) else None
     costs = approach_costs(clear) if clear is not None else None
@@ -1160,14 +1319,32 @@ def select_goal(
                         }
                     )
                 continue
-        path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
+        path_cells = astar(
+            free,
+            start,
+            target,
+            step_cost=grid.res,
+            costs=costs,
+            heading_block=heading_block,
+            yaw_masks=yaw_masks,
+            start_yaw=start_yaw,
+        )
         if not path_cells:
             # The far stand-off can sit across a wall. The nearest safe
             # cell is still a goal, so a tight doorway is not abandoned.
             nearest = _viewpoint_nearest(free, cells, 6)
             if nearest is None or nearest == target:
                 continue
-            path_cells = astar(free, start, nearest, step_cost=grid.res, costs=costs)
+            path_cells = astar(
+                free,
+                start,
+                nearest,
+                step_cost=grid.res,
+                costs=costs,
+                heading_block=heading_block,
+                yaw_masks=yaw_masks,
+                start_yaw=start_yaw,
+            )
             if not path_cells:
                 continue
             target = nearest
@@ -1206,7 +1383,16 @@ def select_goal(
     for mouth, beyond, area in severed_mouths(labels, grid.res, radius_m, here):
         if mouth in banned:
             continue
-        path_cells = astar(free, start, mouth, step_cost=grid.res, costs=costs)
+        path_cells = astar(
+            free,
+            start,
+            mouth,
+            step_cost=grid.res,
+            costs=costs,
+            heading_block=heading_block,
+            yaw_masks=yaw_masks,
+            start_yaw=start_yaw,
+        )
         if not path_cells:
             continue
         pts = [grid.cell_center(*rc) for rc in path_cells]
@@ -1238,7 +1424,16 @@ def select_goal(
     if stand is not None:
         target, area = stand
         if bool(free[target]):
-            path_cells = astar(free, start, target, step_cost=grid.res, costs=costs)
+            path_cells = astar(
+                free,
+                start,
+                target,
+                step_cost=grid.res,
+                costs=costs,
+                heading_block=heading_block,
+                yaw_masks=yaw_masks,
+                start_yaw=start_yaw,
+            )
             if path_cells:
                 pts = [grid.cell_center(*rc) for rc in path_cells]
                 length = 0.0

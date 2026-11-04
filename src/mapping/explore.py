@@ -13,6 +13,8 @@ integrated on the odometry pose.
 ``RBM_RECOVERY_MODE`` defaults to the stacked recoveries. ``one_rule``
 and ``trail_only`` keep a single stuck response: reverse along the
 driven trail. ``one_rule`` also raises the cost of that 0.45 m spot.
+``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
+veto share the skid rectangle. Goal scores stay as they are.
 """
 
 from __future__ import annotations
@@ -56,6 +58,7 @@ from src.mapping.footprint import footprint_clips
 from src.mapping.frontiers import (
     _pose_clearance,
     approach_command,
+    consume_approach_reject,
     free_behind_m,
     frontier_mask,
     select_goal,
@@ -63,12 +66,12 @@ from src.mapping.frontiers import (
     wide_escape,
 )
 from src.mapping.tick import (
-    TURN_W_RAD_S,
-    _ahead_blocked,
     _behind_blocked,
     choose_motion,
     live_veto,
     log_major,
+    map_veto,
+    set_plan_counts,
 )
 from src.mapping.fuse import MotionFusion
 from src.mapping.grid import OccupancyGrid
@@ -270,6 +273,12 @@ class Explorer:
         self.t_s = 0.0
         self.goal_xy: tuple[float, float] | None = None
         self.path_xy: list[tuple[float, float]] = []
+        # Paths handed to the follower, and how many of those the map
+        # footprint then rejected. One rejection per issued path.
+        self.plans_issued = 0
+        self.plan_veto_disagree = 0
+        self._plan_serial = 0
+        self._veto_serial = -1
         self._spin_start: float | None = None
         self._replan_at = -1.0
         self._goal_since = 0.0
@@ -2238,6 +2247,49 @@ class Explorer:
     def _shell_clips(self, v: float, w: float) -> bool:
         return footprint_clips(self.grid, self.plan_pose(), v, w)
 
+    def _issue_path(self, path) -> None:
+        """Hand a path to the follower and count it once."""
+        self.path_xy = list(path)
+        if not self.path_xy:
+            return
+        self.plans_issued += 1
+        self._plan_serial += 1
+        self._flush_plan_veto()
+
+    def _count_path_veto(self) -> None:
+        """One count when this issued path's follow command is map-rejected."""
+        if self._plan_serial <= 0 or self._veto_serial == self._plan_serial:
+            return
+        self._veto_serial = self._plan_serial
+        self.plan_veto_disagree += 1
+        self._flush_plan_veto()
+
+    def _flush_plan_veto(self) -> None:
+        set_plan_counts(self.plans_issued, self.plan_veto_disagree)
+        folder = os.environ.get("RBM_MAP_DIR")
+        if not folder:
+            return
+        text = (
+            f"plans_issued {self.plans_issued}\n"
+            f"plan_veto_disagree {self.plan_veto_disagree}\n"
+        )
+        path = os.path.join(folder, "plan_veto.txt")
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, path)
+
+    def _note_follow_veto(self, pose, v: float, w: float) -> None:
+        """Count a path whose follow command the map footprint rejects.
+
+        Live range is not this count. The mismatch under test is the
+        footprint, not the sonar bubble.
+        """
+        if not self.path_xy:
+            return
+        if map_veto(self.grid, pose, v, w) is not None:
+            self._count_path_veto()
+
     def _remember_command(self, v: float, w: float) -> None:
         if abs(v) < 0.02 and abs(w) < 0.05:
             self._commit = None
@@ -2251,13 +2303,8 @@ class Explorer:
         if self._commit is None or self.t_s <= self._commit_at or self.t_s >= self._commit_until:
             return None
         v, w = self._commit
-        turning = abs(w) > TURN_W_RAD_S
         blocked = live_veto(v, w, view) is not None
-        if not blocked and turning:
-            blocked = footprint_clips(self.grid, pose, v, w)
-        if not blocked and v < -0.02 and not turning and _behind_blocked(self.grid, pose):
-            blocked = True
-        if not blocked and v > 0.02 and not turning and _ahead_blocked(self.grid, pose):
+        if not blocked and map_veto(self.grid, pose, v, w) is not None:
             blocked = True
         if blocked:
             self._commit = None
@@ -2477,6 +2524,8 @@ class Explorer:
             return 0.0, 0.0
         pose = self.plan_pose()
         approach = approach_command(self.grid, pose, self.path_xy)
+        if consume_approach_reject():
+            self._count_path_veto()
         heading_err = wrap_rad(self._segment_heading() - pose[2])
         if approach is not None and approach[2] == "pivot":
             err = abs(heading_err)
@@ -2491,6 +2540,7 @@ class Explorer:
                 approach = None
             elif footprint_clips(self.grid, pose, 0.0, approach[1]):
                 self._pivot_hold = False
+                self._count_path_veto()
                 approach = (-0.10, 0.0, "back")
             else:
                 # A pivot is v = 0. Giving up into a forward arc is how the
@@ -2520,6 +2570,7 @@ class Explorer:
             elif footprint_clips(self.grid, pose, approach[0], approach[1]):
                 # The arc's corner meets the map. The back-up rule below
                 # decides whether reversing is legal.
+                self._count_path_veto()
                 approach = None if self._goal_ahead(pose) else (-0.10, 0.0, "back")
             else:
                 return self._issue_wide(approach)
@@ -2615,6 +2666,7 @@ class Explorer:
         if held is not None:
             self._body_v, self._body_w = held
             return wheel_speeds(*held)
+        self._note_follow_veto(pose, v, w)
         choice = choose_motion(
             view=view,
             pursuit_v=v,
@@ -2747,7 +2799,7 @@ class Explorer:
             # Same target: refresh the path. A different target waits, so
             # the goal does not flip every replan.
             if shift < 0.45:
-                self.path_xy = path
+                self._issue_path(path)
                 self._pocket = bool(report.get("tight"))
                 if pending:
                     self._goal_cells = pending
@@ -2761,7 +2813,8 @@ class Explorer:
             self.goal_xy is not None
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2
         )
-        self.goal_xy, self.path_xy = goal, path
+        self.goal_xy = goal
+        self._issue_path(path)
         self._goal_cells = pending
         self._goal_score = float(report.get("score") or 0.0)
         self._pocket = bool(report.get("tight"))
@@ -2840,7 +2893,8 @@ class Explorer:
             self._did_final_scan = False
             self.phase = "go"
             goal, path = chosen
-            self.goal_xy, self.path_xy = goal, path
+            self.goal_xy = goal
+            self._issue_path(path)
             self._goal_cells = list(report.get("cells") or [])
             self._goal_score = float(report.get("score") or 0.0)
             self._pocket = bool(report.get("tight"))

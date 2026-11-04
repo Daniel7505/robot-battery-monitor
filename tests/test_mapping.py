@@ -3077,8 +3077,33 @@ def test_one_rule_ignores_an_imu_stuck_and_a_blocked_heading(monkeypatch):
     assert left > 0.5 and right > 0.5
 
 
+def test_one_rule_does_not_treat_the_survey_spin_as_a_stall(monkeypatch):
+    """A finished survey is a sit, not a stall. The clock starts with the drive."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.t_s = 10.0
+    bot._commanded = wheel_speeds(0.0, 0.70)
+    bot._body_w = 0.70
+    bot.odometry.yaw_unwrapped_rad = 3.0
+    assert bot._one_rule_command(bot.plan_pose()) is None
+    bot._commanded = wheel_speeds(0.12, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    assert bot._one_rule_command(bot.plan_pose()) is None
+    bot.t_s = 12.1
+    left, right = bot._one_rule_command(bot.plan_pose())
+    assert left is not None and left < -0.5 and right < -0.5
+
+
 def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
     from src.mapping.explore import Explorer
+
+    from src.mapping.drive import wheel_speeds
 
     monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
@@ -3086,6 +3111,8 @@ def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
     bot.phase = "go"
     bot.t_s = 5.0
     bot._body_v = 0.12
+    bot._commanded = wheel_speeds(0.12, 0.0)
+    bot._trans_still_from = (0.0, 0.0, 0.0)
     bot._progress_from = (0.0, 0.0, 0.0, True)
     bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
     bot._view_blind = False

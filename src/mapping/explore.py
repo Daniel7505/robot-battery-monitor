@@ -392,6 +392,7 @@ class Explorer:
         self._failure_zones: list[tuple[float, float, float]] = []
         self._suppress_approach_log = False
         self._spin_still_from: tuple[float, float] | None = None
+        self._trans_still_from: tuple[float, float, float] | None = None
         self._narrow_logged = False
         # t, x, y, commanded translation while still. Resets once the shell moves.
         self._progress_from: tuple[float, float, float, bool] | None = None
@@ -1554,12 +1555,20 @@ class Explorer:
         v_cmd, w_cmd = self._commanded_vw()
         spin_cmd = abs(v_cmd) < 0.02 and (abs(w_cmd) > 0.2 or abs(self._body_w) > 0.2)
         trans_cmd = abs(v_cmd) > 0.03 or (abs(self._body_v) > 0.03 and not spin_cmd)
-        progress = self._progress_from
-        if trans_cmd and progress is not None:
-            t0, x0, y0, saw = progress
-            x, y, _yaw = self.plan_pose()
-            if saw and self.t_s - t0 >= STALL_WINDOW_S and math.hypot(x - x0, y - y0) < 0.04:
-                return True
+        x, y, _yaw = self.plan_pose()
+        # The clock starts when translation is commanded. A survey spin is
+        # not translation, and the sit before the first drive is not a stall.
+        if trans_cmd:
+            if self._trans_still_from is None:
+                self._trans_still_from = (self.t_s, x, y)
+            else:
+                t0, x0, y0 = self._trans_still_from
+                if math.hypot(x - x0, y - y0) >= 0.04:
+                    self._trans_still_from = (self.t_s, x, y)
+                elif self.t_s - t0 >= STALL_WINDOW_S:
+                    return True
+        else:
+            self._trans_still_from = None
         if spin_cmd and abs(v_cmd) < 0.02 and abs(self._body_v) < 0.02:
             yaw = self.plan_yaw_unwrapped()
             if self._spin_still_from is None:
@@ -1604,6 +1613,7 @@ class Explorer:
             self._leave_xy = None
             self._suppress_approach_log = False
             self._spin_still_from = None
+            self._trans_still_from = None
             self._progress_from = (self.t_s, float(pose[0]), float(pose[1]), False)
             self._replan_at = self.t_s
             return None

@@ -70,6 +70,8 @@ REASONS = (
     "camera_imu_stuck",
     "narrow_gap",
     "pile_leave",
+    "one_rule",
+    "trail_only",
     "unknown",
 )
 _major_state: dict[str, dict] = {}

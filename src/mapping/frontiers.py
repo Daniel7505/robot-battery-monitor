@@ -611,6 +611,52 @@ def _touches_door(group: list[tuple[int, int]], doors: np.ndarray) -> bool:
     return False
 
 
+def apply_zone_cost(costs: np.ndarray | None, grid: OccupancyGrid, zones) -> np.ndarray | None:
+    """Raise the step cost inside each (x, y, radius) disk. Cells stay free.
+
+    A path can still cross the disk when it is the only way out. A goal
+    inside the disk is refused separately. This does not write the occupancy
+    grid: the camera's map is left alone.
+    """
+    if not zones:
+        return costs
+    shape = costs.shape if costs is not None else grid.labels().shape
+    out = np.ones(shape, dtype=np.float32) if costs is None else np.array(costs, dtype=np.float32, copy=True)
+    res = float(grid.res)
+    ox, oy = float(grid.origin[0]), float(grid.origin[1])
+    height, width = shape
+    for item in zones:
+        x, y, radius = float(item[0]), float(item[1]), float(item[2])
+        if radius <= 0.0:
+            continue
+        c_lo = max(0, int(math.floor((x - radius - ox) / res)))
+        c_hi = min(width, int(math.floor((x + radius - ox) / res)) + 1)
+        r_lo = max(0, int(math.floor((y - radius - oy) / res)))
+        r_hi = min(height, int(math.floor((y + radius - oy) / res)) + 1)
+        if r_lo >= r_hi or c_lo >= c_hi:
+            continue
+        cols = np.arange(c_lo, c_hi)
+        rows = np.arange(r_lo, r_hi)
+        cc, rr = np.meshgrid(cols, rows)
+        cx = ox + (cc + 0.5) * res
+        cy = oy + (rr + 0.5) * res
+        mask = (cx - x) ** 2 + (cy - y) ** 2 <= radius * radius
+        window = out[r_lo:r_hi, c_lo:c_hi]
+        window[mask] = np.maximum(window[mask], 40.0)
+    return out
+
+
+def point_in_zones(goal: tuple[float, float], zones) -> bool:
+    """True when a goal point sits inside a quarantine disk."""
+    if not zones:
+        return False
+    gx, gy = float(goal[0]), float(goal[1])
+    for item in zones:
+        if math.hypot(gx - float(item[0]), gy - float(item[1])) < float(item[2]):
+            return True
+    return False
+
+
 def _region_factor(goal: tuple[float, float], avoid: list[tuple[float, float, float]]) -> float:
     """Scale a score down near a recently attempted region. The frontier stays reachable."""
     factor = 1.0
@@ -1016,6 +1062,7 @@ def select_goal(
     prefer_near: bool = False,
     visited: np.ndarray | None = None,
     turn_aim_m: float | None = None,
+    zones: list[tuple[float, float, float]] | None = None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -1042,6 +1089,7 @@ def select_goal(
     occupied_now = labels == 1
     clear = clearance_m(occupied_now, grid.res) if np.any(occupied_now) else None
     costs = approach_costs(clear) if clear is not None else None
+    costs = apply_zone_cost(costs, grid, zones)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     if here is None:
         return None
@@ -1061,6 +1109,8 @@ def select_goal(
         cells: list,
     ) -> None:
         nonlocal best
+        if point_in_zones(goal, zones):
+            return
         adjusted = score * _region_factor(goal, avoid)
         ranked_scores.append((adjusted, goal))
         if best is None or adjusted > best[0]:

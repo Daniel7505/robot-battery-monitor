@@ -3000,6 +3000,151 @@ def test_oracle_pose_is_for_the_planner_and_the_map_stays_on_the_estimate():
     assert float(bot.grid.log[other]) == pytest_approx(0.0)
 
 
+def test_recovery_mode_defaults_to_the_stack(monkeypatch):
+    monkeypatch.delenv("RBM_RECOVERY_MODE", raising=False)
+    from src.mapping.explore import Explorer, recovery_mode
+
+    assert recovery_mode() == "stack"
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    assert bot.recovery_mode == "stack"
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "sideways")
+    assert recovery_mode() == "stack"
+
+
+def test_one_rule_reverses_along_the_trail_and_quarantines(monkeypatch):
+    """A pile reverses on the driven trail and remembers the spot. It does not drive forward."""
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy is None
+    assert bot._failure_zones == [(0.0, 0.0, 70.0)]
+    assert bot._escape_block is None
+    assert bot._failure_zone_args() == [(0.0, 0.0, 0.45)]
+
+
+def test_trail_only_reverses_without_a_quarantine(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "trail_only")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy == (1.5, 0.0)
+    assert bot._failure_zones == []
+    assert bot._failure_zone_args() is None
+
+
+def test_one_rule_ignores_an_imu_stuck_and_a_blocked_heading(monkeypatch):
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 2.5
+    bot._replan_at = 100.0
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    bot.goal_xy = (1.5, 0.0)
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    bot._go(False, 0.28)
+    assert bot._escape_block is None
+    assert bot._stuck_reason() == "imu_stuck"
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    left, right = bot._remember(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+
+
+def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.0, 1.0, 1.0)
+
+    def _stall(_pose):
+        raise AssertionError("stall escape")
+
+    def _creep(*_args):
+        raise AssertionError("creep")
+
+    monkeypatch.setattr(bot, "_stall_escape", _stall)
+    monkeypatch.setattr(bot, "_creep_through_gap", _creep)
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    bot._relief = None
+    bot._motion_anchor = (0.0, 0.0, 0.0, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    bot._watch_motion()
+    assert bot._relief is None
+
+
+def test_a_quarantine_disk_is_expensive_and_not_a_goal():
+    from src.mapping.frontiers import apply_zone_cost, point_in_zones
+    from src.mapping.grid import OccupancyGrid
+
+    grid = OccupancyGrid()
+    costs = apply_zone_cost(None, grid, [(0.0, 0.0, 0.45)])
+    assert costs is not None
+    here = grid.cell_of(0.0, 0.0)
+    far = grid.cell_of(2.0, 0.0)
+    assert here is not None and far is not None
+    assert float(costs[here]) >= 40.0
+    assert float(costs[far]) == 1.0
+    assert point_in_zones((0.2, 0.0), [(0.0, 0.0, 0.45)])
+    assert not point_in_zones((1.0, 0.0), [(0.0, 0.0, 0.45)])
+    # The occupancy log was not painted.
+    assert float(grid.log[here]) == 0.0
+
+
+def test_one_rule_plan_hands_the_disk_to_the_goal_picker(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._failure_zones = [(1.0, 2.0, 9.0)]
+    seen = {}
+
+    def _select(*_args, **kwargs):
+        seen["zones"] = kwargs.get("zones")
+        return None
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _select)
+    bot._plan()
+    assert seen["zones"] == [(1.0, 2.0, 0.45)]
+
+
 def test_solids_include_the_closed_doors():
     names = {solid.name for solid in load_solids()}
     assert "APT_DOOR_FRONT" in names

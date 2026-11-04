@@ -147,12 +147,21 @@ def parse_wbt_cameras(path: str | None = None) -> dict[str, dict]:
 
     Camera nodes live in ``webots/protos/ButlerBot.proto`` and are direct
     children of the Robot. A world that instances ``ButlerBot`` is expanded
-    first. The robot origin is the camera frame used here.
+    first. ``ButlerBotSkid`` keeps the same cameras in its own proto, which
+    the caster expander does not open. The robot origin is the camera frame.
     """
     with open(path or _WBT_DEFAULT, encoding="utf-8") as fh:
         text = fh.read()
     from src.butlerbot_proto import expand_world_text
 
+    if re.search(r"(?m)^ButlerBotSkid \{", text):
+        skid = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "webots",
+            "protos",
+            "ButlerBotSkid.proto",
+        )
+        return parse_wbt_cameras(skid)
     text = expand_world_text(text)
     out: dict[str, dict] = {}
     for m in re.finditer(r"\bCamera\s*\{", text):

@@ -225,3 +225,25 @@ Early-quit count: 0. The eleven `select_goal` misses (ten with the flag on, one 
 **Rejected.** Editing `_nearest_free`, the ban lifetime, the top-8 cut, or the expansion cap from this sample. The label was the component split, and it did not end a run. Turning the mask flag on. Reading either 1.5 point visited gap as an effect. Reading 23% and 29% rejected paths as the veto having lined up with the planner.
 
 **Outcome.** The mask flag stays off. The quit line stays, so the next patch has a measured label. This sample's label is the start component, with the cut visible on the same line and the cap unhit, and the robot still ran to the cap.
+
+## 2026-11-04 — Start in the robot's component, and read the pile
+
+**Mission parameter.** The quit dump named `start_component` and the runs still reached 600 s. The next measurement is whether A* should start in the component the robot is actually standing in, and what command a long sit is made of. No new clearance. Recovery and scoring stay as they are. A visited-floor change under about 6 points is noise. 3b is the planner-mask trial (means 16.2 and 10.5).
+
+**Change.** A pile line, always on, logging only. After the existing 60 s inside 0.45 m, one line a second records phase, goal cell, age, attempts, path length, next waypoint, pure-pursuit target, every motion candidate and its veto, the chosen `(v, w)` and its source, live sensor blocks, and odometry delta against the command. Leaving the ball writes the hold, veto, and commanded-but-still shares, the recovery rules that fired, and one plain sentence. `RBM_TRUE_START` is off unless set. On, the robot cell counts as free and a walk that does not step on occupied cells, limited to the same 40 cells as `_nearest_free`, picks the planner-free cell in that component. Commit `33bf583`.
+
+**Why.** The straight-line snap can start in another room. The pile line answers a different question: once the shell has already sat for a minute, is the tick a veto, a zero command, a recovery loop, or a command the pose does not follow.
+
+**Evidence.** Five runs of −0.35 and five of north, flag on, then two of each with the flag off. Pile line on in all fourteen. Oracle off. `RBM_RECOVERY_MODE`, `RBM_FOOTPRINT_ALIGN`, and `RBM_SHARED_FOOTPRINT` unset. Depth-noise seeds 63 and 64. Ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. Counts are in `docs/LESSONS_LEARNED.md`.
+
+Flag on, −0.35 visited %: 19.70, 17.40, 14.16, 10.81, 11.12. Mean 14.6, sample sd 3.9, range 8.9 points. The variance mean was 14.7. The gap is 0.1 points. The 3b mean was 16.2. Pile mean 212 s. Run 5 ended at 329 s.
+
+Flag on, north visited %: 22.88, 26.51, 13.52, 7.54, 4.69. Mean 15.0, sample sd 9.5, range 21.8 points. The variance mean was 9.0. The gap is 6.0 points. The 3b mean was 10.5. Pile mean 219 s, including one pile of 536 s. Run 4 ended at 244 s.
+
+`start_component` count: 0. The two early stops are `return=start_none` `reason=other` (31 misses on −0.35 run 5, 14 on north run 4). The escape walk found no free cell inside 40 cells. The four flag-off runs all lasted 600 s and had no `select_goal` miss. −0.35 flag off visited 20.63 and 9.36. North flag off visited 22.66 and 8.17.
+
+On the summaries the dump did open, hold is 0–4% and a fully vetoed candidate list is 0%. The large share is recovery. North run 3's 60 s summary is 91% recovery (`stall` 6,203 of 7,522 ticks) and 33% commanded-but-still. −0.35 run 3's 65 s summary is 78% recovery (`back` 3,990, `narrow_gap` 1,722, `pile_leave` 645) with commanded-but-still at 1%: the odometry followed a local back-and-creep. North run 5's 536 s ground-truth pile and −0.35 run 4's 443 s pile never opened a summary. The estimate's poses in those windows span 0.36 m and 0.41 m, and the 60 s anchor kept resetting.
+
+**Rejected.** Turning the flag on. Reading the north mean of 15.0 as a gain: the sample sd is 9.5 and two runs stopped early. Lengthening the 40-cell walk. Treating the 0% veto share as proof the map veto is idle outside a pile. The summaries start only after 60 s, and by then the tick is already a recovery command.
+
+**Outcome.** `RBM_TRUE_START` stays off. The pile line stays. A stay the estimate holds for a minute is a recovery loop, chiefly `stall`, `pile_leave`, `back`, and `contact`. It is not a veto hold and it is not a zero command. The component-start trial removed `start_component` from this sample and added two `start_none` stops.

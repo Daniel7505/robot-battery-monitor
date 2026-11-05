@@ -993,17 +993,29 @@ class Explorer:
         hold = 100.0 * stats["hold"] / n
         veto = 100.0 * stats["veto"] / n
         stuck = 100.0 * stats["stuck"] / n
-        kind, share = max((("hold", hold), ("veto", veto), ("stuck", stuck)), key=lambda item: item[1])
-        if kind == "hold":
+        rules = stats["rules"]
+        recovery = 100.0 * sum(int(count) for count in rules.values()) / n
+        kind, share = max(
+            (("hold", hold), ("veto", veto), ("stuck", stuck), ("recovery", recovery)),
+            key=lambda item: item[1],
+        )
+        if share < 20.0:
+            lead = (
+                f"This {dur:.0f} s pile has no single dominant tick: "
+                f"hold {hold:.0f}%, veto {veto:.0f}%, commanded-but-still {stuck:.0f}%, "
+                f"recovery {recovery:.0f}%."
+            )
+        elif kind == "hold":
             lead = f"Most of this {dur:.0f} s pile the command was hold or zero ({share:.0f}% of ticks)."
         elif kind == "veto":
             lead = f"Most of this {dur:.0f} s pile every motion candidate was vetoed ({share:.0f}% of ticks)."
+        elif kind == "recovery":
+            lead = f"Most of this {dur:.0f} s pile was a recovery command ({share:.0f}% of ticks)."
         else:
             lead = (
                 f"Most of this {dur:.0f} s pile the wheels were commanded and the pose did not follow "
                 f"({share:.0f}% of ticks)."
             )
-        rules = stats["rules"]
         if rules:
             top = sorted(rules.items(), key=lambda item: item[1], reverse=True)[:3]
             fired = ", ".join(f"{name} ({count})" for name, count in top)

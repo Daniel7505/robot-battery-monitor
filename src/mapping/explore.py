@@ -392,6 +392,12 @@ class Explorer:
         self._pile_log_at = -1.0
         self._pile_prev: tuple[float, float, float, float] | None = None
         self._pile_reported: tuple[float, float, float] | None = None
+        self._pose_samples: list[tuple[float, float, float]] = []
+        self._est_next = 0.0
+        self._est_center: tuple[float, float, float] | None = None
+        self._est_age = 0.0
+        self._escape_travel_m = 0.0
+        self._escape_phase_travel = 0.0
         # Recent odom poses the shell actually drove. The pile leave reverses
         # along these when a straight sweep is closed. Not a map of the rooms.
         self._crumbs: list[tuple[float, float]] = []
@@ -645,6 +651,10 @@ class Explorer:
         self._mark_visited()
         applied = 0.0 if drop or spin_cmd else ds
         self._path_m += abs(applied)
+        if self._blind_back:
+            # Pose jumps from a match are not travel. Only integrated
+            # wheel motion that this step trusted counts toward leaving.
+            self._escape_travel_m += abs(applied)
         floor_image = floor if self.floor_enabled else None
         self._fusion.scene_floor_m = None
         self._fusion.scene_visual_m = None
@@ -866,20 +876,73 @@ class Explorer:
             "goal": "none",
         }
 
-    def _observe_pile(self) -> None:
-        """Count this tick while the shell is inside the 0.45 m pile ball.
+    def _note_estimate_pile(self) -> None:
+        """Best-center stay on the estimate, same 0.45 m ball as scoring.
 
-        The 1 Hz line starts once the stay has lasted ``PILE_LIMIT_S``,
-        the same window that arms the pile guard. Leaving the ball writes
-        the summary. Logging does not change the command.
+        The entry anchor resets when a chord exceeds 0.45 m, so a long sit
+        whose points still share one center never opened a dump. This clock
+        is the robot's own pose. Ground truth is not read, and it does not
+        arm the pile guard.
         """
-        anchor = self._pile_anchor
-        if anchor is None or anchor == self._pile_reported:
+        if self.t_s < self._est_next:
             return
-        t0, x0, y0 = anchor
+        self._est_next = self.t_s + 0.25
+        x, y, _yaw = self.plan_pose()
+        self._pose_samples.append((self.t_s, x, y))
+        if len(self._pose_samples) > 2400:
+            del self._pose_samples[: len(self._pose_samples) - 2400]
+        center = self._est_center
+        if center is not None and math.hypot(x - center[1], y - center[2]) <= 0.45:
+            self._est_age = self.t_s - center[0]
+            return
+        self._refit_estimate_center()
+
+    def _refit_estimate_center(self) -> None:
+        samples = self._pose_samples
+        n = len(samples)
+        if n == 0:
+            self._est_center = None
+            self._est_age = 0.0
+            return
+        t_now, x_now, y_now = samples[-1]
+        # About one candidate a second. The first hit from the oldest
+        # sample is the longest stay that still contains the current pose.
+        for index in range(0, n, 4):
+            t_i, x_i, y_i = samples[index]
+            if math.hypot(x_now - x_i, y_now - y_i) > 0.45:
+                continue
+            if any(
+                math.hypot(samples[k][1] - x_i, samples[k][2] - y_i) > 0.45
+                for k in range(index, n, 2)
+            ):
+                continue
+            self._est_center = (t_i, x_i, y_i)
+            self._est_age = t_now - t_i
+            return
+        self._est_center = (t_now, x_now, y_now)
+        self._est_age = 0.0
+
+    def _observe_pile(self) -> None:
+        """Count ticks while the estimate's best-center stay is a pile.
+
+        The 1 Hz line starts once that stay has lasted ``PILE_LIMIT_S``.
+        Leaving the ball writes the summary. Logging does not change the command.
+        """
+        prev_age = self._est_age
+        prev_center = self._est_center
+        self._note_estimate_pile()
+        if self._est_age < PILE_LIMIT_S:
+            if (
+                self._pile_stats is not None
+                and int(self._pile_stats.get("n", 0)) > 0
+                and prev_age >= PILE_LIMIT_S
+                and prev_center is not None
+            ):
+                self._finish_pile_dump(float(prev_center[0]), float(prev_center[1]), float(prev_center[2]))
+            return
+        center = self._est_center or (self.t_s, 0.0, 0.0)
+        t0, x0, y0 = float(center[0]), float(center[1]), float(center[2])
         x, y, yaw = self.plan_pose()
-        if math.hypot(x - x0, y - y0) > 0.45:
-            return
         if self._pile_stats is None:
             self._pile_stats = self._fresh_pile_stats()
             self._pile_stats["hz_pose"] = (x, y)
@@ -911,6 +974,9 @@ class Explorer:
             if asked and missed:
                 stats["stuck"] += 1
         stats["hz_cmd"] = float(stats.get("hz_cmd", 0.0)) + abs(v) * dt
+        stats["hz_cmd_total"] = float(stats.get("hz_cmd_total", 0.0)) + abs(v) * dt
+        if prev is not None:
+            stats["pose_path"] = float(stats.get("pose_path", 0.0)) + math.hypot(x - prev[1], y - prev[2])
         self._pile_prev = (self.t_s, x, y, yaw)
         source = self._motion_source
         if source not in ("follow", "hold", "spin", "settle", "pivot", "wide", "straight", "script"):
@@ -979,7 +1045,9 @@ class Explorer:
         self._log(
             f"pile_end dur={dur:.0f}s at=({x0:.2f},{y0:.2f}) from={t0:.0f} "
             f"ticks={n} hold={pct(stats['hold']):.0f}% veto={pct(stats['veto']):.0f}% "
-            f"stuck={pct(stats['stuck']):.0f}% rules={rule_txt}"
+            f"stuck={pct(stats['stuck']):.0f}% cmd_m={float(stats.get('hz_cmd_total', 0.0)):.2f} "
+            f"pose_m={float(stats.get('pose_path', 0.0)):.2f} "
+            f"rules={rule_txt}"
         )
         self._log("pile_why " + self._pile_why(stats, dur))
         self._pile_reported = (t0, x0, y0)
@@ -1581,10 +1649,6 @@ class Explorer:
             return
         t0, x0, y0 = self._pile_anchor
         if math.hypot(x - x0, y - y0) > 0.45:
-            if self.t_s - t0 >= PILE_LIMIT_S:
-                self._finish_pile_dump(t0, x0, y0)
-            else:
-                self._pile_stats = None
             self._pile_anchor = (self.t_s, x, y)
             self._pile_forced = False
             self._pile_logged = False
@@ -2008,6 +2072,8 @@ class Explorer:
                 return None
             if blind and not stalled and self._reverse_closed(pose):
                 return None
+            self._escape_travel_m = 0.0
+            self._escape_phase_travel = 0.0
             self._begin_blind_back(pose)
             # Back out first. If that does not move the shell, the turn below
             # takes over. Driving starts only after the yaw actually changes,
@@ -2016,11 +2082,11 @@ class Explorer:
             self._escape_phase_t = self.t_s
             self._escape_yaw = float(pose[2])
             self._escape_spin = self._relief_spin()
-        origin = self._blind_back_from
-        dist = 0.0 if origin is None else math.hypot(float(pose[0]) - origin[0], float(pose[1]) - origin[1])
-        # Blind still needs a real range. A visible stall only needs the move.
+        moved = max(0.0, self._escape_travel_m - self._escape_phase_travel)
+        # Blind still needs a real range. A visible stall only needs trusted travel.
+        # A loop-closure or match shift of the pose is not that travel.
         seen = (not self._view_blind) or self._depth_real()
-        if dist >= GOAL_HOLD_M and seen:
+        if self._escape_travel_m >= GOAL_HOLD_M and seen:
             self._end_blind_back(0.0)
             self._replan_at = self.t_s
             self._progress_from = (self.t_s, float(pose[0]), float(pose[1]), False)
@@ -2029,10 +2095,11 @@ class Explorer:
             phase_age = self.t_s - self._escape_phase_t
             if (
                 self._reverse_closed(pose)
-                or dist >= BLIND_BACK_CAP_M
-                or (phase_age > 0.8 and dist < 0.02)
+                or moved >= BLIND_BACK_CAP_M
+                or (phase_age > 0.8 and moved < 0.02)
             ):
                 self._escape_phase = "turn"
+                self._escape_phase_travel = self._escape_travel_m
                 self._escape_phase_t = self.t_s
                 self._escape_yaw = float(pose[2])
                 self._escape_spin = self._relief_spin()
@@ -2048,6 +2115,7 @@ class Explorer:
             # the sweep into the wall.
             if not self._spin_safe(self._escape_spin):
                 self._escape_phase = "back"
+                self._escape_phase_travel = self._escape_travel_m
                 self._escape_phase_t = self.t_s
                 along = self._trail_reverse(pose)
                 if along is not None:
@@ -2075,6 +2143,7 @@ class Explorer:
                 not self._view_blind and self.t_s - self._escape_phase_t > 4.0
             ):
                 self._escape_phase = "drive"
+                self._escape_phase_travel = self._escape_travel_m
                 self._escape_phase_t = self.t_s
             else:
                 self._body_v, self._body_w = 0.0, float(self._escape_spin)
@@ -2082,12 +2151,14 @@ class Explorer:
                 return wheel_speeds(0.0, float(self._escape_spin))
         if self._view_blind:
             self._escape_phase = "back"
+            self._escape_phase_travel = self._escape_travel_m
             self._escape_phase_t = self.t_s
             self._body_v, self._body_w = -0.10, 0.0
             self._note_approach("back", -0.10, 0.0)
             return wheel_speeds(-0.10, 0.0)
-        if self.t_s - self._escape_phase_t > 0.8 and dist < 0.05:
+        if self.t_s - self._escape_phase_t > 0.8 and moved < 0.05:
             self._escape_phase = "turn"
+            self._escape_phase_travel = self._escape_travel_m
             self._escape_phase_t = self.t_s
             self._escape_yaw = float(pose[2])
             self._escape_spin = -self._relief_spin()

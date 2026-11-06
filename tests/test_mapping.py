@@ -2702,6 +2702,8 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     assert bot._goal_hold is not None
     bot.odometry.x_m = -0.05
     bot.t_s = 6.2
+    # A pose write is not travel. Credit the reverse the wheels actually integrated.
+    bot._escape_travel_m = 0.05
     left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     nose = bot.camera.translation[0] + bot.camera.min_range_m + BLIND_EXIT_MARGIN_M + 0.02
@@ -2710,6 +2712,7 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     bot.odometry.x_m = -0.35
+    bot._escape_travel_m = 0.35
     bot._go(False, 0.28)
     assert not bot._blind_back
     assert bot._goal_hold is None
@@ -3490,24 +3493,64 @@ def test_true_start_stays_on_the_robot_side_of_a_wall(monkeypatch):
 
 
 def test_a_pile_logs_the_command_and_a_plain_summary(capsys):
-    from src.mapping.explore import PILE_LIMIT_S, Explorer
+    from src.mapping.explore import Explorer
 
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot._note_pile()
-    bot.t_s = PILE_LIMIT_S + 5.0
     bot._mark("follow")
     bot._commanded = (1.0, 1.0)
-    bot._remember((1.0, 1.0))
-    bot.t_s += 1.0
+    for step in range(250):
+        bot.t_s = step * 0.25
+        bot._remember((1.0, 1.0))
+    assert bot._est_age >= 60.0
+    bot.t_s += 0.25
     bot.odometry.x_m = 2.0
-    bot._note_pile()
+    bot._remember((1.0, 1.0))
     out = capsys.readouterr().out
     assert "pile phase=" in out
     assert "src=follow" in out
     assert "cands=" in out
+    assert "cmd_m=" in out
+    assert "pose_m=" in out
     assert "pile_end" in out
     assert "pile_why" in out
     assert "Goal at the end" in out
+
+
+def test_a_wander_inside_one_ball_still_counts_as_a_pile():
+    """An entry anchor resets on a long chord. A shared center does not."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    for step in range(320):
+        bot.t_s = step * 0.25
+        if step == 0:
+            bot.odometry.x_m = 0.30
+        else:
+            bot.odometry.x_m = 0.0 if step % 2 == 0 else -0.20
+        bot._note_estimate_pile()
+    assert bot._est_age >= 60.0
+
+
+def test_stall_escape_ignores_a_pose_jump_without_trusted_travel():
+    from src.mapping.explore import GOAL_HOLD_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._blind_back = True
+    bot._blind_back_from = (0.0, 0.0)
+    bot._escape_phase = "drive"
+    bot._escape_phase_t = 0.0
+    bot._escape_yaw = 0.0
+    bot._escape_spin = 0.5
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.0, 1.0)
+    bot.t_s = 3.0
+    bot.odometry.x_m = 0.40
+    bot._escape_travel_m = 0.0
+    bot._stall_escape(bot.plan_pose())
+    assert bot._blind_back
+    bot._escape_travel_m = GOAL_HOLD_M
+    bot._stall_escape(bot.plan_pose())
+    assert not bot._blind_back
 
 
 def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_path):

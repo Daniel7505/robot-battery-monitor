@@ -977,6 +977,13 @@ class Explorer:
         stats["hz_cmd_total"] = float(stats.get("hz_cmd_total", 0.0)) + abs(v) * dt
         if prev is not None:
             stats["pose_path"] = float(stats.get("pose_path", 0.0)) + math.hypot(x - prev[1], y - prev[2])
+        enc = self._wheels
+        prev_enc = stats.get("enc")
+        if enc is not None and prev_enc is not None:
+            turned = 0.5 * (abs(enc[0] - prev_enc[0]) + abs(enc[1] - prev_enc[1]))
+            stats["wheel_m"] = float(stats.get("wheel_m", 0.0)) + turned * WHEEL_RADIUS_M
+        if enc is not None:
+            stats["enc"] = enc
         self._pile_prev = (self.t_s, x, y, yaw)
         source = self._motion_source
         if source not in ("follow", "hold", "spin", "settle", "pivot", "wide", "straight", "script"):
@@ -1046,6 +1053,7 @@ class Explorer:
             f"pile_end dur={dur:.0f}s at=({x0:.2f},{y0:.2f}) from={t0:.0f} "
             f"ticks={n} hold={pct(stats['hold']):.0f}% veto={pct(stats['veto']):.0f}% "
             f"stuck={pct(stats['stuck']):.0f}% cmd_m={float(stats.get('hz_cmd_total', 0.0)):.2f} "
+            f"wheel_m={float(stats.get('wheel_m', 0.0)):.2f} "
             f"pose_m={float(stats.get('pose_path', 0.0)):.2f} "
             f"rules={rule_txt}"
         )
@@ -1053,6 +1061,14 @@ class Explorer:
         self._pile_reported = (t0, x0, y0)
         self._pile_stats = None
         self._pile_log_at = -1.0
+
+    def flush_pile_log(self) -> None:
+        """Write the open pile summary. The cap quits before the shell leaves the ball."""
+        stats = self._pile_stats
+        if stats is None or int(stats.get("n", 0)) == 0 or stats.get("closed"):
+            return
+        center = self._est_center or (self.t_s, 0.0, 0.0)
+        self._finish_pile_dump(float(center[0]), float(center[1]), float(center[2]))
 
     def _pile_why(self, stats: dict, dur: float) -> str:
         n = int(stats["n"])

@@ -149,6 +149,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Quit dump and planner mask, 2026-11-04. Two reviews agreed on the same quit list. The dump is always on. Flag `RBM_SHARED_FOOTPRINT` stays off. See "Quit reasons and one planner mask."
 - True start and pile dump, 2026-11-04. Flag `RBM_TRUE_START`, off unless set. The pile line is always on. See "Where a long pile spends its ticks."
 - Trusted travel and a best-center pile, 2026-11-06. The dump now follows the estimate's own best center. Stall progress uses wheel travel the step trusted. Five runs of each seed, flags off. Visited means 10.2 and 7.6, inside the noise. The long sits are a `stuck` reverse the pose does not follow. See "A stuck reverse the pose does not follow."
+- Stuck reverse trace, 2026-11-06. The north doorway sit was re-read from the wheel, physics, and pose logs. The motors turn. The body does not, because a wheel leaves the floor. See "The wheels turn and the shell does not."
 
 ## One stuck check, not one pose
 
@@ -231,7 +232,7 @@ Dead ends: do not add another recovery rule from one seed. Do not read a 10 poin
 
 Outcome: the strip was measured. See "One recovery rule." One rule visits less of the −0.35 floor than this stack and sits longer. The cost mark does not close that gap.
 
-Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks." The next measurement, after that dump missed two long sits, is "A stuck reverse the pose does not follow." Do not add another recovery rule on top of this sample.
+Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks." The next measurement, after that dump missed two long sits, is "A stuck reverse the pose does not follow." The trace of that reverse is "The wheels turn and the shell does not." Do not add another recovery rule on top of this sample.
 
 ## True pose for the planner, same map
 
@@ -368,3 +369,26 @@ North run 1. Ground-truth pile 564.5 s from t=35. The dump is 483 s of `src=stuc
 Dead ends: do not read 10.2 or 7.6 as a gain or a regression. Both gaps are inside the 6 point noise, and this −0.35 sample's own sd is 6.1. Do not turn a flag on. Do not delete the recovery stack; the one-rule trial already visited less floor. Do not treat the trusted-travel stall exit as the fix for these sits. The long ones are `stuck`, and that path does not use the travel counter. Do not add a threshold or a new recovery rule from this sample.
 
 Outcome: the best-center dump stays. It sees the sits the entry anchor missed, and it separates a shuffle the pose follows from a reverse the pose does not. The stall travel rule is in the measured commit and did not shorten the piles. The next question is why a stuck reverse of 0.10 m/s moves neither the estimate nor the body, and why the summary is dropped when that sit lasts until the cap.
+
+## The wheels turn and the shell does not
+
+Symptom: a stuck reverse of `v=-0.10` lasted for minutes while the estimate moved about a metre and the true body stayed put. The open question was whether the body was blocked, the wheels were spinning, the motor command never arrived, the contact geometry let go, or the depth check froze the pose and that freeze was being mistaken for a stopped body.
+
+How it was diagnosed: no new simulation. North run 1 from the trusted-travel round is the doorway sit (ground-truth pile 564.5 s from t=35, pose about (3.88, 4.96)). Its `wheel_enc.csv` is the post-safety setpoint and the hinge sensor. `physics_log.csv` is the true body, hub height, and contact counts. `pose_log.csv` is the estimate. Ground truth was used only for this read. The mapper did not receive it. Flags were already off on that run.
+
+The command that reaches the hinges is the command `_stuck_escape` returns. From t=60 s to t=600 s every 10 s bin is `cmd=(-1.25,-1.25)` rad/s, which is `-0.10` m/s at the 0.08 m wheel. The hinge sensors match it: `-12.49` rad on each side per 10 s, so about 1.00 m of wheel travel per 10 s and about 55 m over the sit. True body path in those bins is 0.000 m and true speed is 0.000. The estimate moves about 0.03–0.05 m per 10 s, so it rejects almost all of that wheel travel. That rejection matches the body. Accepting the encoders would have walked the pose away from the shell.
+
+The drop is earlier than the reverse. At t=38–41 s the command is still straight, about `(+1.50,+1.50)`, all four hubs are at z=0.080, all four report the floor, `up_z` is 1.000, and the body is moving at about 0.12 m/s near (3.94, 5.15). At t=42 s the right hub falls to z=0.049 and `up_z` to 0.982. At t=44 s the right hub is z=-0.003 and the front-right hub is z=-0.004, `up_z` 0.965. At t=47 s the command becomes the equal reverse and stays there. From t=60 s, `up_z` is 0.953, the right hub stays at z=0.002, wall contacts stay 0, and the floor count on all four wheels stays 0. The motors are not stalled: a loaded hinge would lag the velocity command, and these hinges match it.
+
+The place is the seam between floor plates. The living plate's west face is x=3.7592. The bedroom plate's east face is x=3.6576. The open slot is 0.102 m, and at y=4.96 no bridge solid covers it. The shell centre is x=3.88, about 0.12 m onto the living plate, so the west-side wheels (0.17 m from the centreline) can drop into that slot. The follow frame at that moment shows the shell in the doorway. This is contact geometry. It is not a missing `setVelocity`, and it is not the depth check inventing a stop.
+
+`_stuck_escape` does own the command after the drop. It runs before the stall machine and clears `_blind_back`, and the equal `-1.25` rad/s is that reverse. It does not own the drop. The wheels left the floor while the command was still a forward mix and the body still had speed.
+
+The same ten runs have two other contact shapes, both with the same actuator fact (the hinge matches a `-1.25` rad/s reverse and the body speed is about 0):
+
+- North run 2, t=200–220 s, at (3.97, 1.28). Level, `up_z` 1.000, every hub z=0.080. Only the right wheel reports a floor contact. The other three wheels and the casters report none. Encoder travel is `-2.00` m in 20 s. True path is 0.
+- North run 5, t=200–220 s. Both rear wheels report a wall contact for the whole window, the front wheels report the floor, hubs stay at z=0.080, `up_z` 1.000. Encoder travel is `-2.00` m. True speed is 0.007 m/s. The same rear-wall window shows up on −0.35 runs 3 and 4. The hinges still reach the commanded speed, so the wall is not stopping the motor. The tire is scrubbing.
+
+Dead ends: do not treat the frozen depth picture as the reason the body stopped. The picture is frozen because the body has stopped, and the estimator's rejection of the spinning wheels agrees with the true path. Do not trust those encoder steps into the pose. Do not add a recovery rule that issues a different reverse; the hinges are already doing the reverse they were given. Do not edit the floor plates or the proto from this round. The slot and the wall scrub are geometry, and that change waits on Dan. Do not read the earlier "commanded 48 m, pose moved 1 m" line as "the motors did not turn."
+
+Outcome: the pile summary is written when the run is marked done, before `mapping_done`, so a sit that lasts to the cap is recorded. The summary now includes `wheel_m`, the hinge travel, beside `cmd_m` and `pose_m`. No driving change. The five-by-five was not repeated. The next decision is Dan's, on the floor seam and on a wheel that is against a wall and still free to spin.

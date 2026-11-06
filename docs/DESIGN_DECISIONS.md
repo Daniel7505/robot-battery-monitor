@@ -269,3 +269,21 @@ The best-center line opened on the long sits. North run 1's 564 s ground-truth p
 **Rejected.** Reading either visited gap as an effect. Turning a flag on. Deleting the recovery stack. Adding a rule or a threshold aimed at `stuck`. Treating the stall travel change as what ended, or failed to end, these sits: `_stuck_escape` runs first and clears the stall latch.
 
 **Outcome.** Flags stay off. The best-center dump stays, because it shows the command and the estimate path on a sit the entry anchor used to hide. The stall travel rule remains in the measured commit and is not a reason to patch Explorer again. The open mechanism is a stuck reverse of 0.10 m/s that neither the estimate nor the body follows.
+
+## 2026-11-06 — The reverse reaches the hinges
+
+**Mission parameter.** Trace why a stuck reverse does not move the body. Separate a blocked shell, spinning wheels, a command that never becomes a motor setpoint, contact geometry, and a depth check that only freezes the estimate. Ground truth is for the read. No new recovery rule and no new knob. A floor or proto change waits on Dan.
+
+**Change.** When the run is marked done, the open pile summary is written before `mapping_done`. The summary adds `wheel_m`, the hinge travel over that window, next to `cmd_m` and `pose_m`. Driving is unchanged. Flags stay off.
+
+**Why.** A sit that lasts until the cap never left the 0.45 m ball, so the summary was skipped and the pose logger then quit. The old `cmd_m` against `pose_m` could be read as "the motors did not turn." The hinge sensor is the measurement that splits that.
+
+**Evidence.** No new Webots run. North run 1 of the trusted-travel round, the doorway sit. From t=60 s to t=600 s the post-safety setpoint is `(-1.25,-1.25)` rad/s and each hinge moves `-12.49` rad per 10 s. True path in those bins is 0.000 m. The estimate moves about 0.04 m per 10 s. The right hub falls from z=0.080 at t=41 s to z=-0.003 at t=44 s, while the command is still a forward mix and the body still has speed. `up_z` settles at 0.953. Wall contacts stay 0. The living floor's west face is x=3.759 and the bedroom floor's east face is x=3.658, a 0.102 m slot with no bridge at y=4.96. The shell centre is x=3.88.
+
+`_stuck_escape` is the source of the equal reverse after t=47 s. It is not the source of the wheel leaving the plate.
+
+Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 s is level with only one wheel reporting the floor, and north run 5 at t=200 s has both rear wheels on a wall while the hinges still match `-1.25` rad/s. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new reverse or a threshold. Trusting the free-spinning encoders in the pose. Editing `apartment.wbt` or `ButlerBotSkid.proto`. Reading the depth freeze as the cause of the stop. Running another five-by-five with no driving change to score.
+
+**Outcome.** The summary closes at the cap and names hinge travel. The body stops because contact is lost or a tire scrubs a wall, while the motor does what it was told. The geometry decision is Dan's.

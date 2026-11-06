@@ -3510,10 +3510,42 @@ def test_a_pile_logs_the_command_and_a_plain_summary(capsys):
     assert "src=follow" in out
     assert "cands=" in out
     assert "cmd_m=" in out
+    assert "wheel_m=" in out
     assert "pose_m=" in out
     assert "pile_end" in out
     assert "pile_why" in out
     assert "Goal at the end" in out
+
+
+def test_a_pile_that_lasts_until_the_cap_still_writes_its_summary(capsys):
+    """Leaving the ball is not the only way a summary is written."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._mark("stuck")
+    bot._commanded = (-1.25, -1.25)
+    angle = 0.0
+    for step in range(250):
+        bot.t_s = step * 0.25
+        angle -= 1.25 * 0.25
+        bot._wheels = (angle, angle)
+        bot._remember((-1.25, -1.25))
+    assert bot._est_age >= 60.0
+    for step in range(50):
+        bot.t_s += 0.25
+        angle -= 1.25 * 0.25
+        bot._wheels = (angle, angle)
+        bot._remember((-1.25, -1.25))
+    bot.done = True
+    bot.flush_pile_log()
+    out = capsys.readouterr().out
+    assert "pile_end" in out
+    assert "pile_why" in out
+    assert "wheel_m=" in out
+    line = next(ln for ln in out.splitlines() if "pile_end" in ln)
+    wheel_m = float(line.split("wheel_m=")[1].split()[0])
+    # Joint travel during the open summary, not the pose path.
+    assert wheel_m > 1.0
 
 
 def test_a_wander_inside_one_ball_still_counts_as_a_pile():

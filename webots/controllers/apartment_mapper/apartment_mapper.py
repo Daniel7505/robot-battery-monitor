@@ -505,6 +505,7 @@ def main() -> None:
                 print(f"MAPPING time cap {max_s:.1f}s", flush=True)
                 print("MAPPING end_run reason=time_cap", flush=True)
             if explorer.done and not saved:
+                explorer.flush_pile_log()
                 explorer._publish_frontier_counts()
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 log.save_rooms(explorer.observed_room_labels(), explorer.room_names)

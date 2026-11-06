@@ -287,3 +287,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A new reverse or a threshold. Trusting the free-spinning encoders in the pose. Editing `apartment.wbt` or `ButlerBotSkid.proto`. Reading the depth freeze as the cause of the stop. Running another five-by-five with no driving change to score.
 
 **Outcome.** The summary closes at the cap and names hinge travel. The body stops because contact is lost or a tire scrubs a wall, while the motor does what it was told. The geometry decision is Dan's.
+
+## 2026-11-06 — Fill the doorway slots Dan said are not real
+
+**Mission parameter.** The real apartment has no floor gap. Find where the 0.102 m slot came from, check every walkable seam rather than one doorway, and fill only the accidental holes. Doors, walls, furniture, friction, motors, and the controller stay. The warehouse stays. No new flag.
+
+**Change.** Two flush carpet plates, the same footprints the removed edges had. `APT_FLOOR_BRIDGE_BEDROOM` fills door G. `APT_FLOOR_BRIDGE_BED_BATH` fills the bedroom-bath walkway. Commit `7590d16`. `tests/test_apartment_floor.py` fails if an interior wall opening loses its floor, and it does not require a plate under a closed door or outside the walls.
+
+**Why.** Room plates have ended at the wall faces since `9e335e7`. The 0.102 m is that 4 in partition. The doorway plates were removed in `0cd3694` with the carpet ramps. A wheel then fell through door G. The lip Dan measured is about 10 mm and was already not a collider.
+
+**Evidence.** The opening audit is in `docs/LESSONS_LEARNED.md`. Door H, the entry, the laundry door, and the closet opening were already bridged. Door G and the walkway were the only open slots. A 60 s spawn facing door G crossed the slot at t=23–26 s with hubs at z=0.080 and all four wheels on the floor. Five runs of each seed, 600 s, flags off. No hub below z=0.078. Early-quit count 0. −0.35 visited mean 14.79 (sd 3.71), pile mean 231 s. North visited mean 11.29 (sd 5.25), pile mean 329 s. Both visited gaps versus 14.7 and 9.0 are inside the 6 point noise. Long sits that remain have a tire on a wall or a wheel with no floor contact, and the hub stays at ride height.
+
+**Rejected.** Calling the floor gap-free from door G alone. Filling the front door or the patio door. Moving a wall to close the slot. Reading the visited means as the effect of a controller change. Using the gapped-floor runs as a clean driving baseline.
+
+**Outcome.** The accidental holes are closed. The tests name the openings. Wall scrubbing is still in the runs and was not patched.

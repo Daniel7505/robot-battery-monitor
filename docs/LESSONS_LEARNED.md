@@ -150,6 +150,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - True start and pile dump, 2026-11-04. Flag `RBM_TRUE_START`, off unless set. The pile line is always on. See "Where a long pile spends its ticks."
 - Trusted travel and a best-center pile, 2026-11-06. The dump now follows the estimate's own best center. Stall progress uses wheel travel the step trusted. Five runs of each seed, flags off. Visited means 10.2 and 7.6, inside the noise. The long sits are a `stuck` reverse the pose does not follow. See "A stuck reverse the pose does not follow."
 - Stuck reverse trace, 2026-11-06. The north doorway sit was re-read from the wheel, physics, and pose logs. The motors turn. The body does not, because a wheel leaves the floor. See "The wheels turn and the shell does not."
+- Floor slots, 2026-11-06. Dan approved filling the apartment floor. The 0.102 m slot is the 4 in partition. The doorway plates were removed in `0cd3694`. See "The partition slot was not a real floor gap."
 
 ## One stuck check, not one pose
 
@@ -232,7 +233,7 @@ Dead ends: do not add another recovery rule from one seed. Do not read a 10 poin
 
 Outcome: the strip was measured. See "One recovery rule." One rule visits less of the −0.35 floor than this stack and sits longer. The cost mark does not close that gap.
 
-Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks." The next measurement, after that dump missed two long sits, is "A stuck reverse the pose does not follow." The trace of that reverse is "The wheels turn and the shell does not." Do not add another recovery rule on top of this sample.
+Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks." The next measurement, after that dump missed two long sits, is "A stuck reverse the pose does not follow." The trace of that reverse is "The wheels turn and the shell does not." The floor repair, after Dan approved it, is "The partition slot was not a real floor gap." Do not add another recovery rule on top of this sample. The gapped-floor runs are not a clean baseline for a later controller change.
 
 ## True pose for the planner, same map
 
@@ -392,3 +393,29 @@ The same ten runs have two other contact shapes, both with the same actuator fac
 Dead ends: do not treat the frozen depth picture as the reason the body stopped. The picture is frozen because the body has stopped, and the estimator's rejection of the spinning wheels agrees with the true path. Do not trust those encoder steps into the pose. Do not add a recovery rule that issues a different reverse; the hinges are already doing the reverse they were given. Do not edit the floor plates or the proto from this round. The slot and the wall scrub are geometry, and that change waits on Dan. Do not read the earlier "commanded 48 m, pose moved 1 m" line as "the motors did not turn."
 
 Outcome: the pile summary is written when the run is marked done, before `mapping_done`, so a sit that lasts to the cap is recorded. The summary now includes `wheel_m`, the hinge travel, beside `cmd_m` and `pose_m`. No driving change. The five-by-five was not repeated. The next decision is Dan's, on the floor seam and on a wheel that is against a wall and still free to spin.
+
+## The partition slot was not a real floor gap
+
+Symptom: a wheel fell through the floor at door G. The real apartment has no such gap. The modeled slot was 0.102 m, from the living plate's west face at x=3.7592 to the bedroom plate's east face at x=3.6576.
+
+Where it came from: that distance is the 4 in partition, `0.1016` m, the estimated wall thickness. Room plates have stopped at the wall faces since the apartment world was added in `9e335e7`. The doorways in those partitions had plates. `APT_FLOOR_CARPET_EDGE` covered door G (0.8128 m along the wall, 0.1056 m across it) and `APT_FLOOR_CARPET_EDGE_BATH` covered the bedroom-bath walkway. Commit `0cd3694` ("Drop the carpet ramps") removed both. Their collision meshes were `IndexedFaceSet`s. The bedroom floor was lowered to the same top as the laminate, and the doorway slots were left empty. The real 10 mm carpet lip was not the hole. Deleting the plates was.
+
+How the rest of the floor was checked: every `APT_FLOOR` visual box matches its collision box, and every top is z=0. Every gap between collinear wall pieces, including a 4 in post on that line, was sampled at 1 cm, inset 1 cm from the jambs. An opening that contains a closed door (`APT_DOOR`, the front door and the patio door) is not walkable and is not required to have a floor plate. Every other opening must be covered. That list is door G, the bedroom-bath walkway, door H, the entry opening, the laundry door, and the closet opening off the bath. The last four were already covered by the laminate bridges from `9e335e7`. Door G and the walkway were the only uncovered ones. A point outside the exterior walls is not a hole. The living and kitchen plates share an edge at y=2.5146 with no gap. This is not a claim from door G alone. It is also not a survey of cracks thinner than 1 cm, and it does not drive a robot along every seam.
+
+The repair puts those two plates back, flush, carpet, the same footprint as the removed edges: `APT_FLOOR_BRIDGE_BEDROOM` and `APT_FLOOR_BRIDGE_BED_BATH`. Doors, walls, furniture, friction, motors, and the controller were not touched. The warehouse world was not touched. Commit `7590d16`.
+
+A 60 s spawn just east of door G, facing the slot, crossed it from x=3.90 to x=3.55 between t=23.3 s and t=25.8 s. On the slot the lowest hub was z=0.080, `up_z` was 1.000, body speed was 0.12 m/s, and all four wheels reported the floor. Before the repair the same slot put a hub at z=-0.003.
+
+Five 600 s runs of −0.35 and five of north, flags off, same harness as the gapped-floor round. Depth seeds 63 and 64. Every run reached 600 s and 75,000 pose rows. No hub fell below z=0.078. Where a run crossed a repaired slot, the hub on that crossing stayed at or above z=0.078. Early-quit count 0. North run 2 logged one `start_component` and still finished.
+
+−0.35 visited % 16.73, 19.07, 12.77, 9.51, 15.85 (mean 14.79, sample sd 3.71). Piles 102, 183, 325, 464, 82 s (mean 231 s). The gapped-floor mean was 10.20, piles mean 364 s. The variance mean was 14.7. The gap to variance is 0.1 points.
+
+North visited % 7.05, 19.53, 9.31, 7.25, 13.31 (mean 11.29, sample sd 5.25). Piles 519, 116, 294, 498, 217 s (mean 329 s). The gapped-floor mean was 7.64, piles mean 464 s. The variance mean was 9.0. The gap is 2.3 points.
+
+Those visited gaps are inside the 6 point noise. The variance runs and the gapped-floor runs were the same broken world, so they are not a clean before for the driving. The clean driving result is the hub height.
+
+Sits that remain are not the slot. North run 1 sat 428 s from t=172 at (4.70, 2.49), level, one rear wheel on a wall about half the window, four-wheel floor contact 0.02. −0.35 run 4 sat 415 s from t=185 at (0.34, 5.64) with a rear wheel on a wall. North run 4 sat 399 s from t=201 at (0.82, 6.62) with both rear wheels on a wall. −0.35 run 3 sat 311 s from t=289 at (8.19, 1.37), level, hub z stayed 0.079, and no wheel reported the floor for that window. That last one is the unloaded-wheel shape, not a fall through a plate.
+
+Dead ends: do not read 14.8 or 11.3 as a coverage gain. Do not treat the old 14.7 / 9.0 or the 10.2 / 7.6 as a driving baseline for a controller change; the world under them had an open slot. Do not widen a door to hide a slot. Do not fill under a closed exterior door. Do not claim the floor is free of every crack thinner than the 1 cm sample.
+
+Outcome: the two doorway slots are plates again. The regression fails if an interior opening loses its floor. Wall scrubbing and a wheel with no contact are still in the logs, and they are a separate problem.

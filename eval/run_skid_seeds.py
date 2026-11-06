@@ -1,7 +1,7 @@
 """Headless 600 s seeds on ButlerBotSkid. Worlds are deleted. Logs stay in /tmp.
 
-The apartment world is copied and the robot instance is swapped to
-ButlerBotSkid. ButlerBot.proto and apartment.wbt are not modified.
+The apartment world already instances ButlerBotSkid. A seed copies it
+and changes only the spawn. ButlerBot.proto stays for the warehouse.
 """
 
 from __future__ import annotations
@@ -9,10 +9,15 @@ from __future__ import annotations
 import math
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.mapping.world_guard import require_skid_world
 WEBOTS = ROOT / "webots"
 WORLDS = WEBOTS / "worlds"
 SOURCE = (WORLDS / "apartment.wbt").read_text(encoding="utf-8")
@@ -33,17 +38,11 @@ def patch(x: float, y: float, yaw: float) -> str:
     text = SOURCE
     old_t = "  translation 6.1 4.7 0\n"
     old_r = "  rotation 0 0 1 1.5708\n"
-    old_proto = 'EXTERNPROTO "../protos/ButlerBot.proto"\n'
-    if old_t not in text or old_r not in text or old_proto not in text or "\nButlerBot {\n" not in text:
+    if old_t not in text or old_r not in text or "\nButlerBotSkid {\n" not in text:
         raise SystemExit("apartment spawn or proto block missing")
-    text = text.replace(
-        old_proto,
-        old_proto + 'EXTERNPROTO "../protos/ButlerBotSkid.proto"\n',
-        1,
-    )
-    text = text.replace("\nButlerBot {\n", "\nButlerBotSkid {\n", 1)
     text = text.replace(old_t, f"  translation {x:.4f} {y:.4f} 0\n", 1)
     text = text.replace(old_r, f"  rotation 0 0 1 {yaw:.4f}\n", 1)
+    require_skid_world(text, "apartment seed world")
     return text
 
 
@@ -56,6 +55,9 @@ def launch(name: str, x: float, y: float, yaw: float, port: int):
     env["PYTHONPATH"] = str(ROOT)
     env["RBM_MAP_MAX_S"] = "600"
     env["RBM_MAP_DIR"] = str(folder)
+    env["RBM_DECISION_LOG"] = "1"
+    env["RBM_MOVIE"] = "1"
+    env["RBM_DEPTH_SEED"] = str(1 + (port % 97))
     env.pop("RBM_DRIVE", None)
     env.pop("RBM_STRAIGHT_S", None)
     log = open(folder / "webots.log", "w", encoding="utf-8")
@@ -63,9 +65,11 @@ def launch(name: str, x: float, y: float, yaw: float, port: int):
         [
             "xvfb-run",
             "-a",
+            "-s",
+            "-screen 0 1280x720x24",
             "webots",
             "--mode=fast",
-            "--no-rendering",
+            "--fullscreen",
             "--batch",
             "--stdout",
             "--stderr",

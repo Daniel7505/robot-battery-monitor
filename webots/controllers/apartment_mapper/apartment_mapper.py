@@ -1,10 +1,16 @@
 """Explore the apartment and build a 2D occupancy grid.
 
-Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, the two wheel
-position sensors, a ring of short-range sonars, and a downward floor
-camera. Wheel angles are quantized in the odometry module. The inertial
-unit's yaw is not used for heading. A separate controller records the
-simulator pose for scoring; this process does not.
+Sensors: oak_depth, oak_rgb, oak_gyro, oak_imu roll/pitch, oak_accel,
+the two wheel position sensors, a ring of short-range sonars, and a
+downward floor camera. Wheel angles are quantized in the odometry
+module. The inertial unit's yaw is not used for heading. A separate
+controller records the simulator pose for scoring. This process does not
+read that log. ``RBM_ORACLE_POSE=1`` hands the planner its own pose from
+``oracle_pose.txt``. The grid still integrates the estimate.
+``RBM_RECOVERY_MODE`` is empty unless set. ``one_rule`` and ``trail_only``
+replace the stacked recoveries. The default is the stacked behavior.
+``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
+veto use one rectangle. Goal scores are unchanged.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
@@ -26,6 +32,7 @@ if _PROJECT_ROOT not in sys.path:
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
+from src.mapping.noise import noisy_accel, noisy_depth
 from src.mapping.run_log import RunLog, default_run_dir, publish_current
 
 
@@ -90,6 +97,30 @@ def _flag(name: str, default: bool = True) -> bool:
     if raw is None or not str(raw).strip():
         return default
     return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _read_oracle_pose(folder: str):
+    """Latest simulator pose, or None when the logger has not published one."""
+    path = os.path.join(folder, "oracle_pose.txt")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            parts = handle.read().split()
+    except OSError:
+        return None
+    if len(parts) < 3:
+        return None
+    try:
+        return float(parts[0]), float(parts[1]), float(parts[2])
+    except ValueError:
+        return None
+
+
+def _feed_oracle(explorer, folder: str) -> bool:
+    """Hand the planner its own pose. True only on the first sample."""
+    sample = _read_oracle_pose(folder)
+    if sample is None:
+        return False
+    return explorer.note_oracle_world(*sample)
 
 
 def _enable(robot, name: str, period: int):
@@ -273,6 +304,16 @@ def main() -> None:
     timestep = int(robot.getBasicTimeStep())
     dt = timestep / 1000.0
     hubs = _Drive(robot)
+    # The caster proto has no front drive motors. _Drive only attaches a
+    # motor whose name is already in the device list, so an empty list
+    # means this world is not ButlerBotSkid.
+    if not hubs._extra:
+        print(
+            "ERROR: this world is not ButlerBotSkid (no front drive wheels). "
+            "The caster ButlerBot must not run this mapper.",
+            flush=True,
+        )
+        return
     _hold_upper(robot)
     left_enc = robot.getDevice("left_wheel_sensor")
     right_enc = robot.getDevice("right_wheel_sensor")
@@ -282,6 +323,8 @@ def main() -> None:
     gyro.enable(timestep)
     imu = robot.getDevice("oak_imu")
     imu.enable(timestep)
+    accel = _enable(robot, "oak_accel", timestep)
+    accel_bias = [0.0, 0.0, 0.0]
     depth = robot.getDevice("oak_depth")
     depth.enable(int(_DEPTH_PERIOD_S * 1000))
     width = int(depth.getWidth()) if hasattr(depth, "getWidth") else OAK_DEPTH.width
@@ -314,15 +357,22 @@ def main() -> None:
         floor=use_floor,
         loop=_flag("RBM_LOOP", True),
     )
+    oracle_on = _flag("RBM_ORACLE_POSE", False)
+    if oracle_on:
+        print("MAPPING oracle pose for the planner; the map still uses the estimate")
+    print(f"MAPPING recovery {explorer.recovery_mode}")
     print(f"MAPPING run folder: {folder}")
     straight_s = _env_float("RBM_STRAIGHT_S")
     if straight_s is not None and straight_s > 0.0:
         _straight_probe(robot, timestep, log, folder, straight_s, hubs)
         return
     print(f"MAPPING depth {width}x{height} stride {explorer.stride} period {_DEPTH_PERIOD_S:.3f}s")
+    # Device noise is 0. This is the OAK-D Lite quadratic, same as the kinematic path.
+    depth_rng = np.random.default_rng(int(os.environ.get("RBM_DEPTH_SEED") or "1"))
     next_depth = _DEPTH_PERIOD_S
     next_save = 5.0
     next_note = 2.0
+    next_oracle_miss = 5.0
     saved = False
     # The hubs almost never sit still once exploration starts, and the
     # gyro bias is a rest reading. Hold for a few seconds so that
@@ -334,6 +384,12 @@ def main() -> None:
     try:
         while robot.step(timestep) != -1:
             now = float(robot.getTime())
+            if oracle_on:
+                if _feed_oracle(explorer, folder):
+                    print("MAPPING oracle pose latched for the planner", flush=True)
+                elif explorer._oracle_local is None and now >= next_oracle_miss:
+                    print("MAPPING oracle pose missing", flush=True)
+                    next_oracle_miss = now + 10.0
             if now < calibrate_s:
                 try:
                     yaw_rate = float(gyro.getValues()[2])
@@ -370,6 +426,8 @@ def main() -> None:
             rear_color = None
             if now + 1e-6 >= next_depth:
                 image = _depth_image(depth, width, height)
+                if image is not None:
+                    image = noisy_depth(image, depth_rng, OAK_DEPTH.max_range_m)
                 if rear_depth_dev is not None:
                     rw = int(rear_depth_dev.getWidth()) if hasattr(rear_depth_dev, "getWidth") else 80
                     rh = int(rear_depth_dev.getHeight()) if hasattr(rear_depth_dev, "getHeight") else 48
@@ -389,6 +447,15 @@ def main() -> None:
                 yaw_rate = float(gyro.getValues()[2])
             except Exception:
                 yaw_rate = 0.0
+            accel_m_s2 = None
+            if accel is not None:
+                try:
+                    raw = accel.getValues()
+                    accel_m_s2 = noisy_accel(
+                        float(raw[0]), float(raw[1]), float(raw[2]), depth_rng, accel_bias, dt
+                    )
+                except Exception:
+                    accel_m_s2 = None
             left_cmd, right_cmd = explorer.step(
                 dt_s=dt,
                 left_wheel_rad=float(left_enc.getValue()),
@@ -396,6 +463,7 @@ def main() -> None:
                 yaw_rate_rad_s=yaw_rate,
                 roll_rad=roll,
                 pitch_rad=pitch,
+                accel_m_s2=accel_m_s2,
                 depth=image,
                 radar_blocked=_radar_blocked(radar),
                 proximity=_proximity(prox_devices),
@@ -434,8 +502,11 @@ def main() -> None:
             if timed_out and not explorer.done:
                 explorer.done = True
                 explorer.phase = "done"
-                print(f"MAPPING time cap {max_s:.1f}s")
+                print(f"MAPPING time cap {max_s:.1f}s", flush=True)
+                print("MAPPING end_run reason=time_cap", flush=True)
             if explorer.done and not saved:
+                explorer.flush_pile_log()
+                explorer._publish_frontier_counts()
                 log.save_map(explorer.grid.labels(), explorer.grid.meta())
                 log.save_rooms(explorer.observed_room_labels(), explorer.room_names)
                 saved = True

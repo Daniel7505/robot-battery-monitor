@@ -40,7 +40,7 @@
 # carpet. Grip is the same on both. Carpet rolling drag is about 2.5x
 # laminate. The energy model is not wired to either floor.
 
-EXTERNPROTO "../protos/ButlerBot.proto"
+EXTERNPROTO "../protos/ButlerBotSkid.proto"
 
 WorldInfo {
   basicTimeStep 8
@@ -794,8 +794,43 @@ DEF APT_FLOOR_BRIDGE_ENTRY Solid {
     size 0.101600 1.016000 0.020000
   }
 }
-# Measured carpet lip is about 10 mm. The skid wheels are 160 mm, so
-# the bedroom floor is flush with the hall. No ramp and no curb.
+# Room plates stop at the wall face, so a doorway in a 4 in partition is a
+# slot unless a plate fills it. Door G and the bedroom-bath walkway are
+# filled flush with the rooms. No ramp and no curb.
+DEF APT_FLOOR_BRIDGE_BEDROOM Solid {
+  translation 3.708400 5.130800 -0.010000
+  name "apt_floor_bridge_bedroom"
+  radarCrossSection 1
+  contactMaterial "carpet"
+  children [
+    Shape {
+      appearance USE APT_APP_CARPET
+      geometry Box {
+        size 0.105600 0.812800 0.020000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.105600 0.812800 0.020000
+  }
+}
+DEF APT_FLOOR_BRIDGE_BED_BATH Solid {
+  translation 1.219200 4.572000 -0.010000
+  name "apt_floor_bridge_bed_bath"
+  radarCrossSection 1
+  contactMaterial "carpet"
+  children [
+    Shape {
+      appearance USE APT_APP_CARPET
+      geometry Box {
+        size 0.812800 0.105600 0.020000
+      }
+    }
+  ]
+  boundingObject Box {
+    size 0.812800 0.105600 0.020000
+  }
+}
 # --- furniture. Every size and position is an estimate. ---
 # No dining table. No rug. No pendant spheres.
 DEF APT_FURN_LOVESEAT Solid {
@@ -1207,7 +1242,7 @@ DEF APT_FURN_VANITY Solid {
   }
 }
 
-ButlerBot {
+ButlerBotSkid {
   # Main room, clear of the sofas and the island. Facing the patio wall (+Y).
   # apartment_mapper explores from sensors. It does not load this file.
   translation 6.1 4.7 0

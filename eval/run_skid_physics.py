@@ -12,6 +12,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.mapping.world_guard import require_skid_world
 WEBOTS = ROOT / "webots"
 WORLD = WEBOTS / "worlds" / "_skid_sanity.wbt"
 OUT = Path("/tmp/skid_sanity")
@@ -112,6 +116,7 @@ ButlerBotSkid {
 
 
 def main() -> int:
+    require_skid_world(WORLD_TEXT, "skid physics world")
     OUT.mkdir(parents=True, exist_ok=True)
     WORLD.write_text(WORLD_TEXT, encoding="utf-8")
     env = os.environ.copy()

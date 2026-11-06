@@ -9,16 +9,20 @@ under a tire does not freeze the next move. Ground truth is not read.
 from __future__ import annotations
 
 import math
+import os
 
 from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M, SHELL_TAIL_M
 from src.mapping.grid import OccupancyGrid
 from src.mapping.odometry import wrap_rad
 
-# A few centimetres outside the 0.39 m shell. This is not the planner's
-# 0.20 m inflation: that disk would refuse a centred 0.81 m doorway.
-# One centimetre was not enough to see a corner swing into a jamb, and
-# three centimetres on a 5 cm cell stopped straight passes that only
-# grazed the next cell. Two centimetres leaves the centred 0.81 m door open.
+# One clearance outside the ButlerBotSkid outline (nose and tail 0.19 m,
+# side face 0.227 m). This is not the planner's 0.20 m disk: that disk is
+# the tire plus a centimetre, and it is round. The rectangle's front corner
+# sits about 0.32 m from the centre, so a path the disk accepts can still
+# swing into a mapped cell. One centimetre was not enough to see that
+# swing, and three centimetres on a 5 cm cell stopped straight passes that
+# only grazed the next cell. Two centimetres leaves a centred 0.81 m door
+# open. ``RBM_FOOTPRINT_ALIGN`` makes the planner use this same rectangle.
 FOOTPRINT_MARGIN_M = 0.02
 NOSE_M = SHELL_NOSE_M + FOOTPRINT_MARGIN_M
 TAIL_M = SHELL_TAIL_M + FOOTPRINT_MARGIN_M
@@ -31,6 +35,27 @@ SWEEP_SPIN_RAD = 0.50
 STEP_M = 0.05
 STEP_SPIN_RAD = 0.10
 _REACH_M = math.hypot(max(NOSE_M, TAIL_M), HALF_M)
+
+
+def shared_footprint_enabled() -> bool:
+    """True when the map veto uses the planner's inflated free mask.
+
+    Off unless ``RBM_SHARED_FOOTPRINT`` is set. The planner is unchanged.
+    The veto then rejects a swept pose whose centre has left that mask.
+    Live range still applies. No extra clearance is introduced.
+    """
+    raw = (os.environ.get("RBM_SHARED_FOOTPRINT") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def footprint_align_enabled() -> bool:
+    """True when the planner and the map veto share this rectangle.
+
+    Off unless ``RBM_FOOTPRINT_ALIGN`` is set. The default keeps the
+    planner's 0.20 m disk and the straight span check.
+    """
+    raw = (os.environ.get("RBM_FOOTPRINT_ALIGN") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
 
 
 def footprint_clips(

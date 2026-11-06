@@ -40,9 +40,22 @@ MIN_FRONTIER_M = 0.30
 HEIGHT_MIN_M = 0.05
 HEIGHT_MAX_M = 1.50
 # Webots RangeFinder.noise is a fraction of maxRange, not of the reading.
-OAK_DEPTH_NOISE = 0.002
+# ButlerBotSkid sets oak_depth noise to 0. The mapper applies the quadratic
+# below. The caster proto still carries 0.002 because the warehouse robot
+# shares that node and never enables it.
 OAK_DEPTH_MAX_M = 8.0
 OAK_DEPTH_MIN_M = 0.35
+# Stereo error grows with range squared. Calibrated to the Luxonis median
+# OAK-D Lite figure (480P, 75 mm baseline): below 3 m, below 2% absolute
+# depth error; from 3 m to 6 m, below 4%.
+# https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+# σ(3 m) = 0.02 × 3 m, so σ(1 m) = 6.7 mm. σ(5 m) is 3.3%, inside the 4% band.
+OAK_DEPTH_SIGMA_AT_1M = 0.06 / 9.0
+# Full-confidence hits out to 4 m. 4–5 m still occupy, at a lower log-odds,
+# because the published error is still a few percent there. Past 5 m the
+# return is only probable and must not close a doorway.
+OAK_FIRM_RANGE_M = 4.0
+OAK_SOFT_RANGE_M = 5.0
 # Share of the forward view with no usable range. A surface closer than
 # minRange fills the frame with empty pixels, and that is contact.
 BLIND_VIEW_FRACTION = 0.65
@@ -52,6 +65,14 @@ GYRO_BIAS_RAD_S = 0.001
 GYRO_NOISE_RAD_S = 0.005
 # Webots InertialUnit.noise of 1.0 is σ = π/2. 0.01 is about 0.9°.
 IMU_NOISE_FIELD = 0.01
+# Cheap 6-axis IMU (MPU-6050 class, about twenty dollars with the
+# encoders). The accelerometer lookup adds a few cm/s² of bias. Fractional
+# lookup noise vanishes at zero, so the mapper also adds this absolute
+# floor and a slow random-walk drift, clamped so it cannot walk off.
+ACCEL_BIAS_M_S2 = 0.03
+ACCEL_NOISE_M_S2 = 0.04
+ACCEL_DRIFT_M_S2_PER_SQRT_S = 0.004
+ACCEL_DRIFT_LIMIT_M_S2 = 0.08
 CRUISE_M_S = 0.28
 SPIN_RAD_S = 0.70
 LOOKAHEAD_M = 0.25

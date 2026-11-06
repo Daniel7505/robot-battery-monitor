@@ -407,7 +407,7 @@ def solids(world_text: str) -> dict:
 
 def test_world_is_r2025a_and_does_not_steer_a_track(world_text: str):
     assert world_text.startswith("#VRML_SIM R2025a utf8\n")
-    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in world_text
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in world_text
     assert "\n# STEER_TRACK off\n" in world_text
     assert "\n# TRACK_FILE " not in world_text
     from src.track_geometry import steer_track_enabled, track_file_from_world
@@ -541,7 +541,7 @@ def world_text_pendants() -> int:
 def test_spawn_is_in_the_main_room_on_a_24_inch_path(world_text: str, solids: dict):
     gt = _ground_truth()
     match = re.search(
-        r"ButlerBot\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        r"ButlerBot(?:Skid)?\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
         _strip_comments(world_text),
         re.S,
     )
@@ -597,6 +597,24 @@ def test_mapper_has_no_pose_or_map_foresight():
             if token in text or token in text.lower():
                 hits.append(f"{path.relative_to(ROOT)}: {token}")
     assert hits == []
+
+
+def test_recovery_mode_flag_is_opt_in():
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    assert "RBM_RECOVERY_MODE" in mapper
+    assert 'print(f"MAPPING recovery {explorer.recovery_mode}")' in mapper
+
+
+def test_oracle_pose_is_opt_in_and_is_not_the_floor_plan():
+    """The planner may be handed its own pose. The scoring file stays out."""
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    logger = (CONTROLLER_ROOT / "apartment_pose_logger" / "apartment_pose_logger.py").read_text(encoding="utf-8")
+    assert '_flag("RBM_ORACLE_POSE", False)' in mapper
+    assert "oracle_pose.txt" in mapper
+    assert "oracle_pose.txt" in logger
+    assert GT_NAME not in mapper
+    assert GT_NAME not in logger
+    assert "apartment_pose_logger" not in mapper
 
 
 def test_pose_logger_is_separate_and_reads_the_simulator_pose():

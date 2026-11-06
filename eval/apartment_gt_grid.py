@@ -126,7 +126,7 @@ def spawn_pose(world: Path | None = None, ground_truth: Path | None = None) -> t
     sx, sy, _sz = (float(v) for v in gt["spawn"]["translation_m"])
     text = _strip_comments((world or WORLD).read_text(encoding="utf-8"))
     match = re.search(
-        r"ButlerBot\s*\{.*?rotation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        r"ButlerBot(?:Skid)?\s*\{.*?rotation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
         text,
         re.S,
     )

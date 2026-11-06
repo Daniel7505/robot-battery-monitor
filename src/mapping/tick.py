@@ -22,7 +22,8 @@ from src.mapping.bubble import (
     pivot_ready,
     stop_gap,
 )
-from src.mapping.footprint import footprint_clips
+from src.mapping.footprint import footprint_align_enabled, footprint_clips, shared_footprint_enabled
+from src.mapping.frontiers import swept_leaves_free
 
 # Half of cruise. A doorway correction has to finish before the tire meets the frame.
 DOOR_CREEP_M_S = 0.12
@@ -63,9 +64,38 @@ REASONS = (
     "step_too_high",
     "contact_bump",
     "goal_changed",
+    "frontier_ban",
+    "frontier_clear",
+    "camera_stuck",
+    "imu_stuck",
+    "camera_imu_stuck",
+    "narrow_gap",
+    "pile_leave",
+    "one_rule",
+    "trail_only",
     "unknown",
 )
 _major_state: dict[str, dict] = {}
+_plan_counts = {
+    "ready": False,
+    "plans_issued": 0,
+    "plan_veto_disagree": 0,
+    "frontier_ban": 0,
+    "frontier_clear": 0,
+}
+
+
+def set_plan_counts(issued: int, disagree: int) -> None:
+    """Remember how many planned paths the map veto then rejected."""
+    _plan_counts["ready"] = True
+    _plan_counts["plans_issued"] = int(issued)
+    _plan_counts["plan_veto_disagree"] = int(disagree)
+
+
+def set_frontier_counts(bans: int, clears: int) -> None:
+    """Unthrottled ban and clear totals for the run summary."""
+    _plan_counts["frontier_ban"] = int(bans)
+    _plan_counts["frontier_clear"] = int(clears)
 
 
 def log_major(
@@ -119,6 +149,11 @@ def log_major(
     summary.extend(f"{name} {state['reasons'][name]}" for name in REASONS)
     summary.append("places")
     summary.extend(f"{name} {state['places'][name]}" for name in ("doorway", "hallway", "room"))
+    if _plan_counts["ready"]:
+        summary.append(f"plans_issued {_plan_counts['plans_issued']}")
+        summary.append(f"plan_veto_disagree {_plan_counts['plan_veto_disagree']}")
+    summary.append(f"frontier_ban_events {_plan_counts['frontier_ban']}")
+    summary.append(f"frontier_clear_events {_plan_counts['frontier_clear']}")
     with open(os.path.join(folder, "summary.txt"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(summary) + "\n")
 
@@ -265,6 +300,34 @@ def _costs(
     }
 
 
+def map_veto(grid, pose: tuple[float, float, float], v: float, w: float) -> str | None:
+    """Map footprint that rejects this command, or None when the shape fits.
+
+    The default checks a turn with the rectangle and a straight command
+    with a three-cell bar. ``RBM_FOOTPRINT_ALIGN`` uses the rectangle for
+    every command, the same outline the planner then inflates with.
+    ``RBM_SHARED_FOOTPRINT`` drops both shapes and uses the planner mask.
+    """
+    if grid is None:
+        return None
+    if shared_footprint_enabled():
+        if swept_leaves_free(grid, pose, v, w):
+            return "map:mask"
+        return None
+    if footprint_align_enabled():
+        if footprint_clips(grid, pose, v, w):
+            return "map:footprint"
+        return None
+    turning = abs(float(w)) > TURN_W_RAD_S
+    if turning and footprint_clips(grid, pose, v, w):
+        return "map:corner"
+    if float(v) < -0.02 and not turning and _behind_blocked(grid, pose):
+        return "map:rear"
+    if float(v) > 0.02 and not turning and _ahead_blocked(grid, pose):
+        return "map:ahead"
+    return None
+
+
 def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
     """Width of a mapped doorway the shell can still pass, or None.
 
@@ -382,6 +445,8 @@ def _known_free_ahead(grid, pose: tuple[float, float, float]) -> bool:
 
 def _reverse_blocked(grid, pose) -> bool:
     """A mapped wall spans the tail, so a straight backup would enter it."""
+    if shared_footprint_enabled():
+        return swept_leaves_free(grid, pose, -0.10, 0.0)
     return _behind_blocked(grid, pose)
 
 
@@ -400,12 +465,22 @@ def _straight_reverse(view, grid, pose, vetoes: list[dict]) -> MotionChoice | No
 
 
 class MotionChoice:
-    def __init__(self, name: str, v: float, w: float, costs: dict[str, float], vetoes: list[dict]) -> None:
+    def __init__(
+        self,
+        name: str,
+        v: float,
+        w: float,
+        costs: dict[str, float],
+        vetoes: list[dict],
+        ballot: list[tuple[str, str]] | None = None,
+    ) -> None:
         self.name = name
         self.v = float(v)
         self.w = float(w)
         self.costs = costs
         self.vetoes = vetoes
+        # (candidate name, "ok" or the veto reason). Logging only.
+        self.ballot = list(ballot or [])
 
     def why(self) -> str:
         parts = [
@@ -433,39 +508,48 @@ def choose_motion(
         pursuit_v, pursuit_w, heading_err, view, left_clear, right_clear, radar_blocked
     )
     vetoes: list[dict] = []
+    ballot: list[tuple[str, str]] = []
     best_name = ""
     best_v = 0.0
     best_w = 0.0
     best_costs: dict[str, float] | None = None
     for name, v, w in CANDIDATES:
         reason = live_veto(v, w, view)
-        if reason is None and grid is not None:
-            turning = abs(w) > TURN_W_RAD_S
-            if turning and footprint_clips(grid, pose, v, w):
-                reason = "map:corner"
-            elif v < -0.02 and not turning and _behind_blocked(grid, pose):
-                reason = "map:rear"
-            elif v > 0.02 and not turning and _ahead_blocked(grid, pose):
-                reason = "map:ahead"
+        if reason is None:
+            reason = map_veto(grid, pose, v, w)
         if reason is not None:
             vetoes.append({"motion": name, "sensor": reason})
+            ballot.append((name, reason))
             continue
+        ballot.append((name, "ok"))
         costs = _costs(v, w, v_des, w_des, view, left_clear, right_clear, radar_blocked)
         if best_costs is None or costs["total"] < best_costs["total"]:
             best_name, best_v, best_w, best_costs = name, v, w, costs
     if best_costs is not None:
-        return MotionChoice(best_name, best_v, best_w, best_costs, vetoes)
+        return MotionChoice(best_name, best_v, best_w, best_costs, vetoes, ballot)
     escape = _straight_reverse(view, grid, pose, vetoes)
     if escape is not None:
+        escape.ballot = ballot
         return escape
     # A nose gap vetoes every spin, and a hold never becomes a stuck event,
     # so the robot would sit. A spin the map shows as clear is still a move.
     if grid is not None:
         for name, w in (("spin_left", 0.70), ("spin_right", -0.70)):
-            if not footprint_clips(grid, pose, 0.0, w):
-                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes)
+            blocked = (
+                swept_leaves_free(grid, pose, 0.0, w)
+                if shared_footprint_enabled()
+                else footprint_clips(grid, pose, 0.0, w)
+            )
+            if not blocked:
+                return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
     # Sonar can sit at 6 cm on open floor the map has already marked free.
     # Holding there never counts as stuck, so the seed does not move.
-    if _known_free_ahead(grid, pose) and not footprint_clips(grid, pose, 0.06, 0.0):
-        return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes)
-    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes)
+    if _known_free_ahead(grid, pose):
+        creep_blocked = (
+            swept_leaves_free(grid, pose, 0.06, 0.0)
+            if shared_footprint_enabled()
+            else footprint_clips(grid, pose, 0.06, 0.0)
+        )
+        if not creep_blocked:
+            return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
+    return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes, ballot)

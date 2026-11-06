@@ -148,6 +148,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Two footprints, 2026-11-04. Flag `RBM_FOOTPRINT_ALIGN`, off unless set. The planner disk and the veto rectangle are written up under "Planner disk and veto rectangle" in `docs/DESIGN_DECISIONS.md`. The scored runs are in "One footprint for the planner and the veto."
 - Quit dump and planner mask, 2026-11-04. Two reviews agreed on the same quit list. The dump is always on. Flag `RBM_SHARED_FOOTPRINT` stays off. See "Quit reasons and one planner mask."
 - True start and pile dump, 2026-11-04. Flag `RBM_TRUE_START`, off unless set. The pile line is always on. See "Where a long pile spends its ticks."
+- Trusted travel and a best-center pile, 2026-11-06. The dump now follows the estimate's own best center. Stall progress uses wheel travel the step trusted. Five runs of each seed, flags off. Visited means 10.2 and 7.6, inside the noise. The long sits are a `stuck` reverse the pose does not follow. See "A stuck reverse the pose does not follow."
 
 ## One stuck check, not one pose
 
@@ -230,7 +231,7 @@ Dead ends: do not add another recovery rule from one seed. Do not read a 10 poin
 
 Outcome: the strip was measured. See "One recovery rule." One rule visits less of the −0.35 floor than this stack and sits longer. The cost mark does not close that gap.
 
-Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks."
+Two later reviews, read independently, agreed on one list: the start cell from `_nearest_free` can sit in a free component that does not reach a frontier, a frontier ban does not lift, the top-8 cut happens before that filter, and A* can hit its 25,000 expansion cap. They also agreed the map veto refuses about a third of planner-accepted paths. That agreement is a hypothesis list. The measurement, before any of those paths is patched, is "Quit reasons and one planner mask." The follow-up, starting A* in the robot's own component and writing down what a pile actually commands, is "Where a long pile spends its ticks." The next measurement, after that dump missed two long sits, is "A stuck reverse the pose does not follow." Do not add another recovery rule on top of this sample.
 
 ## True pose for the planner, same map
 
@@ -339,3 +340,31 @@ North run 5, ground-truth pile 536 s from t=64 s, and −0.35 run 4, ground-trut
 Dead ends: do not read the north mean of 15.0 as a gain. The sample sd is 9.5 and two of the ten flag-on runs stopped early because the escape walk returned no start. Do not turn the flag on in the harness. Do not add a longer walk than the existing 40 cells to chase those two stops. Do not treat a 0% veto share as "the map veto never fires"; it means that once a stay has already lasted 60 s, the tick that is running is a recovery command, not a fresh `choose_motion` ballot.
 
 Outcome: `RBM_TRUE_START` stays off. The pile line stays. On the stays the estimate held for 60 s, the dominant tick is a recovery command (`stall`, `pile_leave`, `back`, `contact`), not a veto hold and not a zero command. `start_component` did not appear. The two early stops are `start_none`.
+
+## A stuck reverse the pose does not follow
+
+Symptom: two ground-truth piles in the true-start round, 536 s and 443 s, never opened a dump. The estimate's poses in those windows spanned 0.36 m and 0.41 m, and the entry anchor reset whenever a chord passed 0.45 m. The same round's opened summaries were recovery commands, often `stall`, with hold at 0–4% and a fully vetoed ballot at 0%.
+
+How it was diagnosed: the code was read before the runs. Three different clocks were in play. The stall escape ended, and its "did not move" phases tripped, on the distance between `plan_pose` and a saved pose. Fusion and loop closure can move that pose without the wheels rolling, and a dropped wheel step (frozen view, slip, spin scrub) does not move it. The pile dump and the pile guard used the entry anchor, while the scorer uses a center the body occupied. `_stuck_escape` is called before the stall machine and clears `_blind_back`, so a camera or IMU stuck tick never reaches the stall travel counter. Ground truth is not an input to any of those.
+
+The logging change uses the robot's own pose only. Every 0.25 s it keeps the longest suffix that still sits inside 0.45 m of one of its samples, and it opens the existing 1 Hz line once that stay reaches 60 s, even if the entry anchor has reset. The summary adds commanded distance (integral of `|v|`) and the estimate's path length. It does not arm the pile guard. The behavior change is only the stall escape: success, and the phase checks that used to read the pose, now sum wheel travel the step actually trusted. The thresholds are the existing ones (0.30 m to leave, 1.0 m back cap, 0.02 m and 0.05 m "did not move"). No new knob. Flags stayed off: `RBM_TRUE_START`, `RBM_SHARED_FOOTPRINT`, `RBM_FOOTPRINT_ALIGN`, `RBM_ORACLE_POSE`, and `RBM_RECOVERY_MODE` were unset. The code is commit `2774b24`.
+
+Five 600 s runs of −0.35 (harness name `m35`) and five of north. Depth-noise seeds 63 and 64, ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. Every run wrote 75,000 pose rows and `mapping_done` is 600 s. The `time cap` print is not in these `webots.log` files; the done file and the row count are the cap. Sample standard deviation divides by 4. Visited figures are the scorer's percent to two decimals. The mean and the sample sd use those figures. A gap under about 6 visited points is the noise from the variance entry. The scored pile is the true body inside 0.45 m of a pose it occupied, samples every 0.25 s. Logs stayed out of git.
+
+−0.35, runs 1–5. Visited % 18.05, 12.38, 4.19, 3.76, 12.64 (mean 10.20, sample sd 6.12, range 14.3). The variance mean was 14.7. The gap is 4.5 points. The 3b mean was 16.2. Pile 103.9 s from t=78, 298.2 s from t=302, 541.4 s from t=58, 553.0 s from t=47, 323.3 s from t=276 (mean 364 s). Early-quit count 0. Run 2 logged `reason=start_component` at 18 distinct times (38 lines; some timestamps are repeated). The search resumed and the run reached 600 s. No `start_none`.
+
+North, runs 1–5. Visited % 3.40, 10.87, 9.16, 9.69, 5.09 (mean 7.64, sample sd 3.22, range 7.5). The variance mean was 9.0. The gap is 1.4 points. The 3b mean was 10.5. Pile 564.5 s from t=35, 431.4 s from t=168, 378.4 s from t=221, 418.3 s from t=182, 527.1 s from t=73 (mean 464 s). Early-quit count 0. No `select_goal` miss.
+
+What the dump shows. The best-center clock opened on these sits. The entry-anchor miss from the previous round did not repeat: a 564 s true sit produced 483 one-hertz lines. A summary is still missing when the shell is inside the ball at the cap, because the pose logger quits in the same step that marks the run done, before the leaving-the-ball summary is written. The one-hertz lines are the record for those.
+
+Three reads:
+
+North run 1. Ground-truth pile 564.5 s from t=35. The dump is 483 s of `src=stuck`, commanded distance 48.2 m, estimate path 1.01 m, and 482 of those seconds commanded at least 0.05 m while the estimate moved under 0.02 m. The command on those lines is `v=-0.10`. The follow frames show the shell in a doorway. The true body was sitting. The estimate was not drifting through a large cloud. `_stuck_escape` owns the tick, clears the stall latch, and keeps reversing while the depth picture stays frozen. A frozen picture drops the wheel step, so the pose does not integrate the command, the picture stays frozen, and `camera_stuck` stays true.
+
+−0.35 run 1, the summary that did close, 84 s from t=77. Hold 1%, veto 0%, commanded-but-still 11%, commanded 1.81 m, estimate path 1.61 m. Recovery 58%: `contact` 979, `stall` 642, `narrow_gap` 98. The odometry followed a local shuffle inside the ball. That is a different sit from the frozen reverse.
+
+−0.35 run 4. Ground-truth pile 553.0 s from t=47. 491 dump seconds, 448 of them `src=stuck`, commanded 45.6 m, estimate path 0.39 m. No summary line, because the sit lasted to the cap. Same pattern as north run 1. `stall` is 35 of those seconds, not the owner.
+
+Dead ends: do not read 10.2 or 7.6 as a gain or a regression. Both gaps are inside the 6 point noise, and this −0.35 sample's own sd is 6.1. Do not turn a flag on. Do not delete the recovery stack; the one-rule trial already visited less floor. Do not treat the trusted-travel stall exit as the fix for these sits. The long ones are `stuck`, and that path does not use the travel counter. Do not add a threshold or a new recovery rule from this sample.
+
+Outcome: the best-center dump stays. It sees the sits the entry anchor missed, and it separates a shuffle the pose follows from a reverse the pose does not. The stall travel rule is in the measured commit and did not shorten the piles. The next question is why a stuck reverse of 0.10 m/s moves neither the estimate nor the body, and why the summary is dropped when that sit lasts until the cap.

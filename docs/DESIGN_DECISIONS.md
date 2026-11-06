@@ -247,3 +247,25 @@ On the summaries the dump did open, hold is 0–4% and a fully vetoed candidate 
 **Rejected.** Turning the flag on. Reading the north mean of 15.0 as a gain: the sample sd is 9.5 and two runs stopped early. Lengthening the 40-cell walk. Treating the 0% veto share as proof the map veto is idle outside a pile. The summaries start only after 60 s, and by then the tick is already a recovery command.
 
 **Outcome.** `RBM_TRUE_START` stays off. The pile line stays. A stay the estimate holds for a minute is a recovery loop, chiefly `stall`, `pile_leave`, `back`, and `contact`. It is not a veto hold and it is not a zero command. The component-start trial removed `start_component` from this sample and added two `start_none` stops.
+
+## 2026-11-06 — Trusted wheel travel, and a best-center pile
+
+**Mission parameter.** The previous pile line missed a 536 s sit and a 443 s sit because the entry anchor reset. The opened summaries were recovery, often `stall`. The question for this round is whether that sit is the stall state machine, a command the pose does not follow, or the estimate drifting while the body sits. One behavior change, and only if that read supports it. No new clearance. Flags stay off unless a run shows a reason to set one. A visited-floor change under about 6 points is noise. The variance means are 14.7 and 9.0. The 3b means are 16.2 and 10.5.
+
+**Change.** The pile dump follows the estimate's own best center: a sample every 0.25 s, the longest suffix inside 0.45 m of one of those samples, the 1 Hz line once that stay reaches the existing 60 s. The summary records commanded distance against the estimate's path. Ground truth is not read, and this clock does not arm the pile guard. Stall escape progress uses wheel travel the step trusted, at the existing 0.30 m, 1.0 m, 0.02 m, and 0.05 m checks. A pose jump is not travel. Commit `2774b24`.
+
+**Why.** The missed sits spanned 0.36 m and 0.41 m on the estimate, so a center on that pose would have opened the dump. The stall exit was a pose distance, which a match correction can satisfy without the shell leaving.
+
+**Evidence.** Five runs of −0.35 and five of north, all flags off. Depth-noise seeds 63 and 64. Ports 1711 and 1712. `RBM_MAP_MAX_S=600`, `RBM_DECISION_LOG=1`, `RBM_MOVIE=1`. Webots R2025a, fast, `--no-rendering`, headless. All ten runs wrote 75,000 pose rows and `mapping_done` is 600 s. Sample standard deviation divides by 4. Counts are in `docs/LESSONS_LEARNED.md`.
+
+−0.35 visited %: 18.05, 12.38, 4.19, 3.76, 12.64. Mean 10.20, sample sd 6.12, range 14.3 points. The variance mean was 14.7. The gap is 4.5 points. The 3b mean was 16.2. Pile mean 364 s, range 104 s to 553 s.
+
+North visited %: 3.40, 10.87, 9.16, 9.69, 5.09. Mean 7.64, sample sd 3.22, range 7.5 points. The variance mean was 9.0. The gap is 1.4 points. The 3b mean was 10.5. Pile mean 464 s, range 378 s to 565 s.
+
+Early-quit count: 0. `start_none` count: 0. −0.35 run 2 has `reason=start_component` at 18 distinct times. The run still reached 600 s.
+
+The best-center line opened on the long sits. North run 1's 564 s ground-truth pile is 483 s of `src=stuck`, commanded 48.2 m, estimate path 1.01 m. −0.35 run 4's 553 s pile is 448 s of `src=stuck`, commanded 45.6 m, estimate path 0.39 m. The closed summary on −0.35 run 1 is the other kind: commanded 1.81 m, estimate path 1.61 m, veto 0%, recovery `contact` / `stall` / `narrow_gap`. A sit that lasts until the cap still writes no `pile_end`. The pose logger quits in the step that marks the run done.
+
+**Rejected.** Reading either visited gap as an effect. Turning a flag on. Deleting the recovery stack. Adding a rule or a threshold aimed at `stuck`. Treating the stall travel change as what ended, or failed to end, these sits: `_stuck_escape` runs first and clears the stall latch.
+
+**Outcome.** Flags stay off. The best-center dump stays, because it shows the command and the estimate path on a sit the entry anchor used to hide. The stall travel rule remains in the measured commit and is not a reason to patch Explorer again. The open mechanism is a stuck reverse of 0.10 m/s that neither the estimate nor the body follows.

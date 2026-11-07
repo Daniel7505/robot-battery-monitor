@@ -1162,6 +1162,55 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
     assert math.hypot(*bot.pose()[:2]) < 0.08
 
 
+def test_a_stuck_reverse_yields_after_the_hinges_spin_against_a_frozen_picture():
+    """The reverse starts. Once the hubs have turned the backup cap and the picture is still frozen, it yields."""
+    from src.mapping.explore import BLIND_BACK_CAP_M, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    saw_reverse = False
+    # Longer than the 1 m backup cap at the stuck reverse of 0.10 m/s.
+    steps = int((BLIND_BACK_CAP_M / 0.10 + 4.0) / dt)
+    last = (0.0, 0.0)
+    for _ in range(steps):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        last = (cmd_l, cmd_r)
+        if cmd_l < -0.5 and cmd_r < -0.5:
+            saw_reverse = True
+            left += cmd_l * dt
+            right += cmd_r * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert saw_reverse
+    assert bot._stuck_yield
+    assert not (last[0] < -0.5 and last[1] < -0.5)
+
+
 def test_a_still_floor_freezes_translation_while_the_view_turns():
     """The pile is still and the forward picture is not. That is a scrub.
 

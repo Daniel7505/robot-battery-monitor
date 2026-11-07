@@ -332,6 +332,13 @@ class Explorer:
         self._stall_act = 0.0
         self._stall_trans = 0.0
         self._stall_latched = False
+        # A stuck reverse whose hinges already turned BLIND_BACK_CAP_M
+        # while the forward picture stayed frozen is slip. Yield so the
+        # rest of the stack can run. Cleared when the picture changes.
+        self._stuck_reverse_m = 0.0
+        self._stuck_yield = False
+        self._stuck_enc: tuple[float, float] | None = None
+        self._stuck_note_t = -1.0
         self.sweep_checks = 0
         self.sweep_rejected = 0
         self.sweep_widened = 0
@@ -1944,8 +1951,41 @@ class Explorer:
             return "imu_stuck"
         return None
 
+    def _note_stuck_slip(self) -> None:
+        """Count hinge travel of a stuck reverse that the picture ignores.
+
+        Called once per step. The forward camera is the motion check.
+        Encoders are the actuator check. Ground truth is not read.
+        """
+        if self._stuck_note_t == self.t_s:
+            return
+        self._stuck_note_t = self.t_s
+        wheels = self._wheels
+        if not self._view_frozen():
+            self._stuck_reverse_m = 0.0
+            self._stuck_yield = False
+            self._stuck_enc = wheels
+            return
+        prev = self._stuck_enc
+        self._stuck_enc = wheels
+        if self._stuck_yield or wheels is None or prev is None:
+            return
+        cmd_l, cmd_r = self._commanded
+        v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+        w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+        # The existing stuck reverse is v=-0.10, w=0. A spin is not this.
+        if v >= -0.05 or abs(w) >= 0.2:
+            return
+        turned = 0.5 * (abs(wheels[0] - prev[0]) + abs(wheels[1] - prev[1]))
+        self._stuck_reverse_m += turned * WHEEL_RADIUS_M
+        if self._stuck_reverse_m >= BLIND_BACK_CAP_M:
+            self._stuck_yield = True
+
     def _stuck_escape(self, pose) -> tuple[float, float] | None:
         """Reverse along the trail. Do not spin in place: that was the wedge."""
+        self._note_stuck_slip()
+        if self._stuck_yield:
+            return None
         why = self._stuck_reason()
         if why is None:
             return None

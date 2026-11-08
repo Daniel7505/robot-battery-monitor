@@ -152,6 +152,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Stuck reverse trace, 2026-11-06. The north doorway sit was re-read from the wheel, physics, and pose logs. The motors turn. The body does not, because a wheel leaves the floor. See "The wheels turn and the shell does not."
 - Floor slots, 2026-11-06. Dan approved filling the apartment floor. The 0.102 m slot is the 4 in partition. The doorway plates were removed in `0cd3694`. See "The partition slot was not a real floor gap."
 - Stuck reverse yield, 2026-11-07. A reverse the hinges have already turned, while the forward picture stays frozen, yields after the existing 1 m backup cap. See "A stuck reverse that the picture ignores."
+- Collision check, 2026-11-08. No controller change. The tire collider meets the floor in ordinary driving. A corner sit can lift the rear axle or scrub both rear tires on a wall. See "The collider is on the floor until a corner lifts it."
 
 ## One stuck check, not one pose
 
@@ -440,3 +441,25 @@ Driving: some runs no longer spend the whole cap in `src=stuck`. −0.35 run 1 h
 Dead ends: do not treat an open nose as a reason to drive forward on the first stuck tick. The press test is that case, and the reverse has to start. Do not read 18.9 or 17.0 as a gain. Do not edit friction, motors, or the world from this sample. Do not add a second recovery rule in the same round.
 
 Outcome: the stuck reverse now has the same 1 m cap as a blind backup, measured by the hinges, and only while the forward picture stays frozen. The sit is not gone. The next command in the same sit is pile-leave, and it reverses too.
+
+## The collider is on the floor until a corner lifts it
+
+Symptom: after the stuck escape yields, pile-leave sends the same `v=-0.10` reverse. Dan's hypothesis, from earlier Webots work, is that the visible tire sat on the floor while the hidden collision shape was about 0.35 mm above it, so the hubs spun and the body did not. A second hypothesis is intermittent wedging: a chassis or tire shape loads and unloads at a corner. A permanent gap would also show up in ordinary driving.
+
+How it was checked: the proto and the wheel mesh, then the saved physics logs. No new simulation. No geometry edit.
+
+The collision tire is a cylinder of radius 0.08 m and thickness 0.05 m, center at z=0.08, so the authored tread is at z=0. The visual mesh vertices lie on that same radius within 0.001 mm (`butlerbot_skid_wheel.obj`, radius 0.080001). The mesh builder rejects a wheel whose vertex radius differs from 0.08 m by more than 0.1 mm. The chassis boxes end at z=0.105 (deck and side sonars). The floor pods end at z=0.055. None of those are the support when the tires are at z=0.08.
+
+Ordinary driving, yield −0.35 run 1, t=20–40 s, speed about 0.15 m/s. All four hubs at z=0.08000, body z median 0.00000, contact point z median 0.00000, every wheel reporting the floor, no wall. The same medians hold for the free-drive windows of yield north run 5 and the repaired-floor north run 1. The body z in those windows swings about ±0.35 mm around zero. That is the size of Dan's figure, and it is the bounce while the tire is carrying the robot, not a resting gap. A collider that stayed 0.35 mm off the floor would not leave the hub median at 0.08000 and the contact median at z=0 while the shell moves.
+
+Two different sits, both with hinges matching the reverse:
+
+Repaired-floor north run 1, t=250–260 s, before the yield change. Front hubs z=0.08000 and on the floor. Both rear hubs z=0.09425, rear floor contact 0, left rear wall contact 0.49. Body z=0.00729, `up_z` 0.9979, about 3.7° nose-down over the 0.22 m axle spacing. The rear axle is 14 mm off the floor. The hub positions say that. The missing rear floor count agrees with the lift; it is not the only evidence.
+
+Yield north run 5, t=300–320 s. All four hubs at z=0.080, body z=0.000, `up_z` 1. Both rear wheels report a wall on 0.80 of the samples and the floor on 0.45. The tire collider is on the floor and on the wall at the same time. The hinges still match `v=-0.10`. The body speed in the longer window around that sit is about 0.03 m/s. This is scrubbing, not an airborne wheel. A missing contact report is not what this window shows.
+
+The handoff does not carry the failed reverse. `_stuck_yield` is read only inside `_stuck_escape`. Once that returns nothing, a pile that has already lasted 60 s calls `_straight_leave`. That function does not see the yield or the hinge distance. It still emits `v=-0.10` when it prefers backing. On yield north run 5, 30 of the pile-leave reverse seconds had a mapper nose of at least 0.5 m, so the open-nose check alone did not force a forward command. Which of the remaining checks fired (a map clip, a short forward bubble, or a rear gap larger than the forward gap) is not in the log.
+
+Dead ends: do not treat the 0.35 mm figure as an authored radius error. The mesh and the resting hub disagree with that. Do not treat a missing floor count, by itself, as an airborne wheel. Do not patch pile-leave in this round. The rear tire is mechanically against a wall, or the rear axle is lifted, and another reverse rule would be guessing which command the contact will allow. Do not edit the proto or the friction without Dan.
+
+Outcome: ordinary driving is the collision cylinder on the floor. A corner can lift the rear axle by about 14 mm or plant both rear tires on a wall while they stay at ride height. Pile-leave repeats the reverse because it does not know the stuck reverse already failed. No controller change followed this read.

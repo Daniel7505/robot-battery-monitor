@@ -315,3 +315,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Driving forward on the first stuck tick because the nose is open. The press test requires the reverse to start. Reading the visited means as a result. A second patch aimed at pile-leave in this same round. Editing the world or the tire friction.
 
 **Outcome.** The stuck reverse yields after 1 m of hinge travel with a frozen picture. Pile-leave then repeats the reverse, and the wall sit remains.
+
+## 2026-11-08 — No command change after the collision check
+
+**Mission parameter.** Find why pile-leave repeats the reverse after the stuck escape yields, and check the hidden collision shapes before another behavior patch. Dan's hypotheses: a collision tire about 0.35 mm above a visual tire that looks grounded, or intermittent chassis and corner wedging. A permanent gap would also appear in ordinary driving. Contact counts can be missing. No world, proto, friction, or motor edit unless the evidence is brought back first.
+
+**Change.** None in the controller, the proto, or the world.
+
+**Why.** The collision cylinder and the wheel-mesh vertices are both radius 0.08 m. In ordinary driving the hub median is z=0.08000 and the contact median is z=0 while the shell moves at about 0.15 m/s. The ±0.35 mm body motion in those windows is bounce around that contact, not a resting clearance. The chassis boxes bottom at z=0.105, 25 mm above the tire contact.
+
+**Evidence.** Saved logs only. Repaired-floor north run 1, t=250–260 s: rear hubs z=0.09425, fronts z=0.08000, rear floor contact 0, left rear wall contact 0.49, body z=0.00729. The rear axle is 14 mm up. Yield north run 5, t=300–320 s: all hubs z=0.080, both rear wheels on a wall (0.80) and on the floor (0.45), body level. `_stuck_yield` is not an input to `_straight_leave`. Counts and the rejected patch are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A pile-leave patch this round. Editing the tire radius or the friction to chase 0.35 mm. Treating an absent floor count as proof the wheel is in the air when the hub height already says otherwise, or the reverse.
+
+**Outcome.** The collider supports ordinary driving. Corner sits are a lifted rear axle or a tire scrubbing a wall. The handoff forgets the failed reverse, and that is not enough, on this evidence, to change the command.

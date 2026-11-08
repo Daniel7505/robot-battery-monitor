@@ -340,6 +340,7 @@ class Explorer:
         self._stuck_enc: tuple[float, float] | None = None
         self._stuck_note_t = -1.0
         self._leave_why = ""
+        self._leave_logged_why = ""
         self._leave_log_t = -1.0
         self.sweep_checks = 0
         self.sweep_rejected = 0
@@ -2074,9 +2075,15 @@ class Explorer:
         return side is None or float(side) >= TURN_CLEAR_M
 
     def _log_pile_leave(self) -> None:
-        """One line a second. The command is already chosen. Logging only."""
-        if self.t_s - self._leave_log_t < 1.0:
+        """Log a new branch immediately, and otherwise once a second.
+
+        A one-second throttle hid a reverse that started a tenth of a
+        second after a forward line. The command is already chosen.
+        """
+        changed = self._leave_why != self._leave_logged_why
+        if not changed and self.t_s - self._leave_log_t < 1.0:
             return
+        self._leave_logged_why = self._leave_why
         self._leave_log_t = self.t_s
         view = self._bubble_view
         forward = None if view is None else view.forward

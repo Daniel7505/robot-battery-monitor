@@ -1235,6 +1235,23 @@ def test_pile_leave_logs_why_the_rear_gap_won(capsys):
     assert "yield=1" in out
 
 
+def test_a_pile_leave_branch_change_is_not_hidden_by_the_one_second_line(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._bubble_view = None
+    bot._last_clear = (1.0, 1.0, 1.0)
+    bot.t_s = 10.0
+    bot._leave_why = "nose_forward"
+    bot._log_pile_leave()
+    bot.t_s = 10.1
+    bot._leave_why = "fallback_reverse"
+    bot._log_pile_leave()
+    out = capsys.readouterr().out
+    assert "branch=nose_forward" in out
+    assert "branch=fallback_reverse" in out
+
+
 def test_a_still_floor_freezes_translation_while_the_view_turns():
     """The pile is still and the forward picture is not. That is a scrub.
 

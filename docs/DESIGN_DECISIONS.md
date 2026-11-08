@@ -301,3 +301,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Calling the floor gap-free from door G alone. Filling the front door or the patio door. Moving a wall to close the slot. Reading the visited means as the effect of a controller change. Using the gapped-floor runs as a clean driving baseline.
 
 **Outcome.** The accidental holes are closed. The tests name the openings. Wall scrubbing is still in the runs and was not patched.
+
+## 2026-11-07 — Cap a stuck reverse the picture does not see
+
+**Mission parameter.** On the repaired floor, long sits still put a rear tire on a wall, and one sit had no wall contact and no four-wheel floor contact. Find why the reverse continues, from the robot's own sensors. One correction only if that read supports it. No new distance, no new recovery rule, no world or friction edit.
+
+**Change.** While the forward picture stays frozen, hinge travel of a straight stuck reverse is counted. At the existing `BLIND_BACK_CAP_M` (1 m) the stuck escape yields. A 0.05 m change in the depth signature clears it. The reverse still starts. Commit `6281d58`.
+
+**Why.** The repaired-floor sits commanded `(-1.25,-1.25)` rad/s for the whole window and the hinges matched every 1 s bin. The forward nose was 0.9–2.2 m. `camera_stuck` is that frozen picture plus a nonzero command, and the escape is the command, so it does not end. The encoders are the evidence the hubs turned. The picture is the evidence the shell did not.
+
+**Evidence.** Five runs of each seed on the repaired world, flags off, depth seeds 63 and 64. The previous repaired-floor five was not rerun. All ten reached 600 s. Early-quit count 0. −0.35 visited mean 18.89 (sd 6.94), pile mean 208 s, against 14.79 and 231 s. North visited mean 16.99 (sd 6.27), pile mean 225 s, against 11.29 and 329 s. The visited gaps are 4.1 and 5.7 points. North run 5 still reversed for 259 s with both rear wheels on a wall. −0.35 run 3 still reversed for 289 s, and much of that was `pile_leave` after the stuck escape yielded. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Driving forward on the first stuck tick because the nose is open. The press test requires the reverse to start. Reading the visited means as a result. A second patch aimed at pile-leave in this same round. Editing the world or the tire friction.
+
+**Outcome.** The stuck reverse yields after 1 m of hinge travel with a frozen picture. Pile-leave then repeats the reverse, and the wall sit remains.

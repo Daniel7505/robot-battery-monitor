@@ -151,6 +151,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Trusted travel and a best-center pile, 2026-11-06. The dump now follows the estimate's own best center. Stall progress uses wheel travel the step trusted. Five runs of each seed, flags off. Visited means 10.2 and 7.6, inside the noise. The long sits are a `stuck` reverse the pose does not follow. See "A stuck reverse the pose does not follow."
 - Stuck reverse trace, 2026-11-06. The north doorway sit was re-read from the wheel, physics, and pose logs. The motors turn. The body does not, because a wheel leaves the floor. See "The wheels turn and the shell does not."
 - Floor slots, 2026-11-06. Dan approved filling the apartment floor. The 0.102 m slot is the 4 in partition. The doorway plates were removed in `0cd3694`. See "The partition slot was not a real floor gap."
+- Stuck reverse yield, 2026-11-07. A reverse the hinges have already turned, while the forward picture stays frozen, yields after the existing 1 m backup cap. See "A stuck reverse that the picture ignores."
 
 ## One stuck check, not one pose
 
@@ -419,3 +420,23 @@ Sits that remain are not the slot. North run 1 sat 428 s from t=172 at (4.70, 2.
 Dead ends: do not read 14.8 or 11.3 as a coverage gain. Do not treat the old 14.7 / 9.0 or the 10.2 / 7.6 as a driving baseline for a controller change; the world under them had an open slot. Do not widen a door to hide a slot. Do not fill under a closed exterior door. Do not claim the floor is free of every crack thinner than the 1 cm sample.
 
 Outcome: the two doorway slots are plates again. The regression fails if an interior opening loses its floor. Wall scrubbing and a wheel with no contact are still in the logs, and they are a separate problem.
+
+## A stuck reverse that the picture ignores
+
+Symptom: on the repaired floor, three long sits still had a rear tire on a wall, and one had ride-height hubs with no floor contact. The question was why the reverse kept going, using the robot's own sensors, with the contact log only as a check afterward.
+
+How it was diagnosed: the repaired-floor logs, flags off. In each of those four windows the post-safety command was `(-1.25,-1.25)` rad/s, which is `v=-0.10`, and every 1 s bin of the hinge sensors matched it. True speed was about 0. The forward nose in the mapper log was 0.9–2.2 m, so the forward beam was open. The pile source was `stuck` for the whole sit. `_stuck_escape` sends that reverse when the rear beam is not within 0.08 m, and it keeps sending it while `camera_stuck` is true. `camera_stuck` is a frozen forward picture plus a nonzero command. The escape is that command, so the picture stays frozen and the reverse does not end. The encoders say the hubs turned. The forward camera says the shell did not. That is the onboard split. The wall-contact counts are the supervisor's, and they are not an input.
+
+The press test still wants that reverse to start: a still picture with an open nose is a press. The fault is that the reverse never ends. After the hinges have turned the existing `BLIND_BACK_CAP_M` (1 m) of that straight reverse while the picture stays frozen, `_stuck_escape` yields. A picture change of 0.05 m in the depth signature clears the yield. No new distance and no ground truth. Commit `6281d58`.
+
+Five runs of each seed, same repaired world, same spawns, depth seeds 63 and 64, flags off. The repaired-floor five was not rerun; it is the baseline, and Webots still varies run to run. Every new run reached 600 s. Early-quit count 0. `start_component` still appears and does not end the run.
+
+−0.35 visited % 26.56, 15.46, 9.61, 24.84, 18.00 (mean 18.89, sample sd 6.94). Piles 75, 257, 437, 157, 112 s (mean 208 s). The repaired-floor mean was 14.79, pile mean 231 s. The gap in visited floor is 4.1 points.
+
+North visited % 22.68, 17.93, 10.77, 23.32, 10.27 (mean 16.99, sample sd 6.27). Piles 144, 127, 325, 119, 408 s (mean 225 s). The repaired-floor mean was 11.29, pile mean 329 s. The gap is 5.7 points. Both sample sds are about 6 points. Neither gap is a coverage result.
+
+Driving: some runs no longer spend the whole cap in `src=stuck`. −0.35 run 1 had 0 s of stuck and a 75 s pile. North run 1 had 0 s of stuck. The long ones moved from a pure stuck reverse to a mix. −0.35 run 3 still had 289 s of `v=-0.10` (139 s of it `stuck`, the rest `pile_leave`) and both rear wheels on a wall around (3.40, 7.42). North run 5 had 259 s of that reverse and both rear wheels on a wall around (3.95, 0.88). North run 3 had 217 s of reverse with no wall contact and four-wheel floor contact only 0.30 of the window, hubs still near z=0.08. Yielding the stuck escape hands the tick to pile-leave, and pile-leave issues the same reverse.
+
+Dead ends: do not treat an open nose as a reason to drive forward on the first stuck tick. The press test is that case, and the reverse has to start. Do not read 18.9 or 17.0 as a gain. Do not edit friction, motors, or the world from this sample. Do not add a second recovery rule in the same round.
+
+Outcome: the stuck reverse now has the same 1 m cap as a blind backup, measured by the hinges, and only while the forward picture stays frozen. The sit is not gone. The next command in the same sit is pile-leave, and it reverses too.

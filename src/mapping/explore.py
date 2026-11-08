@@ -339,6 +339,8 @@ class Explorer:
         self._stuck_yield = False
         self._stuck_enc: tuple[float, float] | None = None
         self._stuck_note_t = -1.0
+        self._leave_why = ""
+        self._leave_log_t = -1.0
         self.sweep_checks = 0
         self.sweep_rejected = 0
         self.sweep_widened = 0
@@ -2071,34 +2073,78 @@ class Explorer:
         side = view.left if w > 0 else view.right
         return side is None or float(side) >= TURN_CLEAR_M
 
+    def _log_pile_leave(self) -> None:
+        """One line a second. The command is already chosen. Logging only."""
+        if self.t_s - self._leave_log_t < 1.0:
+            return
+        self._leave_log_t = self.t_s
+        view = self._bubble_view
+        forward = None if view is None else view.forward
+        rear = None if view is None else view.rear
+
+        def fmt(value: float | None) -> str:
+            return "none" if value is None else f"{float(value):.2f}"
+
+        nose = float(self._last_clear[0])
+        self._log(
+            f"pile_leave branch={self._leave_why or 'unset'} "
+            f"nose={nose:.2f} fwd={fmt(forward)} rear={fmt(rear)} "
+            f"blind={int(self._view_blind)} "
+            f"clip_fwd={int(self._shell_clips(0.12, 0.0))} "
+            f"clip_back={int(self._shell_clips(-0.10, 0.0))} "
+            f"yield={int(self._stuck_yield)} yield_m={self._stuck_reverse_m:.2f}"
+        )
+
     def _straight_leave(self, pose) -> tuple[float, float] | None:
         """Creep forward or back. No spin. None when both ways meet the shell."""
         view = self._bubble_view
         nose = float(self._last_clear[0])
         forward_gap = None if view is None else view.forward
         rear_gap = None if view is None else view.rear
+        clip_fwd = self._shell_clips(0.12, 0.0)
+        clip_back = self._shell_clips(-0.10, 0.0)
         forward_ok = (
             not self._view_blind
             and nose >= 0.50
-            and not self._shell_clips(0.12, 0.0)
+            and not clip_fwd
             and (forward_gap is None or float(forward_gap) >= 0.30)
         )
-        back_ok = not self._reverse_closed(pose) and not self._shell_clips(-0.10, 0.0)
+        back_ok = not self._reverse_closed(pose) and not clip_back
         prefer_forward = forward_ok and (
             not back_ok or rear_gap is None or forward_gap is None or float(forward_gap) >= float(rear_gap)
         )
         if prefer_forward:
+            self._leave_why = "straight_forward"
             self._body_v, self._body_w = 0.12, 0.0
             self._note_approach("wide", 0.12, 0.0)
             return wheel_speeds(0.12, 0.0)
         if back_ok:
+            if self._view_blind:
+                why = "blind"
+            elif nose < 0.50:
+                why = "nose"
+            elif clip_fwd:
+                why = "clip_fwd"
+            elif forward_gap is not None and float(forward_gap) < 0.30:
+                why = "fwd_short"
+            elif (
+                rear_gap is not None
+                and forward_gap is not None
+                and float(forward_gap) < float(rear_gap)
+            ):
+                why = "rear_clearer"
+            else:
+                why = "back"
+            self._leave_why = "straight_back:" + why
             self._body_v, self._body_w = -0.10, 0.0
             self._note_approach("back", -0.10, 0.0)
             return wheel_speeds(-0.10, 0.0)
         if forward_ok:
+            self._leave_why = "straight_forward"
             self._body_v, self._body_w = 0.12, 0.0
             self._note_approach("wide", 0.12, 0.0)
             return wheel_speeds(0.12, 0.0)
+        self._leave_why = "straight_none"
         return None
 
     def _clear_heading(self) -> bool:
@@ -2825,13 +2871,16 @@ class Explorer:
             self._blind_back = False
             leaving = self._straight_leave(pose)
             if leaving is None:
+                self._leave_why = "trail_reverse"
                 leaving = self._trail_reverse(pose, trust_trail=True)
             if leaving is None and not self._view_blind and float(self._last_clear[0]) >= 0.50:
+                self._leave_why = "nose_forward"
                 self._body_v, self._body_w = 0.10, 0.0
                 self._note_approach("wide", 0.10, 0.0)
                 leaving = wheel_speeds(0.10, 0.0)
             if leaving is not None:
                 self._mark("pile_leave")
+                self._log_pile_leave()
                 return leaving
             # A wedge does not get another spin. The camera and the IMU
             # already took the reverse above when the picture or the gyro
@@ -2842,13 +2891,17 @@ class Explorer:
                 right = 0.0 if view is None or view.right is None else float(view.right)
                 turn = 0.30 if left >= right else -0.30
                 if self._spin_safe(turn):
+                    self._leave_why = "spin"
                     self._body_v, self._body_w = 0.0, turn
                     self._note_approach("pivot", 0.0, turn)
                     self._mark("pile_leave")
+                    self._log_pile_leave()
                     return wheel_speeds(0.0, turn)
+            self._leave_why = "fallback_reverse"
             self._body_v, self._body_w = -0.10, 0.0
             self._note_approach("back", -0.10, 0.0)
             self._mark("pile_leave")
+            self._log_pile_leave()
             return wheel_speeds(-0.10, 0.0)
         if not self._simple_recovery():
             blind = self._stall_escape(pose)

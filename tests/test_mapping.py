@@ -1211,6 +1211,30 @@ def test_a_stuck_reverse_yields_after_the_hinges_spin_against_a_frozen_picture()
     assert not (last[0] < -0.5 and last[1] < -0.5)
 
 
+def test_pile_leave_logs_why_the_rear_gap_won(capsys):
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot._pile_forced = True
+    bot._view_blind = False
+    bot._last_clear = (1.20, 1.0, 1.0)
+    bot._bubble_view = BubbleView(0.40, 1.0, 1.0, 2.00, 0.40)
+    bot._view_sig = (1.0, 1.0, ())
+    bot._view_still_from = 0.0
+    bot.t_s = 10.0
+    bot._stuck_yield = True
+    bot._stuck_reverse_m = 1.0
+    bot._go(False, 0.0)
+    out = capsys.readouterr().out
+    assert "pile_leave branch=straight_back:rear_clearer" in out
+    assert "fwd=0.40" in out
+    assert "rear=2.00" in out
+    assert "clip_fwd=0" in out
+    assert "yield=1" in out
+
+
 def test_a_still_floor_freezes_translation_while_the_view_turns():
     """The pile is still and the forward picture is not. That is a scrub.
 

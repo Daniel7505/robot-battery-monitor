@@ -132,7 +132,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - A seed folder that still has `mapping_done` quits the next launch at once. The pose logger sees the file and calls `simulationQuit`. Delete the folder first.
 - Killing Webots by a broad pattern killed another seed's X server. Kill by port.
 - Odd video sizes fail in ffmpeg. Scale to an even width and height.
-- PR #40 (pytest-xdist on `main`, idle since 27 Oct 2026) is not safe to merge. CI failed: workers raced on Postgres and hit a duplicate `allocation_snapshots` type. The speedup is real when database tests stay on one worker. Do not close it from a mapping round.
+- PR #40 (pytest-xdist on `main`, idle since 27 Oct 2026) is not safe to merge. Re-read on 2026-11-08: still open, still `MERGEABLE`, CI still the 27 Oct failure. `gw1` created `allocation_snapshots` while `gw0` already had it. The `xdist_group("db")` pin did not cover every database test. +93/−12 across the workflow, pytest.ini, and a set of test files. Do not merge it, and do not close it from a mapping round.
 
 ## Round log
 
@@ -153,6 +153,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Floor slots, 2026-11-06. Dan approved filling the apartment floor. The 0.102 m slot is the 4 in partition. The doorway plates were removed in `0cd3694`. See "The partition slot was not a real floor gap."
 - Stuck reverse yield, 2026-11-07. A reverse the hinges have already turned, while the forward picture stays frozen, yields after the existing 1 m backup cap. See "A stuck reverse that the picture ignores."
 - Collision check, 2026-11-08. No controller change. The tire collider meets the floor in ordinary driving. A corner sit can lift the rear axle or scrub both rear tires on a wall. See "The collider is on the floor until a corner lifts it."
+- Island prop and pile-leave log, 2026-11-08. The 14 mm rear lift is the rear sonar box against the island. Pile-leave now logs its branch. See "What held the rear axle up."
 
 ## One stuck check, not one pose
 
@@ -463,3 +464,23 @@ The handoff does not carry the failed reverse. `_stuck_yield` is read only insid
 Dead ends: do not treat the 0.35 mm figure as an authored radius error. The mesh and the resting hub disagree with that. Do not treat a missing floor count, by itself, as an airborne wheel. Do not patch pile-leave in this round. The rear tire is mechanically against a wall, or the rear axle is lifted, and another reverse rule would be guessing which command the contact will allow. Do not edit the proto or the friction without Dan.
 
 Outcome: ordinary driving is the collision cylinder on the floor. A corner can lift the rear axle by about 14 mm or plant both rear tires on a wall while they stay at ride height. Pile-leave repeats the reverse because it does not know the stuck reverse already failed. No controller change followed this read.
+
+## What held the rear axle up
+
+Symptom: repaired-floor north run 1 held both rear hubs at z=0.09425 from t=175 s through t=600 s. The fronts stayed at z=0.08000. Dan asked what pair of shapes was actually carrying that pitch. A permanent 0.35 mm tire gap was already inconsistent with free-drive hub medians of 0.08000.
+
+How it was measured: the saved physics and wheel logs, the robot pose at t=175.2 s, and the bounding boxes. No new world. The pose logger does not name the other body in a contact, so the pair is the overlap of those boxes, not a force sensor.
+
+At t=175.2 s the shell is at (4.696, 2.489), yaw 3.119, body z 0.00729, `up_z` 0.9979 (3.7° nose-down). The command for the previous 1.5 s, and then for the rest of the cap, is `(-1.25,-1.25)` rad/s, a straight reverse. The island cabinet `apt_furn_island` has its west face at x=4.8768, y from 1.600 to 2.515, z from 0 to 0.914. The rear-left tire center transforms to (4.796, 2.317, 0.094). The cylinder of radius 0.08 m is 0.56 mm clear of that face. The rear sonar box, body center (−0.172, 0, 0.12), size 0.032×0.040×0.030, has a corner 0.005 mm from the same face. That is contact, within the solver slop. The deck's closest corner is 34 mm clear. The rear-right tire is 80 mm clear. The front tires are on the floor.
+
+The sequence before the lock: from t=153 s the rear wheels report no floor while their hubs are still z=0.080 and the command is reverse. At t=156 s the left rear wheel reports a wall and the hubs are still z=0.080. At t=157 s both rear hubs rise through 0.088 to 0.093, then drop back. At t=174.5 s the reverse is on again and by t=175.0 s the hubs are at 0.09425 and stay there, to five decimals, until t=600 s. From t=180 s to t=600 s, z, both rear hub heights, both front hub heights, and `up_z` each have one unique value. x and yaw still jitter. Over t=180–190 s the hinges turn −12.50 rad each, matching the reverse. The rear tires are spinning. The pitch is not.
+
+That is a climb, then a prop. The reverse drives the tail into the cabinet. The rear-left tire meets the face while it is still at ride height (the wall count). The body pitches. The rear sonar box, which reaches almost as far back as the tire and sits higher, takes the cabinet face. The rear tires unload by 14 mm. Gravity does not drop them because the sonar box and the front tires are the supports. A hidden 0.35 mm tire clearance does not produce a 14 mm lock, and it does not appear in the free-drive windows.
+
+The ride-height scrub is a different pair. Yield north run 5 at t=300.5 s, pose (3.949, 0.877), yaw 0. Both rear hubs z=0.080. Both rear tire centers sit 80 mm from `APT_WALL_SHARED_A`, which is the tire radius: the tread is on that wall. The log reports wall contacts and, at that instant, no floor contacts. The hub height says the tires are not 14 mm in the air.
+
+Pile-leave does not receive `_stuck_yield`. Commit `6ac2026` writes one line a second once a pile-leave command is chosen: branch, nose, forward gap, rear gap, blind, forward clip, back clip, yield, and the hinge metres already counted. A unit test with forward gap 0.40 m and rear gap 2.00 m records `straight_back:rear_clearer` while yield is still set. A 240 s north run on this code, depth seed 64, did not open a pile and did not lift a hub (maximum left hub 0.081 m). The island sit was not reproduced. The branch that chooses reverse when the rear gap is the larger one is the tested decision. Which of those checks fired in the old 259 s sit is still not in that sit's log.
+
+Dead ends: do not call the rear tires the support of the 14 mm lock. They are 0.56 mm clear, and the sonar box is the contact. Do not call a missing floor count the proof by itself; the hub z is the proof they are up, and the box overlap is the proof of what holds them. Do not patch pile-leave from the unit test alone. The live sit was not re-read with the new line.
+
+Outcome: the lift is the rear sonar collider against the island cabinet, after a reverse drove the rear tire into that face. The ride-height case is both rear tires on `APT_WALL_SHARED_A`. The pile-leave line is in the tree. One 240 s probe did not reach a pile. `eval/score_rooms.py` (82 lines) had no caller in tests, docs, or the CLI; room seen/visited percent stays in `eval/score_apartment_map.py`. Removed in `233ed4b`.

@@ -329,3 +329,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A pile-leave patch this round. Editing the tire radius or the friction to chase 0.35 mm. Treating an absent floor count as proof the wheel is in the air when the hub height already says otherwise, or the reverse.
 
 **Outcome.** The collider supports ordinary driving. Corner sits are a lifted rear axle or a tire scrubbing a wall. The handoff forgets the failed reverse, and that is not enough, on this evidence, to change the command.
+
+## 2026-11-08 — The rear sonar box holds the pitched shell
+
+**Mission parameter.** Name the contact that held the rear hubs at z=0.09425, and record why pile-leave still reverses after the stuck escape yields. Diagnosis and a log line only. No driving change, no proto or world edit.
+
+**Change.** Pile-leave logs its branch, the forward gap, the rear gap, the map clip, and the stuck-yield flag, once a second. Commit `6ac2026`. `eval/score_rooms.py` is deleted in `233ed4b`. Nothing imported it. The room percent the runs use is still `eval/score_apartment_map.py`.
+
+**Why.** The hub height says the rear axle is up. It does not say which shape is under it. The yield flag is not an input to `_straight_leave`, so a later reverse can be chosen for a different reason.
+
+**Evidence.** Repaired-floor north run 1 at t=175.2 s, pose (4.696, 2.489), yaw 3.119. The rear sonar box corner is 0.005 mm from `apt_furn_island`'s west face. The rear-left tire is 0.56 mm clear of that face. Front hubs stay at z=0.08000. From t=180 s the pitch values do not change while the hinges keep turning −12.5 rad per 10 s under `(-1.25,-1.25)`. The climb starts at t=156–157 s with the left rear tire still at z=0.080 and a wall contact, command reverse. Yield north run 5 at t=300.5 s has both rear tires on `APT_WALL_SHARED_A` at hub z=0.080. A 240 s north probe with the new line did not open a pile. The unit test records `straight_back:rear_clearer` when the rear gap is 2.00 m and the forward gap is 0.40 m, with yield still set.
+
+**Rejected.** Another reverse rule. A tire-radius or friction edit. Treating the 14 mm lock as the 0.35 mm free-drive bounce. A five-by-five to read one branch line. Merging PR #40: its CI failure is still the `allocation_snapshots` race, and this round does not merge or close it.
+
+**Outcome.** The prop is the rear sonar collider on the island. The scrub is the rear tires on the shared wall. Pile-leave can still choose reverse because the rear gap is larger, and it does not consult the yield. The old sit was not re-logged.

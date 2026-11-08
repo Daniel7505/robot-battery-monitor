@@ -343,3 +343,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Another reverse rule. A tire-radius or friction edit. Treating the 14 mm lock as the 0.35 mm free-drive bounce. A five-by-five to read one branch line. Merging PR #40: its CI failure is still the `allocation_snapshots` race, and this round does not merge or close it.
 
 **Outcome.** The prop is the rear sonar collider on the island. The scrub is the rear tires on the shared wall. Pile-leave can still choose reverse because the rear gap is larger, and it does not consult the yield. The old sit was not re-logged.
+
+## 2026-11-08 — The escape block rewrites a forward leave
+
+**Mission parameter.** Reproduce a recovery stall with the pile-leave branch line and name the reverse that is actually sent. The unit test `straight_back:rear_clearer` is not evidence of a live sit. Diagnosis only. No driving change, no new clearance, no proto, world, friction, or motor edit.
+
+**Change.** Commit `be9bac7` logs a pile-leave branch as soon as the branch string changes. A one-second throttle had kept the first branch of a second and dropped a command that started a tenth later. The command is unchanged.
+
+**Why.** The branch line and the wheel command were not the same tick. Logging the change makes a forward branch sitting next to `v=-0.10` mean something.
+
+**Evidence.** Three 600 s probes, flags off, no scoring batch. Configurations and the trace are in `docs/LESSONS_LEARNED.md`. North seed 64 on `be9bac7` commands a straight reverse for 340 s. Every pile-leave branch in that run is `straight_forward` or `nose_forward`. At t=436.9 s the branch is `straight_forward` with `clip_fwd=0` and `yield=0`, and the phase line is `src=pile_leave v=-0.10`. `_respect_escape_block` runs after the branch is logged and replaces a forward command along the stuck heading with `wheel_speeds(-0.10, 0)` for 18 s. The log of that replacement is `blocked heading, not driving back in`. The body stays near (3.86, 5.39) at hub z=0.080 while the rear sonar box is 0.93 mm from `APT_WALL_SHARED_C` and the rear tire is 19 mm clear. A 1.2 s pitch to hub z=0.09491 at the same jamb releases. The island lock is not in these probes. −0.35 seed 63 does not stall; its `trail_reverse` moves the body 1.02 m.
+
+**Rejected.** Reading `rear_clearer` out of the unit test as the live branch. Reading a `nose_forward` line as the sent command when the wheels are `(-1.25,-1.25)`. Calling a wheel-wall count of 0 a clear tail while the sonar box is on the jamb. Treating the 1.2 s pitch as the sustained fault or as the island. Another clearance parameter. Merging or restacking PR #40.
+
+**Outcome.** The sustained reverse is the escape block, applied after pile-leave has chosen forward. The ride-height doorway sit is the rear sonar box on `APT_WALL_SHARED_C`. The nightstand sit is both rear treads on the furniture at hub z=0.080. Neither is the island prop. No behavior change in this round. The next change, when one is wanted, is to stop the block from repeating a reverse that has not moved the shell.

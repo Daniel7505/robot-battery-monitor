@@ -632,3 +632,15 @@ North is 2.5 points over a baseline sd of 4.7. −0.35 is 2.4 points under a bas
 Dead ends: the 30% stall ratio on this peak. The climb's ratios sit at 0.27–0.36, so that line still accepts the steps that moved the pose. A new fraction. The pitch gate. An `oak_imu` input. Calling the north mean a win.
 
 Outcome: a floor shift that misses the wheel step by more than 2 px is not travel. A shift that matches the wheels still is. The forced climb's early `moving` window no longer moves the planner pose.
+
+## The two holds together, and where that stops
+
+The short-shift hold and the blocked-heading stop were checked together on the pre-climb pose, depth seed 64. The backup ignored the rear gap and the heading was armed at explorer t=0.4 s. Both hooks were removed. At explorer t=0.2 s the log is `floor shift short of the wheels` (4.4 px on 0.013 m). The planner pose stays at 0. At explorer t=2.4 s the log is `blocked reverse did not move the shell` and the command becomes a turn. `up_z` is 0.625 when the reverse is cut, reaches 0.395 during the turn, and is 1.000 again by sim t=12.5 s with the hubs at z=0.080. The shell does not finish inverted. The unarmed reverse of the same face does.
+
+The matched runs on `fec4ff8` were not climbs. In north run 5 the command is a turn on 44% of samples, forward on 21%, and a straight reverse on 18%. Over sim t=31–300 s the pose path is 25.3 m and the wheel path is 26.6 m. The long net-encoder spans are the shell driving back and forth, not a pose that swallowed a climb.
+
+iRobot's stasis patent (US 9,317,038) treats drive wheels that spin while an independent wheel shows no transitions as stasis, and uses that to escape. Their optical-odometry patent (US 9,744,670) takes distance from the underside camera when its quality is high enough, and marks wheel data unreliable when it disagrees with the inertial measurement. The floor-camera check is the first of those. The second needs an inertial unit we are not using as a controller input, or a stasis wheel we do not have. Neither is a threshold change.
+
+Dead ends: another fraction on the same peak. The 30% stall line still accepts this climb. Shortening the 2 s clock. A new recovery rule from the backup counts. Those backups move the shell.
+
+Outcome: the early `moving` window is not planner travel, and with the heading armed the reverse stops and the shell comes back upright. The pitch to `up_z` 0.395 during the turn is the 2 s the existing clock allows. No further command change.

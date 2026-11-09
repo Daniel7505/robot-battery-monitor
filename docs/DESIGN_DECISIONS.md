@@ -441,3 +441,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Raising the bar with the existing 30% stall ratio. Those climb steps are at 0.27–0.36, so the line that already means "not motion" still lets the pose walk. A new fraction. The pitch gate. `oak_imu`. Another change to the 2 s reverse clock.
 
 **Outcome.** A peak that misses the wheel step by more than 2 px is not travel. A peak that matches the wheels still is. The early climb no longer counts as planner progress.
+
+## 2026-11-09 — The short shift and the reverse-stop together
+
+**Mission parameter.** The early-climb window is already closed in `fec4ff8`. Check that window together with the existing reverse-stop, and do not add a rule the matched runs do not support.
+
+**Change.** None.
+
+**Why.** With the heading armed, the short shift holds the pose from the first centimetre, and the 2 s clock then cuts the reverse. The matched runs' long reverse spans are the shell moving, pose path beside wheel path, not a climb accepted as travel.
+
+**Evidence.** Pre-climb pose, depth seed 64, heading armed for the probe only. Pose stays at 0. Reverse cut at explorer t=2.4 s. `up_z` minimum 0.395, upright again by sim t=12.5 s. North run 5 of the matched set: turn 44%, forward 21%, straight reverse 18%; pose path 25.3 m and wheel path 26.6 m over sim t=31–300 s. iRobot US 9,317,038 (stasis wheel) and US 9,744,670 (underside camera, trust it when quality is high, drop wheels when they disagree with an IMU). Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A tighter peak ratio. A shorter stall window. An `oak_imu` tilt gate. A new escape because the decision log says `cant_see_behind_backing_out` often. That label is every logged reverse, and those reverses move the shell.
+
+**Outcome.** The honesty gap in the early climb is closed. The residual pitch during the turn is the existing 2 s. The next sensor those patents use is not on this robot as a controller input.

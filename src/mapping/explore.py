@@ -113,6 +113,10 @@ _IMU_ACCEL_MAX_M_S2 = 0.20
 _ESCAPE_BLOCK_S = 18.0
 _ESCAPE_BLOCK_M = 0.70
 _ESCAPE_BLOCK_YAW = 0.9
+# A pitch this far from the level the IMU learned is a tip, not a
+# carpet lip. The floor-still branch already used 0.12 rad. A 10 mm
+# rise over the 0.22 m axle spacing is about 0.045 rad.
+_PITCH_TIP_RAD = 0.12
 
 def _picture_still(prev, curr, *, limit: float, min_std: float) -> bool:
     """True when two frames are the same picture, not a shifted one.
@@ -471,6 +475,7 @@ class Explorer:
         self._floor_track = ShortFloorTrack()
         self._zupt_wheels: tuple[float, float] | None = None
         self._pitch_rest: float | None = None
+        self._pitch_log_at = -1.0
         self.zupt_events = 0
         self.wheels_lifted = 0
         # Planner pose in the odometry frame. None keeps the estimate.
@@ -642,6 +647,22 @@ class Explorer:
         # distance is how the pose leaves the jamb.
         if self._view_frozen() and not self._view_blind and abs(ds) > 1e-4:
             drop = True
+        # The same 0.12 rad tip the floor-still branch already names.
+        # A blank floor image used to skip it, and the wheel step then
+        # walked the pose up the island. Pitch does not wait for that image.
+        if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch_rad)) < 0.15:
+            self._pitch_rest = float(pitch_rad)
+        pitched = (
+            self._pitch_rest is not None
+            and abs(float(pitch_rad) - self._pitch_rest) > _PITCH_TIP_RAD
+        )
+        if pitched and abs(ds) > 1e-4:
+            drop = True
+            if self.t_s >= self._pitch_log_at:
+                self._pitch_log_at = self.t_s + 1.0
+                self._log(
+                    f"shell pitched {float(pitch_rad):.2f} rad, wheel translation dropped"
+                )
         # A commanded spin should leave the axle where it is. Encoder
         # translation on that command is one wheel scrubbing, which walked
         # the pose while the body pivoted in a few centimetres.
@@ -1621,7 +1642,7 @@ class Explorer:
         rest = self._pitch_rest
         # No casters and no carpet ramp. A pitch past 0.12 rad while the
         # hubs claim motion means the shell tipped, not a wheel unload.
-        pitched = rest is not None and abs(float(pitch) - rest) > 0.12
+        pitched = rest is not None and abs(float(pitch) - rest) > _PITCH_TIP_RAD
         if pitched and (claimed >= 0.02 or spun >= 0.08) and not anchor["lifted"]:
             anchor["lifted"] = True
             self.wheels_lifted += 1

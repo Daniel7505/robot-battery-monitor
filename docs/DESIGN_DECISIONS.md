@@ -371,3 +371,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Removing the rewrite. A new threshold. Counting wheel radians as motion. Applying the 2 s clock to a frozen picture. Another recovery rule for the island climb or for spins that are not this block. Merging PR #40.
 
 **Outcome.** The safeguard still backs up first, then turns. It does not keep backing up once the pose has stayed put. A reverse the pose follows, and a frozen-picture reverse inside the hinge cap, are unchanged.
+
+## 2026-11-09 — The island climb was accepted wheel travel
+
+**Mission parameter.** Explain why north run 4's reverse onto the island moved the planner pose and continued until the shell was inverted. Diagnosis only. Ground truth stays off the controller.
+
+**Change.** None in the controller.
+
+**Why.** The still-pose gate can only stop a reverse the estimate does not follow. If the estimate follows the wheels up the cabinet, the gate sees progress.
+
+**Evidence.** Saved logs of that run, commit `9ebb7cd`. From t=304 s to t=310 s, command `(-1.25,-1.25)`, planner displacement 0.49 m, wheel arc 0.51 m, ground-truth floor travel 0.18 m, body z 0 to 0.185, `up_z` 1.000 to 0.057, both rear hubs 0.080 to 0.300. Applied visual, floor, and wall yaw are 0. No slip or floor-still line in that window. The nose goes from 0.87 m to the blind placeholder as the shell pitches. A 50 s start at the pre-climb pose did not climb. North run 3's hub z=0.445 is a 0.9 s toss near (1.00, 4.67) during which the planner pose does not move. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A behavior change this round. Reading the pose shift as visual odometry. Treating run 3 as the same climb. Another full north seed in place of the saved log.
+
+**Outcome.** The translation is the wheel step, trusted because the forward range leaves the slip band and the floor image never becomes the still picture the pitch gate waits on. The pitch is already measured. It did not veto the travel.

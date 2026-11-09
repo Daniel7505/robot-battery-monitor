@@ -1491,6 +1491,7 @@ class Explorer:
             "left": float(left_rad),
             "right": float(right_rad),
             "logged": False,
+            "blank_held": False,
             "lifted": False,
             "backed": False,
             "left_spin": False,
@@ -1556,9 +1557,27 @@ class Explorer:
         anchor = self._zupt_anchor
         age = self.t_s - float(anchor["t"])
         status = self._floor_track.push(floor, self._step_dt, travel)
-        # "pending" is a step that has not closed yet. A blank face and a
-        # real slide both restart the pose anchor, so a weak zero cannot
-        # sit on an old pose and delete the crossing.
+        # A real slide restarts the anchor. A flat frame does not: the
+        # wheels can be turning while the downward camera has nothing to
+        # track, which is the island face. Holding the pose there is the
+        # same idea as a stasis wheel. An ambiguous correlation is not
+        # that face, so it still restarts.
+        gray = np.asarray(floor, dtype=np.float64) if floor is not None else None
+        flat = gray is not None and gray.size > 0 and float(gray.std()) < 2.0
+        if status == "blank" and flat:
+            dl_b = float(left_rad) - float(anchor["left"])
+            dr_b = float(right_rad) - float(anchor["right"])
+            claimed_b = abs(0.5 * (dl_b + dr_b)) * self.odometry.radius_m
+            if claimed_b >= 0.02:
+                self.odometry.x_m = float(anchor["x"])
+                self.odometry.y_m = float(anchor["y"])
+                self._zupt_trans_until = self.t_s + 0.12
+                if not anchor.get("blank_held"):
+                    anchor["blank_held"] = True
+                    self._log(
+                        f"floor blank, wheel translation held std={float(gray.std()):.1f}"
+                    )
+            return
         if status in ("moving", "blank"):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()

@@ -1482,6 +1482,47 @@ def test_a_moving_floor_is_not_a_zero_velocity_update():
     assert bot.zupt_events == 0
 
 
+def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):
+    """The island face is a flat picture. Wheels turning are not travel.
+
+    A textured floor that shifts still counts. That is ordinary driving.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    for _ in range(12):
+        left += step
+        right += step
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.02
+    assert "floor blank, wheel translation held" in capsys.readouterr().out
+    bot._escape_block = (bot.t_s + 40.0, bot.pose()[0], bot.pose()[1], bot.pose()[2])
+    bot._view_still_from = bot.t_s
+    left_c, right_c = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left_c < -0.5 and right_c < -0.5
+    bot.t_s += STALL_WINDOW_S + 0.1
+    bot._view_still_from = bot.t_s
+    left_c, right_c = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left_c * right_c < 0
+
+
 def test_lifted_wheels_are_a_zero_velocity_update():
     """Casters take the load, the drive wheels spin, the pictures do not move."""
     from src.mapping.explore import Explorer

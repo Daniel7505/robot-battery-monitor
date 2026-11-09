@@ -423,6 +423,15 @@ class Explorer:
         self._escape_block: tuple[float, float, float, float] | None = None
         self._block_log_at = -1.0
         self._block_refusals = 0
+        # Planner pose when this block's reverse started, and the pose of a
+        # reverse that did not move the shell. Wheel angle is not progress.
+        self._block_rev_from: tuple[float, float, float] | None = None
+        self._block_reverse_dead = False
+        self._block_dead_pose: tuple[float, float, float] | None = None
+        self._block_turn_from: tuple[float, float] | None = None
+        self._block_turn_sign = 0.0
+        self._block_turns_tried = 0
+        self._block_turn_logged = False
         self._last_escape_xy: tuple[float, float] | None = None
         self._escape_repeats = 0
         # Back out to here, then take a different goal. The old spot is
@@ -1147,20 +1156,88 @@ class Explorer:
             self.phase = "go"
             self._replan_at = self.t_s
 
-    def _respect_escape_block(self, speeds: tuple[float, float]) -> tuple[float, float]:
-        """A forward command along the stuck heading becomes a reverse."""
-        block = self._escape_block
-        if block is None:
-            return speeds
-        until, x0, y0, yaw0 = block
+    def _clear_block_failure(self) -> None:
+        """The shell left the heading this reverse failed on."""
+        self._block_rev_from = None
+        self._block_reverse_dead = False
+        self._block_dead_pose = None
+        self._block_turn_from = None
+        self._block_turn_sign = 0.0
+        self._block_turns_tried = 0
+        self._block_turn_logged = False
+
+    def _on_blocked_heading(self) -> bool:
+        """Still on the spot and heading the escape refused to drive along."""
         x, y, yaw = self.plan_pose()
-        if self.t_s >= until or math.hypot(x - x0, y - y0) >= _ESCAPE_BLOCK_M:
-            self._escape_block = None
-            return speeds
-        left, right = float(speeds[0]), float(speeds[1])
-        v = 0.5 * (left + right) * WHEEL_RADIUS_M
-        if v <= 0.02 or abs(wrap_rad(yaw - yaw0)) > _ESCAPE_BLOCK_YAW:
-            return speeds
+        if self._escape_block is not None:
+            until, x0, y0, yaw0 = self._escape_block
+            left = math.hypot(x - x0, y - y0) >= _ESCAPE_BLOCK_M
+            if self.t_s >= until or left:
+                self._escape_block = None
+                if left:
+                    self._clear_block_failure()
+                elif not self._block_reverse_dead:
+                    return False
+            elif abs(wrap_rad(yaw - yaw0)) > _ESCAPE_BLOCK_YAW:
+                self._clear_block_failure()
+                return False
+            else:
+                return True
+        if not self._block_reverse_dead or self._block_dead_pose is None:
+            return False
+        x0, y0, yaw0 = self._block_dead_pose
+        if (
+            math.hypot(x - x0, y - y0) >= _ESCAPE_BLOCK_M
+            or abs(wrap_rad(yaw - yaw0)) > _ESCAPE_BLOCK_YAW
+        ):
+            self._clear_block_failure()
+            return False
+        return True
+
+    def _block_reverse_stalled(self) -> bool:
+        """The reverse on this heading has not shifted the planner pose.
+
+        ``STILL_M`` and ``STALL_WINDOW_S`` are the clocks already used for a
+        command the body did not follow. Encoder rotation is not one of them.
+        """
+        if self._block_reverse_dead:
+            return True
+        # A frozen picture already has the hinge cap. Pose is held while
+        # that reverse runs, so stillness there is not this clock. A
+        # picture that is changing, with the pose still put, is the sit
+        # the hinge cap never saw.
+        if self._stuck_yield:
+            self._mark_block_reverse_dead()
+            return True
+        if self._view_frozen():
+            self._block_rev_from = None
+            return False
+        x, y, _yaw = self.plan_pose()
+        if self._block_rev_from is None:
+            self._block_rev_from = (self.t_s, x, y)
+            return False
+        t0, x0, y0 = self._block_rev_from
+        if math.hypot(x - x0, y - y0) >= STILL_M:
+            self._block_rev_from = (self.t_s, x, y)
+            return False
+        if self.t_s - t0 < STALL_WINDOW_S:
+            return False
+        self._mark_block_reverse_dead()
+        return True
+
+    def _mark_block_reverse_dead(self) -> None:
+        if self._block_reverse_dead:
+            return
+        self._block_reverse_dead = True
+        if self._escape_block is not None:
+            _until, x0b, y0b, yaw0 = self._escape_block
+            self._block_dead_pose = (float(x0b), float(y0b), float(yaw0))
+        else:
+            x, y, yaw = self.plan_pose()
+            self._block_dead_pose = (float(x), float(y), float(yaw))
+        self._log("blocked reverse did not move the shell")
+
+    def _substitute_blocked_reverse(self) -> tuple[float, float]:
         if self.t_s >= self._block_log_at:
             self._block_log_at = self.t_s + 2.0
             self._log("blocked heading, not driving back in")
@@ -1170,6 +1247,78 @@ class Explorer:
         self._body_v, self._body_w = -0.10, 0.0
         self._note_approach("back", -0.10, 0.0)
         return wheel_speeds(-0.10, 0.0)
+
+    def _block_turn_away(self) -> tuple[float, float] | None:
+        """Yaw off the blocked heading. Two quiet directions, then stop.
+
+        The heading release is the existing ``_ESCAPE_BLOCK_YAW``. A
+        direction that does not change yaw by the body-stuck spin amount
+        inside ``STALL_WINDOW_S`` is not repeated, and neither is a spin
+        after both directions have been quiet.
+        """
+        if self._block_turns_tried >= 2 and self._block_turn_sign == 0.0:
+            return None
+        yaw = self.plan_yaw_unwrapped()
+        if self._block_turn_from is None:
+            self._block_turn_from = (self.t_s, yaw)
+            if self._block_turn_sign == 0.0:
+                view = self._bubble_view
+                left = 0.0 if view is None or view.left is None else float(view.left)
+                right = 0.0 if view is None or view.right is None else float(view.right)
+                self._block_turn_sign = 0.30 if left >= right else -0.30
+            self._block_turns_tried += 1
+        else:
+            t0, yaw0 = self._block_turn_from
+            if abs(wrap_rad(yaw - yaw0)) >= 0.12:
+                self._block_turn_from = (self.t_s, yaw)
+            elif self.t_s - t0 >= STALL_WINDOW_S:
+                if self._block_turns_tried >= 2:
+                    self._block_turn_sign = 0.0
+                    if not self._block_turn_logged:
+                        self._block_turn_logged = True
+                        self._log("blocked turn did not yaw")
+                    return None
+                self._block_turn_sign = -self._block_turn_sign
+                self._block_turn_from = (self.t_s, yaw)
+                self._block_turns_tried += 1
+                self._log("blocked turn did not yaw, other way")
+        turn = self._block_turn_sign if self._block_turn_sign != 0.0 else 0.30
+        self._body_v, self._body_w = 0.0, turn
+        self._note_approach("pivot", 0.0, turn)
+        return wheel_speeds(0.0, turn)
+
+    def _respect_escape_block(self, speeds: tuple[float, float]) -> tuple[float, float]:
+        """Refuse a forward command along the stuck heading.
+
+        The first substitute is the existing reverse. Once that reverse
+        has not moved the planner pose, it is not sent again. A turn off
+        the heading is the other legal leave. Forward along the heading
+        stays refused until the shell leaves or the turn has been quiet
+        both ways.
+        """
+        if not self._on_blocked_heading():
+            return speeds
+        left, right = float(speeds[0]), float(speeds[1])
+        v = 0.5 * (left + right) * WHEEL_RADIUS_M
+        w = (right - left) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+        straight_back = v < -0.05 and abs(w) < 0.2
+        forward = v > 0.02
+        if not straight_back and not forward:
+            return speeds
+        if not self._block_reverse_stalled():
+            if straight_back:
+                return speeds
+            return self._substitute_blocked_reverse()
+        turn = self._block_turn_away()
+        if turn is not None:
+            return turn
+        # Both turns were quiet. A straight reverse is the move that
+        # already failed, so it is not sent again. A forward the caller
+        # chose is no longer rewritten.
+        if straight_back:
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
+        return speeds
 
     def _begin_pile_leave(self, pose) -> None:
         """The same spot again. Reverse along the trail and drop that goal."""
@@ -1988,6 +2137,10 @@ class Explorer:
         """Reverse along the trail. Do not spin in place: that was the wedge."""
         self._note_stuck_slip()
         if self._stuck_yield:
+            return None
+        # The blocked-heading reverse already failed to move the pose.
+        # Starting it again is how the sit lasted for minutes.
+        if self._block_reverse_dead:
             return None
         why = self._stuck_reason()
         if why is None:

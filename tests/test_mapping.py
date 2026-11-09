@@ -2919,6 +2919,85 @@ def test_a_blocked_heading_does_not_drive_straight_back_in():
     assert left > 0.5 and right > 0.5
 
 
+def test_a_blocked_reverse_that_does_not_move_the_shell_is_not_repeated():
+    """Pose still for the stall window. Wheel spin is not progress."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._wheels = (0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    bot._wheels = (-20.0, -20.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left * right < 0
+    assert abs(left + right) < 0.2
+    assert not bot._block_reverse_dead or bot._block_turns_tried >= 1
+
+
+def test_a_blocked_reverse_that_moves_the_shell_keeps_backing():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, STILL_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    bot.odometry.x_m = STILL_M + 0.01
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    assert not bot._block_reverse_dead
+    left, right = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_failed_block_backs_up_again_after_the_shell_leaves():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    turned = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert turned[0] * turned[1] < 0
+    assert bot._block_reverse_dead
+    bot.odometry.x_m = 0.80
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+    assert not bot._block_reverse_dead
+    bot.t_s = 20.0
+    bot._escape_block = (40.0, 0.80, 0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_quiet_blocked_turn_does_not_spin_forever():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    first = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert first[0] * first[1] < 0
+    bot.t_s = 14.3
+    second = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert second[0] * second[1] < 0
+    assert (second[0] > 0) != (first[0] > 0)
+    bot.t_s = 16.5
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
 def test_a_changing_depth_picture_is_not_camera_stuck():
     from src.mapping.explore import Explorer
 

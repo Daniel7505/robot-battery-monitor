@@ -455,3 +455,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A tighter peak ratio. A shorter stall window. An `oak_imu` tilt gate. A new escape because the decision log says `cant_see_behind_backing_out` often. That label is every logged reverse, and those reverses move the shell.
 
 **Outcome.** The honesty gap in the early climb is closed. The residual pitch during the turn is the existing 2 s. The next sensor those patents use is not on this robot as a controller input.
+
+## 2026-11-09 — The apartment job is the visited floor, and this tip does not finish it
+
+**Mission parameter.** Say what an apartment job already means here, and whether tip `0351bf4` finishes it. Do not add a score. Do not chase the leftover pitch.
+
+**Change.** None.
+
+**Why.** Done, in the mapper, is no reachable frontier after a final scan and a map that stays still for 4 s while the shell is stopped. The number beside that is visited %, free floor the shell drove over, per `APT_FLOOR_*` solid. Seen % is not the job.
+
+**Evidence.** The ten 600 s runs of this controller. Every one ends at the cap, still in `go`, with no done line. Pantry and storage are 0 on all ten. Closet is 0 except one run at 1%. Bath is 0 on eight. The best visited draw is north run 5 at 23%, and its pose path matches its wheel path. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new completion percent. A recovery change inferred from how often a reverse is logged. Another five aimed at `up_z` 0.395.
+
+**Outcome.** The job is blocked by time, with most rooms unvisited. The logs do not name one command change that would finish it.

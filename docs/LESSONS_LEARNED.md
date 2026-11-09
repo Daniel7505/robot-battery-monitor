@@ -644,3 +644,30 @@ iRobot's stasis patent (US 9,317,038) treats drive wheels that spin while an ind
 Dead ends: another fraction on the same peak. The 30% stall line still accepts this climb. Shortening the 2 s clock. A new recovery rule from the backup counts. Those backups move the shell.
 
 Outcome: the early `moving` window is not planner travel, and with the heading armed the reverse stops and the shell comes back upright. The pitch to `up_z` 0.395 during the turn is the 2 s the existing clock allows. No further command change.
+
+## The apartment job is not finished at this tip
+
+What the job already is. The mapper declares itself done only when no reachable frontier remains after a final scan and the occupied-cell count stays within 8 cells for 4 s while the shell is stopped (`done: no reachable frontier after a final scan, map stable while stopped`). The apartment reward beside that is visited %, the free floor the shell actually drove over, overall and per floor solid. Seen % is the map label and is not that reward. The floor solids are living, kitchen, hall, bath, bedroom, closet, laundry, pantry, storage, and the bridge plates. There is no second score and no visited-percent knob.
+
+Evidence, the ten 600 s runs already scored for the short-shift change, which is this controller (`fec4ff8`, notes through `0351bf4`). Flags off. North depth seed 64, −0.35 depth seed 63. Every run wrote `mapping_done` at 600 s. None logged the done line. The last phase is still `go`. End reason, where the log flushed it, is `time_cap`.
+
+Visited floor, and the rooms that matter, in percent:
+
+| run | all | living | kitchen | hall | bath | bedroom | laundry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 10.15 | 15 | 25 | 0 | 0 | 3 | 0 |
+| n2 | 5.24 | 11 | 0 | 0 | 0 | 2 | 0 |
+| n3 | 14.34 | 6 | 0 | 0 | 0 | 60 | 0 |
+| n4 | 12.87 | 22 | 8 | 70 | 0 | 0 | 0 |
+| n5 | 23.44 | 47 | 17 | 0 | 0 | 7 | 0 |
+| m1 | 16.17 | 18 | 17 | 74 | 0 | 18 | 0 |
+| m2 | 9.54 | 7 | 0 | 0 | 0 | 33 | 0 |
+| m3 | 17.92 | 12 | 0 | 32 | 34 | 32 | 25 |
+| m4 | 14.78 | 34 | 2 | 0 | 0 | 0 | 0 |
+| m5 | 13.42 | 7 | 0 | 0 | 16 | 44 | 0 |
+
+Pantry and storage are 0 on all ten. Closet is 0 except m3 at 1. Bath is 0 on eight of the ten. The shell does enter a second room on some seeds (bedroom 60 on n3, hall 74 on m1) and still has not finished the apartment. North run 5, the highest visited draw at 23%, is a turn on 44% of samples and a straight reverse on 18%, and the pose path matches the wheel path. That time is real motion, not a climb the pose accepted.
+
+Dead ends: another coverage batch aimed at the 0.395 pitch. A new visited threshold. A recovery rewrite chosen because `cant_see_behind_backing_out` is a common log line. That line is every logged reverse, and those reverses move the shell.
+
+Outcome: at this tip the job is blocked by the 600 s cap while the mapper is still going and most rooms are unvisited. That is not an honesty bug and not a single command change the logs pick out. No controller edit.

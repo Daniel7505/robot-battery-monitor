@@ -1462,7 +1462,7 @@ def test_a_moving_floor_is_not_a_zero_velocity_update():
     wheel = 0.22 / WHEEL_RADIUS_M
     dt = 0.05
     for i in range(30):
-        shifted = np.roll(floor, i * 3, axis=1)
+        shifted = np.roll(floor, i * 8, axis=1)
         cmd_l, cmd_r = bot.step(
             dt_s=dt,
             left_wheel_rad=left,
@@ -1480,6 +1480,45 @@ def test_a_moving_floor_is_not_a_zero_velocity_update():
             left += cmd_l * dt
             right += cmd_r * dt
     assert bot.zupt_events == 0
+    assert math.hypot(*bot.pose()[:2]) > 0.08
+
+
+def test_a_short_floor_shift_does_not_confirm_the_wheel_step(capsys):
+    """A couple of pixels is not the centimetre the hubs just claimed.
+
+    That is the start of the island climb: the picture is not flat, and
+    it is not still, and it did not move with the wheels.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.05
+    step = 0.15
+    for i in range(16):
+        left += step
+        right += step
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth + 0.02 * (i % 4),
+            floor=np.roll(floor, i * 2, axis=1),
+        )
+    assert math.hypot(*bot.pose()[:2]) < 0.03
+    assert "floor shift short of the wheels" in capsys.readouterr().out
 
 
 def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):

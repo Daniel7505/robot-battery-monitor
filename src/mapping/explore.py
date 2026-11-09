@@ -1542,7 +1542,13 @@ class Explorer:
         """
         if self._pitch_rest is None and self.odometry.still_s > 1.0 and abs(float(pitch)) < 0.15:
             self._pitch_rest = float(pitch)
+        prev_wheels = self._zupt_wheels
         travel = self._zupt_travel(left_rad, right_rad)
+        trans = 0.0
+        if prev_wheels is not None:
+            dl = float(left_rad) - prev_wheels[0]
+            dr = float(right_rad) - prev_wheels[1]
+            trans = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         if floor is None:
             return
         if self._zupt_anchor is None:
@@ -1556,15 +1562,17 @@ class Explorer:
             return
         anchor = self._zupt_anchor
         age = self.t_s - float(anchor["t"])
-        status = self._floor_track.push(floor, self._step_dt, travel)
+        status = self._floor_track.push(floor, self._step_dt, travel, trans)
         # A real slide restarts the anchor. A flat frame does not: the
         # wheels can be turning while the downward camera has nothing to
-        # track, which is the island face. Holding the pose there is the
-        # same idea as a stasis wheel. An ambiguous correlation is not
-        # that face, so it still restarts.
+        # track, which is the island face. A peak that only just clears
+        # "moving" while the hubs claim a full step is the same refusal:
+        # the picture did not confirm the travel. An ambiguous correlation
+        # is not that face, so it still restarts.
         gray = np.asarray(floor, dtype=np.float64) if floor is not None else None
         flat = gray is not None and gray.size > 0 and float(gray.std()) < 2.0
-        if status == "blank" and flat:
+        weak = status == "moving" and not self._floor_track.confirms_translation()
+        if (status == "blank" and flat) or weak:
             dl_b = float(left_rad) - float(anchor["left"])
             dr_b = float(right_rad) - float(anchor["right"])
             claimed_b = abs(0.5 * (dl_b + dr_b)) * self.odometry.radius_m
@@ -1572,11 +1580,20 @@ class Explorer:
                 self.odometry.x_m = float(anchor["x"])
                 self.odometry.y_m = float(anchor["y"])
                 self._zupt_trans_until = self.t_s + 0.12
-                if not anchor.get("blank_held"):
+                if weak and not anchor.get("shift_held"):
+                    anchor["shift_held"] = True
+                    self._log(
+                        f"floor shift short of the wheels, translation held "
+                        f"mag={self._floor_track.last_mag:.1f}px "
+                        f"trans={self._floor_track.last_trans:.3f}"
+                    )
+                elif not weak and not anchor.get("blank_held"):
                     anchor["blank_held"] = True
                     self._log(
                         f"floor blank, wheel translation held std={float(gray.std()):.1f}"
                     )
+            if weak:
+                self._floor_track.reset()
             return
         if status in ("moving", "blank"):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)

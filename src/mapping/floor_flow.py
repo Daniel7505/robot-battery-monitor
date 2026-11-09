@@ -154,12 +154,15 @@ class ShortFloorTrack:
         self._base: np.ndarray | None = None
         self._wheel = 0.0
         self._age = 0.0
+        self._trans = 0.0
         self.sum_row = 0.0
         self.sum_col = 0.0
         self.sum_wheel_m = 0.0
         self.still_samples = 0
         self.motion_samples = 0
         self.blank_s = 0.0
+        self.last_mag = 0.0
+        self.last_trans = 0.0
 
     @property
     def moved_px(self) -> float:
@@ -171,10 +174,26 @@ class ShortFloorTrack:
             self.motion_samples == 0
             and self.still_samples >= 1
             and self.sum_wheel_m >= 0.02
-            and self.moved_px <= _STILL_PX
+            and             self.moved_px <= _STILL_PX
         )
 
-    def push(self, image, dt: float, wheel_m: float) -> str:
+    def confirms_translation(self) -> bool:
+        """The short-step peak is within a still-pixel of the wheel claim.
+
+        ``moving`` only means the peak cleared 2 px. On open floor that
+        peak is about the whole wheel step. A climb that just clears 2 px
+        while the hubs claim a centimetre is not that agreement. The
+        allowed miss is the same 2 px that already means "still".
+        """
+        mpp = metres_per_px()
+        if mpp <= 1e-9:
+            return True
+        expect = self.last_trans / mpp
+        if expect <= _STILL_PX:
+            return True
+        return self.last_mag + _STILL_PX >= expect
+
+    def push(self, image, dt: float, wheel_m: float, trans_m: float | None = None) -> str:
         """Fold one frame in. Returns pending, blank, moving, or still.
 
         ``dt <= 0`` closes on this call once the hubs have claimed any
@@ -190,17 +209,20 @@ class ShortFloorTrack:
             self._base = None
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "blank"
         self.blank_s = 0.0
         if self._base is None:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "pending"
         step_wheel = abs(float(wheel_m))
         step_dt = max(0.0, float(dt))
         self._wheel += step_wheel
         self._age += step_dt
+        self._trans += abs(float(wheel_m if trans_m is None else trans_m))
         # A caller that does not pass time is handing over one finished sample.
         close = self._wheel >= _STEP_WHEEL_M or self._age >= _STEP_MAX_S
         if step_dt <= 0.0 and step_wheel > 0.0:
@@ -215,6 +237,7 @@ class ShortFloorTrack:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "blank"
         row, col, quality = shift
         mag = math.hypot(float(row), float(col))
@@ -223,14 +246,18 @@ class ShortFloorTrack:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "blank"
         if mag > _STILL_PX:
             self.sum_row += float(row)
             self.sum_col += float(col)
             self.motion_samples += 1
+            self.last_mag = mag
+            self.last_trans = self._trans
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "moving"
         # Closed because the clock ran out, not because the hubs claimed
         # enough ground for a real slide. A few millimetres is under two
@@ -239,17 +266,20 @@ class ShortFloorTrack:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "pending"
         if quality < _STILL_QUALITY:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
+            self._trans = 0.0
             return "blank"
         self.still_samples += 1
         self.sum_wheel_m += closed_wheel
         self._base = np.array(gray, copy=True)
         self._wheel = 0.0
         self._age = 0.0
+        self._trans = 0.0
         return "still"
 
 

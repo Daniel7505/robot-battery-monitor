@@ -427,3 +427,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A shorter than 2 s clock. Dropping the frozen-picture exemption; this reverse was cut before that picture froze. Folding a pile-leave that has cleared the block into the same clock. Retiming the stall escape's 0.8 s check, which counts wheel travel the pose did not take and was not the island command.
 
 **Outcome.** A held pose during a blocked-heading reverse stops that reverse. The command path is unchanged, so there is no new matched five.
+
+## 2026-11-09 — A short floor shift is not the wheel step
+
+**Mission parameter.** Find whether the early island climb, while the floor tracker still says `moving`, is accepted as planner travel. Change the controller only if that window is trusted, and only with an existing signal.
+
+**Change.** Commit `fec4ff8`. A `moving` step keeps the wheel translation when the peak is within the existing 2 px still gate of the metres that step claimed, at the camera's own metres per pixel. A shorter peak rewinds x,y to the anchor, the same hold a flat blank uses.
+
+**Why.** `moving` meant the peak cleared 2 px, and that bit kept the whole wheel step. On open floor the peak is 8–11 px for a centimetre of wheels. On the island face it is 2–4 px for the same claim, and from sim t=5.5 s to t=6.5 s the pose moved with the wheels (0.085 m vs 0.088 m) while `up_z` fell from 0.730 to 0.469.
+
+**Evidence.** After the check the same forced reverse holds the planner pose at 0 through that window. The open-floor reverse still matches the wheels and does not log a short shift. Matched means against `222da06`: north 13.21 (sd 6.69) vs 10.71 (sd 4.74); −0.35 14.37 (sd 3.17) vs 16.73 (sd 5.31). All twenty ran 600 s. No `up_z` below 0.5. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Raising the bar with the existing 30% stall ratio. Those climb steps are at 0.27–0.36, so the line that already means "not motion" still lets the pose walk. A new fraction. The pitch gate. `oak_imu`. Another change to the 2 s reverse clock.
+
+**Outcome.** A peak that misses the wheel step by more than 2 px is not travel. A peak that matches the wheels still is. The early climb no longer counts as planner progress.

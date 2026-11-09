@@ -605,3 +605,30 @@ The same pairing on the pre-climb pose (4.652, 2.339, yaw −2.948), depth seed 
 Dead ends: a shorter stall window. The forward picture did not freeze before the stop, so the frozen-picture exemption was not what kept this reverse going. That exemption stays: a frozen picture already belongs to the 1 m hinge cap, and deleting it would cut a backup whose pose is held on purpose. A pile-leave that has cleared the block is a different reverse. The island command was a forward rewritten while the block was still on, which is the path that stops. A stall reverse with no block counts wheel travel the pose rejected, so its own 0.8 s check does not see the hold. That clock was not this reverse, and it was not retimed.
 
 Outcome: once the pose is held and the blocked heading is armed, the existing 0.04 m / 2 s rule cuts the reverse. The shell on this probe pitched and settled back upright. No matched five, because the command path is unchanged.
+
+## A short floor shift is not the wheel step
+
+Symptom: the floor tracker can say `moving` at the start of an island climb, while `up_z` is already falling, and that bit was treated as agreement with the whole wheel step.
+
+What the camera reported, same forced reverse, pre-climb pose (4.652, 2.339, yaw −2.948), depth seed 64. The backup ignored the rear gap for the probe only. On open floor the same reverse is a different picture: std about 7, the peak 8–11 px on a 0.010–0.013 m wheel step, and planner, wheels, and ground truth all move together (0.73 m) with `up_z` at 1.000.
+
+Against the island the peak is 2–5 px on a step of about 0.010–0.013 m, which at this camera is about 8–11 px of floor. From sim t=5.5 s to t=6.5 s, `up_z` goes 0.730 → 0.469, the hubs rise, the peak stays 2.2–3.0 px, and the planner pose moves 0.085 m while the wheels move 0.088 m. That window was trusted. The blank hold starts at sim t=6.5 s, after the pose has already taken the climb. The shell then inverts, because this probe is not the blocked-heading reverse.
+
+How it was changed. Commit `fec4ff8`. A `moving` step confirms the wheel translation only when the peak is within the existing 2 px still gate of the distance that step should have moved. The scale is the camera's own metres per pixel. A shorter peak puts x,y back on the anchor, the same rewind a flat blank already uses. The log is `floor shift short of the wheels`. No new threshold. The 2 s reverse clock was not touched.
+
+After that check, the same forced reverse keeps the planner pose at 0 while the wheels turn through the climb (`up_z` still falls, because the script keeps reversing). The open-floor reverse still matches the wheels, and it does not log a short shift. Tests: a floor rolled about as far as the wheel step keeps the travel; a 2 px roll on a centimetre of wheels does not. Mapping, floor, twin, skid, and the warehouse proto test passed, 197. Postgres was down, so database tests were skipped.
+
+Matched five runs per seed against `222da06`, flags off, 600 s. North depth seed 64, −0.35 depth seed 63. All twenty reached 600 s. No `up_z` below 0.5. No run climbed. Sample sd divides by n−1.
+
+| code | seed | visited % | mean | sd |
+| --- | --- | --- | ---: | ---: |
+| short shift | north | 10.15, 5.24, 14.34, 12.87, 23.44 | 13.21 | 6.69 |
+| `222da06` | north | 12.39, 11.29, 17.28, 4.76, 7.85 | 10.71 | 4.74 |
+| short shift | −0.35 | 16.17, 9.54, 17.92, 14.78, 13.42 | 14.37 | 3.17 |
+| `222da06` | −0.35 | 22.22, 18.99, 16.52, 17.92, 8.00 | 16.73 | 5.31 |
+
+North is 2.5 points over a baseline sd of 4.7. −0.35 is 2.4 points under a baseline sd of 5.3. Neither gap is a coverage result. Short-shift holds on the new runs were 0–17 per 600 s. The straight open-floor reverse logged none.
+
+Dead ends: the 30% stall ratio on this peak. The climb's ratios sit at 0.27–0.36, so that line still accepts the steps that moved the pose. A new fraction. The pitch gate. An `oak_imu` input. Calling the north mean a win.
+
+Outcome: a floor shift that misses the wheel step by more than 2 px is not travel. A shift that matches the wheels still is. The forced climb's early `moving` window no longer moves the planner pose.

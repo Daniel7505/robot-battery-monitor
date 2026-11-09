@@ -1,6 +1,7 @@
 """Dan's t_end report (2026-10-02): a T-end must never be driven straight through,
 and a run must not silently use a track / world left over from an earlier run."""
 import importlib.util
+import pytest
 import os
 import subprocess
 import sys
@@ -40,6 +41,7 @@ def test_t_end_route_s_falls_back_to_left_never_straight():
     assert _decide("plus", True, ["S"]).state == "GAP_CROSS"  # a real crossing still goes straight
 
 
+@pytest.mark.slow
 def test_t_end_closed_loop_with_route_s_turns_left():
     r = sim.run("t_end", route="S", max_s=45.0)
     assert r["ok"] and r["exit"] == "north", (r["exit"], r["junctions"])

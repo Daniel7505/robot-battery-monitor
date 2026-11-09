@@ -130,6 +130,7 @@ def test_lane_lost_three_frames_brakes_then_recovers():
     assert not ctl.step(est(), new_frame=True)["brake"]
 
 
+@pytest.mark.slow
 def test_closed_loop_ninety_degree_turn():
     spec = importlib.util.spec_from_file_location("rowfit_sim", ROOT / "scripts" / "rowfit_sim.py")
     sim = importlib.util.module_from_spec(spec)
@@ -567,6 +568,7 @@ def test_short_view_holds_do_not_brake_at_once():
     assert seen[GATE_MAX_SHORT_HOLDS][1] and seen[-1][2] >= 3
 
 
+@pytest.mark.slow
 def test_finish_bar_no_turn_closed_loop():
     sim = _sim()
     import src.lane_vision as lv
@@ -594,6 +596,7 @@ def test_finish_bar_no_turn_closed_loop():
     assert gated["pivots"] == []  # red bar scored as yellow: a bar across the lane, still no corner
 
 
+@pytest.mark.slow
 def test_s_track_does_not_regress_with_gate():
     res = _sim().run("s")
     assert res["finished"] and res["max_ct_m"] < 0.085 and res["held_frames"] == 0

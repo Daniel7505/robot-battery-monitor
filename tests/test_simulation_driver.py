@@ -1,4 +1,5 @@
 import time
+import pytest
 
 from src.simulation_driver import SimulationDriver, BUTLERBOT_SCRIPT
 from src.mission_tasks import MissionTaskManager, TICK_SECONDS
@@ -69,6 +70,7 @@ def test_driver_advances_through_phases():
     assert "balanced" in seen
 
 
+@pytest.mark.slow
 def test_ros2_butlerbot_simulation_integrated():
     reset_hardware_source()
     source = ROS2BatterySource()

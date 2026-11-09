@@ -144,6 +144,7 @@ def test_box_in_the_lane(backend):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.slow
 def test_waist_high_table_edge_intruding(backend):
     """Table 0.9 m high whose edge is 0.30 m into the lane (legs + top): waist band."""
     tb = table(1.6 + 1.2, 0.30 + 0.45, 2.4, 0.9)  # near edge x = 1.6 m, inner edge y = 0.30
@@ -155,6 +156,7 @@ def test_waist_high_table_edge_intruding(backend):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.slow
 def test_rack_in_the_lane_is_tall(backend):
     """A 6 m rack: 'tall' from 3.5 m (top ray reaches ~1.5 m there); at 2.5 m the
     top ray only reaches ~1.3 m, so the top is clipped and the gate keeps the tall band."""
@@ -171,6 +173,7 @@ def test_rack_in_the_lane_is_tall(backend):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.slow
 def test_shelf_corner_just_outside_the_corridor_is_ignored(backend):
     """Corner 0.75 m left of the centre (lane edge 0.65 + 0.10), corridor +-0.55: pass by, no detection."""
     shelf = SceneBox.at(1.5 + 0.6, 0.75 + 0.3, 1.2, 0.6, 1.8)
@@ -381,6 +384,7 @@ def test_corner_approach_keeps_its_remaining_distance_while_stopped():
 # ---------------------------------------------------------------- closed loop (offline sim)
 
 
+@pytest.mark.slow
 def test_sim_stops_before_a_box_and_resumes_when_it_is_removed():
     import sys
 
@@ -403,6 +407,7 @@ def test_sim_stops_before_a_box_and_resumes_when_it_is_removed():
     assert r["max_ct_m"] < 0.12  # lane keep unharmed by the stop
 
 
+@pytest.mark.slow
 def test_sim_without_obstacles_is_unchanged():
     import sys
 

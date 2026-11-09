@@ -222,14 +222,14 @@ Windows (PowerShell):
 ```
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt pytest
+pip install -r requirements.txt pytest pytest-xdist
 ```
 
 Mac / Linux:
 ```
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt pytest
+pip install -r requirements.txt pytest pytest-xdist
 ```
 
 Your prompt now starts with `(.venv)`. Run the activate line again whenever you open a new terminal.
@@ -263,16 +263,26 @@ Any file in `tracks/` (for example `corner_mix`, `plus`, `t_end`, `widen`) can b
 
 **Step 4. Run the automated tests**
 
+While changing code, the quick set:
+
 ```
-python -m pytest
+python -m pytest -m "not slow" -n auto
 ```
+
+That leaves out the tests marked `slow` (the closed-loop laps). Before a pull request, the full set, which is also what GitHub Actions runs:
+
+```
+python -m pytest -n auto
+```
+
+`-n auto` needs `pytest-xdist` and uses one worker per core. `pytest.ini` sets `--dist loadgroup`, so the database tests, which share one Postgres database and truncate it, stay on a single worker.
 
 That works with or without a database:
 
 - **No Postgres running:** the 27 tests marked `db` are **skipped**, and everything else runs. One more test skips when the `docker` command is not on PATH. ✅ **It worked if** the last line shows `passed` and `skipped`, with no `failed` or `error`.
-- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 880 tests.
+- **With Postgres:** those 27 run. The only skip is `test_docker_compose_config_valid` when the docker CLI is absent. ✅ **It worked if** the last line shows `passed` (and `skipped` only for that docker check), with no `failed` or `error`. pytest collects 903 tests.
 
-The full run takes about 5 minutes. To run just one file: `python -m pytest tests/test_lane_keep.py`.
+To run just one file: `python -m pytest tests/test_lane_keep.py`.
 
 **Optional: run the database tests too**
 
@@ -294,7 +304,7 @@ The full run takes about 5 minutes. To run just one file: `python -m pytest test
    export PGPASSWORD=robot
    python scripts/setup_postgres.py
    ```
-3. Run `python -m pytest` again.
+3. Run `python -m pytest -n auto` again.
 
 The tests empty the tables of `robot_battery_test` only. Your dashboard history in `robot_battery` is not touched.
 
@@ -392,7 +402,7 @@ Same as C, with these differences:
 
 **Before you change anything** read [`docs/REVIEW_CHECKLIST.md`](docs/REVIEW_CHECKLIST.md). It lists the parts that must not be rewritten casually (stop/ABS and power core) and how credits are recorded.
 
-1. **Set up** as in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) (venv, `pip install -r requirements.txt pytest`, Postgres up).
+1. **Set up** as in [B](#b-run-the-lightweight-simulator-and-tests-no-webots) (venv, `pip install -r requirements.txt pytest pytest-xdist`, Postgres up).
 2. **Branch** from `main` with a descriptive name, following the existing pattern:
    ```
    git checkout main && git pull
@@ -403,7 +413,7 @@ Same as C, with these differences:
    python scripts/rowfit_sim.py corner90 corner_mix --table --quiet
    ```
    then in Webots on the matching world.
-4. **Run the tests** before pushing: `python -m pytest` (or one file: `python -m pytest tests/test_lane_keep.py`). New tests that need Postgres should use the `clean_database` fixture or `@pytest.mark.db` so they skip cleanly on machines without a database.
+4. **Run the tests.** While iterating, the quick set: `python -m pytest -m "not slow" -n auto`. Before pushing a pull request, the full set: `python -m pytest -n auto` (or one file: `python -m pytest tests/test_lane_keep.py`). New tests that need Postgres should use the `clean_database` fixture or `@pytest.mark.db` so they skip cleanly on machines without a database. A new closed-loop lap that takes more than about a second should be marked `slow`.
 5. **Open a pull request into `main`.** GitHub Actions ([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) runs the full test suite on Python 3.12 against a Postgres 16 service for every push and pull request to `main`. In CI a missing database is an error, never a skip (`RBM_REQUIRE_DB=1`). Merge only when it is green.
 6. **Restore points:** before and after a feature, the project tags `main` as `save-YYYY-MM-DD-<name>` (for example `save-2026-10-05-pre-cruise-v1` and `save-2026-10-05-cruise-v1`). To look at an old state: `git checkout save-2026-10-05-cruise-v1`. To list them: `git tag -l "save-*"`.
 7. **Webots worlds are generated.** Track worlds come from `tracks/*.json` via `scripts/track_builder.py`, the S from `scripts/s_track.py --write-world`, and the warehouse from `scripts/warehouse_builder.py` (see [`docs/TRACKS.md`](docs/TRACKS.md), [`docs/WAREHOUSE.md`](docs/WAREHOUSE.md)). Regenerate instead of hand-editing, and never save a world from the Webots exit prompt.
@@ -573,7 +583,7 @@ Installed by `pip install -r requirements.txt` and the [`Dockerfile`](Dockerfile
 
 | Package | Where | Link | License | Notes |
 |---------|-------|------|---------|--------|
-| [pytest](https://pypi.org/project/pytest/) | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) (`pip install pytest`) | https://docs.pytest.org/ | MIT | Not in `requirements.txt`; used only in CI/local test runs. |
+| [pytest](https://pypi.org/project/pytest/) | [`.github/workflows/tests.yml`](.github/workflows/tests.yml) (`pip install pytest pytest-xdist`) | https://docs.pytest.org/ | MIT | Not in `requirements.txt`; used only in CI/local test runs. [pytest-xdist](https://pypi.org/project/pytest-xdist/) runs that suite with `-n auto`. |
 
 ### Python — optional on the host (Webots / scripts)
 

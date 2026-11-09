@@ -1,4 +1,5 @@
 import time
+import pytest
 
 from src.twin import DigitalTwinBridge, get_twin_bridge, reset_twin_bridge
 from src.twin.power_feed import POWER_FEED_SCHEMA_VERSION
@@ -66,6 +67,7 @@ def test_pybullet_adapter_maps_joints():
     assert tel.task == "moving"
 
 
+@pytest.mark.slow
 def test_bridge_export_state_from_hardware():
     reset_twin_bridge()
     reset_hardware_source()
@@ -82,6 +84,7 @@ def test_bridge_export_state_from_hardware():
     reset_hardware_source()
 
 
+@pytest.mark.slow
 def test_bridge_sync_external_to_hardware():
     reset_twin_bridge()
     reset_hardware_source()
@@ -98,6 +101,7 @@ def test_bridge_sync_external_to_hardware():
     reset_hardware_source()
 
 
+@pytest.mark.slow
 def test_bridge_apply_mission_command():
     reset_twin_bridge()
     reset_hardware_source()

@@ -1,4 +1,5 @@
 import time
+import pytest
 
 from src.simulation_driver import SimulationDriver as MissionSimulator
 from src.mission_tasks import MissionTaskManager, TICK_SECONDS
@@ -50,6 +51,7 @@ def test_simulator_loops_when_enabled():
     assert sim._loops_completed >= 1
 
 
+@pytest.mark.slow
 def test_ros2_source_simulation_status():
     reset_hardware_source()
     source = ROS2BatterySource()

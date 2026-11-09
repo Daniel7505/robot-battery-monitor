@@ -399,3 +399,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Shipping the gate. Calling the −0.35 rise a win. A new threshold. Editing the IMU noise or the proto.
 
 **Outcome.** Wheel translation is not dropped from pitch alone. The island climb is still trusted wheel travel. A later pitch veto has to be a tip of the body, not one reading against a single rest sample.
+
+## 2026-11-09 — A flat floor frame is not wheel travel
+
+**Mission parameter.** Accept wheel travel into the planner pose only when the floor camera agrees. A frame that cannot confirm motion should block translation, not only a frame that is confidently still. Do not retry the single-rest pitch gate. Do not learn a rest while driving. `oak_imu` stays off the controller if it is ground-truth attitude.
+
+**Change.** Commit `b1827e7`. A floor step that returns `blank` with frame std under 2 rewinds x,y to the last anchor once the hubs have claimed 0.02 m, and holds translation for the same 0.12 s a still floor already uses. A `moving` step accepts the travel and moves the anchor. A blank that still has texture restarts the anchor.
+
+**Why.** On a level reverse the camera confirms motion. On the island face it goes blank while the wheels turn, and the old code restarted the anchor on that blank, so the pose followed the wheels. The std cutoff and the 2 cm claim are the tracker's existing blank and still tests.
+
+**Evidence.** The forced reverse into the face holds the planner pose on the anchor after the image goes flat. The tracker still says `moving` while `up_z` is falling through 0.8, so that part of the climb is still accepted. The probe keeps commanding the reverse and the shell inverts; the pose does not follow the rest. `oak_imu` is an InertialUnit with noise 0.01. Matched five-run means: north 14.25 (sd 2.40) with the hold, 16.65 (sd 9.21) on a fresh `9ebb7cd`; −0.35 13.01 (sd 2.31) and 12.90 (sd 5.78). All twenty ran 600 s. No `up_z` below 0.5. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** The single-rest pitch gate, already reverted. A rest that updates during driving. An `oak_imu` translation veto. Calling a wrapped correlation a stall. Treating the 2.4 point north gap as a regression.
+
+**Outcome.** Flat blanks are not travel. Textured motion is. The scored runs did not climb the island, and the part of a climb the camera still calls `moving` is still trusted.

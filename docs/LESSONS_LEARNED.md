@@ -566,3 +566,30 @@ On new north run 1 the log says `shell pitched 0.11 rad, wheel translation dropp
 Dead ends: keeping the gate because −0.35's mean rose. Lowering 0.12 rad. A new knob. Treating the unit-test pitch of 0.20 as what the device reports on a level floor.
 
 Outcome: `2db10f5` is reverted. The 0.12 rad check is still only the floor-still branch. A pitch veto on every wheel step needs a rest that is not one noisy sample, and this round does not add that.
+
+## A flat floor frame does not confirm wheel travel
+
+Symptom: on `9ebb7cd`, north run 4's reverse into the island moved the planner pose with the wheels, so the 2 s still-pose gate kept the reverse until the shell inverted. The floor image during that climb was blank, and the pitch check waits for a confidently still picture. A pitch gate against one rest sample false-fired on level driving and was reverted.
+
+What the downward camera reports. A level reverse stays textured (std about 6–11) and the closed steps come back `moving`. A forced reverse into the island face goes flat (std about 0.4–0.6) and every step is `blank` while the wheels keep turning. The blank begins while the body is still partway up: earlier in that same reverse the tracker is still saying `moving` at std about 9–11 as `up_z` falls through 0.8 toward 0.6. `oak_imu` is a Webots InertialUnit, roll/pitch/yaw with noise 0.01. That is ground-truth attitude. It was not wired in as a new controller input.
+
+How it was changed. Commit `b1827e7`. When the floor step is `blank` and the frame std is under 2, and the hubs have claimed 0.02 m since the anchor, translation is put back on that anchor. Both numbers already belong to the floor tracker (a flat frame is not a track; a confident still needs 2 cm). A step that comes back `moving` still accepts the travel and moves the anchor. A blank that still has texture, the wrapped correlation, still restarts the anchor. No new threshold.
+
+The forced reverse used the pre-climb pose (4.652, 2.339, yaw −2.948), depth seed 64. The backup was told to ignore the rear gap for that probe, and that edit was removed before the commit. Once the image is flat, the planner pose stays on the anchor, about 0.13 m from the start of the reverse, while the wheels continue. The shell still inverts, because the probe keeps commanding the reverse. The pose does not follow that remainder.
+
+Matched five runs of each seed, flags off, 600 s. North is depth seed 64 at (5.80, 5.60, yaw 2.2). −0.35 is depth seed 63 at (6.10, 4.70, yaw 1.2208). The `9ebb7cd` column is a rerun beside this commit, not the earlier 21.93 / 10.86 sample. All twenty reached 600 s. No run had `up_z` below 0.5. No run climbed the island, so this sample does not say whether a real climb would still count as progress. The closest north approaches were 0.40–0.51 m with the hold and 0.24–0.40 m on `9ebb7cd`, all upright. Sample sd divides by n−1.
+
+| code | seed | visited % | mean | sd | min up_z | holds |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| floor blank | north | 14.62, 15.81, 10.78, 13.10, 16.92 | 14.25 | 2.40 | all 1.000 | 1, 0, 2, 0, 8 |
+| `9ebb7cd` | north | 27.07, 3.44, 20.97, 20.14, 11.62 | 16.65 | 9.21 | 1, 0.999, 1, 1, 1 | — |
+| floor blank | −0.35 | 13.11, 13.39, 15.40, 13.96, 9.19 | 13.01 | 2.31 | all 1.000 | 2, 3, 8, 6, 0 |
+| `9ebb7cd` | −0.35 | 22.51, 9.12, 9.90, 8.85, 14.10 | 12.90 | 5.78 | 1, 0.998, 1, 1, 1 | — |
+
+North's mean is 2.4 points under a baseline whose sd is 9.2. −0.35 differs by 0.1. Neither gap is a coverage result. This is not the pitch gate's drop, where the matched north mean fell from 21.93 to 13.64.
+
+Flat frames do occur on a level floor. North run 5 logs eight holds while `up_z` is 1.000 and both hubs are z=0.080. After one of them the body moves 0.26 m in two seconds and the planner moves 0.16 m. The next textured step accepts travel again. Several of those frames sit near (3.7, 5.2) and (1.1, 4.5). The pose does not stay put for the rest of the drive.
+
+Dead ends: retrying the single-rest pitch gate. A rest pitch that keeps learning while the robot drives, which would absorb a slow climb. Using `oak_imu` as a controller input. Treating an ambiguous, textured blank as a stall. Reading the 2.4 point north gap as a loss.
+
+Outcome: a flat blank is no longer wheel travel. A moving floor still is, and that includes the part of a climb where the picture still has texture. The scored runs did not climb.

@@ -357,3 +357,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Reading `rear_clearer` out of the unit test as the live branch. Reading a `nose_forward` line as the sent command when the wheels are `(-1.25,-1.25)`. Calling a wheel-wall count of 0 a clear tail while the sonar box is on the jamb. Treating the 1.2 s pitch as the sustained fault or as the island. Another clearance parameter. Merging or restacking PR #40.
 
 **Outcome.** The sustained reverse is the escape block, applied after pile-leave has chosen forward. The ride-height doorway sit is the rear sonar box on `APT_WALL_SHARED_C`. The nightstand sit is both rear treads on the furniture at hub z=0.080. Neither is the island prop. No behavior change in this round. The next change, when one is wanted, is to stop the block from repeating a reverse that has not moved the shell.
+
+## 2026-11-09 — Stop a blocked reverse that does not move the shell
+
+**Mission parameter.** Dan authorized the correction named above. Keep the safeguard: do not drive forward along the blocked heading on the first tick, and do not replace the reverse with an endless stop or an endless spin. No new knob. Controller pose only. Ground truth stays off the controller.
+
+**Change.** Commit `9ebb7cd`. While the heading is blocked, a straight reverse is still the first substitute. If the planner pose has not moved `STILL_M` in `STALL_WINDOW_S`, that reverse is not sent again and `_stuck_escape` does not start it either. A turn off the heading follows, then the other sign. A direction that does not change yaw by 0.12 rad in that same window is dropped. After both are quiet, a forward the caller already chose is left alone. The latch clears when the shell leaves the 0.70 m spot or yaws past `_ESCAPE_BLOCK_YAW`. A frozen picture does not use the pose clock. The hinge cap still ends that reverse.
+
+**Why.** The doorway sit rewrote `straight_forward` into `v=-0.10` for minutes while the body stayed at hub z=0.080. The encoders were turning. The planner pose was not. The frozen-picture hinge cap never accumulated because the picture kept changing.
+
+**Evidence.** Same north seed 64 and spawn, flags off, 600 s. Straight reverse fell from 340 s to 81 s. The longest span after the change moved the body 1.81 m. Five runs of each seed are in `docs/LESSONS_LEARNED.md`. North visited 26.28, 3.15, 15.31, 9.06, 11.86 (mean 13.13, sd 8.59). −0.35 visited 22.28, 10.57, 15.87, 7.89, 14.89 (mean 14.30, sd 5.51). −0.35 run 3 stopped at 456 s, `start_component`. North run 4 reversed into the island while the pose was moving and finished inverted. These visited figures are not a matched five against the previous code.
+
+**Rejected.** Removing the rewrite. A new threshold. Counting wheel radians as motion. Applying the 2 s clock to a frozen picture. Another recovery rule for the island climb or for spins that are not this block. Merging PR #40.
+
+**Outcome.** The safeguard still backs up first, then turns. It does not keep backing up once the pose has stayed put. A reverse the pose follows, and a frozen-picture reverse inside the hinge cap, are unchanged.

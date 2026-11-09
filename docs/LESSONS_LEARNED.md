@@ -155,6 +155,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Collision check, 2026-11-08. No controller change. The tire collider meets the floor in ordinary driving. A corner sit can lift the rear axle or scrub both rear tires on a wall. See "The collider is on the floor until a corner lifts it."
 - Island prop and pile-leave log, 2026-11-08. The 14 mm rear lift is the rear sonar box against the island. Pile-leave now logs its branch. See "What held the rear axle up."
 - Escape-block rewrite, 2026-11-08. Three probes, no scoring batch. The sustained reverse is a forward pile-leave branch rewritten to `v=-0.10`. See "The forward branch is rewritten into the failed reverse."
+- Blocked reverse that does not move, 2026-11-09. The rewrite still starts. A reverse whose planner pose stays put is not sent again. See "A blocked reverse that does not move the shell."
 
 ## One stuck check, not one pose
 
@@ -507,3 +508,24 @@ A separate 1.2 s pitch at the same jamb, t=189.4–190.6 s, holds both rear hubs
 Dead ends: `straight_back:rear_clearer` is the unit test, and it is not a line in these three logs. The throttled `nose_forward` line is the pre-rewrite branch, not the wheels that were sent. A missing wheel-wall count is not clearance while the sonar box is under 1 mm from the wall and the body is still. The 1.2 s pitch is not the island lock and not the sustained stall. Not reproducing the island sit does not clear it; these probes never entered that cabinet. No clearance knob, no friction edit, no proto edit. The command that keeps the reverse going is already in the controller.
 
 Outcome: the sustained reverse in the re-logged north run is `_respect_escape_block` replacing a forward pile-leave command. The shell is at ride height with the rear sonar box against the doorway jamb. The nightstand sit on the 1 Hz log is the same rewrite against a different shape, the rear treads on `APT_FURN_NIGHTSTAND`. The smallest next change, not made here, is to stop that block from sending `v=-0.10` once the reverse has already failed to move the shell.
+
+## A blocked reverse that does not move the shell
+
+Symptom: Dan agreed the next change was to stop the blocked-heading safeguard from substituting a reverse again after that reverse had failed to move the robot. Forward along the blocked heading, and an endless stop or spin, were not the replacement.
+
+How it was changed. Commit `9ebb7cd`. The first substitute is still the reverse. Progress is the planner pose, the same `STILL_M` (0.04 m) and `STALL_WINDOW_S` (2 s) a command-the-body-did-not-follow already uses. Wheel angle is not that clock. A frozen picture does not use it either: the hinge cap already owns that reverse, and the pose is held on purpose while it runs. Once the pose has stayed put, the reverse is not sent again, including from `_stuck_escape`. The other legal leave is a turn off the heading, one sign then the other, each dropped when yaw does not change by 0.12 rad inside the same 2 s. After both are quiet the caller's forward is no longer rewritten. A straight reverse from the caller is not sent. Leaving the 0.70 m spot, or yawing past the existing 0.9 rad release, clears the latch so a later block can back up again.
+
+Matched north seed 64, spawn (5.80, 5.60, yaw 2.2), depth seed 64, flags off, 600 s. The run before this change (`/tmp` `leave_repro/north_b`, code `be9bac7`) commanded a straight reverse for 340 s. The longest spans were 18–37 s and the body moved about 0.1 m, hubs at z=0.080, at the doorway. The run after (`block_fix/north`) commanded that reverse for 81 s. Its longest span, 18.1 s from t=545 s, moved the body 1.81 m. Two lines say `blocked reverse did not move the shell`. Maximum hub z=0.081. The shell leaves the doorway corner and later spins near the nightstand. That spin is not the block: the block never logged `blocked turn did not yaw` on this run.
+
+Five runs of each seed, flags off, 600 s cap, depth seeds 64 and 63. No movie. This is not a second five of the old code, so the visited percents are the sample, not a win against 14.7 / 9.0 or the repaired-floor means.
+
+| seed | visited % | mean | sd | longest pile | early stop | straight reverse |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| north | 26.28, 3.15, 15.31, 9.06, 11.86 | 13.13 | 8.59 | 63 s, 543 s, 115 s, 352 s, 140 s | 0 | 71 s, 47 s, 156 s, 102 s, 201 s |
+| −0.35 | 22.28, 10.57, 15.87, 7.89, 14.89 | 14.30 | 5.51 | 196 s, 369 s, 67 s, 169 s, 210 s | run 3 at 456 s | 183 s, 91 s, 68 s, 141 s, 184 s |
+
+Every run exited 0. The early stop is `end_run reason=start_component` after a final scan found no reachable frontier. The longest straight reverse that barely moved the body is north run 2, 20.6 s and 0.04 m, hubs z=0.080. The other long reverses in the ten moved the body by a metre or more, except −0.35 run 1's 14.4 s span (0.13 m) and −0.35 run 5's 12.8 s span (0.03 m). North run 4 drove a reverse into the island from t=306 s, the pose moved with the climb, and the shell finished inverted (`up_z` −0.01, hub z=0.30) through t=600 s. North run 3's hub touched z=0.45 for 0.7 s and came back down.
+
+Dead ends: deleting the block, which would drive the forward along the stuck heading on the first tick. A new distance or a new recovery rule. Treating encoder radians as the progress check. Using the 2 s pose clock while the picture is frozen, which cut off the hinge-cap yield the existing test requires. Reading 13.13 or 14.30 as a coverage gain.
+
+Outcome: the repeated doorway reverse is shorter. A reverse the pose believes is moving, including a climb onto the island, is still sent. A frozen-picture reverse still runs out the hinge cap. Spins that are not this block still sit. No further rule in this round.

@@ -469,3 +469,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A new completion percent. A recovery change inferred from how often a reverse is logged. Another five aimed at `up_z` 0.395.
 
 **Outcome.** The job is blocked by time, with most rooms unvisited. The logs do not name one command change that would finish it.
+
+## 2026-11-09 — Seen rooms are not goals, and the bath frontier loses
+
+**Mission parameter.** Name why pantry, storage, and closet stay at 0% visited, and the bath on eight of ten runs. Use the ten runs already scored. Do not add a goal weight.
+
+**Change.** None.
+
+**Why.** A frontier is free next to unknown. Depth through a door paints the room free and the frontier goes away. The unvisited-stand goal is scored at `min(area, 4) / length * 0.45` so it does not beat a frontier that is still unknown. These runs die at the 600 s cap while other frontiers remain, so that stand never becomes the only choice.
+
+**Evidence.** Pantry: 0 goals inside on all ten. Storage: one goal, and the shell was 1.66 m away. Closet: one goal, shell 0.59 m away, visited 0; m3's 1% is a 0.22 m brush. Storage and closet are often 90% seen. Bath: a frontier remains inside on the runs that stay out, and a goal is selected with the shell there only on m1 (stopped at 0.19 m), m3, and m5 (entered). Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** One tweak aimed at the bath. Raising the 0.45 so a seen room outranks a real frontier. That is a new weight, and the small rooms are not failing at a door the shell was crossing.
+
+**Outcome.** The small rooms are seen and then not selected. The bath frontier is usually not selected before time runs out. No controller change.

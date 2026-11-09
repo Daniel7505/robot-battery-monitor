@@ -671,3 +671,19 @@ Pantry and storage are 0 on all ten. Closet is 0 except m3 at 1. Bath is 0 on ei
 Dead ends: another coverage batch aimed at the 0.395 pitch. A new visited threshold. A recovery rewrite chosen because `cant_see_behind_backing_out` is a common log line. That line is every logged reverse, and those reverses move the shell.
 
 Outcome: at this tip the job is blocked by the 600 s cap while the mapper is still going and most rooms are unvisited. That is not an honesty bug and not a single command change the logs pick out. No controller edit.
+
+## Why pantry, storage, closet, and the bath stay unvisited
+
+The same ten runs. No new batch. A frontier is free space next to unknown space. Depth through a door paints the next room free and removes that frontier. `_unvisited_stand` can still aim about 2 m into undriven free floor, and its score is capped (`min(area, 4) / length * 0.45`) so it does not beat a real frontier. Goals in the log were warped with the seed spawn. The shell's distance is ground truth.
+
+Pantry: 0 goals inside the box on all ten. Seen is 0 on n2 and m2, where the shell stayed 1.7 m and 1.9 m away, so no way in was on the map. On the other runs seen is 9–69% and the shell's closest pass is 0.33–1.67 m. The room was looked into and never chosen.
+
+Storage: one goal lands in the box, on n4, and at that moment the shell was 1.66 m away, so it was not an approach. Seen is 94–99% on n4, m4, and n5, with visited 0 and the shell 0.43 m short. The camera finished the room from the door. The final map has no frontier left inside it on those runs.
+
+Closet: one goal inside, on m5, with the shell 0.59 m away, and the closest pass is 0.33 m. Visited stays 0. m3's 1% is a brush at 0.22 m with no goal inside the box. Seen is 73–99% on m2, m3, m4, m5, n5.
+
+Bath: the final map still has a frontier inside the bath on every run that did not enter it (42–239 cells in a cluster at least `MIN_FRONTIER_M`). Goals inside the box, with the shell actually there: m3 and m5 entered (visited 34% and 16%). m1 had three such goals, the shell came to 0.19 m, and visited stayed 0. On n1 and m4 a warped goal falls in the bath rectangle while the shell was 2.5–2.8 m away, which is the pose, not a visit. The other five runs never selected a bath goal. The frontier was there and lost the score to other frontiers before the cap.
+
+Dead ends: one patch for all four rooms. Raising the unvisited-stand weight so a seen room beats a real frontier. That weight is already the cap that keeps an unscanned room from outranking a frontier, and these logs do not show it failing at a door the shell was on, except m1's bath, which is one run.
+
+Outcome: pantry, storage, and closet are mostly seen from the doorway and then drop out of the frontier list, so they are not selected. The bath usually still has a frontier and it is not selected before 600 s. m1 is the one bath goal the shell reached and did not cross. No controller change.

@@ -157,6 +157,7 @@ Result: the next four seeds had 0 corner steps. Later escape spins brought some 
 - Escape-block rewrite, 2026-11-08. Three probes, no scoring batch. The sustained reverse is a forward pile-leave branch rewritten to `v=-0.10`. See "The forward branch is rewritten into the failed reverse."
 - Blocked reverse that does not move, 2026-11-09. The rewrite still starts. A reverse whose planner pose stays put is not sent again. See "A blocked reverse that does not move the shell."
 - Island climb counted as travel, 2026-11-09. North run 4's reverse onto the island moved the planner pose with the wheels. No driving change. See "The island climb was wheel travel."
+- Pitch gate on every wheel step, 2026-11-09. Tried and reverted. The IMU pitch crossed 0.12 rad while the body was level. See "The pitch gate fired on level driving."
 
 ## One stuck check, not one pose
 
@@ -544,3 +545,24 @@ North run 3's hub z=0.445 is not this. From t=332.8 s to t=333.7 s the body flip
 Dead ends: calling the planner motion visual odometry or a scan match. Those yaw channels are zero, and the metre of pose equals the metre of wheel arc. Calling north run 3 the same climb. Treating the 50 s reconstruction as the scored run. A driving change in this round.
 
 Outcome: the climb is trusted wheel travel. The pose gate saw that travel and kept the reverse. The pitch the robot already measures did not get a vote, because the floor image never became the still picture that gate waits for. The smallest next change, not made here, is to let that existing pitch gate drop wheel translation when the shell is tipped, without waiting for a still floor image.
+
+## The pitch gate fired on level driving
+
+Symptom: the note above said to drop wheel translation when `oak_imu` pitch is more than 0.12 rad from the learned rest, without waiting for a still floor image. That change was committed as `2db10f5` and then taken back.
+
+How it was checked. The threshold stayed 0.12 rad. The line logs the IMU pitch. Unit tests: a 0.20 rad pitch drops the wheel step and the blocked-heading reverse; a level reading and a 10 mm rise over the 0.22 m axle spacing (about 0.045 rad) do not. Mapping, floor, twin, skid, and the warehouse proto test passed, 176. Postgres was not up, so database tests were skipped.
+
+A 50 s start at north run 4's pre-climb pose stayed upright and never logged a pitch drop. The same north spawn was then run five times with the change and five times on `9ebb7cd`, depth seed 64, and the same five for −0.35, depth seed 63. Flags off. All twenty reached 600 s. No run had `up_z` below 0.5. The movie run (new north 1) never came closer than 2.9 m to the island face, so there is no clip of a tip.
+
+| code | seed | visited % | mean | sd | min up_z | max hub z |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| pitch gate | north | 10.52, 16.59, 3.17, 18.25, 19.67 | 13.64 | 6.81 | 0.998, 1, 1, 1, 1 | 0.094, 0.082, 0.081, 0.082, 0.082 |
+| `9ebb7cd` | north | 16.41, 19.66, 23.70, 26.12, 23.78 | 21.93 | 3.86 | 1, 1, 1, 1, 1 | 0.083, 0.081, 0.083, 0.081, 0.083 |
+| pitch gate | −0.35 | 19.88, 16.19, 16.23, 19.53, 12.34 | 16.83 | 3.06 | all 1 | 0.084, 0.081, 0.081, 0.084, 0.083 |
+| `9ebb7cd` | −0.35 | 10.26, 8.32, 13.31, 12.23, 10.16 | 10.86 | 1.95 | 1, 1, 0.999, 1, 1 | 0.082, 0.083, 0.083, 0.082, 0.081 |
+
+On new north run 1 the log says `shell pitched 0.11 rad, wheel translation dropped` at t=105.2, 111.9, 125.9, 130.6, 351.9, 483.9, 537.6, 589.5 s. At each of those times the ground-truth body is level: `up_z` 1.000, hubs z=0.080, and the speed is often 0.10 m/s. The printed 0.11 rad is the IMU pitch, and the gate compares it with the learned rest, so a rest a little below zero plus a reading near 0.11 rad crosses 0.12. The body had not tipped. Dropping the wheel step there freezes the planner pose while the shell is driving. North's visited mean fell from 21.93 to 13.64 on the matched seeds. −0.35 moved the other way. Neither difference is a coverage result to keep. No run in this pair inverted, so the gate was not shown stopping the island climb.
+
+Dead ends: keeping the gate because −0.35's mean rose. Lowering 0.12 rad. A new knob. Treating the unit-test pitch of 0.20 as what the device reports on a level floor.
+
+Outcome: `2db10f5` is reverted. The 0.12 rad check is still only the floor-still branch. A pitch veto on every wheel step needs a rest that is not one noisy sample, and this round does not add that.

@@ -385,3 +385,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** A behavior change this round. Reading the pose shift as visual odometry. Treating run 3 as the same climb. Another full north seed in place of the saved log.
 
 **Outcome.** The translation is the wheel step, trusted because the forward range leaves the slip band and the floor image never becomes the still picture the pitch gate waits on. The pitch is already measured. It did not veto the travel.
+
+## 2026-11-09 — The raw pitch gate dropped level driving
+
+**Mission parameter.** Apply the existing 0.12 rad pitch gate to wheel translation without waiting for a still floor image, so a climb does not count as progress. Revert if it does not help or if it regresses.
+
+**Change.** Commit `2db10f5` dropped the wheel step when `oak_imu` pitch was more than 0.12 rad from the learned rest, and logged that pitch. The commit was reverted. The floor-still branch is again the only user of that threshold.
+
+**Why.** On the saved island climb the body really did pitch past 0.12 rad, and the pose followed the wheels. On the matched runs the same comparison fired while ground truth stayed level.
+
+**Evidence.** New north run 1 logs `shell pitched 0.11 rad` at times when `up_z` is 1.000, the hubs are z=0.080, and the speed is about 0.10 m/s. Matched five-run means: north 13.64 (sd 6.81) with the gate, 21.93 (sd 3.86) on `9ebb7cd`. −0.35 16.83 (sd 3.06) with the gate, 10.86 (sd 1.95) without. No `up_z` below 0.5 in any of the twenty runs. The movie run stayed 2.9 m from the island. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Shipping the gate. Calling the −0.35 rise a win. A new threshold. Editing the IMU noise or the proto.
+
+**Outcome.** Wheel translation is not dropped from pitch alone. The island climb is still trusted wheel travel. A later pitch veto has to be a tip of the body, not one reading against a single rest sample.

@@ -413,3 +413,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** The single-rest pitch gate, already reverted. A rest that updates during driving. An `oak_imu` translation veto. Calling a wrapped correlation a stall. Treating the 2.4 point north gap as a regression.
 
 **Outcome.** Flat blanks are not travel. Textured motion is. The scored runs did not climb the island, and the part of a climb the camera still calls `moving` is still trusted.
+
+## 2026-11-09 — A held pose cuts the blocked reverse
+
+**Mission parameter.** Once the floor-blank hold pins planner x,y, check whether the existing blocked-heading rule stops that reverse. Change the controller only if the logs show it does not.
+
+**Change.** None. The rule already stops a reverse when the planner pose has not moved 0.04 m in 2 s, then turns off the heading.
+
+**Why.** The forced reverse that inverted was a scripted backup. It never armed the blocked heading, so the pose clock was not in the path. With the heading armed, a held pose is the lack of progress that rule already measures.
+
+**Evidence.** The step loop with a flat floor and a changing forward picture cuts the reverse 2.0 s after it starts, and the pose stays under 0.04 m. On the pre-climb pose, with the heading armed for the probe only, the reverse is cut at explorer t=2.4 s. `up_z` falls to 0.395 during the following turn and is 1.000 again by sim t=12.5 s, hubs at ride height. The unarmed probe of the same reverse finished inverted. The probe hooks were removed. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A shorter than 2 s clock. Dropping the frozen-picture exemption; this reverse was cut before that picture froze. Folding a pile-leave that has cleared the block into the same clock. Retiming the stall escape's 0.8 s check, which counts wheel travel the pose did not take and was not the island command.
+
+**Outcome.** A held pose during a blocked-heading reverse stops that reverse. The command path is unchanged, so there is no new matched five.

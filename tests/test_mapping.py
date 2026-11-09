@@ -1523,6 +1523,71 @@ def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):
     assert left_c * right_c < 0
 
 
+def test_a_held_floor_cuts_the_blocked_reverse(capsys):
+    """The pose pin is the progress clock the blocked reverse already uses.
+
+    A flat floor holds translation. Two seconds under 0.04 m, and that
+    reverse is not sent again. The forward picture keeps changing, which
+    is the climb: the nose range moves while the downward camera is blank.
+    """
+    from src.mapping.explore import STILL_M, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    base = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.032
+    for i in range(6):
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=base + 0.04 * (i % 4),
+            floor=flat,
+        )
+    bot._arm_escape_block()
+    held_at = None
+    reverse_at = None
+    stopped_at = None
+    for i in range(160):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=base + 0.05 * ((i // 3) % 6),
+            floor=flat,
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        straight_back = cmd_l < -0.5 and cmd_r < -0.5 and abs(cmd_l - cmd_r) < 0.4
+        if held_at is None and math.hypot(*bot.pose()[:2]) < 0.02 and bot.t_s > 0.3:
+            held_at = bot.t_s
+        if straight_back and reverse_at is None:
+            reverse_at = bot.t_s
+        if reverse_at is not None and not straight_back and bot._block_reverse_dead:
+            stopped_at = bot.t_s
+            break
+    out = capsys.readouterr().out
+    assert held_at is not None
+    assert reverse_at is not None
+    assert stopped_at is not None
+    assert stopped_at - reverse_at >= 1.5
+    assert stopped_at - reverse_at < 2.6
+    assert math.hypot(*bot.pose()[:2]) < STILL_M
+    assert "blocked reverse did not move the shell" in out
+    assert not bot._view_frozen()
+
+
 def test_lifted_wheels_are_a_zero_velocity_update():
     """Casters take the load, the drive wheels spin, the pictures do not move."""
     from src.mapping.explore import Explorer

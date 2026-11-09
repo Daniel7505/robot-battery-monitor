@@ -593,3 +593,15 @@ Flat frames do occur on a level floor. North run 5 logs eight holds while `up_z`
 Dead ends: retrying the single-rest pitch gate. A rest pitch that keeps learning while the robot drives, which would absorb a slow climb. Using `oak_imu` as a controller input. Treating an ambiguous, textured blank as a stall. Reading the 2.4 point north gap as a loss.
 
 Outcome: a flat blank is no longer wheel travel. A moving floor still is, and that includes the part of a climb where the picture still has texture. The scored runs did not climb.
+
+## A held pose cuts the blocked reverse
+
+Symptom: the forced island reverse kept commanding reverse after the planner pose stuck, and the shell inverted. That probe was a scripted backup. It never armed the blocked heading, so the 2 s pose clock was not consulted.
+
+How it was checked. No controller change. A step loop with a flat floor, the heading armed, and a forward picture that keeps changing: the pose stays under 0.04 m, a straight reverse starts, and 2.0 s later the log is `blocked reverse did not move the shell` and the command is a turn. The test is `test_a_held_floor_cuts_the_blocked_reverse`. Mapping tests passed, 151. Postgres was down, so database tests were skipped.
+
+The same pairing on the pre-climb pose (4.652, 2.339, yaw −2.948), depth seed 64. The backup was told to ignore the rear gap, and the heading was armed at explorer t=0.4 s. Both of those were probe-only and were removed. At explorer t=2.4 s the log is `blocked reverse did not move the shell`. The command changes from a straight reverse to a turn. `up_z` is 1.000 when the reverse starts, about 0.63 when it is cut, and reaches a minimum of 0.395 during the turn. By sim t=12.5 s the shell is upright again (`up_z` 1.000, hubs z=0.080). It does not finish inverted. The earlier unarmed probe finished at `up_z` −0.01 with both hubs at 0.30. This probe did not log `floor blank`; an earlier pin (`depth floor and visual still`) is what held translation. The step loop is the run that uses the flat-floor hold itself.
+
+Dead ends: a shorter stall window. The forward picture did not freeze before the stop, so the frozen-picture exemption was not what kept this reverse going. That exemption stays: a frozen picture already belongs to the 1 m hinge cap, and deleting it would cut a backup whose pose is held on purpose. A pile-leave that has cleared the block is a different reverse. The island command was a forward rewritten while the block was still on, which is the path that stops. A stall reverse with no block counts wheel travel the pose rejected, so its own 0.8 s check does not see the hold. That clock was not this reverse, and it was not retimed.
+
+Outcome: once the pose is held and the blocked heading is armed, the existing 0.04 m / 2 s rule cuts the reverse. The shell on this probe pitched and settled back upright. No matched five, because the command path is unchanged.

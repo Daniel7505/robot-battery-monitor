@@ -913,3 +913,27 @@ m1 is the same kind of miss and then a rebuild. Pose error is 0.39 m at t=1200 s
 n2 sits at (7.29, 8.07) in the living room from t=805 s to the cap, yaw +2.754. The right-rear tire is 1.6 cm from `APT_FURN_SOFA` and the right-front tire is 2.8 cm from `APT_WALL_NORTH_B`. The left-rear tire is 11 cm from the sofa. Over those 1000 s the right wheel is the only part with a wall contact, on 2.4% of steps. `up_z` stays 0.999. A one-minute slice of the pivot has wheel rotation 76.69 rad against 76.69 rad of command. The wheels are slipping on the floor. The sofa is close, and the contact is a brush, not a wedge that locks the shell.
 
 The commanded speed is `_corner_pivot`, not `_escape_spin`. Every 4 s, `yaw_stuck` flips `_escape_spin` and sets the phase clock back to now, so the branch that would drive after 4 s does not run. The yaw target of 0.8 rad is never met. Stall travel does not grow because a pivot sets `applied` to 0. The sign of the 0.30 rad/s pivot comes from the side gaps and does not change, which is why 94% of the commands are the same wheel pair. No controller change.
+
+## The small pivot hands off, and two runs sit on a blocked reverse
+
+Commit `1a66938`. When the stall turn is sending `_corner_pivot` and yaw has not moved 0.2 rad in 4 s, the phase becomes `drive` and the existing drive code runs. Flipping `_escape_spin` stays the path for the ±0.70 spin, which is the command only when that spin is safe. Mapping tests: 161 passed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.998, on n2 and m3.
+
+North visited 12.30, 18.61, 15.15, 20.72, 17.42 (mean 16.84, sd 3.24) against 17.98 (sd 2.99). −0.35 visited 25.34, 17.28, 8.12, 17.92, 5.98 (mean 14.93, sd 7.89) against 20.58 (sd 6.59). Pantry and storage are 0. Bath is 47.5 and 47.3 on n2 and n3, and 26.9 on m1. Hall is 52.1 on n4 and 69.3 on m1. Laundry is 38.0 on n4. Closet is 31.6 on m1. The other bath, hall, laundry, and closet figures are 0.
+
+Pose error at the cap: n1 0.31, n2 1.94, n3 1.26, n4 0.94, n5 0.63, m1 0.71, m2 2.08, m3 0.35, m4 0.71, m5 0.56.
+
+The longest stretch of a pivot command whose yaw stays within 0.2 rad of the start is 5.2 s on n1, 4.0 s on n2, 5.0 s on n3, 2.6 s on n4, and 1.8 s on n5. On −0.35 it is 12.0 s on m1, 47.0 s on m2, 21.6 s on m3, 17.4 s on m4, and 9.4 s on m5. m2's 47 s is the ±0.70 pair, 49% `(1.49, -1.49)` and 47% `(-1.49, 1.49)`, pile `src=stall`. m1's 12 s and m4's 17 s are the ±0.30 pair, both signs. m3's 22 s is 71% the ±0.30 pair. The log on m3 and m5 shows the handoff: `src=stall` goes from `w=0.30` to `v=0.12` within a few seconds.
+
+The 10 s wastes that are not the opening survey spin:
+
+- n1, 26 s of spin from t=201 s, `pile_leave` and `stall`. n1, 10 s of spin from t=514 s, `pile_leave`.
+- n3, 29 s of the ±0.70 spin from t=570 s to the cap. Yaw change +0.10 rad. The log is `blocked turn did not yaw, other way`.
+- n5, 16 s of `(0, 0)` from t=332 s, `src=hold` then `pile_leave`, and another 14 s of `(0, 0)` from t=364 s.
+- m2, the 47 s ±0.70 stall above, then 12 s more of the same spin from t=526 s.
+- m3, 332 s of `(0, 0)` from t=268 s to the cap. Pile `src=back`, `v=0`. The line just before is the stall drive, then a goal, then `src=back`.
+- m4, 43 s of `(0, 0)` from t=557 s to the cap.
+- m5, 354 s of `(0, 0)` from t=245 s to the cap. Pile `src=back`, `v=0`, after the stall drive and a new goal.
+
+The ±0.70 flip is unchanged, and it is what fills m2's long flat spin. The two long zeros are a reverse the block has already refused. The tag stays `back` and the speeds stay `(0, 0)`.

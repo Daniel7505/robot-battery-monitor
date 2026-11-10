@@ -687,3 +687,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** One gate for both pose failures. n1 is the pivot rule on a command whose wheels have almost no translation. m1 is the floor-slip rejection during a blocked stall, followed by a grid rebuild. Calling n2 a wedge. The contact is a brush and the tread is slipping.
 
 **Outcome.** Two faults. A stall pivot is defined as no translation, so a real creep never enters the pose. The small pivot that replaced the refused reverse is not the spin the 4 s flip turns, so it never hands off. No controller change.
+
+## 2026-11-10 — A quiet small pivot takes the drive
+
+**Mission parameter.** When the small pivot is the command and yaw has not moved in the existing 4 s, take the existing drive branch. Leave the ±0.70 flip in place when that spin is the command. Leave the odometry pivot rule and the loop-closure grid reset.
+
+**Change.** In the stall turn, `yaw_stuck` used to flip `_escape_spin` and restart the phase clock even when the wheels were being sent `_corner_pivot`. That flip now runs only when `pivot` is None. When the small pivot is the command, the phase becomes `drive` and the existing drive code runs. The 4 s window, the 0.2 rad quiet test, the 0.8 rad target, and the speeds are unchanged. Commit `1a66938`.
+
+**Why.** On n2 the held w=−0.30 was not `_escape_spin`, so flipping that spin never changed the command. The same quiet 4 s on the ±0.70 spin still flips it.
+
+**Evidence.** Mapping tests: 161 passed. The new tests cover a flat small pivot handing to `wheel_speeds(0.12, 0)`, the ±0.70 flip still happening, and the refused-reverse hold still returning the small pivot inside the 4 s. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 12.30, 18.61, 15.15, 20.72, 17.42 (mean 16.84, sd 3.24) against 17.98 (sd 2.99). −0.35 visited 25.34, 17.28, 8.12, 17.92, 5.98 (mean 14.93, sd 7.89) against 20.58 (sd 6.59). No mapper done line. Lowest `up_z` is 0.998. The longest flat pivot is 5.2 s on the north runs. On −0.35 the 47 s flat spin on m2 is the ±0.70 pair. m3 and m5 then sit on `(0, 0)` for 332 s and 354 s with `src=back`. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Changing the odometry rule that drops translation on a pivot. Resetting the loop-closure grid. Changing the 4 s value or the ±0.70 flip.
+
+**Outcome.** A quiet small pivot leaves the turn. The long single-sign w=−0.30 hold does not repeat. Two −0.35 runs then spend the rest of the cap on a blocked reverse tagged `back`.

@@ -953,3 +953,17 @@ The speeds come from `_continue_back`, which returns `wheel_speeds(-0.10, 0)` wh
 The saved live tens for `8f9efb0` (`hold_pivot`), `4dc9e25` (`stall_turn`), and `7d07869` (`release_live`) have no `src=back v=0.00` stretch of 20 s. The code path is older than `1a66938`. Those runs did not reach it. The drive handoff is what gets m3 and m5 to a goal, and the goal path then requests the reverse the block already refused.
 
 m2 from t=538 s to t=585 s is not the 4 s flip. The wheel command swaps between `(1.49, -1.49)` and `(-1.49, 1.49)` every step or two. Of 2311 runs of one sign, 1498 last one or two steps, and the longest is 0.78 s. The 4 s flip would hold one sign. This is the turn's first check: `_spin_safe` rejects the spin just sent, the opposite sign is sent the same tick, and the next tick rejects that one. The 1 Hz pile line shows one sign for several seconds only because it samples a single tick.
+
+## The path latch is cleared with the dead reverse
+
+Commit `a1604df`. `_release_dead_reverse` clears `_backing` and `_back_from`. `_begin_back` does not start on a heading whose reverse is already dead. Mapping tests: 162 passed. The ±0.70 same-tick swap was not changed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.997, on n1 and m3.
+
+North visited 25.10, 17.70, 14.86, 14.95, 15.04 (mean 17.53, sd 4.40) against 16.84 (sd 3.24) after the handoff and 17.98 after `8f9efb0`. −0.35 visited 18.06, 17.93, 9.30, 21.40, 19.77 (mean 17.29, sd 4.69) against 14.93 (sd 7.89) and 20.58. Pantry and storage are 0. Bath is 4.6, 20.1, 34.0, 20.6, and 57.7 on n1, n2, m1, m2, and m4. Hall is 83.4 on n3 and 58.4 on n4. Laundry is 11.5 on n3. Closet is 66.5 on m1. Bedroom is above 40 on n2, m1, m2, and m4.
+
+Pose error at the cap: n1 0.67, n2 1.53, n3 1.27, n4 0.55, n5 2.15, m1 0.32, m2 0.38, m3 0.74, m4 0.29, m5 0.78.
+
+The longest `(0, 0)` stretch is 10.1 s on n1, from t=95 s to t=106 s, while a stall is backing out. At t=107 s the wheels are `(-1.25, -1.25)` and the shell moves. The other nine runs' longest zero is 3.5 s at the start. No `src=back` zero of 20 s.
+
+The longest ±0.70 sign-swap, commands alternating within one step or two, is 2.2 s on m1, 2.1 s on m3, m5, and n4, and 1.3 s on n2. n1, n3, n5, m2, and m4 have none. The 47 s loop from the previous ten does not appear.

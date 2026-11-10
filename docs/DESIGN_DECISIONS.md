@@ -715,3 +715,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Calling the zero a stall back phase. The stall has already handed off. Calling m2's alternation the 4 s flip. A 4 s flip would hold one sign.
 
 **Outcome.** The fault is `_continue_back` keeping a reverse the block has already refused. The shell is free on both runs. No controller change.
+
+## 2026-11-10 — A dead reverse drops the path backing latch
+
+**Mission parameter.** Clear `_backing` when a reverse is refused, and do not start another `_begin_back` on that heading. No new speed. Leave the ±0.70 same-tick swap for a later pass.
+
+**Change.** `_release_dead_reverse` now clears `_backing` and `_back_from` along with the leave latch. `_begin_back` returns nothing when the shell is still on a heading whose reverse is already dead. The planned path, or a replan when the path is empty, is the next command. Commit `a1604df`.
+
+**Why.** The path latch was the caller `7d07869` and `4dc9e25` did not clear. It kept asking for the reverse, and the block turned every ask into (0, 0).
+
+**Evidence.** Mapping tests: 162 passed. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 25.10, 17.70, 14.86, 14.95, 15.04 (mean 17.53, sd 4.40) against 16.84 (sd 3.24) and 17.98. −0.35 visited 18.06, 17.93, 9.30, 21.40, 19.77 (mean 17.29, sd 4.69) against 14.93 (sd 7.89) and 20.58. No mapper done line. Lowest `up_z` is 0.997. The longest `(0, 0)` stretch is 10.1 s, on n1, at the start of a stall that then reverses. The 332 s and 354 s `src=back` sits do not repeat. The longest ±0.70 sign-swap is 2.2 s. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Changing the ±0.70 per-tick flip. Adding a new speed.
+
+**Outcome.** A refused path reverse does not stay at (0, 0). −0.35's mean moves from 14.93 to 17.29 and the sd from 7.89 to 4.69. The same-tick ±0.70 swap does not hold a run this ten.

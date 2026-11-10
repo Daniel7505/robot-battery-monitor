@@ -673,3 +673,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Reading 1800 s as enough for the done line. The unknown edges are still there, and two runs spend most of the extra time in a stall pivot.
 
 **Outcome.** The explorer does not converge to the mapper done line in 1800 s. Time is no longer the only limit: a stall pivot can hold a real room edge, and some of the longest edges are partly off the floor.
+
+## 2026-11-10 — A pivot drops the creep, and the small pivot never ends
+
+**Mission parameter.** From the 1800 s logs, say why n1's pose misses a real creep, why m1's seen percent falls to 21, and why n2's w=−0.30 pivot runs for 1000 s without a yaw. Do not change the controller.
+
+**Change.** None.
+
+**Why.** On n1 from t=450 s, 99.8% of commands are a pivot, so `trust_translation` is false. Wheel translation in that window is 0.26 m. The true path at 1 s samples is 3.5 m, net 2.1 m, mostly forward, yaw change −0.04 rad, in the bedroom clear of the walls. The floor gate logs `floor still, translation frozen` 106 times and does not contain the other metres, because it only holds wheel travel. m1's error grows from 0.39 m at t=1200 s to 1.09 m at t=1400 s after `stall, backing out` at t=1209 s, with floor slip and the floor-still hold rejecting steps while the shell moves. Loop closure then resets the grid at t=1435 s, t=1699 s, and t=1792 s, and seen percent falls to 21. n2 is not wedged: the right-rear tire is 1.6 cm from the sofa, the right wheel touches on 2.4% of steps, and the wheels match the pivot. `yaw_stuck` flips the unused ±0.70 spin and restarts the 4 s clock, so the drive branch does not run, and stall travel stays 0 because a pivot zeroes `applied`.
+
+**Evidence.** Counts and the poses are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** One gate for both pose failures. n1 is the pivot rule on a command whose wheels have almost no translation. m1 is the floor-slip rejection during a blocked stall, followed by a grid rebuild. Calling n2 a wedge. The contact is a brush and the tread is slipping.
+
+**Outcome.** Two faults. A stall pivot is defined as no translation, so a real creep never enters the pose. The small pivot that replaced the refused reverse is not the spin the 4 s flip turns, so it never hands off. No controller change.

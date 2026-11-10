@@ -711,3 +711,30 @@ m3 is the one that does not land on a plate. The old goal was 80% off the plates
 The bath is the chosen frontier on two of the ten final poses (n1, and m5 as before). On the runs the loop used to win, a real room now wins instead, and on n2, n3, and n5 that room is the living room or the bedroom, which still outrank the bath. No new 600 s batch.
 
 Dead ends: deleting every cell past a plate. Splitting every cluster, on-plate or not. The bedroom frontier on m4 is 37 m and mostly on the plate; a split of every long cluster would have cut that too.
+
+## Live ten under the loop credit
+
+The rescore above used maps the old score had already built. These ten are new 600 s runs, same seeds, flags off. North depth seed 64, spawn (5.80, 5.60, yaw 2.2). −0.35 depth seed 63, spawn (6.10, 4.70, yaw 1.2208). The controller is the floor-blank hold, the short-shift match, and the blocked-heading reverse-stop, plus the loop credit. Each run latched 15 floor plates. `oak_imu` was not a planner input. No `up_z` below 0.5. The lowest is 0.999.
+
+Nine logs end `time_cap` still in `go`, except m2, which is in `spin` at the cap. n4's log stops at phase `go`, t=599.5 s, and `mapping_done` is 600.000; the reason line was not flushed. None log the mapper done line.
+
+Visited %, then living, kitchen, hall, bath, bedroom, closet, laundry, pantry, storage:
+
+| run | visited | liv | kit | hall | bath | bed | closet | lau | pan | sto |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 18.48 | 30.5 | 0 | 0 | 0 | 27.7 | 0 | 0 | 0 | 0 |
+| n2 | 10.73 | 11.2 | 0 | 0 | 0 | 30.4 | 0 | 0 | 0 | 0 |
+| n3 | 12.55 | 23.3 | 0 | 0 | 0 | 13.0 | 0 | 0 | 0 | 0 |
+| n4 | 9.14 | 18.6 | 9.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 20.69 | 23.8 | 0 | 0 | 44.9 | 26.0 | 1.2 | 0 | 0 | 0 |
+| m1 | 14.97 | 25.6 | 32.8 | 0 | 0 | 0.1 | 0 | 0 | 0 | 0 |
+| m2 | 14.14 | 27.2 | 19.1 | 0 | 0 | 0.6 | 0 | 0 | 0 | 0 |
+| m3 | 7.96 | 8.1 | 0 | 0 | 0 | 22.8 | 0 | 0 | 0 | 0 |
+| m4 | 9.57 | 7.5 | 0 | 0 | 0 | 32.1 | 0 | 0 | 0 | 0 |
+| m5 | 11.40 | 22.2 | 15.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+North mean 14.32, sd 5.02. The pre-fix five were 10.15, 5.24, 14.34, 12.87, 23.44 (mean 13.21, sd 6.69). −0.35 mean 11.61, sd 2.97. The pre-fix five were 16.17, 9.54, 17.92, 14.78, 13.42 (mean 14.37, sd 3.17). Both gaps sit inside that scatter.
+
+Bath visited is 0 on nine runs. n5 is 44.9, and its walk-in is 1.2. The pre-fix bath entries were m3 at 34 and m5 at 16; those two are 0 here. Pantry and storage are 0 on all ten. Hall and laundry are 0. The goal stand, warped with the seed spawn, sits on a floor plate for most of the 600 s. The longest stretch with the stand more than 0.35 m off every plate is m2 at 125 s, then n5 at 76 s. n2's stand sits in the bath for 296 s and the shell never drives on that floor.
+
+Outcome: the night is in-room stands, not the outside loop. Overall visited does not move past the old scatter, and the bath is entered on one run of ten. No further scoring change.

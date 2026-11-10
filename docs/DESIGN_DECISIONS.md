@@ -511,3 +511,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Raising 0.45. Zeroing each off-plate cell. Cutting every long cluster down to a strip. The m4 bedroom frontier is on the plate and is the right winner.
 
 **Outcome.** The building loop is not the goal on those five poses. The bath is the goal on n1 and m5. On n2, n3, and n5 a living or bedroom frontier outranks it. m3 still selects a compact cluster that is barely majority-off-plate.
+
+## 2026-11-10 — Live ten with the loop credit
+
+**Mission parameter.** Same ten-run honesty check, live, under the new score. North seed 64 and −0.35 seed 63, five each, flags off, 600 s. Compare visited % with the pre-fix five (controller `fec4ff8`, notes through `0351bf4`). Do not raise the 0.45. Do not open pantry or storage.
+
+**Change.** The score is `058387a`. The first launch never latched the plates: `Robot` has no `getSelf`, so those runs were the old score and were discarded. `a307819` reads the spawn from `RBM_SPAWN` or from the supervisor node, once. The ten below each log 15 plates. No geometry, clock, or inertial change.
+
+**Evidence.** All ten reach the cap still going. Nine logs say `time_cap`. m2 is in `spin` at the cap. n4's log stops at phase `go`, t=599.5 s, with `mapping_done` 600.000 and no reason line. None log the mapper done line. No `up_z` below 0.5.
+
+North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.21 (sd 6.69). −0.35 visited 14.97, 14.14, 7.96, 9.57, 11.40 (mean 11.61, sd 2.97) against 14.37 (sd 3.17). Bath is 0 except n5 at 44.9. The walk-in is 0 except n5 at 1.2. Pantry and storage are 0. Goal stands sit on a floor plate for most of each run. The longest off-plate stand is 125 s (m2). n2 aims into the bath for 296 s and does not drive on it. The room table is in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Another scoring pass on this sample. The visited gaps are inside the old scatter. One bath entry does not make a rule.
+
+**Outcome.** Live, the shell is not spending the night on the outside loop. Coverage is not past the pre-fix sample, and the bath is still missed on nine of ten.

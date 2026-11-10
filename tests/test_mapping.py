@@ -3370,6 +3370,40 @@ def test_a_dead_reverse_lets_the_planned_path_run():
     assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
 
 
+def test_a_dead_reverse_does_not_keep_the_path_backing_latch():
+    """A path reverse on a dead heading must not stay (0, 0) as src=back.
+
+    The goal is behind the nose, so the backing latch would otherwise
+    keep requesting the reverse. After the release, the planned path runs.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (-1.5, 0.0)
+    bot.path_xy = [(0.4, 0.0), (1.5, 0.0)]
+    bot._backing = True
+    bot._back_from = (0.0, 0.0)
+    bot._block_reverse_dead = True
+    bot._block_dead_pose = (0.0, 0.0, 0.0)
+    bot._block_turns_tried = 2
+    bot._block_turn_sign = 0.0
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert not bot._backing
+    for _ in range(4):
+        speeds = bot._go(False, 0.0)
+        assert speeds != (0.0, 0.0) or bot._motion_source != "back"
+        assert bot._motion_source != "back"
+        assert speeds != (0.0, 0.0)
+
+
 def test_a_changing_depth_picture_is_not_camera_stuck():
     from src.mapping.explore import Explorer
 

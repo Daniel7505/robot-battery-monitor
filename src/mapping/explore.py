@@ -1358,13 +1358,17 @@ class Explorer:
         ``_leaving_command`` and a forced pile both send that reverse
         again. A stall still backing up does too, and the back phase
         will not hand off while trusted wheel travel sits between 0.02 m
-        and 1 m. While they do, the command stays zero. The path that
-        was already planned is the next action. An empty path replans
-        on the next tick. A stall in its back phase moves to the turn
-        it already has.
+        and 1 m. The path follower's ``_backing`` latch does the same:
+        it keeps returning the reverse while the pose is still, so the
+        block turns every tick into (0, 0). While they do, the command
+        stays zero. The path that was already planned is the next
+        action. An empty path replans on the next tick. A stall in its
+        back phase moves to the turn it already has.
         """
         self._leave_xy = None
         self._pile_forced = False
+        self._backing = False
+        self._back_from = None
         x, y, _yaw = self.plan_pose()
         self._pile_anchor = (self.t_s, x, y)
         self._pile_logged = False
@@ -3001,6 +3005,10 @@ class Explorer:
 
     def _begin_back(self, pose) -> tuple[float, float] | None:
         if self._reverse_closed(pose):
+            return None
+        # This heading's reverse already failed. Starting another one
+        # comes back from the block as (0, 0) on every tick.
+        if self._on_blocked_heading() and self._block_reverse_dead:
             return None
         if not self._backing:
             self._backing = True

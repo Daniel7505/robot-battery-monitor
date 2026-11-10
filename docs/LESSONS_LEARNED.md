@@ -738,3 +738,15 @@ North mean 14.32, sd 5.02. The pre-fix five were 10.15, 5.24, 14.34, 12.87, 23.4
 Bath visited is 0 on nine runs. n5 is 44.9, and its walk-in is 1.2. The pre-fix bath entries were m3 at 34 and m5 at 16; those two are 0 here. Pantry and storage are 0 on all ten. Hall and laundry are 0. The goal stand, warped with the seed spawn, sits on a floor plate for most of the 600 s. The longest stretch with the stand more than 0.35 m off every plate is m2 at 125 s, then n5 at 76 s. n2's stand sits in the bath for 296 s and the shell never drives on that floor.
 
 Outcome: the night is in-room stands, not the outside loop. Overall visited does not move past the old scatter, and the bath is entered on one run of ten. No further scoring change.
+
+## A bath stand with the shell held still
+
+Same ten logs. No new run. n2 holds one goal from explorer t=317 s to the cap, 283 s. Warped with the seed spawn, that stand is (1.07, 2.50), inside the bath, about 0.8 m west of the east wall and 1.1 m from door H. The true shell at that moment is (0.77, 4.92), in the bedroom, 0.38 m north of the bath floor at the bedroom walkway. Pose error is 0.24 m, so the stand is not a spawn-warp illusion and the shell is not somewhere else. From there to the cap the true path is 0.04 m. The pile summary is 314 s, command hold or zero on 100% of ticks, `cmd_m` 0, `wheel_m` 0, `pose_m` 0, and the goal at the end is still that stand. The lines just before the zeros are `blocked reverse did not move the shell` and `blocked turn did not yaw`.
+
+The other bath, hall, and laundry stands are a different shape. A stand held 20 s or more in one of those rooms, other than n2: the shell is in another room, 1.0–2.5 m from the target floor, and it is still driving (zero command under 3% of the phase lines). Hall is selected for at most 45 s (n3). Laundry for 49 s (n5), while the shell is already in the bath and moving. Those goals change before the shell arrives. n5 is the run that does drive the bath, 44.9%.
+
+m3, n4, m4, and m5 also sit for 232–414 s with a zero command. Their pile summaries that flushed do not keep a bath stand; m3 and m4 end with no goal. The n2 case is the one where the unvisited room's stand stays selected through the sit.
+
+Dead ends: calling n2 a stop 0.19 m short of door H. The shell is at the other opening, the bedroom walkway, and then the command is zero rather than a creep that quits at the jamb.
+
+Outcome: the stand is a real point in the bath. The shell is in the bedroom, and after the blocked turn does not yaw the command stays zero until the cap, with that goal still selected. No controller change.

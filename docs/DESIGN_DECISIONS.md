@@ -525,3 +525,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Another scoring pass on this sample. The visited gaps are inside the old scatter. One bath entry does not make a rule.
 
 **Outcome.** Live, the shell is not spending the night on the outside loop. Coverage is not past the pre-fix sample, and the bath is still missed on nine of ten.
+
+## 2026-11-10 — The bath stand stays selected while the command is zero
+
+**Mission parameter.** From the live ten, say why a stand inside a room does not become a visit. The sharp case is n2: 296 s of bath stand, bath visited 0. Do not change the controller.
+
+**Change.** None.
+
+**Why.** A stand warped into a floor plate is not yet a visit. The visit is the true shell on that floor.
+
+**Evidence.** n2, explorer t=317 s to the cap. The stand warps to (1.07, 2.50), inside the bath, 1.1 m from door H. The true shell is (0.77, 4.92), bedroom, 0.38 m north of the bath floor at the bedroom walkway. Pose error 0.24 m. True path over that window 0.04 m. The pile is 314 s of hold or zero, `cmd_m` 0, `wheel_m` 0, and the goal at the end is still (0.28, 5.65). Just before the zeros: `blocked reverse did not move the shell`, then `blocked turn did not yaw`. Other bath, hall, and laundry stands of 20 s or more have the shell in a different room, still driving, and the goal changes first. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A spawn warp that only looks like the bath. A stop at door H, the earlier m1 shape. n2 is at the bedroom walkway, and the command is zero after that.
+
+**Outcome.** The stand is in the bath and the shell is in the bedroom. The command stays zero until the cap, and the bath goal is not dropped. No controller change.

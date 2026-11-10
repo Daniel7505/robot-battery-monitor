@@ -687,3 +687,15 @@ Bath: the final map still has a frontier inside the bath on every run that did n
 Dead ends: one patch for all four rooms. Raising the unvisited-stand weight so a seen room beats a real frontier. That weight is already the cap that keeps an unscanned room from outranking a frontier, and these logs do not show it failing at a door the shell was on, except m1's bath, which is one run.
 
 Outcome: pantry, storage, and closet are mostly seen from the doorway and then drop out of the frontier list, so they are not selected. The bath usually still has a frontier and it is not selected before 600 s. m1 is the one bath goal the shell reached and did not cross. No controller change.
+
+## What is left at the time cap
+
+The same ten maps, at 600 s. A frontier the picker will score is a cluster at least 0.30 m long. Its score is that length divided by the path length plus 0.25 m. The unvisited stand is capped at 4 m² and multiplied by 0.45, so a stand 2 m away scores about 0.80. Cells were warped with the seed spawn and compared with the floor plates.
+
+Of the cells in those clusters, 48% land on a floor plate, 11% are within 0.35 m of one, and 42% are farther out. The outside cells form clusters that run around the building, 0.4–1 m past the plates, on every side. A single pose shift cannot put every side outside at once. Rank below uses straight-line distance in place of the A* path. North run 5's outside cluster is 51 m long and 1.6 m from the final odom pose, so that score is 28. The best bath cluster on that run scores 0.28. The outside cluster is the top score on eight of the ten runs. On m2 and m4 a real bedroom frontier is the top score instead (3.9 and 6.1). The gap on the runs the outside cluster wins is large enough that a longer path would not hand the win to the bath.
+
+Real unknown is still there. Inside the plates, the big clusters are bedroom (15% of big-cluster cells), living (14%), bath (10%), and kitchen (5%). Bath clusters that remain score 0.1–2.1. That already beats the capped stand, and the outside cluster beats the bath. Clusters shorter than 0.30 m are 1887 cells and are not scored, so speckle is not what starves the bath.
+
+Dead ends: raising the 0.45. Rejecting every off-plate cell. The 0.4–1 m band is wide enough that a yaw error can move a real edge into it, so a hard reject would also drop real floor. Pantry and storage stay out of this. They are closed.
+
+Outcome: the leftover is both. The score is won by a perimeter of free cells the map drew past the floor, glued into one frontier. Real unexplored floor remains in the bedroom, the living room, and the bath, and it would lose to that perimeter on most of these runs. No controller change.

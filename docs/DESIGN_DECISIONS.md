@@ -483,3 +483,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** One tweak aimed at the bath. Raising the 0.45 so a seen room outranks a real frontier. That is a new weight, and the small rooms are not failing at a door the shell was crossing.
 
 **Outcome.** The small rooms are seen and then not selected. The bath frontier is usually not selected before time runs out. No controller change.
+
+## 2026-11-10 — The frontier that wins is outside the floor
+
+**Mission parameter.** At the 600 s cap, say whether the frontiers that outrank the bath and the unvisited stand are real unknown floor or junk. Do not raise the 0.45. Pantry and storage are closed closets.
+
+**Change.** None.
+
+**Why.** Score is cluster length over path length. A stand capped at 4 m² and scaled by 0.45 scores about 0.80 when the path is 2 m. Anything longer and closer beats it, and beats a shorter bath cluster too.
+
+**Evidence.** The ten maps. 48% of the cells in clusters of at least 0.30 m sit on a floor plate (bedroom 15%, living 14%, bath 10%, kitchen 5%). 42% sit more than 0.35 m outside every plate, in a ring 0.4–1 m past the walls on every side. Rank uses straight-line distance in place of the A* path. North run 5's ring is 51 m long and scores 28; its best bath cluster scores 0.28. That outside cluster is the top score on eight runs. On m2 and m4 a bedroom frontier is the top score. Clusters under 0.30 m are not scored. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Calling the leftover only real unknown, or only speckle. Raising 0.45. Dropping every cell that misses a floor plate. A yaw error can move a real edge into the 0.4–1 m band.
+
+**Outcome.** The score is won by free space the map drew past the floor and connected into one frontier. Real unknown remains, and on these runs it loses to that perimeter. No controller change.

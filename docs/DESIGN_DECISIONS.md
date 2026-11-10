@@ -659,3 +659,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating the missing line as a mapper crash. Treating the cap as a stuck robot. The shell is still moving, except m5's slower end.
 
 **Outcome.** The end reason is on disk before the quit. The run stops because 600 s arrives while unknown edges in other rooms still outrank the seen living room.
+
+## 2026-11-10 — An 1800 s cap still does not reach mapper done
+
+**Mission parameter.** Three runs of each seed, cap 1800 s, same worlds and flags. Ask whether the mapper done line fires when time is not 600 s. Do not change the controller.
+
+**Change.** None. The cap is the existing `RBM_MAP_MAX_S`.
+
+**Why.** At 600 s the shell was still moving and unknown edges remained. A longer cap is the check that those edges eventually go away.
+
+**Evidence.** No run logs `done: no reachable frontier`. All six write `end_run.txt` with `time_cap`. Seen percent is already 80–93 at 600 s and, except m1, stays there. Visited percent at 1800 s is 12, 24, 31 on the north runs and 17, 28, 40 on −0.35. Frontier counts at the cap are 47, 41, 36, 11, 37, 47. The long edges that remain are a 7.0 m bath edge (n2), a 4.4 m laundry edge (n3), a 4.4 m bedroom edge (m3), and edges with a large off-plate share (n1 living, m2 bedroom). n2 commands the stall's w=−0.30 pivot from t=805 s to the cap; the wheels follow and the true path is 0.52 m. m1's seen percent falls from 91 to 21, so its 35.8 m edge is a misaligned map. Lowest `up_z` is 0.998. The table is in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Reading 1800 s as enough for the done line. The unknown edges are still there, and two runs spend most of the extra time in a stall pivot.
+
+**Outcome.** The explorer does not converge to the mapper done line in 1800 s. Time is no longer the only limit: a stall pivot can hold a real room edge, and some of the longest edges are partly off the floor.

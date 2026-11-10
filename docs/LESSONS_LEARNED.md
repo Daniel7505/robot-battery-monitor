@@ -882,3 +882,22 @@ The cap is what stops the run. Over the last 120 s the true path is 10.9, 9.1, 9
 m5 is the slow end (3.1 m in the last 120 s) and the long spin. The other nine are still covering ground when the clock stops.
 
 The largest unvisited reachable floor is the living room, 21.3 m², with about 17–18 m² still unvisited on m5 and n1 and about 99% seen. The interior is free on the map, so it is not a frontier. On m5 the longest remaining frontier is a 6.2 m bath edge (124 cells). The living edge is 4.0 m, mixed with cells off the floor, and ranks behind that bath edge. m5's last goal, t=558 s, is in the bath. On n1 the last four goals are in the bath, and the longest frontier is a 2.7 m kitchen edge. A seen room does not keep a frontier, and the capped unvisited stand loses to those unknown edges. Pantry and storage stay closed.
+
+## An 1800 s cap still does not finish
+
+Three runs of each seed, cap 1800 s, same worlds and flags. No mapper done line. All six write `end_run.txt` with `time_cap`. Lowest `up_z` is 0.998. Map snapshots are the save just after 600, 1200, and 1800 s. The pair in each cell below is seen % / visited %.
+
+| run | 600 s | 1200 s | 1800 s | frontiers at the cap | stall | pile_leave | no goal | progress |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
+| n1 | 83/10 | 87/12 | 88/12 | 47, longest 4.0 m living, 26 of 79 cells off the floor | 0.78 | 0.01 | 0.79 | 0.12 |
+| n2 | 91/16 | 91/24 | 91/24 | 41, longest 7.0 m bath, 9 of 140 off the floor | 0.54 | 0.04 | 0.59 | 0.25 |
+| n3 | 93/20 | 98/30 | 98/31 | 36, longest 4.4 m laundry | 0.05 | 0.07 | 0.14 | 0.46 |
+| m1 | 91/15 | 85/16 | 21/17 | 11, longest 35.8 m after the map leaves the floor | 0.12 | 0.20 | 0.38 | 0.38 |
+| m2 | 80/16 | 96/27 | 97/28 | 37, longest 6.1 m bedroom, 48 of 121 off the floor | 0.06 | 0.05 | 0.11 | 0.57 |
+| m3 | 90/12 | 98/23 | 98/40 | 47, longest 4.4 m bedroom | 0.06 | 0.06 | 0.15 | 0.49 |
+
+Rooms at 1800 s, seen/visited. n1: living 99/19, bath 21/0, bedroom 91/18, closet 86/0. n2: living 98/35, bath 67/0, bedroom 93/46, closet 100/0. n3: living 99/17, bath 93/62, bedroom 99/35, closet 99/0, laundry 93/34. m2: living 99/11, bath 91/68, bedroom 97/79, closet 97/0. m3: living 97/47, bath 97/63, bedroom 98/39, closet 99/0. Visited is flat after 1200 s on n1 and n2. The others still gain a few points.
+
+n2 from t=805 s to the cap commands the stall's w=−0.30 pivot on 94% of samples. The wheels match the command. True path is 0.52 m and yaw does not change. Bath visited stays 0, and the 7 m bath edge is still there. n1's command from t=450 s is a stall pivot as well (w=+0.30 on 60%, w=−0.70 on 28%). The planner moves 0.16 m. The true shell creeps 8.0 m and the pose error grows from 1.4 m to 2.6 m. m1's seen percent falls from 91 at 600 s to 21 at 1800 s, with pose error 1.1 m, so the 35.8 m edge is the spawn warp of a map that has left the floor. Other waste of 10 s or more is spin on m2 (1535–1623 s), n3 (1325–1385 s and 1699–1736 s), and m3 (longest 309–361 s), plus a 36 s zero on m2.
+
+What stays alive is an unknown edge on a real room, sometimes with a share of its cells off the floor plate. n2's is the bath. n3's is the laundry. m3's is the bedroom. n1's late edge is a living-room strip with a third of its cells off the floor. The walk-in is seen and not driven. The shell does not run out of frontiers in 1800 s.

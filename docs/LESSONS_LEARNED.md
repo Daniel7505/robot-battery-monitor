@@ -758,3 +758,28 @@ The two lines are one path. `_respect_escape_block` sends the existing reverse a
 What kept the zero until the cap: `_leaving_command` and a forced pile both send that straight reverse on the next tick. The block turns it into zero again, so the shell never moves the 0.70 m that would drop the leave, and `_go` never reaches the path it already planned. n2's path was still 4.11 m, with the bath stand still selected. m3, n4, m4, and m5 are the same branch. Each logs the failed reverse, then `blocked turn did not yaw`, then `pile, leaving the spot`, and the long sit is `src=pile_leave` with the command at zero. m3 and m4 end that sit with no goal. n2 is the one that keeps the bath stand.
 
 The correction does not add a motion. On that zero return, the leave latch and the forced pile are dropped, and the pile clock starts again. An empty path replans on the next tick. A path that is already there is driven by the existing pursuit. A forward the caller chose is still left alone. The 2 s clocks are unchanged.
+
+## Live ten after the dead reverse is released
+
+Same seeds, flags off, 600 s, on `7d07869`. Each run latched 15 floor plates. All ten end `time_cap` still in `go`. None log the mapper done line. No `up_z` below 0.5. The lowest is 0.999.
+
+Visited %, then living, kitchen, hall, bath, bedroom, closet, laundry, pantry, storage:
+
+| run | visited | liv | kit | hall | bath | bed | closet | lau | pan | sto |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 17.74 | 12.6 | 20.1 | 1.1 | 0 | 49.9 | 0 | 0 | 0 | 0 |
+| n2 | 12.81 | 22.7 | 25.5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n3 | 22.73 | 35.8 | 0 | 0 | 31.7 | 18.3 | 0 | 0 | 0 | 0 |
+| n4 | 14.58 | 22.6 | 0 | 0 | 0 | 24.9 | 0 | 0 | 0 | 0 |
+| n5 | 18.62 | 25.3 | 4.7 | 0 | 0.1 | 36.7 | 0 | 0 | 0 | 0 |
+| m1 | 17.27 | 23.0 | 1.5 | 0 | 0 | 36.8 | 0 | 0 | 0 | 0 |
+| m2 | 19.86 | 12.1 | 32.3 | 49.2 | 56.5 | 11.7 | 0 | 0 | 0 | 0 |
+| m3 | 15.34 | 34.2 | 3.6 | 0 | 0 | 0.8 | 0 | 0 | 0 | 0 |
+| m4 | 11.18 | 16.7 | 32.8 | 0.9 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m5 | 9.14 | 7.3 | 0 | 0 | 0.2 | 30.2 | 0 | 0 | 0 | 0 |
+
+North mean 17.30, sd 3.84, against 14.32 (sd 5.02) on the previous live ten. −0.35 mean 14.56, sd 4.38, against 11.61 (sd 2.97). Both gaps are about 3 points. Pantry, storage, laundry, and the walk-in are 0. Bath is entered on m2 (56.5) and n3 (31.7). Hall is entered on m2 (49.2).
+
+`blocked reverse did not move the shell` appears on every run. `blocked turn did not yaw` appears on n1, n2, n3, m3, n4, m4, and m5. After that second line the next phase command is not zero: n2 is a turn at t=415.5, two seconds later. No run has a `src=pile_leave` stretch with both v and w at zero. n2's following pile is 209 s of pile-leave and stall, goal none, and the true shell moves 0.6 m. m4 and m5 spend the late run in `src=stall` with a turn or a zero and almost no translation (m4's longest v=w=0 stall stretch is 101 s). That is not the old pile-leave zero that kept the bath stand.
+
+Outcome: the 314 s zero with the bath stand held did not repeat, and neither did the 232–414 s pile-leave zeros. The shell still does not finish the apartment. No further change.

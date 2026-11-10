@@ -553,3 +553,15 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Another spin. The quiet-turn rule already stops that. A new reverse speed. The 2 s clock already decided this reverse did not move the shell.
 
 **Outcome.** Sitting still was the leave latch asking for a reverse the block had already refused. The next tick can run the path that was already planned.
+
+## 2026-11-10 — Live ten after releasing the dead reverse
+
+**Mission parameter.** Same ten-run check on `7d07869`. Compare with the live ten in notes `5ec530a` / `3a20f51`. Do not change the controller again.
+
+**Change.** None this pass. The runs are the release in `7d07869`.
+
+**Evidence.** All ten latch 15 plates and end `time_cap` in `go`. No mapper done line. No `up_z` below 0.5. North visited 17.74, 12.81, 22.73, 14.58, 18.62 (mean 17.30, sd 3.84) against 14.32 (sd 5.02). −0.35 visited 17.27, 19.86, 15.34, 11.18, 9.14 (mean 14.56, sd 4.38) against 11.61 (sd 2.97). Bath is entered on m2 (56.5) and n3 (31.7). Hall on m2 (49.2). Pantry, storage, laundry, and the walk-in are 0. No `src=pile_leave` stretch has both v and w at zero. After `blocked turn did not yaw`, the next phase command is a turn or a drive, not zero through the cap. n2's later pile is 209 s of pile-leave and stall with no goal, and the shell moves 0.6 m. m4's longest zero is 101 s of `src=stall`. The room table is in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Another scoring or recovery change from this sample. The old multi-minute pile-leave zero is gone. Coverage is about 3 points higher, inside the previous north scatter.
+
+**Outcome.** The command does not stay zero until the cap after those two lines. The apartment is still not finished.

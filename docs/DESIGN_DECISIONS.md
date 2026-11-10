@@ -593,3 +593,15 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Ending the stall and replanning. The turn is already the next action. A new spin for m5. That flip is the stall turn not changing the heading, and this pass does not add a motion for it. Treating n2's `trail_reverse` as this zero.
 
 **Outcome.** A refused stall reverse is not requested again. The stall turn runs on the next tick. The 2 s clocks are unchanged.
+
+## 2026-11-10 — Live ten after the stall reverse advances
+
+**Mission parameter.** Same ten 600 s checks as `6f113f6`. Flags off. Do not change the controller.
+
+**Change.** None this pass. The runs are the release in `4dc9e25`.
+
+**Evidence.** All ten latch 15 plates and end `time_cap` in `go`. No mapper done line. Lowest `up_z` is 0.975. North visited 19.48, 11.66, 15.75, 12.18, 16.60 (mean 15.14, sd 3.25) against 17.30 (sd 3.84). −0.35 visited 12.59, 14.13, 16.44, 16.39, 12.07 (mean 14.33, sd 2.05) against 14.56 (sd 4.38). Bath on m4 (52.7) and m5 (4.5). Hall on n2 (73.9), n5 (61.4), and m4 (45.3). Pantry, storage, laundry, and the walk-in are 0. No `src=pile_leave` stretch has both speeds at zero. After both quiet turns the next phase command is a drive (m1, m5) or a turn (m2, and m5's second). m4's 101 s stall zero does not repeat. m2 then sits: stall v=w=0 for 38 s from t=493.3, goal none, true path 0.00 m, with two one-line pivots before the cap. `trail_reverse` spans 16 s on n2 and 11 s on m2. m5's true path from t=510 s is 6.4 m. The room table is in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Another controller change from this sample. The gaps are inside the earlier scatter. The turn after a refused reverse is already what `4dc9e25` sends. On m2 that turn does not change the heading.
+
+**Outcome.** The 101 s stall zero is gone. One run still sits after the turn, with the heading unchanged. The apartment is still not finished.

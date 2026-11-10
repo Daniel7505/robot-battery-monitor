@@ -801,3 +801,26 @@ Outcome: two sits. Stall keeps requesting a reverse the block has already refuse
 ## A refused stall reverse moves to the turn
 
 When the block turns that stall reverse into (0, 0), the back phase moves to the turn the stall already has. The same step the 0.8 s handoff uses. Trusted travel is left where it is. The next tick asks for that turn, which the block does not rewrite. No new speed and no new spin. The pile-leave `trail_reverse` spin is unchanged. m5's 4 s flip, which restarts before the drive, is unchanged. Mapping tests: 157 passed. No new 600 s batch.
+
+## Live ten after the stall reverse advances
+
+Same seeds, flags off, 600 s, controller `4dc9e25`. All ten latch 15 plates and end `time_cap` in `go`. No mapper done line. Lowest `up_z` is 0.975 (m5). None go below 0.5.
+
+| run | visited | living | kitchen | hall | bath | bedroom | closet | laundry | pantry | storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 19.48 | 28.7 | 6.7 | 0 | 0 | 32.7 | 0 | 0 | 0 | 0 |
+| n2 | 11.66 | 17.7 | 12.1 | 73.9 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n3 | 15.75 | 31.8 | 16.2 | 2.0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n4 | 12.18 | 24.3 | 14.1 | 0.2 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 16.60 | 29.3 | 15.7 | 61.4 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m1 | 12.59 | 18.8 | 0 | 0 | 0 | 23.1 | 0 | 0 | 0 | 0 |
+| m2 | 14.13 | 16.2 | 59.3 | 0 | 0 | 0.1 | 0 | 0 | 0 | 0 |
+| m3 | 16.44 | 21.1 | 6.2 | 0 | 0 | 33.9 | 0 | 0 | 0 | 0 |
+| m4 | 16.39 | 6.9 | 0 | 45.3 | 52.7 | 28.5 | 0 | 0 | 0 | 0 |
+| m5 | 12.07 | 7.4 | 0 | 0 | 4.5 | 42.2 | 0 | 0 | 0 | 0 |
+
+North mean 15.14, sd 3.25, against 17.30 (sd 3.84). −0.35 mean 14.33, sd 2.05, against 14.56 (sd 4.38). Both gaps are inside the earlier scatter. Bath is entered on m4 (52.7) and m5 (4.5). Hall on n2 (73.9), n5 (61.4), and m4 (45.3). Pantry, storage, laundry, and the walk-in are 0.
+
+No `src=pile_leave` stretch has both v and w at zero. The three runs that log `blocked reverse did not move the shell` and then `blocked turn did not yaw` do not stay at zero on the next phase line: m1 drives `(1.50,1.50)` at t=483.5, m2 turns `(1.49,-1.49)` at t=455.5, and m5 drives at t=273.5 and turns at t=521.5. m4's 101 s stall zero does not repeat. m2 is the run that still sits. After that turn the phase command is zero, and stall pile lines stay v=0 w=0 for 38 s (t=493.3 to t=531.5), then one line at w=0.30, then zeros again through t=596.5 except one w=−0.30 at t=561.5. The goal is none. From t=490 s the true path is 0.00 m. Wheel commands in that window are zero on 99% of samples, with brief w=±0.30 pivots. The turn was sent and the heading did not leave.
+
+`trail_reverse` is 33 lines on n2 (span 16 s) and 346 lines on m2 (span 11 s). The 209 s no-goal trail spin does not repeat. m5's late window moves: true path 6.4 m from t=510 s to the cap, so the 4 s flip does not hold the shell on this draw. No further change.

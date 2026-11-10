@@ -967,3 +967,41 @@ Pose error at the cap: n1 0.67, n2 1.53, n3 1.27, n4 0.55, n5 2.15, m1 0.32, m2 
 The longest `(0, 0)` stretch is 10.1 s on n1, from t=95 s to t=106 s, while a stall is backing out. At t=107 s the wheels are `(-1.25, -1.25)` and the shell moves. The other nine runs' longest zero is 3.5 s at the start. No `src=back` zero of 20 s.
 
 The longest ±0.70 sign-swap, commands alternating within one step or two, is 2.2 s on m1, 2.1 s on m3, m5, and n4, and 1.3 s on n2. n1, n3, n5, m2, and m4 have none. The 47 s loop from the previous ten does not appear.
+
+## Where the pose error comes from
+
+No controller change. The `a1604df` ten, position error only. Each number is the source's share of the final error vector, in metres. The four shares sum to the final error. Yaw at the cap is within 4° on every run. Loop closure is about 0 (one closure each on n4 and n5).
+
+| run | final | pivot creep | floor slip | loop | drive |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| n1 | 0.67 | −0.04 | 0.00 | 0.00 | 0.71 |
+| n2 | 1.53 | −0.02 | 0.00 | 0.00 | 1.55 |
+| n3 | 1.27 | −0.14 | 0.00 | 0.00 | 1.41 |
+| n4 | 0.55 | 0.15 | 0.00 | 0.00 | 0.40 |
+| n5 | 2.15 | 0.02 | 0.00 | 0.00 | 2.13 |
+| m1 | 0.32 | 0.15 | −0.13 | 0.00 | 0.30 |
+| m2 | 0.38 | 0.08 | 0.00 | 0.00 | 0.30 |
+| m3 | 0.74 | 0.36 | 0.07 | 0.00 | 0.31 |
+| m4 | 0.29 | 0.01 | 0.00 | 0.00 | 0.28 |
+| m5 | 0.78 | −0.01 | 0.00 | 0.00 | 0.79 |
+
+A negative share points against the final miss. Pivot creep is the part of the final miss from a pivot command while the true shell moved and the pose did not. It is the largest share only on m3. Floor-slip rejections are logged (50 times on m3, 0 on n2, n3, n5, m4, m5) and do not leave the miss.
+
+The drive share is mostly the shell moving while the pose stays. The largest rises, with the phase and the pile src when one is open:
+
+- n5 t=387 s, +0.34 m, `go`, no pile. t=54 s, +0.14 m, `go`. t=382 s, +0.13 m, `go`.
+- n2 t=310 s, +0.28 m, `go`. t=197 s, +0.18 m, `go`. t=271 s, +0.16 m, `go`.
+- n3 t=310 s, +0.16 m, `go`, `stall`. t=144 s, +0.15 m, `go`. t=313 s, +0.14 m, `go`, `hold`.
+- n1 t=385 s, +0.12 m, `go`. t=233 s, +0.09 m, `go`.
+- n4 t=560 s, +0.25 m, `go`, the pose running ahead of the shell.
+- m5 t=441 s, +0.20 m, `go`. t=444 s, +0.17 m, `go`. t=246 s, +0.15 m, `go`.
+- m1 t=564 s, +0.17 m, `go`, `back`. t=159 s, +0.08 m, `go`. t=598 s, +0.08 m, `go`, `stall`.
+- m3 t=113 s, +0.12 m, `go`. t=21 s, +0.08 m, `go`.
+- m4 t=389 s, +0.11 m, `go`. t=21 s, +0.10 m, `go`.
+- m2 t=227 s, +0.11 m, `go`, `hold`.
+
+On n5 from t=384 s to t=392 s the command is a straight reverse, wheel travel is −0.80 m, the true shell moves 0.80 m, and the pose moves 0.17 m. The forward nose range goes from 0.82 m to 1.45 m. The log repeats `pinned, depth floor and visual still, wheel translation frozen`. The same shape is on n3 from t=305 s (true 0.78 m, wheels −0.71 m, pose 0.08 m, `src=stall`) and on m5 from t=438 s (true 0.75 m, wheels −0.72 m, pose 0.12 m). A pin rewinds the pose and then holds translation for 1.2 s, and the next pin rearms. The part of the final error inside those holds is 0.09, 0.40, 0.89, 0.01, 0.50 m on n1–n5 and −0.01, 0.00, 0.11, 0.01, 0.65 m on m1–m5.
+
+m3 visited 9.30 with pose error 0.74 m and no long zero. Phase samples are 97.7% `go` and 2.3% `spin`. Wheel commands are 55% drive, 39% pivot, 4% mixed, 2% zero. True path 28.2 m, planner path 25.4 m. A pile is open for 281 s: `pile_leave` 182 s, `stuck` 42 s, `stall` 31 s, `hold` 11 s, `pivot` 9 s, `contact` 5 s. It adopts 17 goals. Warped, 6 are in the bedroom, 5 are off the floor plates, 3 are in the kitchen, 2 in the hall, 1 in the laundry. The true shell never comes within 0.6 m of any of them. The closest miss is 1.16 m. Visited floor is the living room at 20% and the kitchen at 5%.
+
+The change that cuts the pose error, not made here: do not pin a straight reverse when the forward range has increased since the pin anchor. The wheels and the nose already show that reverse. m3's visited score is the goals it never reached, not this 0.74 m.

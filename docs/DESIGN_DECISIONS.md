@@ -729,3 +729,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Changing the ±0.70 per-tick flip. Adding a new speed.
 
 **Outcome.** A refused path reverse does not stay at (0, 0). −0.35's mean moves from 14.93 to 17.29 and the sd from 7.89 to 4.69. The same-tick ±0.70 swap does not hold a run this ten.
+
+## 2026-11-10 — The pose miss is a reverse the pin froze
+
+**Mission parameter.** From the `a1604df` ten, say where the planner-vs-true position error accumulates, why m3 visited only 9.30, and name one change that would cut the pose error. Do not change the controller.
+
+**Change.** None.
+
+**Why.** Yaw at the cap is within 4°. Loop closure adds about 0. Pivots and the logged floor-slip rejections do not account for the runs whose error is above 1 m. Those misses are a straight reverse, `cmd=(-1.25,-1.25)`, whose wheel step matches the true motion while the pose stays put. The log on that stretch is `pinned, depth floor and visual still, wheel translation frozen`, and the forward nose range is rising. `_watch_pin` rewinds the pose and holds translation for 1.2 s, then arms again.
+
+**Evidence.** Signed metres of the final error, by source, are in `docs/LESSONS_LEARNED.md`. They sum to the final error. The pin hold alone is +0.89 m of n3's 1.27 m and +0.65 m of m5's 0.78 m.
+
+**Rejected.** Treating the pivot rule or the loop-closure rebuild as the residual. Neither shows up in this ten. Using `oak_imu`, or shortening the 2 s reverse clock.
+
+**Outcome.** The smallest pose change, not made here, is to not pin a straight reverse when the forward range has increased since the pin anchor. m3's low visited score is a separate fact: it drove 28 m and never came within 0.6 m of a goal.

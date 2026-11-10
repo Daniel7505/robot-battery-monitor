@@ -605,3 +605,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Another controller change from this sample. The gaps are inside the earlier scatter. The turn after a refused reverse is already what `4dc9e25` sends. On m2 that turn does not change the heading.
 
 **Outcome.** The 101 s stall zero is gone. One run still sits after the turn, with the heading unchanged. The apartment is still not finished.
+
+## 2026-11-10 — m2's pivots are too short to yaw
+
+**Mission parameter.** From the `4dc9e25` m2 log, say whether the shell is pinned, what the brief w=±0.30 pivots do to the wheels, and why the command returns to zero. Do not change the controller.
+
+**Change.** None.
+
+**Why.** After t=490 s the true pose is (8.147, 0.888) and does not move. True yaw changes by −0.0007 rad and planner yaw by −0.0014 rad. Hubs stay at z=0.080, `up_z` is 1.000, and the supervisor logs no wall contact on any shell part. The nearest tire is 3.5 cm from `APT_FURN_COUNTER`. A held w=0.30 pivot at t=451–454 s yawed the shell +0.45 rad with the wheels tracking, so the motor can turn the body. After t=490 s each w=±0.30 command lasts 8–24 ms and the wheel positions stay put.
+
+**Evidence.** 171 such pivots, no w=±0.70 command in that window. The code path is both `_spin_safe` checks failing, the phase returning to `back`, and the straight reverse becoming (0, 0) in `_respect_escape_block`. The w=±0.30 line is the existing fallback on a step whose rear reads closed. Counts are in `docs/LESSONS_LEARNED.md`. No other run in this ten holds that shape for 20 s.
+
+**Rejected.** Calling the sit a pin. Calling the pivot too weak: the same speed, held for 3.1 s, did yaw. A new motion. The 4 s flip is not what returns this command to zero.
+
+**Outcome.** The shell is on the floor, clear of the counter and the east wall. The stall asks again for the refused reverse, and the pivot it inserts lasts one to three steps, which does not yaw. No controller change.

@@ -24,7 +24,7 @@ import sys
 import traceback
 
 import numpy as np
-from controller import Robot
+from controller import Supervisor
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -300,23 +300,29 @@ def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: 
             return
 
 
+def _spawn_from_env():
+    raw = (os.environ.get("RBM_SPAWN") or "").replace(",", " ").split()
+    if len(raw) != 3:
+        return None
+    try:
+        return float(raw[0]), float(raw[1]), float(raw[2])
+    except ValueError:
+        return None
+
+
 def _note_apartment_floor(robot, explorer) -> None:
     """Floor plates, and the spawn as odom zero. Not the inertial unit.
 
     Read once before the shell drives. A loop of free cells past the
-    plates then cannot take the length of the whole loop.
+    plates then cannot take the length of the whole loop. ``RBM_SPAWN``
+    is the placement written into the world. The node pose is the same
+    number when the supervisor read works.
     """
     try:
         from eval.apartment_gt_grid import load_solids
-
-        node = robot.getSelf()
-        pos = node.getPosition()
-        rot = node.getOrientation()
-    except Exception:
-        print("MAPPING floor plates unavailable", flush=True)
+    except Exception as exc:
+        print(f"MAPPING floor plates unavailable {exc}", flush=True)
         return
-    # Local +x in the world. The matrix is row-major, local to world.
-    yaw = math.atan2(float(rot[3]), float(rot[0]))
     boxes = [
         (s.xmin, s.xmax, s.ymin, s.ymax)
         for s in load_solids()
@@ -325,15 +331,27 @@ def _note_apartment_floor(robot, explorer) -> None:
     if not boxes:
         print("MAPPING floor plates unavailable", flush=True)
         return
-    explorer.note_floor_plates(boxes, (float(pos[0]), float(pos[1]), yaw))
+    spawn = _spawn_from_env()
+    if spawn is None:
+        try:
+            node = robot.getSelf()
+            pos = node.getPosition()
+            rot = node.getOrientation()
+            # Local +x in the world. The matrix is row-major, local to world.
+            yaw = math.atan2(float(rot[3]), float(rot[0]))
+            spawn = (float(pos[0]), float(pos[1]), yaw)
+        except Exception as exc:
+            print(f"MAPPING floor plates unavailable {exc}", flush=True)
+            return
+    explorer.note_floor_plates(boxes, spawn)
     print(
-        f"MAPPING floor plates {len(boxes)} spawn {float(pos[0]):.2f} {float(pos[1]):.2f} {yaw:.3f}",
+        f"MAPPING floor plates {len(boxes)} spawn {spawn[0]:.2f} {spawn[1]:.2f} {spawn[2]:.3f}",
         flush=True,
     )
 
 
 def main() -> None:
-    robot = Robot()
+    robot = Supervisor()
     timestep = int(robot.getBasicTimeStep())
     dt = timestep / 1000.0
     hubs = _Drive(robot)

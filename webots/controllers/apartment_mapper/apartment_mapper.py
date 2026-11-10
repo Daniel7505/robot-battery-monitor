@@ -34,7 +34,7 @@ from src.mapping.body import FLOOR_CAM, OAK_DEPTH
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.explore import Explorer
 from src.mapping.noise import noisy_accel, noisy_depth
-from src.mapping.run_log import RunLog, default_run_dir, publish_current
+from src.mapping.run_log import RunLog, default_run_dir, publish_current, record_end_run
 
 
 _DEPTH_PERIOD_S = 0.096
@@ -557,6 +557,10 @@ def main() -> None:
             if timed_out and not explorer.done:
                 explorer.done = True
                 explorer.phase = "done"
+                # The file is written before mapping_done, which is what
+                # makes the pose logger stop the world. Stdout from this
+                # step can be discarded with that quit.
+                record_end_run(folder, "time_cap")
                 print(f"MAPPING time cap {max_s:.1f}s", flush=True)
                 print("MAPPING end_run reason=time_cap", flush=True)
             if explorer.done and not saved:

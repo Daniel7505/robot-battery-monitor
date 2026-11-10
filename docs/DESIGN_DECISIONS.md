@@ -645,3 +645,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Reading the −0.35 mean as a finished apartment. m4 is one draw, and no run logs mapper done.
 
 **Outcome.** The m2 ping-pong does not repeat. The shell still does not finish the apartment.
+
+## 2026-11-10 — The cap line, and the living room left unseen as a frontier
+
+**Mission parameter.** Say why n1 and m4 have no `end_run` line, what stops the ten at 600 s, and which reachable unvisited area is largest. Pantry and storage stay closed. Do not change how the shell moves.
+
+**Change.** `record_end_run` writes `end_run.txt` and flushes it before `mapping_done` is created. The print stays. Motion code is unchanged.
+
+**Why.** n1 and m4 have no traceback. `mapping_done` contains `600.000`. The pose logger stops the world when that file appears, and Webots dropped the stdout from that step. Eight runs still have the line in the log.
+
+**Evidence.** Last 120 s true path is 8.3–10.9 m on the north runs and 3.1–12.4 m on −0.35. Go-with-progress is 0.39–0.73 of each run. Stall is at most 0.13 (m5). Spins of 10 s or more are m1 (49 s), m2 (52 s), and m5 (100 s). The living room is 21.3 m² and about 99% seen, with about 17–18 m² unvisited on m5 and n1. m5's longest frontier is a 6.2 m bath edge; its last goal is in the bath. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Treating the missing line as a mapper crash. Treating the cap as a stuck robot. The shell is still moving, except m5's slower end.
+
+**Outcome.** The end reason is on disk before the quit. The run stops because 600 s arrives while unknown edges in other rooms still outrank the seen living room.

@@ -859,3 +859,26 @@ Same seeds, flags off, 600 s. All ten latch 15 plates. Eight log `time_cap` in `
 North mean 17.98, sd 2.99, against 15.14 (sd 3.25). −0.35 mean 20.58, sd 6.59, against 14.33 (sd 2.05). The −0.35 sd is wide because m4 is 31.44; the other four are 19.33, 20.22, 18.38, and 13.55. Bath is entered on n1 (26.6), n4 (21.4), m2 (7.5), and m4 (36.2). Laundry on n3 (31.3), m4 (60.3), and m5 (80.2). Pantry and storage are 0.
 
 No run has a zero-command stretch of 20 s with the true shell still. The longest exact zero is 14 s on m2. The m2 shape from t=456 s, a refused reverse ping-ponging with 8–24 ms pivots, does not repeat. No further change.
+
+## The cap line and what the ten was still doing
+
+n1 and m4 reach t=599.5 s, print `Terminating`, and have no `end_run` line and no traceback. Both `mapping_done` files contain `600.000`, so the time-cap branch did run. The pose logger calls `simulationQuit` as soon as that file exists, and Webots dropped the controller's stdout from that step. Eight of the ten still show the line. `record_end_run` now writes `end_run.txt` and flushes it before `mapping_done` is created. The motion code is unchanged.
+
+The cap is what stops the run. Over the last 120 s the true path is 10.9, 9.1, 9.5, 8.3, 9.9 m on the north runs and 10.0, 6.1, 12.4, 10.6, 3.1 m on −0.35. That is 0.026–0.103 m/s. Share of the 600 s:
+
+| run | stall | pile_leave | no goal | go with progress | waste of 10 s |
+| --- | ---: | ---: | ---: | ---: | --- |
+| n1 | 0.03 | 0.10 | 0.11 | 0.56 | none |
+| n2 | 0.00 | 0.02 | 0.04 | 0.57 | none |
+| n3 | 0.01 | 0.04 | 0.04 | 0.60 | none |
+| n4 | 0.02 | 0.15 | 0.22 | 0.48 | none |
+| n5 | 0.00 | 0.23 | 0.23 | 0.55 | none |
+| m1 | 0.09 | 0.06 | 0.21 | 0.58 | 49 s of spin |
+| m2 | 0.04 | 0.07 | 0.12 | 0.49 | 52 s, mostly spin |
+| m3 | 0.01 | 0.12 | 0.17 | 0.57 | none |
+| m4 | 0.00 | 0.02 | 0.01 | 0.73 | none |
+| m5 | 0.13 | 0.09 | 0.27 | 0.39 | 100 s of spin |
+
+m5 is the slow end (3.1 m in the last 120 s) and the long spin. The other nine are still covering ground when the clock stops.
+
+The largest unvisited reachable floor is the living room, 21.3 m², with about 17–18 m² still unvisited on m5 and n1 and about 99% seen. The interior is free on the map, so it is not a frontier. On m5 the longest remaining frontier is a 6.2 m bath edge (124 cells). The living edge is 4.0 m, mixed with cells off the floor, and ranks behind that bath edge. m5's last goal, t=558 s, is in the bath. On n1 the last four goals are in the bath, and the longest frontier is a 2.7 m kitchen edge. A seen room does not keep a frontier, and the capped unvisited stand loses to those unknown edges. Pantry and storage stay closed.

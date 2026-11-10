@@ -4077,6 +4077,14 @@ def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_pat
     assert bot.plan_veto_disagree == 2
 
 
+def test_the_end_reason_is_on_disk_before_the_world_quits(tmp_path):
+    """Stdout from the cap step can vanish when the pose logger stops the world."""
+    from src.mapping.run_log import record_end_run
+
+    path = record_end_run(tmp_path, "time_cap")
+    assert path.read_text(encoding="utf-8") == "MAPPING end_run reason=time_cap\n"
+
+
 def test_solids_include_the_closed_doors():
     names = {solid.name for solid in load_solids()}
     assert "APT_DOOR_FRONT" in names

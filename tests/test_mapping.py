@@ -3194,6 +3194,38 @@ def test_a_quiet_blocked_turn_does_not_spin_forever():
     assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
 
 
+def test_a_dead_reverse_lets_the_planned_path_run():
+    """After both turns fail, the leave latch must not keep the command at zero."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 14.3
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.3, 0.0), (1.5, 0.0)]
+    bot._leave_xy = (0.0, 0.0)
+    bot._pile_forced = True
+    bot._replan_at = 1.0e9
+    bot.t_s = 16.5
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert bot._leave_xy is None
+    assert bot._pile_forced is False
+    assert bot.path_xy
+    left, right = bot._go(False, 0.0)
+    assert left > 0.5 and right > 0.5
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
 def test_a_changing_depth_picture_is_not_camera_stuck():
     from src.mapping.explore import Explorer
 

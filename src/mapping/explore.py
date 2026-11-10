@@ -1342,12 +1342,31 @@ class Explorer:
         if turn is not None:
             return turn
         # Both turns were quiet. A straight reverse is the move that
-        # already failed, so it is not sent again. A forward the caller
-        # chose is no longer rewritten.
+        # already failed, so it is not sent again. The leave latch and
+        # the forced pile would ask for it every tick, and the path
+        # already planned would never run. Drop those latches. A forward
+        # the caller chose is no longer rewritten.
         if straight_back:
             self._body_v, self._body_w = 0.0, 0.0
+            self._release_dead_reverse()
             return 0.0, 0.0
         return speeds
+
+    def _release_dead_reverse(self) -> None:
+        """Stop re-requesting a reverse the block has already refused.
+
+        ``_leaving_command`` and a forced pile both send that reverse
+        again. While they do, the command stays zero and the goal stays
+        selected. The path that was already planned is the next action.
+        An empty path replans on the next tick.
+        """
+        self._leave_xy = None
+        self._pile_forced = False
+        x, y, _yaw = self.plan_pose()
+        self._pile_anchor = (self.t_s, x, y)
+        self._pile_logged = False
+        if not self.path_xy:
+            self._replan_at = self.t_s
 
     def _begin_pile_leave(self, pose) -> None:
         """The same spot again. Reverse along the trail and drop that goal."""

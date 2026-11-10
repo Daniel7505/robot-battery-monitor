@@ -539,3 +539,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A spawn warp that only looks like the bath. A stop at door H, the earlier m1 shape. n2 is at the bedroom walkway, and the command is zero after that.
 
 **Outcome.** The stand is in the bath and the shell is in the bedroom. The command stays zero until the cap, and the bath goal is not dropped. No controller change.
+
+## 2026-11-10 — A dead reverse is not requested again
+
+**Mission parameter.** Trace why n2's command stays zero after `blocked reverse did not move the shell` and `blocked turn did not yaw`. Say whether m3, n4, m4, and m5 are the same branch. Do not add a knob or a new motion.
+
+**Change.** When both of those recoveries have failed, a straight reverse still returns zero for that tick. The leave latch and the forced pile are cleared, and the pile clock starts again, so the next tick is not another copy of the same reverse. An empty path replans. A path already in hand is driven by the existing pursuit.
+
+**Why.** `_respect_escape_block` refuses the reverse, then one yaw and the other. After the second quiet turn it returns `(0, 0)` for a straight reverse. `_leaving_command` and the forced pile send that reverse again on the next tick, so the zero repeats and the planned path never runs.
+
+**Evidence.** n2's pile is 314 s of hold or zero, `src=pile_leave`, goal still the bath stand, path 4.11 m. m3, n4, m4, and m5 log the same two lines, then `pile, leaving the spot`, then a sit of 232–414 s on `src=pile_leave`. The unit test drives the planned path on the tick after the zero. Mapping tests: 156 passed. No new 600 s batch.
+
+**Rejected.** Another spin. The quiet-turn rule already stops that. A new reverse speed. The 2 s clock already decided this reverse did not move the shell.
+
+**Outcome.** Sitting still was the leave latch asking for a reverse the block had already refused. The next tick can run the path that was already planned.

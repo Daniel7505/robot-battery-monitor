@@ -750,3 +750,11 @@ m3, n4, m4, and m5 also sit for 232–414 s with a zero command. Their pile summ
 Dead ends: calling n2 a stop 0.19 m short of door H. The shell is at the other opening, the bedroom walkway, and then the command is zero rather than a creep that quits at the jamb.
 
 Outcome: the stand is a real point in the bath. The shell is in the bedroom, and after the blocked turn does not yaw the command stays zero until the cap, with that goal still selected. No controller change.
+
+## The dead reverse was requested again
+
+The two lines are one path. `_respect_escape_block` sends the existing reverse along a blocked heading. When that reverse has not moved the planner pose for the 2 s stall window, it logs `blocked reverse did not move the shell` and does not send the reverse again. `_block_turn_away` then tries one yaw, and the other way. Each quiet try is the same 2 s window. The second quiet try logs `blocked turn did not yaw`. A straight reverse after that returns wheel speeds `(0, 0)`.
+
+What kept the zero until the cap: `_leaving_command` and a forced pile both send that straight reverse on the next tick. The block turns it into zero again, so the shell never moves the 0.70 m that would drop the leave, and `_go` never reaches the path it already planned. n2's path was still 4.11 m, with the bath stand still selected. m3, n4, m4, and m5 are the same branch. Each logs the failed reverse, then `blocked turn did not yaw`, then `pile, leaving the spot`, and the long sit is `src=pile_leave` with the command at zero. m3 and m4 end that sit with no goal. n2 is the one that keeps the bath stand.
+
+The correction does not add a motion. On that zero return, the leave latch and the forced pile are dropped, and the pile clock starts again. An empty path replans on the next tick. A path that is already there is driven by the existing pursuit. A forward the caller chose is still left alone. The 2 s clocks are unchanged.

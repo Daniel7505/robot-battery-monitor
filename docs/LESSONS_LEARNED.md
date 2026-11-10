@@ -783,3 +783,17 @@ North mean 17.30, sd 3.84, against 14.32 (sd 5.02) on the previous live ten. −
 `blocked reverse did not move the shell` appears on every run. `blocked turn did not yaw` appears on n1, n2, n3, m3, n4, m4, and m5. After that second line the next phase command is not zero: n2 is a turn at t=415.5, two seconds later. No run has a `src=pile_leave` stretch with both v and w at zero. n2's following pile is 209 s of pile-leave and stall, goal none, and the true shell moves 0.6 m. m4 and m5 spend the late run in `src=stall` with a turn or a zero and almost no translation (m4's longest v=w=0 stall stretch is 101 s). That is not the old pile-leave zero that kept the bath stand.
 
 Outcome: the 314 s zero with the bath stand held did not repeat, and neither did the 232–414 s pile-leave zeros. The shell still does not finish the apartment. No further change.
+
+## Stall zero and the trail spin
+
+Same ten logs. No new run. `src=stall` is `_stall_escape`. It backs up, then turns, then drives a short way. The tag is set before `_respect_escape_block` sees the speeds.
+
+m4, from the turn failure at t=257 s to the cap, is that stall. 304 of 312 pile lines are v=0 and w=0. One line is a turn (w=0.30), then zeros. The last `stall, backing out` is t=242.9 s, then the failed reverse and both quiet turns. The back phase hands off to a turn when the reverse is closed, when trusted wheel travel hits 1 m, or when 0.8 s have passed with under 0.02 m of that travel. The command is already zero, so travel stops where it is, above 0.02 m and under those caps. The handoff does not come. The block turns the reverse into zero on the next tick as well. Planner yaw over that window changes by 0.00 rad. The true path is 0.0 m. The goal is none.
+
+m5 is the same stall, split between the turn (w=0.30 or −0.70, 226 lines) and the zeroed reverse (176 lines). Planner yaw changes by −0.02 rad. The true path is 0.9 m. The turn is commanded and the heading does not leave.
+
+n2's 209 s pile is not that branch. After the blocked turn, the phase command at t=415.5 s is already a turn. Of 149 pile lines from t=414 s, 122 are `src=pile_leave` and 27 are stall. The pile-leave branch after that time is `trail_reverse` 120 times and `straight_forward` 3 times. `trail_reverse` is a ±0.50 spin when the crumb is off to the side, with v=0. The goal is none and the path is empty. Planner yaw changes by 0.01 rad, so the spin never lines up and never becomes a drive. The true path is 0.6 m.
+
+Dead ends: calling n2 another stall zero. The speeds are a spin, the source is pile-leave, and the goal was already dropped. Calling the m4 zero a pile-leave latch. The latch from `7d07869` is clear; this reverse comes from the stall's back phase.
+
+Outcome: two sits. Stall keeps requesting a reverse the block has already refused, and its own 0.8 s handoff does not see that as no motion. The n2 pile is the trail spin, which does not yaw, so it does not start driving. No controller change.

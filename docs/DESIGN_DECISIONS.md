@@ -565,3 +565,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Another scoring or recovery change from this sample. The old multi-minute pile-leave zero is gone. Coverage is about 3 points higher, inside the previous north scatter.
 
 **Outcome.** The command does not stay zero until the cap after those two lines. The apartment is still not finished.
+
+## 2026-11-10 — Stall's reverse and the trail spin
+
+**Mission parameter.** From the `7d07869` logs, say what `src=stall` is, why it can sit with no translation, and whether n2's 209 s no-goal pile is the same branch. Do not change the controller.
+
+**Change.** None.
+
+**Why.** `src=stall` is `_stall_escape`: back up, then turn, then a short drive. The name is attached before the blocked-heading check. A straight reverse that check has already refused becomes wheel speeds (0, 0), and the tag stays stall.
+
+**Evidence.** m4 after t=257 s: 304 of 312 pile lines are stall with v=0 and w=0. The back phase leaves that reverse on a closed tail, 1 m of trusted wheel travel, or 0.8 s with under 0.02 m. Travel is already above 0.02 m when the command is zero, so it freezes there and the handoff does not run. Yaw change 0.00 rad, true path 0.0 m, goal none. m5 is the same stall, 226 turn lines and 176 zero lines, yaw change −0.02 rad, true path 0.9 m. n2 from t=414 s is `trail_reverse` 120 times under `src=pile_leave` (a ±0.50 spin, v=0), plus 27 stall lines. Goal none. Yaw change 0.01 rad, true path 0.6 m. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Treating n2 as the stall zero. The speeds are a spin and the source is pile-leave. A new motion. The stall turn is already the next action, and on these logs it does not change the heading.
+
+**Outcome.** Stall keeps asking for a reverse the block has refused, and the 0.8 s handoff does not see the zeroed command as no motion. n2 is a different sit: the trail spin never lines up, so it never drives. No controller change.

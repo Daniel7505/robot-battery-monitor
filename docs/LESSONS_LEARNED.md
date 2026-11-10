@@ -834,3 +834,28 @@ The left-rear tire rim is 3.5 cm from `APT_FURN_COUNTER`. The right-rear tire is
 A held w=0.30 pivot just before this window, t=451.04 s to t=454.13 s, turned the wheels 1.97 rad on each side, matching the command, and the true yaw changed by +0.45 rad. The planner yaw changed by the same amount. That rate is enough to yaw the shell. After t=490 s there are 171 pivots, all w=±0.30 (wheel commands ±0.637 rad/s). Each lasts 8–24 ms, one to three steps. The wheel positions do not move on those steps. None of them is a w=±0.70 stall turn.
 
 The branch is `_stall_escape` after both `_spin_safe` checks fail on the ±0.70 spin. The phase is set back to `back`. A rear that reads closed returns the existing w=±0.30 pivot for that step. Otherwise the function returns the straight reverse, and `_respect_escape_block` turns it into (0, 0) because that reverse was already refused. `_advance_stall_turn` arms the turn again, and the next step repeats. The block does not rewrite the pivot. The 4 s yaw flip does not run, because the safe spin is not held. The stall does not end, and the source stays stall, so the pile clock is not the command. The pivot is too short to yaw. The same shape for 20 s or longer appears on m2 only, from t=456 s to the cap. No controller change.
+
+## The small pivot stays on when the reverse is refused
+
+Commit `8f9efb0`. When both ±0.70 spins fail `_spin_safe` and `_block_reverse_dead` is set, the stall stays in the turn and holds `_corner_pivot`: 0.40 rad/s if that sweep is clear, otherwise 0.30 rad/s toward the open side. The phase clock is not reset, so the existing yaw target and the 4 s limit still end the turn. A reverse that has not been refused still drops back. Mapping tests: 158 passed.
+
+## Live ten with the small pivot held
+
+Same seeds, flags off, 600 s. All ten latch 15 plates. Eight log `time_cap` in `go`. n1 and m4 reach t=599.5 s and the process exits 0 without an `end_run` line; n1's last phase is `spin`, m4's is `go`. No mapper done line. Lowest `up_z` is 0.999. None go below 0.5.
+
+| run | visited | living | kitchen | hall | bath | bedroom | closet | laundry | pantry | storage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 16.96 | 17.2 | 14.5 | 0 | 26.6 | 23.6 | 0 | 0 | 0 | 0 |
+| n2 | 19.60 | 25.3 | 21.6 | 1.1 | 0 | 30.8 | 0 | 0 | 0 | 0 |
+| n3 | 19.28 | 33.5 | 19.5 | 35.7 | 0 | 0 | 0 | 31.3 | 0 | 0 |
+| n4 | 20.81 | 19.5 | 23.3 | 59.8 | 21.4 | 24.8 | 0 | 0 | 0 | 0 |
+| n5 | 13.26 | 20.7 | 29.0 | 6.9 | 0 | 2.2 | 0 | 0 | 0 | 0 |
+| m1 | 19.33 | 20.2 | 8.6 | 0 | 0.1 | 49.0 | 0 | 0 | 0 | 0 |
+| m2 | 20.22 | 27.7 | 0 | 0 | 7.5 | 36.0 | 5.3 | 0 | 0 | 0 |
+| m3 | 18.38 | 19.8 | 0.2 | 0 | 0 | 50.5 | 0 | 0 | 0 | 0 |
+| m4 | 31.44 | 26.7 | 0 | 39.0 | 36.2 | 59.7 | 4.6 | 60.3 | 0 | 0 |
+| m5 | 13.55 | 16.5 | 12.7 | 40.2 | 0 | 0.9 | 0 | 80.2 | 0 | 0 |
+
+North mean 17.98, sd 2.99, against 15.14 (sd 3.25). −0.35 mean 20.58, sd 6.59, against 14.33 (sd 2.05). The −0.35 sd is wide because m4 is 31.44; the other four are 19.33, 20.22, 18.38, and 13.55. Bath is entered on n1 (26.6), n4 (21.4), m2 (7.5), and m4 (36.2). Laundry on n3 (31.3), m4 (60.3), and m5 (80.2). Pantry and storage are 0.
+
+No run has a zero-command stretch of 20 s with the true shell still. The longest exact zero is 14 s on m2. The m2 shape from t=456 s, a refused reverse ping-ponging with 8–24 ms pivots, does not repeat. No further change.

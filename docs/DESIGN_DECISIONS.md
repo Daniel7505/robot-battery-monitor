@@ -619,3 +619,29 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Calling the sit a pin. Calling the pivot too weak: the same speed, held for 3.1 s, did yaw. A new motion. The 4 s flip is not what returns this command to zero.
 
 **Outcome.** The shell is on the floor, clear of the counter and the east wall. The stall asks again for the refused reverse, and the pivot it inserts lasts one to three steps, which does not yaw. No controller change.
+
+## 2026-11-10 — Hold the small pivot when the reverse is refused
+
+**Mission parameter.** Both ±0.70 spins fail `_spin_safe`, the phase drops to back, and the refused reverse becomes (0, 0) every step. Hold the existing small pivot instead. Do not add a speed or change a clock.
+
+**Change.** If `_block_reverse_dead` is set, the stall stays in the turn and commands `_corner_pivot` (0.40 rad/s when that sweep is clear, otherwise 0.30 rad/s toward the open side). The turn clock is not reset. The yaw target and the 4 s limit still end it. A reverse that has not been refused still drops back.
+
+**Why.** A held w=0.30 pivot at t=451–454 s on the `4dc9e25` m2 yawed the shell +0.45 rad. The 8–24 ms pulses did not.
+
+**Evidence.** `test_a_refused_stall_holds_the_small_pivot_when_the_spin_is_unsafe`: six `_go` calls return the same 0.30 rad/s pivot, source stall, phase still turn. Mapping tests: 158 passed.
+
+**Rejected.** A new spin speed. Resetting the 4 s clock on each pulse. Opening the reverse again.
+
+**Outcome.** The refused reverse is not requested again while the big spins are unsafe. The small pivot stays commanded.
+
+## 2026-11-10 — Live ten with the small pivot held
+
+**Mission parameter.** Same ten 600 s checks. Compare with `734b6cc` (north 15.14 sd 3.25, −0.35 14.33 sd 2.05).
+
+**Change.** None this pass. The runs are `8f9efb0`.
+
+**Evidence.** All ten latch 15 plates. Eight log `time_cap` in `go`. n1 and m4 reach t=599.5 s without an `end_run` line (last phase `spin` and `go`). No mapper done line. Lowest `up_z` is 0.999. North visited 16.96, 19.60, 19.28, 20.81, 13.26 (mean 17.98, sd 2.99). −0.35 visited 19.33, 20.22, 18.38, 31.44, 13.55 (mean 20.58, sd 6.59). The wide −0.35 sd is m4 at 31.44. Pantry and storage are 0. No zero-command stretch of 20 s with the shell still. The longest exact zero is 14 s. The room table is in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Reading the −0.35 mean as a finished apartment. m4 is one draw, and no run logs mapper done.
+
+**Outcome.** The m2 ping-pong does not repeat. The shell still does not finish the apartment.

@@ -2411,6 +2411,21 @@ class Explorer:
         self._escape_yaw = float(pose[2])
         self._escape_spin = self._relief_spin()
 
+    def _corner_pivot(self) -> float:
+        """Small pivot when both stall spins meet a corner.
+
+        0.40 rad/s when that sweep is clear, otherwise 0.30 rad/s toward
+        the open side. These are the speeds the closed-rear fallback
+        already uses.
+        """
+        turn = 0.40 if self._spin_safe(0.40) else -0.40
+        if not self._spin_safe(turn):
+            view = self._bubble_view
+            left = 0.0 if view is None or view.left is None else float(view.left)
+            right = 0.0 if view is None or view.right is None else float(view.right)
+            turn = 0.30 if left >= right else -0.30
+        return turn
+
     def _stall_escape(self, pose) -> tuple[float, float] | None:
         """Leave a stall by backing, then turning to a heading the camera can see.
 
@@ -2467,26 +2482,27 @@ class Explorer:
             if not self._spin_safe(self._escape_spin):
                 self._escape_spin = -float(self._escape_spin)
             # Both pivots meet a corner. Back straight instead of driving
-            # the sweep into the wall.
+            # the sweep into the wall. A reverse the block has already
+            # refused would come back as zero on the next step, so that
+            # case stays in this turn and holds the small pivot.
+            pivot = None
             if not self._spin_safe(self._escape_spin):
-                self._escape_phase = "back"
-                self._escape_phase_travel = self._escape_travel_m
-                self._escape_phase_t = self.t_s
-                along = self._trail_reverse(pose)
-                if along is not None:
-                    return along
-                if self._reverse_closed(pose):
-                    turn = 0.40 if self._spin_safe(0.40) else -0.40
-                    if not self._spin_safe(turn):
-                        view = self._bubble_view
-                        left = 0.0 if view is None or view.left is None else float(view.left)
-                        right = 0.0 if view is None or view.right is None else float(view.right)
-                        turn = 0.30 if left >= right else -0.30
-                    self._body_v, self._body_w = 0.0, turn
-                    return wheel_speeds(0.0, turn)
-                self._body_v, self._body_w = -0.10, 0.0
-                self._note_approach("back", -0.10, 0.0)
-                return wheel_speeds(-0.10, 0.0)
+                if self._block_reverse_dead:
+                    pivot = self._corner_pivot()
+                else:
+                    self._escape_phase = "back"
+                    self._escape_phase_travel = self._escape_travel_m
+                    self._escape_phase_t = self.t_s
+                    along = self._trail_reverse(pose)
+                    if along is not None:
+                        return along
+                    if self._reverse_closed(pose):
+                        turn = self._corner_pivot()
+                        self._body_v, self._body_w = 0.0, turn
+                        return wheel_speeds(0.0, turn)
+                    self._body_v, self._body_w = -0.10, 0.0
+                    self._note_approach("back", -0.10, 0.0)
+                    return wheel_speeds(-0.10, 0.0)
             # A spin the gyro did not follow is slip. Keep turning instead of
             # driving the false wheel travel into the pose.
             yaw_stuck = self.t_s - self._escape_phase_t > 4.0 and turned < 0.2
@@ -2501,9 +2517,10 @@ class Explorer:
                 self._escape_phase_travel = self._escape_travel_m
                 self._escape_phase_t = self.t_s
             else:
-                self._body_v, self._body_w = 0.0, float(self._escape_spin)
-                self._note_approach("pivot", 0.0, float(self._escape_spin))
-                return wheel_speeds(0.0, float(self._escape_spin))
+                spin = self._escape_spin if pivot is None else pivot
+                self._body_v, self._body_w = 0.0, float(spin)
+                self._note_approach("pivot", 0.0, float(spin))
+                return wheel_speeds(0.0, float(spin))
         if self._view_blind:
             self._escape_phase = "back"
             self._escape_phase_travel = self._escape_travel_m

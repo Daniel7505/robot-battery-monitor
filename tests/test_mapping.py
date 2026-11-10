@@ -3234,6 +3234,42 @@ def test_a_refused_stall_reverse_advances_to_the_turn():
     assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
 
 
+def test_a_refused_stall_holds_the_small_pivot_when_the_spin_is_unsafe(monkeypatch):
+    """Both big spins meet a corner and the reverse is already refused.
+
+    Dropping back to that reverse zeros the command every step. The
+    closed-rear pivot stays on until the turn's own limits end it.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    monkeypatch.setattr(bot, "_spin_safe", lambda _w: False)
+    expected = wheel_speeds(0.0, 0.30)
+    seen = []
+    for _ in range(6):
+        speeds = bot._go(False, 0.0)
+        seen.append(speeds)
+        assert speeds == expected
+        assert speeds != (0.0, 0.0)
+        assert bot._motion_source == "stall"
+        assert bot._escape_phase == "turn"
+    assert len(set(seen)) == 1
+
+
 def test_a_dead_reverse_lets_the_planned_path_run():
     """After both turns fail, the leave latch must not keep the command at zero."""
     from src.mapping.drive import wheel_speeds

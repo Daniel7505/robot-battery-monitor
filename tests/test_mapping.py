@@ -1060,6 +1060,89 @@ def test_a_still_scene_with_turning_wheels_freezes_translation():
     assert bot._pin_until > 0.0
 
 
+def _feed_reverse_pin(bot, rear, noses, pitch_rad: float) -> None:
+    """One pin window of a straight reverse. The rear scene does not move."""
+    from src.mapping.drive import wheel_speeds
+
+    bot._commanded = wheel_speeds(-0.10, 0.0)
+    bot._fusion.scene_floor_m = 0.0
+    bot._fusion.scene_visual_m = 0.0
+    bot.odometry.x_m = 0.0
+    for nose in noses:
+        bot._watch_pin(None, -0.01, rear, nose, pitch_rad)
+        if bot._pin_until <= 0.0:
+            bot.odometry.x_m -= 0.01
+
+
+def test_a_reverse_whose_nose_opens_is_not_pinned():
+    """The forward range rose by more than the noise margin. Keep the wheel step."""
+    from src.mapping.explore import PIN_NOSE_RELEASE_M, Explorer
+
+    cam = _small_oak(64, 40)
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    noses = [1.00 + 0.01 * i for i in range(8)]
+    assert noses[-1] - noses[0] > PIN_NOSE_RELEASE_M
+    _feed_reverse_pin(bot, rear, noses, 0.0)
+    assert bot.odometry.x_m < -0.04
+    assert bot._pin_until <= 0.0
+
+
+def test_a_reverse_with_a_flat_nose_still_pins():
+    """The same forward range is not the shell backing up."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot._replan_at = 1.0e9
+    bot._confident_after = 0.0
+    left = right = 0.0
+    step_rad = 0.10 / WHEEL_RADIUS_M * 0.05
+    dt = 0.05
+    for _ in range(16):
+        bot._commanded = wheel_speeds(-0.10, 0.0)
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            rear_depth=rear,
+            proximity={"us_left": 0.80, "us_right": 0.80},
+        )
+        left -= step_rad
+        right -= step_rad
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+    assert bot._pin_until > 0.0
+
+
+def test_a_tipped_reverse_still_pins_when_the_nose_opens():
+    """Pitch past the existing rest gate is a climb. The pin stays."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    bot._pitch_rest = 0.0
+    noses = [1.00 + 0.01 * i for i in range(8)]
+    _feed_reverse_pin(bot, rear, noses, 0.20)
+    assert abs(bot.odometry.x_m) < 0.02
+    assert bot._pin_until > 0.0
+
+
 def test_a_still_scene_freezes_yaw_while_the_wheels_spin():
     """Depth, floor, and vision unchanged. The gyro still reads its rest offset.
 

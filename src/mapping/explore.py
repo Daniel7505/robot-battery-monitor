@@ -210,6 +210,12 @@ def recovery_mode() -> str:
 # ordinary backup cap so a dead camera cannot reverse across the apartment.
 BLIND_BACK_CAP_M = 1.0
 STILL_M = 0.04
+# The forward nose is a minimum range. OAK-D Lite σ is 6.7 mm at 1 m and
+# 15 mm at 1.5 m. 0.04 m is six standard deviations at 1 m and more than
+# two at 1.5 m, the ranges where a pinned reverse sat still in the pose
+# while this reading rose by several tenths of a metre. A flat range
+# does not clear it.
+PIN_NOSE_RELEASE_M = 0.04
 STILL_S = 0.50
 
 
@@ -323,6 +329,7 @@ class Explorer:
         self._path_m = 0.0
         self._bubble_view: BubbleView | None = None
         self._pin = PinWatch()
+        self._pin_nose_m: float | None = None
         self._pin_idle_s = 0.0
         self._pin_until = -1.0
         self._mark_xy = (0.0, 0.0)
@@ -726,7 +733,7 @@ class Explorer:
                 self._slip_debt_m = min(2.0, self._slip_debt_m + abs(ds))
                 self._confident_after = max(self._confident_after, self.t_s + 4.0)
                 self._log(f"{self._fusion.last_slip} slip, wheel motion rejected")
-        self._watch_pin(depth, ds, rear_depth)
+        self._watch_pin(depth, ds, rear_depth, clearance, pitch_rad)
         self._watch_zupt(
             depth,
             floor_image,
@@ -1483,7 +1490,7 @@ class Explorer:
             self._stall_latched = expected >= 0.04 and trans > 0.4 and actual < 0.30 * expected
         return self._stall_latched
 
-    def _watch_pin(self, depth, ds: float, rear_depth=None) -> None:
+    def _watch_pin(self, depth, ds: float, rear_depth=None, nose_m: float = 99.0, pitch_rad: float = 0.0) -> None:
         """Freeze wheel translation when depth, floor, and visual odometry are all still.
 
         The forward range can keep changing while the shell yaws against a
@@ -1491,6 +1498,8 @@ class Explorer:
         translation. A fast yaw no longer throws their readings away.
         While the tail leads (reverse or a spin), the rear camera is the
         depth vote. The forward picture still shows the room behind the motion.
+        A straight reverse whose forward range has opened since this window
+        started is that motion, not a still scene. A climb or a tip still pins.
         """
         cmd_l, cmd_r = self._commanded
         tail_first = (cmd_l + cmd_r) < -0.3 or (
@@ -1522,16 +1531,41 @@ class Explorer:
         self._pin_idle_s = 0.0
         if self._pin.wheel_m <= 0.0:
             self._pin.anchor(self._mark_xy[0], self._mark_xy[1])
+            self._pin_nose_m = float(nose_m)
         self._pin.add(ds, depth_m, self._fusion.scene_floor_m, self._fusion.scene_visual_m)
         if not self._pin.ready():
             return
         pinned = self._pin.pinned()
-        if pinned:
+        if pinned and not self._reverse_nose_opened(nose_m, pitch_rad):
             self.odometry.x_m = self._pin.x0
             self.odometry.y_m = self._pin.y0
             self._pin_until = self.t_s + 1.2
             self._log("pinned, depth floor and visual still, wheel translation frozen")
         self._pin.reset()
+
+    def _reverse_nose_opened(self, nose_m: float, pitch_rad: float) -> bool:
+        """A straight reverse whose forward range opened is not a still scene.
+
+        The pin's depth vote on a reverse is the rear camera. A wall ahead
+        getting farther is the shell backing up, which that vote misses.
+        The release is only that case. A spin, a flat range, and a shell
+        that is already pitched still pin.
+        """
+        cmd_l, cmd_r = self._commanded
+        straight_reverse = (cmd_l + cmd_r) < -0.3 and abs(cmd_l - cmd_r) < 0.6
+        if not straight_reverse:
+            return False
+        nose0 = getattr(self, "_pin_nose_m", None)
+        if nose0 is None or float(nose0) >= 90.0 or float(nose_m) >= 90.0:
+            return False
+        if float(nose_m) - float(nose0) <= PIN_NOSE_RELEASE_M:
+            return False
+        rest = self._pitch_rest
+        if rest is not None and abs(float(pitch_rad) - rest) > 0.12:
+            return False
+        if self.wheels_lifted:
+            return False
+        return True
 
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
         held_depth = None

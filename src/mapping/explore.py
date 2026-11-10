@@ -2504,9 +2504,16 @@ class Explorer:
                     self._note_approach("back", -0.10, 0.0)
                     return wheel_speeds(-0.10, 0.0)
             # A spin the gyro did not follow is slip. Keep turning instead of
-            # driving the false wheel travel into the pose.
+            # driving the false wheel travel into the pose. That flip is for
+            # the ±0.70 spin, which is the command only when pivot is None.
+            # The small pivot ignores _escape_spin, so flipping it and
+            # restarting the clock would hold that same pivot until the cap.
             yaw_stuck = self.t_s - self._escape_phase_t > 4.0 and turned < 0.2
-            if yaw_stuck:
+            if yaw_stuck and pivot is not None:
+                self._escape_phase = "drive"
+                self._escape_phase_travel = self._escape_travel_m
+                self._escape_phase_t = self.t_s
+            elif yaw_stuck:
                 self._escape_phase_t = self.t_s
                 self._escape_yaw = float(pose[2])
                 self._escape_spin = -float(self._escape_spin)

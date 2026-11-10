@@ -3270,6 +3270,74 @@ def test_a_refused_stall_holds_the_small_pivot_when_the_spin_is_unsafe(monkeypat
     assert len(set(seen)) == 1
 
 
+def test_a_quiet_small_pivot_hands_off_to_the_drive():
+    """Four seconds of the small pivot with flat yaw takes the drive.
+
+    Flipping the unused ±0.70 spin and restarting the clock would send
+    the same pivot again. The drive branch is the existing handoff.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s - 4.1
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    bot._spin_safe = lambda _w: False
+    drive = wheel_speeds(0.12, 0.0)
+    first = bot._go(False, 0.0)
+    assert first == drive
+    assert bot._escape_phase == "drive"
+    second = bot._go(False, 0.0)
+    assert second == drive
+    assert bot._escape_phase == "drive"
+    assert second != wheel_speeds(0.0, 0.30)
+    assert second != wheel_speeds(0.0, -0.30)
+
+
+def test_a_quiet_big_spin_still_flips():
+    """The ±0.70 spin is the command, so a quiet 4 s still flips it.
+
+    The same tick falls through to the drive because the clock was just
+    reset. The next turn command is the flipped spin, not a held pivot.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s - 4.1
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    bot._spin_safe = lambda _w: True
+    first = bot._go(False, 0.0)
+    assert first == wheel_speeds(0.12, 0.0)
+    assert bot._escape_spin == -0.70
+    assert bot._escape_phase == "turn"
+    second = bot._go(False, 0.0)
+    assert second == wheel_speeds(0.0, -0.70)
+    assert bot._escape_phase == "turn"
+
+
 def test_a_dead_reverse_lets_the_planned_path_run():
     """After both turns fail, the leave latch must not keep the command at zero."""
     from src.mapping.drive import wheel_speeds

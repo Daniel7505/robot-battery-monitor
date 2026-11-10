@@ -579,3 +579,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating n2 as the stall zero. The speeds are a spin and the source is pile-leave. A new motion. The stall turn is already the next action, and on these logs it does not change the heading.
 
 **Outcome.** Stall keeps asking for a reverse the block has refused, and the 0.8 s handoff does not see the zeroed command as no motion. n2 is a different sit: the trail spin never lines up, so it never drives. No controller change.
+
+## 2026-11-10 — A refused stall reverse moves to its turn
+
+**Mission parameter.** The stall back phase keeps requesting the reverse the block has already refused, because wheel travel sits between 0.02 m and 1 m. Stop that request. Use the turn the stall already has. Do not touch the pile-leave trail spin, and do not add a motion for the 4 s flip.
+
+**Change.** `_release_dead_reverse` advances a stall that is still in its back phase with `_advance_stall_turn`, the same step the 0.8 s handoff uses. The refused reverse on that tick is still (0, 0). The next tick is the existing turn.
+
+**Why.** `7d07869` drops the pile latches and leaves `_blind_back` set. The stall tag is applied before the block, so the zero stays labeled stall and the back phase asks again.
+
+**Evidence.** Unit test: travel 0.15 m, both block turns already quiet, the reverse returns (0, 0), the phase is `turn`, and the next `_go` is the stall pivot. Mapping tests: 157 passed. No new 600 s batch.
+
+**Rejected.** Ending the stall and replanning. The turn is already the next action. A new spin for m5. That flip is the stall turn not changing the heading, and this pass does not add a motion for it. Treating n2's `trail_reverse` as this zero.
+
+**Outcome.** A refused stall reverse is not requested again. The stall turn runs on the next tick. The 2 s clocks are unchanged.

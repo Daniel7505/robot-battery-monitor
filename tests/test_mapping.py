@@ -3194,6 +3194,46 @@ def test_a_quiet_blocked_turn_does_not_spin_forever():
     assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
 
 
+def test_a_refused_stall_reverse_advances_to_the_turn():
+    """A stall reverse the block has refused must not stay (0, 0) until the cap.
+
+    Wheel travel already sits between the 0.02 m handoff and the 1 m cap,
+    so the back phase would ask for that reverse on every tick. The turn
+    the stall already has is the next command.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._view_blind = False
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 14.3
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot._blind_back = True
+    bot._escape_phase = "back"
+    bot._escape_phase_t = bot.t_s
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot.t_s = 16.5
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert bot._escape_phase == "turn"
+    assert bot._blind_back
+    assert bot._escape_travel_m == 0.15
+    left, right = bot._go(False, 0.0)
+    assert left * right < 0
+    assert abs(left) > 0.5 and abs(right) > 0.5
+    assert bot._motion_source == "stall"
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
 def test_a_dead_reverse_lets_the_planned_path_run():
     """After both turns fail, the leave latch must not keep the command at zero."""
     from src.mapping.drive import wheel_speeds

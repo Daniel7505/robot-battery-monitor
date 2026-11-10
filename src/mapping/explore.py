@@ -1342,10 +1342,10 @@ class Explorer:
         if turn is not None:
             return turn
         # Both turns were quiet. A straight reverse is the move that
-        # already failed, so it is not sent again. The leave latch and
-        # the forced pile would ask for it every tick, and the path
-        # already planned would never run. Drop those latches. A forward
-        # the caller chose is no longer rewritten.
+        # already failed, so it is not sent again. The leave latch, the
+        # forced pile, and a stall still in its back phase would ask for
+        # it every tick. Drop those latches. The stall's own turn is the
+        # next action. A forward the caller chose is no longer rewritten.
         if straight_back:
             self._body_v, self._body_w = 0.0, 0.0
             self._release_dead_reverse()
@@ -1356,9 +1356,12 @@ class Explorer:
         """Stop re-requesting a reverse the block has already refused.
 
         ``_leaving_command`` and a forced pile both send that reverse
-        again. While they do, the command stays zero and the goal stays
-        selected. The path that was already planned is the next action.
-        An empty path replans on the next tick.
+        again. A stall still backing up does too, and the back phase
+        will not hand off while trusted wheel travel sits between 0.02 m
+        and 1 m. While they do, the command stays zero. The path that
+        was already planned is the next action. An empty path replans
+        on the next tick. A stall in its back phase moves to the turn
+        it already has.
         """
         self._leave_xy = None
         self._pile_forced = False
@@ -1367,6 +1370,8 @@ class Explorer:
         self._pile_logged = False
         if not self.path_xy:
             self._replan_at = self.t_s
+        if self._blind_back and self._escape_phase == "back":
+            self._advance_stall_turn((x, y, _yaw))
 
     def _begin_pile_leave(self, pose) -> None:
         """The same spot again. Reverse along the trail and drop that goal."""
@@ -2398,6 +2403,14 @@ class Explorer:
         nose = float(self._last_clear[0])
         return nose >= 90.0 or nose >= 0.50
 
+    def _advance_stall_turn(self, pose) -> None:
+        """The backup is over. The turn this escape already has is next."""
+        self._escape_phase = "turn"
+        self._escape_phase_travel = self._escape_travel_m
+        self._escape_phase_t = self.t_s
+        self._escape_yaw = float(pose[2])
+        self._escape_spin = self._relief_spin()
+
     def _stall_escape(self, pose) -> tuple[float, float] | None:
         """Leave a stall by backing, then turning to a heading the camera can see.
 
@@ -2444,11 +2457,7 @@ class Explorer:
                 or moved >= BLIND_BACK_CAP_M
                 or (phase_age > 0.8 and moved < 0.02)
             ):
-                self._escape_phase = "turn"
-                self._escape_phase_travel = self._escape_travel_m
-                self._escape_phase_t = self.t_s
-                self._escape_yaw = float(pose[2])
-                self._escape_spin = self._relief_spin()
+                self._advance_stall_turn(pose)
             else:
                 self._body_v, self._body_w = -0.10, 0.0
                 self._note_approach("back", -0.10, 0.0)

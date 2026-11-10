@@ -797,3 +797,7 @@ n2's 209 s pile is not that branch. After the blocked turn, the phase command at
 Dead ends: calling n2 another stall zero. The speeds are a spin, the source is pile-leave, and the goal was already dropped. Calling the m4 zero a pile-leave latch. The latch from `7d07869` is clear; this reverse comes from the stall's back phase.
 
 Outcome: two sits. Stall keeps requesting a reverse the block has already refused, and its own 0.8 s handoff does not see that as no motion. The n2 pile is the trail spin, which does not yaw, so it does not start driving. No controller change.
+
+## A refused stall reverse moves to the turn
+
+When the block turns that stall reverse into (0, 0), the back phase moves to the turn the stall already has. The same step the 0.8 s handoff uses. Trusted travel is left where it is. The next tick asks for that turn, which the block does not rewrite. No new speed and no new spin. The pile-leave `trail_reverse` spin is unchanged. m5's 4 s flip, which restarts before the drive, is unchanged. Mapping tests: 157 passed. No new 600 s batch.

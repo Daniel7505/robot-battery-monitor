@@ -937,3 +937,19 @@ The 10 s wastes that are not the opening survey spin:
 - m5, 354 s of `(0, 0)` from t=245 s to the cap. Pile `src=back`, `v=0`, after the stall drive and a new goal.
 
 The ±0.70 flip is unchanged, and it is what fills m2's long flat spin. The two long zeros are a reverse the block has already refused. The tag stays `back` and the speeds stay `(0, 0)`.
+
+## The path reverse is still requested after the block zeros it
+
+No controller change. On m3 and m5 the stall drive does hand off, a goal is taken, and the command is then `(0, 0)` with pile `src=back`.
+
+m5: at t=236–239 s the stall is `w=±0.30`. At t=240.3 s it is `v=0.12`, the drive. At t=242.0 s the goal is (−0.72, 3.83). At t=242.3 s the pile is `src=back v=0.00`, and it stays there until the cap, 354 s, 353 lines. The goal's bearing is 1.49 rad off the planner yaw, so it is not ahead. The true shell stays at (3.91, 5.00) in the living room, yaw −1.36. The right-front tire is 13.7 cm from `APT_WALL_SHARED_B`. The other tires are 35–49 cm from that wall or `APT_WALL_SHARED_C`. No wall contact on those 354 s. `up_z` is 1.000 and the hub stays at z=0.
+
+m3: the dead reverse was logged at t=223.0 s and `blocked turn did not yaw` at t=231.8 s. At t=263.4 s the stall is `v=0.12`. At t=264.2 s the goal is (−0.71, 3.56). At t=264.4 s `src=back v=0.00` starts and runs 332 s. The goal bearing is 1.20 rad off the yaw. The true shell stays at (4.14, 2.39) in the kitchen, yaw −2.87. The right-front tire is 22.5 cm from `APT_WALL_SHARED_B`. The others are 33–53 cm out. No wall contact. `up_z` is 1.000.
+
+The speeds come from `_continue_back`, which returns `wheel_speeds(-0.10, 0)` while `_backing` is set. `_go` marks that `back` before `_remember` runs. `_respect_escape_block` sees a straight reverse on a heading whose reverse is already dead and whose two turns were already quiet, sets the body speeds to 0, and calls `_release_dead_reverse`. There is no `blocked heading` line during the sit. That line is logged only while the reverse is still being substituted, which is before it is marked dead.
+
+`_release_dead_reverse` clears `_leave_xy` and `_pile_forced`, replans only when the path is empty, and calls `_advance_stall_turn` only when `_blind_back` is set and the stall phase is still `back`. This caller is the path's `_backing` latch, after the stall has left that phase. The latch ends when the pose moves 1 m, the clearance opens, the rear closes, or the goal is ahead. None of those happen while the command is zero, so the next tick asks again. `4dc9e25` is that stall advance. It does not run here.
+
+The saved live tens for `8f9efb0` (`hold_pivot`), `4dc9e25` (`stall_turn`), and `7d07869` (`release_live`) have no `src=back v=0.00` stretch of 20 s. The code path is older than `1a66938`. Those runs did not reach it. The drive handoff is what gets m3 and m5 to a goal, and the goal path then requests the reverse the block already refused.
+
+m2 from t=538 s to t=585 s is not the 4 s flip. The wheel command swaps between `(1.49, -1.49)` and `(-1.49, 1.49)` every step or two. Of 2311 runs of one sign, 1498 last one or two steps, and the longest is 0.78 s. The 4 s flip would hold one sign. This is the turn's first check: `_spin_safe` rejects the spin just sent, the opposite sign is sent the same tick, and the next tick rejects that one. The 1 Hz pile line shows one sign for several seconds only because it samples a single tick.

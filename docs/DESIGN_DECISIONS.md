@@ -701,3 +701,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Changing the odometry rule that drops translation on a pivot. Resetting the loop-closure grid. Changing the 4 s value or the ±0.70 flip.
 
 **Outcome.** A quiet small pivot leaves the turn. The long single-sign w=−0.30 hold does not repeat. Two −0.35 runs then spend the rest of the cap on a blocked reverse tagged `back`.
+
+## 2026-11-10 — The path reverse stays requested after the block zeros it
+
+**Mission parameter.** From the handoff logs, say what produces `src=back` with `v=0` on m3 and m5, whether that sit is new, and whether m2's ±0.70 alternation is the 4 s flip. Do not change the controller.
+
+**Change.** None.
+
+**Why.** After the stall drive, the goal path calls `_begin_back` and then `_continue_back`, which returns `wheel_speeds(-0.10, 0)` and `_go` marks `back`. `_remember` runs `_respect_escape_block`. The reverse on that heading is already dead and both quiet turns are already used, so the block sets the speeds to (0, 0) and calls `_release_dead_reverse`. That release clears the leave latch and a stall whose phase is still `back`. It does not clear `_backing`. The goal is behind the nose, the planner pose does not move, and the 1 m exit never arrives, so the next tick asks for the same reverse. `7d07869` and `4dc9e25` do not see this caller. The saved tens for those commits have no `src=back v=0` stretch of 20 s. The drive handoff is what reaches the goal. m2's wheels swap the ±0.70 sign every step or two. The longest same sign is 0.78 s. That is the turn's per-tick "try the other spin", not the 4 s flip.
+
+**Evidence.** The sequence, the clearances, and the earlier tens are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Calling the zero a stall back phase. The stall has already handed off. Calling m2's alternation the 4 s flip. A 4 s flip would hold one sign.
+
+**Outcome.** The fault is `_continue_back` keeping a reverse the block has already refused. The shell is free on both runs. No controller change.

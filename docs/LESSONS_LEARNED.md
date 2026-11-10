@@ -699,3 +699,15 @@ Real unknown is still there. Inside the plates, the big clusters are bedroom (15
 Dead ends: raising the 0.45. Rejecting every off-plate cell. The 0.4–1 m band is wide enough that a yaw error can move a real edge into it, so a hard reject would also drop real floor. Pantry and storage stay out of this. They are closed.
 
 Outcome: the leftover is both. The score is won by a perimeter of free cells the map drew past the floor, glued into one frontier. Real unexplored floor remains in the bedroom, the living room, and the bath, and it would lose to that perimeter on most of these runs. No controller change.
+
+## The outside loop no longer takes the whole length
+
+Same ten maps, rescored with the planner, not a new batch. A cluster keeps its cell count unless two things are both true: more than half its cells are over 0.35 m from every floor plate, and those cells average more than 1.2 m from their own center. That is the loop. Its credit is the longest 0.40 m strip, and only the share of the strip still within 0.35 m of a plate. A local edge keeps the cell count, including one that sits entirely off the plate. The 0.45 stand cap is unchanged. The plates are the apartment floor solids. The spawn is read once, as odom zero. The inertial unit is not an input.
+
+At the final pose the planner was choosing a majority-off-plate cluster on n1, n2, n3, m3, and n5. North run 5's was the 51 m loop, planner score 19.5. After the credit, that goal is the living room (score 3.76). n2's goal becomes the living room, n3's the bedroom, and n1's the bath (score 2.15). m5 was already the bath, and it stays the bath. m1, m2, n4, and m4 were already on a plate and stay there (living, bedroom, kitchen, bedroom).
+
+m3 is the one that does not land on a plate. The old goal was 80% off the plates, stand in the kitchen, score 2.86. That one loses. The goal that replaces it is a tighter cluster, 51% off the plates, stand in the living room, score 1.91. Its cells sit close to their own center, so the rule leaves the length alone. That is the same case as a wall a yaw error has pushed off the plate.
+
+The bath is the chosen frontier on two of the ten final poses (n1, and m5 as before). On the runs the loop used to win, a real room now wins instead, and on n2, n3, and n5 that room is the living room or the bedroom, which still outrank the bath. No new 600 s batch.
+
+Dead ends: deleting every cell past a plate. Splitting every cluster, on-plate or not. The bedroom frontier on m4 is 37 m and mostly on the plate; a split of every long cluster would have cut that too.

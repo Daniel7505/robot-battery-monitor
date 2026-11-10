@@ -66,6 +66,7 @@ from src.mapping.frontiers import (
     free_behind_m,
     frontier_mask,
     motion_blocked,
+    odom_to_world,
     select_goal,
     spin_fits,
     wide_escape,
@@ -478,9 +479,37 @@ class Explorer:
         self._oracle_local: tuple[float, float, float] | None = None
         self._oracle_yaw_prev = 0.0
         self._oracle_yaw_unwrapped = 0.0
+        # Floor plates in world metres, and the spawn that odom zero is.
+        # None leaves every frontier length as the cell count.
+        self._floor_boxes: list[tuple[float, float, float, float]] | None = None
+        self._floor_spawn: tuple[float, float, float] | None = None
 
     def pose(self) -> tuple[float, float, float]:
         return self.odometry.pose()
+
+    def note_floor_plates(
+        self,
+        boxes: list[tuple[float, float, float, float]],
+        spawn: tuple[float, float, float],
+    ) -> None:
+        """World-frame floor rectangles. Odom zero is ``spawn``.
+
+        The spawn is the robot's place at the start, not an inertial
+        reading. A loop of free cells past the plates then cannot take
+        the length of the whole loop. With no plates, scores are unchanged.
+        """
+        self._floor_boxes = [(float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b in boxes]
+        self._floor_spawn = (float(spawn[0]), float(spawn[1]), float(spawn[2]))
+
+    def _floor_goal_args(self) -> dict:
+        if not self._floor_boxes or self._floor_spawn is None:
+            return {}
+        spawn = self._floor_spawn
+
+        def _to_world(x: float, y: float) -> tuple[float, float]:
+            return odom_to_world(x, y, spawn)
+
+        return {"floor_boxes": self._floor_boxes, "to_world": _to_world}
 
     def plan_pose(self) -> tuple[float, float, float]:
         """Pose the explorer plans with. The estimate, unless an oracle was handed in."""
@@ -3383,6 +3412,7 @@ class Explorer:
             visited=self.visited,
             turn_aim_m=aim,
             zones=zones,
+            **self._floor_goal_args(),
         )
         self._note_refusals(report)
         if chosen is None:
@@ -3519,6 +3549,7 @@ class Explorer:
             report=report,
             visited=self.visited,
             zones=self._failure_zone_args(),
+            **self._floor_goal_args(),
         )
         self._note_refusals(report)
         if chosen is None:

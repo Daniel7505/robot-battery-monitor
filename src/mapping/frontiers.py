@@ -2,7 +2,10 @@
 
 Yamauchi 1997: a frontier cell is free space next to unknown space.
 Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
-scored by size divided by the A* path length. The path is planned on
+scored by size divided by the A* path length. When floor plates are
+known, a loop that sits mostly past those plates does not keep the
+length of the whole loop. A local frontier does, even off the plate.
+The path is planned on
 the free grid with occupied cells inflated by the robot radius, so the
 robot does not try to squeeze through a door it cannot fit. With
 ``RBM_FOOTPRINT_ALIGN`` the inflation is the same rectangle the map
@@ -44,6 +47,16 @@ VIEW_MAX_M = 3.0
 # Close enough that a corner is in the depth image, far enough to be
 # outside the near blind zone. Travel is only a tie break.
 VIEW_SWEET_M = 1.15
+
+# A cell farther than this from every floor plate is outside the plate
+# and outside the band a yaw error can slide a real edge into.
+FLOOR_MARGIN_M = 0.35
+# Mean distance of a cluster's cells from their own center. A local
+# wall is under this. The loop around the outside of the apartment is over it.
+PERIMETER_RADIUS_M = 1.20
+# A spread-out loop may claim the cells within this distance of one
+# centerline, and only the share of that strip still near a floor plate.
+STRIP_BAND_M = 0.40
 
 # Expansion limit inside one frontier search. A hit is a failed search,
 # not a longer path. The quit dump counts how often this fires.
@@ -104,6 +117,64 @@ def frontier_mask(labels: np.ndarray) -> np.ndarray:
     neighbor[:, 1:] |= unknown[:, :-1]
     neighbor[:, :-1] |= unknown[:, 1:]
     return free & neighbor
+
+
+def odom_to_world(x: float, y: float, spawn: tuple[float, float, float]) -> tuple[float, float]:
+    """Odom metres to world metres. Odom zero is the spawn pose."""
+    sx, sy, yaw = spawn
+    c, s = math.cos(yaw), math.sin(yaw)
+    return sx + c * float(x) - s * float(y), sy + s * float(x) + c * float(y)
+
+
+def far_from_floor(
+    x: float,
+    y: float,
+    boxes: list[tuple[float, float, float, float]],
+    margin_m: float = FLOOR_MARGIN_M,
+) -> bool:
+    """True when (x, y) is more than ``margin_m`` from every axis-aligned plate."""
+    limit = float(margin_m)
+    for xmin, xmax, ymin, ymax in boxes:
+        if xmin <= x <= xmax and ymin <= y <= ymax:
+            return False
+        dx = 0.0 if xmin <= x <= xmax else (xmin - x if x < xmin else x - xmax)
+        dy = 0.0 if ymin <= y <= ymax else (ymin - y if y < ymin else y - ymax)
+        if math.hypot(dx, dy) <= limit:
+            return False
+    return True
+
+
+def frontier_credit_m(points: np.ndarray, far: np.ndarray, res: float) -> float:
+    """Length a frontier cluster may claim, in metres.
+
+    ``points`` are cell centers. ``far`` is true for a cell more than
+    ``FLOOR_MARGIN_M`` from every floor plate. A local cluster keeps
+    ``len(points) * res``, including one that yaw error has carried off
+    the plate. A cluster that is mostly far from the plates and spread
+    around its own center is the outside loop glued into one frontier.
+    That loop is credited as its longest strip, and only the share of
+    the strip that is not far from a plate.
+    """
+    count = int(points.shape[0])
+    full = count * float(res)
+    if count == 0 or far.shape[0] != count:
+        return full
+    if float(np.mean(far)) < 0.5:
+        return full
+    centered = points - points.mean(axis=0)
+    radius = float(np.mean(np.hypot(centered[:, 0], centered[:, 1])))
+    if radius < PERIMETER_RADIUS_M:
+        return full
+    cov = centered.T @ centered
+    _vals, vecs = np.linalg.eigh(cov)
+    axis = vecs[:, int(np.argmax(_vals))]
+    cross = np.abs(centered[:, 0] * axis[1] - centered[:, 1] * axis[0])
+    keep = cross <= STRIP_BAND_M
+    kept = int(np.count_nonzero(keep))
+    if kept == 0:
+        return full
+    near = float(np.mean(~far[keep]))
+    return kept * float(res) * near
 
 
 def clusters(mask: np.ndarray) -> list[list[tuple[int, int]]]:
@@ -1464,6 +1535,22 @@ def format_quit(diag: dict) -> str:
     return " ".join(parts)
 
 
+def _group_credit_m(grid, group, floor_boxes, to_world) -> float:
+    """Cell length, or the outside-loop credit when floor plates are known."""
+    full = len(group) * grid.res
+    if not floor_boxes or to_world is None:
+        return full
+    points = np.empty((len(group), 2), dtype=float)
+    far = np.empty(len(group), dtype=bool)
+    for i, (row, col) in enumerate(group):
+        x, y = grid.cell_center(row, col)
+        points[i, 0] = x
+        points[i, 1] = y
+        wx, wy = to_world(float(x), float(y))
+        far[i] = far_from_floor(float(wx), float(wy), floor_boxes)
+    return frontier_credit_m(points, far, grid.res)
+
+
 def select_goal(
     grid: OccupancyGrid,
     pose_xy: tuple[float, float],
@@ -1480,6 +1567,8 @@ def select_goal(
     visited: np.ndarray | None = None,
     turn_aim_m: float | None = None,
     zones: list[tuple[float, float, float]] | None = None,
+    floor_boxes: list[tuple[float, float, float, float]] | None = None,
+    to_world=None,
 ) -> tuple[tuple[float, float], list[tuple[float, float]]] | None:
     """Best frontier goal and the path to it, in odom metres. None if nothing worth driving to."""
     labels = grid.labels()
@@ -1603,8 +1692,14 @@ def select_goal(
         cells = [c for c in group if c not in banned]
         if not cells:
             continue
-        # Prefer a cell the robot can stand on. The score still uses the
-        # whole cluster's length, so a long wall beats a speck.
+        # A local wall keeps its cell count, including one yaw has slid
+        # off a plate. A loop spread past the plates does not keep the
+        # length of the whole loop. Below the usual minimum it is not a goal.
+        size_m = _group_credit_m(grid, group, floor_boxes, to_world)
+        if size_m < min_frontier_m:
+            continue
+        # Prefer a cell the robot can stand on. The score uses the credit
+        # above, so a long wall beats a speck.
         target = viewpoint(free, cells, occupied=(labels == 1), res=grid.res, pose=start)
         if target is None:
             continue
@@ -1624,7 +1719,6 @@ def select_goal(
         # The 1–3 m stand-off can land in that pocket. The nearest safe cell
         # is tried before the frontier is refused, so a look from the open
         # floor is not dropped because the sweet spot sat in the corner.
-        size_m = len(group) * grid.res
         if clear is not None and float(clear[target]) < aim_m and size_m < 0.80:
             safer = _viewpoint_clearest(free, cells, labels == 1)
             nearest = _viewpoint_nearest(free, cells, 6)

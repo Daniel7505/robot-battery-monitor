@@ -497,3 +497,17 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 **Rejected.** Calling the leftover only real unknown, or only speckle. Raising 0.45. Dropping every cell that misses a floor plate. A yaw error can move a real edge into the 0.4–1 m band.
 
 **Outcome.** The score is won by free space the map drew past the floor and connected into one frontier. Real unknown remains, and on these runs it loses to that perimeter. No controller change.
+
+## 2026-11-10 — A spread-out loop past the plates does not keep its length
+
+**Mission parameter.** One scoring change so a long exterior halo cannot beat a real in-room frontier on the ten maps. Do not raise the 0.45. Do not drop every cell that misses a plate. Do not open pantry or storage.
+
+**Change.** `frontier_credit_m` in `src/mapping/frontiers.py`. A cluster keeps `len * res` unless more than half its cells are over 0.35 m from every floor plate and the cells average more than 1.2 m from their own center. Then the credit is the longest strip within 0.40 m of one centerline, times the share of that strip that is not far from a plate. The apartment controller passes the floor solids and the spawn, read once. No plates, and the score is the old one. The inertial unit is not read for this.
+
+**Why.** The loop is one cluster because the free cells past the walls connect around the building. Cell count times 0.05 m turns that into 51 m on north run 5. A yaw-shifted wall is off the plate too, but it is local, so the radius test leaves it. An on-plate bedroom frontier is long and spread out, but it is not mostly past the plates, so it keeps its length.
+
+**Evidence.** The ten saved maps, `select_goal` at the final pose. Before: a majority-off-plate cluster on n1, n2, n3, m3, n5. North run 5 scored 19.5. After: n5 living 3.76, n2 living, n3 bedroom, n1 bath 2.15. m5 was already the bath. m3's kitchen-stand loop (80% off, score 2.86) loses to a tighter cluster (51% off, score 1.91) whose cells are close to their own center. Counts are in `docs/LESSONS_LEARNED.md`. Mapping tests: 155 passed. No new 600 s batch.
+
+**Rejected.** Raising 0.45. Zeroing each off-plate cell. Cutting every long cluster down to a strip. The m4 bedroom frontier is on the plate and is the right winner.
+
+**Outcome.** The building loop is not the goal on those five poses. The bath is the goal on n1 and m5. On n2, n3, and n5 a living or bedroom frontier outranks it. m3 still selects a compact cluster that is barely majority-off-plate.

@@ -896,6 +896,57 @@ def test_pitch_down_still_sees_a_wall():
     assert float(np.median(hits[:, 0])) == pytest_approx(1.6, abs=0.15)
 
 
+def test_a_local_off_plate_edge_keeps_its_length():
+    """Yaw can slide a real wall off the plate. That wall is still one frontier."""
+    from src.mapping.frontiers import frontier_credit_m
+
+    res = 0.05
+    xs = np.arange(0.0, 2.0, res)
+    points = np.column_stack([xs, np.zeros_like(xs)])
+    far = np.ones(len(xs), dtype=bool)
+    credit = frontier_credit_m(points, far, res)
+    assert credit == pytest_approx(len(xs) * res)
+
+
+def test_an_outside_loop_does_not_keep_the_whole_length():
+    """A ring past the plates is one glued loop. It does not score as that loop."""
+    from src.mapping.frontiers import frontier_credit_m
+
+    res = 0.05
+    radius = 3.0
+    steps = int(round(2.0 * math.pi * radius / res))
+    theta = np.linspace(0.0, 2.0 * math.pi, steps, endpoint=False)
+    points = np.column_stack([radius * np.cos(theta), radius * np.sin(theta)])
+    far = np.ones(len(theta), dtype=bool)
+    credit = frontier_credit_m(points, far, res)
+    assert credit < 0.30
+    # The same ring, mostly on a plate, keeps the cell length.
+    on_plate = np.zeros(len(theta), dtype=bool)
+    on_plate[: len(theta) // 5] = True
+    assert frontier_credit_m(points, on_plate, res) == pytest_approx(len(theta) * res)
+
+
+def test_an_in_room_frontier_beats_the_outside_loop():
+    """The long free-space ring loses to the frontier that sits on the floor."""
+    grid = OccupancyGrid(size_m=16.0)
+    rows, cols = np.indices(grid.log.shape)
+    x = grid.origin[0] + (cols + 0.5) * grid.res
+    y = grid.origin[1] + (rows + 0.5) * grid.res
+    disk = np.hypot(x, y) <= 3.2
+    grid.log[disk] = grid.l_min
+    pocket = (x > 0.35) & (x < 0.95) & (np.abs(y) < 0.45)
+    grid.log[pocket] = 0.0
+    boxes = [(-1.5, 1.5, -1.5, 1.5)]
+    bare = select_goal(grid, (-1.0, 0.0))
+    plated = select_goal(grid, (-1.0, 0.0), floor_boxes=boxes, to_world=lambda px, py: (px, py))
+    assert bare is not None and plated is not None
+    # Bare aims at the rim. With the plates, the stand-off is on the open
+    # side of the pocket, about a metre back from that edge.
+    assert abs(bare[0][1]) > 1.2
+    assert abs(plated[0][1]) < 0.4
+    assert plated[0][0] < 0.2
+
+
 def test_frontier_rejects_a_speck_and_scores_a_real_edge():
     grid = OccupancyGrid()
     # A free disk with unknown outside produces a frontier ring.

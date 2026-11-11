@@ -771,3 +771,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Keeping a pivot, a flat nose, or a shell pitched more than 0.12 rad from rest. Changing the pin release, the floor-blank hold, or the weak-shift hold. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
 
 **Outcome.** The keep is in. Visited means are 14.07 and 16.60, below 18.67 and 17.99. Pose-error means are 0.81 m and 0.65 m, against 0.84 m and 0.75 m. n2 and m4 lose most of the rejected-translation share. n1, n3, n4, and m3 gain it. The long zeros are a stopped shell.
+
+## 2026-11-11 — The nose keep is reverted, and a zero approach takes the stall
+
+**Mission parameter.** `6b8ce43` is a regression against `5a546bf`. Put that behavior back. Then, in phase `go` on a straight or pivot approach, a command that has been `(0, 0)` for more than 5 s, with the goal unchanged and the shell still, takes the existing stall escape. If that escape is blocked, drop the goal. Do not add a separate hold-branch change.
+
+**Change.** The frozen-view drop and the floor-still rewind are back to the `5a546bf` rule. `ZERO_APPROACH_S` is 5 s. `_zero_approach_stall` starts the same `_stall_escape` that logs `stall, backing out`. A doorway crossing, the stall cooldown, or a reverse the block has already refused calls `_drop_sitting_goal` instead. Commit `e929f76`.
+
+**Why.** The nose keep cut visited means from 18.67 and 17.99 to 14.07 and 16.60 and brought the long zeros back. On that ten the n4 and m4 `src=hold` sits were a pivot whose issued command was already `(0, 0)`, so this clock covers them. The n3 24 s and 55 s zeros followed a `back` and an empty path. That is not this approach.
+
+**Evidence.** Mapping tests: 169 passed. A zero command past 5 s logs `stall, backing out`. Under 5 s does not. A shell that has moved 0.10 m does not. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 15.56, 14.82, 8.80, 22.92, 17.67 (mean 15.95, sd 5.10) against 18.67 (sd 4.36). −0.35 visited 24.09, 18.63, 16.47, 27.00, 16.82 (mean 20.60, sd 4.70) against 17.99 (sd 2.44). Pose error: n 0.37, 1.03, 0.53, 0.50, 0.81 and m 1.31, 0.19, 0.51, 0.43, 1.62, against 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. No mapper done line. Lowest `up_z` is 0.999. No sample below 0.95. The longest `(0, 0)` is 243 s on n3, contact recovery (`contact_bump`), which this clock does not take. m4's 49 s follows a `back`. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Keeping the nose release. A separate change to the hold mark or to contact recovery. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
+
+**Outcome.** The nose keep is gone. The 5 s clock is in. North's visited mean is 15.95, below 18.67. −0.35's mean is 20.60, above 17.99. The long contact-recovery sit and the sit after a `back` are still there.

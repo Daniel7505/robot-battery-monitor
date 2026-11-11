@@ -1074,3 +1074,34 @@ Pose error at the cap: n1 1.60, n2 0.45, n3 0.37, n4 1.33, n5 0.28, m1 0.32, m2 
 The rejected-translation share, outside the 1.2 s after each `pinned` line, is the part of the final error from a 0.5 s step whose wheels moved more than 0.02 m, whose planner moved less than 0.4 of that, and whose true shell moved more than 0.5 of that. It is +0.61, +0.09, +0.83, +1.12, +0.21 on n1–n5 and +0.32, +0.51, +0.73, +0.05, −0.20 on m1–m5. The same gate on the `5a546bf` logs reads +0.30, +0.64, +0.64, +0.21, +0.22 and −0.43, +0.62, +0.26, +0.83, +0.44. The notes for that ten listed +0.30, +0.69, +0.58, +0.23, +0.20 and −0.54, +0.64, +0.26, +0.84, +0.44. n2 and m4 are the runs this keep cuts. n1, n3, n4, and m3 are larger.
 
 The longest `(0, 0)` stretch is 55 s on n3, from t=67 s to t=122 s, phase `go`, true motion 0.6 cm. The command is zero after a reverse. The next decision that moves it is `pile_leave` at t=122 s, after `camera_stuck`. n4 sits 40 s from t=560 s to the cap, pile `src=hold`, bubble 0.02 m, dead-end refusals, true motion 0.3 cm. m4 sits 40 s from t=523 s to t=563 s, the same hold, bubble 0.03 m, true motion 2.2 cm. n5 sits 20 s from t=185 s to t=205 s and then logs `stall, backing out`. The other six stretches are 3.5 s at the start.
+
+## The nose keep was a regression
+
+Commit `6b8ce43` is reverted in `e929f76`. Visited means were 14.07 and 16.60 against 18.67 and 17.99. Pose-error means were 0.81 m and 0.65 m against 0.84 m and 0.75 m. The 55 s n3 zero and the 40 s n4 and m4 zeros came back. `5a546bf` stays the baseline. The opening-nose test is kept with the drop restored. A flat nose, a pivot, a pitched shell, and the floor-still rewind still do what they did before that commit, so those tests were dropped.
+
+The n4 and m4 sits on that ten were a pivot whose issued command was `(0, 0)` with the path still set. `src=hold` is the mark on that zero, not a separate leave. The same 5 s clock covers them. The n3 24 s and 55 s zeros followed a `back` and then an empty path (`goal=none`). The approach was not straight or pivot, so the clock leaves that sit alone.
+
+## A zero straight or pivot takes the stall
+
+Commit `e929f76`. In phase `go`, a straight or pivot approach whose command has been `(0, 0)` for more than 5 s, with the same goal and a shell that has not moved 0.04 m, takes the existing stall escape (`stall, backing out`). A doorway crossing, the stall cooldown, or a reverse the block has already refused drops the goal instead. Mapping tests: 169 passed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.999, on m2 and m3. No sample is below 0.95.
+
+North visited 15.56, 14.82, 8.80, 22.92, 17.67 (mean 15.95, sd 5.10) against 18.67 (sd 4.36). −0.35 visited 24.09, 18.63, 16.47, 27.00, 16.82 (mean 20.60, sd 4.70) against 17.99 (sd 2.44). Pantry, storage, laundry, and closet stay at 0. Bath is 20.4 on n5, 23.0 on m3, 13.9 on m2, and 2.1 on n2. Hall is 67.8 on n2, 48.2 on m1, and 49.2 on m2.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 33.0 | 5.6 | 2.5 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n2 | 12.2 | 25.3 | 16.1 | 2.1 | 0 | 0 | 67.8 | 0 | 0 |
+| n3 | 6.0 | 31.8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n4 | 23.5 | 66.0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 9.0 | 58.4 | 0 | 20.4 | 0 | 0 | 0 | 0 | 0 |
+| m1 | 31.1 | 14.4 | 51.3 | 0 | 0 | 0 | 48.2 | 0 | 0 |
+| m2 | 18.0 | 31.5 | 10.3 | 13.9 | 0 | 0 | 49.2 | 0 | 0 |
+| m3 | 17.0 | 32.4 | 0 | 23.0 | 0 | 0 | 0 | 0 | 0 |
+| m4 | 42.5 | 45.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m5 | 16.0 | 51.0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Pose error at the cap: n1 0.37, n2 1.03, n3 0.53, n4 0.50, n5 0.81, m1 1.31, m2 0.19, m3 0.51, m4 0.43, m5 1.62. The `5a546bf` ten was 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. Means are 0.65 m and 0.81 m, against 0.84 m and 0.75 m.
+
+The longest `(0, 0)` is 243 s on n3, from t=357 s to the cap, phase `go`. The branch is contact recovery: `action=recover`, `contact_bump`, pile `src` flipping between `hold` and `contact`, goal `(2.23, 0.93)` unchanged, bubble about 0.5 m. That look returns `(0, 0)`. It is not a straight or pivot approach, so the 5 s clock does not take it. m4 sits 49 s from t=532 s to t=581 s after a `back` at t=527 s, then `goal=none` and `src=hold`, until `pile_leave` at t=577 s. That approach is `back`, so the clock leaves it. n1's 14 s from t=578 s to t=592 s includes `stall, backing out` at t=588 s. The other seven longest stretches are 3.5 s at the start.

@@ -1017,3 +1017,33 @@ North visited 17.92, 13.60, 15.94, 24.64, 21.26 (mean 18.67, sd 4.36) against 17
 Pose error at the cap: n1 1.28, n2 0.79, n3 0.95, n4 0.85, n5 0.35, m1 0.24, m2 1.19, m3 0.93, m4 1.06, m5 0.34. The previous ten was 0.67, 1.53, 1.27, 0.55, 2.15 and 0.32, 0.38, 0.74, 0.29, 0.78. The pin's share of that error is 0.12, −0.01, 0.01, 0.26, −0.00 on the north runs and −0.02, 0.19, 0.17, 0.18, −0.00 on −0.35. Previously it was 0.09, 0.40, 0.89, 0.01, 0.50 and −0.01, 0.00, 0.11, 0.01, 0.65.
 
 The longest `(0, 0)` stretch is 24 s on n3, from t=70 s to t=95 s, phase `go`, command zero, nose about 0.64 m. The other nine are 3.5 s at the start.
+
+## What is left after the pin release
+
+No controller change. Same `5a546bf` logs. Shares below are metres of the final error from the steps outside a pin hold. Yaw at the cap is −1.7°, +1.1°, +1.2°, +2.8°, +1.4° on n1–n5 and −1.2°, −3.9°, +5.0°, +0.7°, −0.6° on m1–m5. Loop closure is one event on n4 and one on m1, and that share is 0.00 m.
+
+| run | final | drive | reverse | pivot | stall | pile | zero |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 1.28 | +0.40 | +0.62 | −0.02 | −0.09 | +0.27 | +0.01 |
+| n2 | 0.79 | +1.27 | −0.69 | 0.00 | 0.00 | +0.24 | −0.01 |
+| n3 | 0.95 | +0.22 | +0.35 | +0.02 | 0.00 | +0.32 | −0.01 |
+| n4 | 0.85 | +0.57 | −0.07 | +0.04 | 0.00 | +0.06 | +0.01 |
+| n5 | 0.35 | +0.79 | −0.23 | −0.12 | −0.02 | −0.08 | −0.01 |
+| m1 | 0.24 | 0.00 | +0.21 | +0.18 | 0.00 | −0.16 | +0.03 |
+| m2 | 1.19 | +0.44 | +0.29 | +0.02 | −0.03 | +0.24 | +0.02 |
+| m3 | 0.93 | −0.11 | +0.74 | +0.21 | −0.04 | −0.05 | 0.00 |
+| m4 | 1.06 | +0.23 | +0.42 | +0.32 | −0.09 | −0.07 | +0.02 |
+| m5 | 0.34 | +0.35 | −0.05 | −0.01 | 0.00 | +0.04 | +0.01 |
+
+The outside-pin sum is not the final error. The pin hold is the rest. On the four large misses the mechanism is the same: the wheels and the true shell move together, and the pose does not. That rejected-translation share is +0.30, +0.69, +0.58, +0.23, +0.20 on n1–n5 and −0.54, +0.64, +0.26, +0.84, +0.44 on m1–m5. The pose-ahead share is smaller except on n1 (+0.38). A slide the wheels did not report is about 0. Floor-slip rejections are 9, 27, 0, 0, 0 and 0, 0, 149, 31, 0, and their share of the final error is about 0 except +0.18 on m4 and +0.07 on m3.
+
+Largest rises outside a pin hold:
+
+- n1 t=287–289 s, +0.18 m, drive. True 0.18 m, pose 0.02 m, wheels +0.20 m. Command `(-0.34, 2.84)`, an arc. t=182–183 s, +0.16 m, the same shape. t=536–538 s, +0.15 m, reverse, wheels −0.15 m, pose 0.05 m.
+- m2 t=263–266 s, +0.29 m, reverse. True 0.30 m, pose 0.00 m, wheels −0.30 m. Nose goes from 0.54 m at t=261.5 s to 0.92 m at t=265.5 s while the pose stays at (−1.43, 2.61). The pin logs stop at t=261.5 s. `floor still, translation frozen` is at t=269 s, after the pose has already missed the reverse. t=71–73 s and t=21–23 s are +0.17 m drives, wheels matching the shell, pose under 0.04 m.
+- m4 t=152–154 s, +0.20 m, drive. True 0.17 m, pose 0.04 m, wheels +0.20 m. `floor still` is at t=156 s. t=21–23 s, +0.17 m, same shape. t=141–142 s, +0.16 m.
+- n3 t=352–354 s, +0.16 m, pile `src=hold`, command `v=0.10 w=0.75`. True 0.17 m, pose 0.00 m, wheels +0.20 m. `floor still, translation frozen` is at t=348.3 s. t=514–516 s, +0.15 m, reverse, wheels −0.15 m, pose 0.00 m. t=348–350 s, +0.15 m, same hold.
+
+n3 from t=70 s to t=95 s is not that miss. The true shell stays near (4.47, 5.66), about 3 cm of motion, yaw +2.00. The planner stays at (0.61, 1.10). The phase command is `(0, 0)`. Nose stays about 0.64 m and the bubble about 0.40 m. There is no blocked-heading line. The previous decision is `back` at t=65.9 s. The next is a goal and `stall, backing out` at t=91 s. A straight or pivot approach does not count as a translation stall, so a shell that has already stopped there waits until the goal changes. The sit does not add pose error.
+
+The next fix, not made here: a wheel step the two hubs agree on, and whose forward nose has moved more than the existing 0.04 m since the picture was called still, should not be dropped by the frozen-view check or rewound by the floor-still hold. A flat nose still drops. A pivot still drops. A pitched shell still drops. The test is a frozen depth signature with a straight reverse and a nose that opens by more than 0.04 m, which keeps the wheel step, against the same signature with a flat nose, which still drops it.

@@ -1869,50 +1869,92 @@ class Explorer:
         self._back_from = None
         self._replan_at = self.t_s
 
-    def _zero_approach_stall(self, pose) -> tuple[float, float] | None:
-        """A straight or pivot approach that has sent (0, 0).
+    def _zero_branch(self) -> str | None:
+        """A go-phase sit whose command can stay (0, 0).
 
-        Those approaches are not a translation stall, so a shell that has
-        already stopped waits. Five seconds of that zero, the same goal,
-        and no shell motion takes the stall escape. A doorway crossing or
-        a reverse the block has already refused drops the goal instead.
+        Straight and pivot are exempt from the translation stall. Contact
+        recovery and the empty path after a back are the other two.
+        """
+        if self._approach_why in ("straight", "pivot"):
+            return "approach"
+        if self._recover or self._approach_why == "recover":
+            return "contact"
+        if self.goal_xy is None and (self._approach_why == "back" or self._backing):
+            return "back"
+        return None
+
+    def _finish_zero(self, pose, branch: str) -> tuple[float, float]:
+        """Leave a zero sit. Stall, then pile-leave, then drop the goal.
+
+        Contact uses the cooldown a reverse that did not move already
+        sets. The empty path uses the ordinary 4 s replan gap. Neither
+        branch is still latched when this returns.
+        """
+        self._zero_go = None
+        back_blocked = (
+            self._doorway_crossing()
+            or self.t_s < self._blind_back_until
+            or self._reverse_closed(pose)
+            or (self._on_blocked_heading() and self._block_reverse_dead)
+        )
+        if branch == "contact":
+            self._recover = False
+            self._recover_phase = ""
+            self._contact_until = max(self._contact_until, self.t_s + 2.0)
+        if branch == "back":
+            self._backing = False
+            self._back_from = None
+        if not back_blocked:
+            self._zero_stall = True
+            try:
+                cmd = self._stall_escape(pose)
+            finally:
+                self._zero_stall = False
+            if cmd is not None:
+                return cmd
+        self._begin_pile_leave(pose)
+        leaving = self._leaving_command(pose)
+        if leaving is not None:
+            self._mark("pile_leave")
+            return leaving
+        self._drop_sitting_goal(pose)
+        if branch == "back":
+            self._approach_why = ""
+            self._replan_at = self.t_s + 4.0
+        self._body_v, self._body_w = 0.0, 0.0
+        return 0.0, 0.0
+
+    def _zero_approach_stall(self, pose) -> tuple[float, float] | None:
+        """(0, 0) on a straight, pivot, contact, or after-back sit.
+
+        Five seconds of that output, the same goal, and a shell that has
+        not moved takes the stall escape. A blocked back-out takes the
+        pile leave. If that cannot start either, the goal is dropped.
         """
         goal = self._goal_key()
         x, y = float(pose[0]), float(pose[1])
         zero = abs(self._commanded[0]) < 1e-3 and abs(self._commanded[1]) < 1e-3
-        straight = self._approach_why in ("straight", "pivot")
-        if self.phase != "go" or not straight or not zero or self._blind_back:
+        branch = self._zero_branch()
+        if self.phase != "go" or branch is None or not zero or self._blind_back:
             self._zero_go = None
             return None
         if self._zero_go is None:
-            self._zero_go = (self.t_s, self.t_s, goal, x, y)
+            self._zero_go = (self.t_s, self.t_s, goal, x, y, branch)
             return None
-        t0, t_last, goal0, x0, y0 = self._zero_go
+        t0, t_last, goal0, x0, y0, branch0 = self._zero_go
         moved = math.hypot(x - x0, y - y0) >= STILL_M
-        if self.t_s - t_last > 0.25 or not self._same_goal(goal, goal0) or moved:
-            self._zero_go = (self.t_s, self.t_s, goal, x, y)
+        if (
+            self.t_s - t_last > 0.25
+            or branch0 != branch
+            or not self._same_goal(goal, goal0)
+            or moved
+        ):
+            self._zero_go = (self.t_s, self.t_s, goal, x, y, branch)
             return None
-        self._zero_go = (t0, self.t_s, goal0, x0, y0)
+        self._zero_go = (t0, self.t_s, goal0, x0, y0, branch)
         if self.t_s - t0 <= ZERO_APPROACH_S:
             return None
-        self._zero_go = None
-        blocked = self._doorway_crossing() or self.t_s < self._blind_back_until
-        if not blocked and self._on_blocked_heading() and self._block_reverse_dead:
-            blocked = True
-        if blocked:
-            self._drop_sitting_goal(pose)
-            self._body_v, self._body_w = 0.0, 0.0
-            return 0.0, 0.0
-        self._zero_stall = True
-        try:
-            cmd = self._stall_escape(pose)
-        finally:
-            self._zero_stall = False
-        if cmd is None:
-            self._drop_sitting_goal(pose)
-            self._body_v, self._body_w = 0.0, 0.0
-            return 0.0, 0.0
-        return cmd
+        return self._finish_zero(pose, branch)
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""

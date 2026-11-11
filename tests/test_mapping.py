@@ -3601,7 +3601,7 @@ def _zero_go_bot():
 def test_a_zero_command_in_go_past_five_seconds_takes_the_stall(capsys):
     """Straight approach, (0, 0) for more than 5 s, same goal, shell still."""
     bot = _zero_go_bot()
-    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0)
+    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0, "approach")
     left, right = bot._go(False, 0.0)
     assert "stall, backing out" in capsys.readouterr().out
     assert left < -0.5 and right < -0.5
@@ -3611,7 +3611,7 @@ def test_a_zero_command_in_go_past_five_seconds_takes_the_stall(capsys):
 
 def test_a_zero_command_under_five_seconds_is_not_a_stall():
     bot = _zero_go_bot()
-    bot._zero_go = (7.5, 9.9, (3.0, 0.0), 0.0, 0.0)
+    bot._zero_go = (7.5, 9.9, (3.0, 0.0), 0.0, 0.0, "approach")
     bot._go(False, 0.0)
     assert bot.goal_xy == (3.0, 0.0)
     assert not bot._blind_back
@@ -3620,10 +3620,88 @@ def test_a_zero_command_under_five_seconds_is_not_a_stall():
 def test_a_moving_shell_does_not_take_the_zero_stall():
     bot = _zero_go_bot()
     bot.odometry.x_m = 0.10
-    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0)
+    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0, "approach")
     bot._go(False, 0.0)
     assert bot.goal_xy == (3.0, 0.0)
     assert not bot._blind_back
+
+
+def _arm_contact(bot, started: float) -> None:
+    bot._approach_why = "recover"
+    bot._recover = True
+    bot._recover_phase = "look"
+    bot._recover_until = 1.0e9
+    bot._recover_from = (0.0, 0.0)
+    bot._recover_t0 = bot.t_s
+    bot._zero_go = (started, bot.t_s - 0.05, (3.0, 0.0), 0.0, 0.0, "contact")
+
+
+def _arm_after_back(bot, started: float) -> None:
+    bot._approach_why = "back"
+    bot._backing = False
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot._replan_at = 1.0e9
+    bot._zero_go = (started, bot.t_s - 0.05, None, 0.0, 0.0, "back")
+
+
+def test_contact_recovery_past_five_seconds_takes_the_stall(capsys):
+    """The look returns (0, 0). Five seconds of that is the stall, not another look."""
+    bot = _zero_go_bot()
+    _arm_contact(bot, 4.0)
+    left, right = bot._go(False, 0.0)
+    assert "stall, backing out" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert not bot._recover
+    assert bot._contact_until > bot.t_s
+    assert bot._blind_back
+
+
+def test_contact_recovery_under_five_seconds_stays_in_the_look():
+    bot = _zero_go_bot()
+    _arm_contact(bot, 7.5)
+    left, right = bot._go(False, 0.0)
+    assert left == 0.0 and right == 0.0
+    assert bot._recover
+    assert not bot._blind_back
+
+
+def test_a_moving_shell_does_not_leave_contact_recovery():
+    bot = _zero_go_bot()
+    bot.odometry.x_m = 0.10
+    _arm_contact(bot, 4.0)
+    bot._go(False, 0.0)
+    assert bot._recover
+    assert not bot._blind_back
+
+
+def test_an_empty_path_after_back_past_five_seconds_takes_the_stall(capsys):
+    """goal=none after a back. Five seconds of (0, 0) is the stall."""
+    bot = _zero_go_bot()
+    _arm_after_back(bot, 4.0)
+    left, right = bot._go(False, 0.0)
+    assert "stall, backing out" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot._blind_back
+    assert not bot._backing
+
+
+def test_an_empty_path_after_back_under_five_seconds_stays_zero():
+    bot = _zero_go_bot()
+    _arm_after_back(bot, 7.5)
+    left, right = bot._go(False, 0.0)
+    assert left == 0.0 and right == 0.0
+    assert not bot._blind_back
+    assert bot._leave_xy is None
+
+
+def test_a_moving_shell_does_not_leave_the_empty_path_after_back():
+    bot = _zero_go_bot()
+    bot.odometry.x_m = 0.10
+    _arm_after_back(bot, 4.0)
+    bot._go(False, 0.0)
+    assert not bot._blind_back
+    assert bot._leave_xy is None
 
 
 def test_a_sixty_second_pile_drives_straight_out():

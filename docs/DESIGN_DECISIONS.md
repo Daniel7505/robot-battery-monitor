@@ -743,3 +743,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating the pivot rule or the loop-closure rebuild as the residual. Neither shows up in this ten. Using `oak_imu`, or shortening the 2 s reverse clock.
 
 **Outcome.** The smallest pose change, not made here, is to not pin a straight reverse when the forward range has increased since the pin anchor. m3's low visited score is a separate fact: it drove 28 m and never came within 0.6 m of a goal.
+
+## 2026-11-10 — A straight reverse with an opening nose is not pinned
+
+**Mission parameter.** Do not hold the pin on a straight reverse when the forward range has opened by more than sensor noise. A flat range still pins. A pitched shell still pins. Nothing else moves.
+
+**Change.** `PIN_NOSE_RELEASE_M` is 0.04 m. OAK-D Lite σ is 6.7 mm at 1 m and 15 mm at 1.5 m, which is where the frozen reverses sat, so 0.04 m is six standard deviations at 1 m and more than two at 1.5 m. The logged freezes rose by several tenths of a metre. On a straight reverse, if the nose has opened by more than that since the pin anchor, the rewind and the 1.2 s hold do not run. A spin, a flat range, a sentinel range, and a pitch more than 0.12 rad from the learned rest still pin. The floor-still and floor-blank holds are unchanged. Commit `5a546bf`.
+
+**Why.** The large misses were a reverse the wheels and the nose both showed, while the pin's rear-camera vote said still.
+
+**Evidence.** Mapping tests: 165 passed. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 17.92, 13.60, 15.94, 24.64, 21.26 (mean 18.67, sd 4.36) against 17.53 (sd 4.40). −0.35 visited 19.80, 13.96, 17.91, 20.02, 18.27 (mean 17.99, sd 2.44) against 17.29 (sd 4.69). No mapper done line. Lowest `up_z` is 0.996. No sample below 0.95. The pin's share of the final error on n3 fell from 0.89 m to 0.01 m, and on n5 from 0.50 m to 0.00 m. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Releasing the pin on a spin, or while the pitch is already past the rest gate. Touching the 2 s reverse clock.
+
+**Outcome.** The repeated pin on a real reverse is gone from the runs that had it. Visited means are 18.67 and 17.99. Pose error is lower on the north runs that were above 1 m, and higher on two −0.35 runs.

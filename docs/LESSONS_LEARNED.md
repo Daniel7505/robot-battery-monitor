@@ -1005,3 +1005,15 @@ On n5 from t=384 s to t=392 s the command is a straight reverse, wheel travel is
 m3 visited 9.30 with pose error 0.74 m and no long zero. Phase samples are 97.7% `go` and 2.3% `spin`. Wheel commands are 55% drive, 39% pivot, 4% mixed, 2% zero. True path 28.2 m, planner path 25.4 m. A pile is open for 281 s: `pile_leave` 182 s, `stuck` 42 s, `stall` 31 s, `hold` 11 s, `pivot` 9 s, `contact` 5 s. It adopts 17 goals. Warped, 6 are in the bedroom, 5 are off the floor plates, 3 are in the kitchen, 2 in the hall, 1 in the laundry. The true shell never comes within 0.6 m of any of them. The closest miss is 1.16 m. Visited floor is the living room at 20% and the kitchen at 5%.
 
 The change that cuts the pose error, not made here: do not pin a straight reverse when the forward range has increased since the pin anchor. The wheels and the nose already show that reverse. m3's visited score is the goals it never reached, not this 0.74 m.
+
+## The opening nose is not a pin
+
+Commit `5a546bf`. A straight reverse whose forward range has risen more than 0.04 m since the pin anchor is not rewound and is not held for 1.2 s. That margin is six standard deviations of the depth noise at 1 m and more than two at 1.5 m. The frozen reverses in the previous ten rose by several tenths of a metre. A flat range still pins. A pitch more than 0.12 rad from the learned rest still pins. Mapping tests: 165 passed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.996, on m3. No sample is below 0.95.
+
+North visited 17.92, 13.60, 15.94, 24.64, 21.26 (mean 18.67, sd 4.36) against 17.53 (sd 4.40). −0.35 visited 19.80, 13.96, 17.91, 20.02, 18.27 (mean 17.99, sd 2.44) against 17.29 (sd 4.69). Pantry and storage stay under 0.5. Bath is 28.3 on n5, 16.0 on m1, and 59.2 on m5. Hall is 19.4 on n5 and 55.4 on m5. Bedroom is above 40 on n4, n5, m1, m3, and m4.
+
+Pose error at the cap: n1 1.28, n2 0.79, n3 0.95, n4 0.85, n5 0.35, m1 0.24, m2 1.19, m3 0.93, m4 1.06, m5 0.34. The previous ten was 0.67, 1.53, 1.27, 0.55, 2.15 and 0.32, 0.38, 0.74, 0.29, 0.78. The pin's share of that error is 0.12, −0.01, 0.01, 0.26, −0.00 on the north runs and −0.02, 0.19, 0.17, 0.18, −0.00 on −0.35. Previously it was 0.09, 0.40, 0.89, 0.01, 0.50 and −0.01, 0.00, 0.11, 0.01, 0.65.
+
+The longest `(0, 0)` stretch is 24 s on n3, from t=70 s to t=95 s, phase `go`, command zero, nose about 0.64 m. The other nine are 3.5 s at the start.

@@ -1047,3 +1047,30 @@ Largest rises outside a pin hold:
 n3 from t=70 s to t=95 s is not that miss. The true shell stays near (4.47, 5.66), about 3 cm of motion, yaw +2.00. The planner stays at (0.61, 1.10). The phase command is `(0, 0)`. Nose stays about 0.64 m and the bubble about 0.40 m. There is no blocked-heading line. The previous decision is `back` at t=65.9 s. The next is a goal and `stall, backing out` at t=91 s. A straight or pivot approach does not count as a translation stall, so a shell that has already stopped there waits until the goal changes. The sit does not add pose error.
 
 The next fix, not made here: a wheel step the two hubs agree on, and whose forward nose has moved more than the existing 0.04 m since the picture was called still, should not be dropped by the frozen-view check or rewound by the floor-still hold. A flat nose still drops. A pivot still drops. A pitched shell still drops. The test is a frozen depth signature with a straight reverse and a nose that opens by more than 0.04 m, which keeps the wheel step, against the same signature with a flat nose, which still drops it.
+
+## An agreed step with a moving nose is kept
+
+Commit `6b8ce43`. The frozen-view drop and the floor-still rewind both keep a wheel step the two hubs agree on when the forward nose has moved more than 0.04 m since the picture was called still. A flat nose still drops. Opposite hubs, and a commanded pivot, still drop. A pitch more than 0.12 rad from the learned rest still drops. The pin release, the floor-blank hold, and the weak-shift hold are unchanged. Mapping tests: 170 passed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.998, on m5. No sample is below 0.95.
+
+North visited 16.42, 13.01, 17.52, 13.27, 10.15 (mean 14.07, sd 2.94) against 18.67 (sd 4.36). −0.35 visited 18.94, 16.10, 23.72, 13.19, 11.05 (mean 16.60, sd 4.97) against 17.99 (sd 2.44). Pantry and storage stay at 0. Laundry and closet stay at 0. Bath is 14.2 on m1 and 17.7 on m5. Hall is 58.4 on m1, 10.1 on n2, 5.6 on m3, 3.8 on n1, and 3.2 on n3. Bedroom is 45.0 on n4 and 49.9 on m2. Kitchen is 57.6 on n3.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 19.7 | 35.3 | 6.8 | 0 | 0 | 0 | 3.8 | 0 | 0 |
+| n2 | 21.4 | 1.3 | 24.8 | 0 | 0 | 0 | 10.1 | 0 | 0 |
+| n3 | 24.1 | 0 | 57.6 | 0 | 0 | 0 | 3.2 | 0 | 0 |
+| n4 | 10.5 | 45.0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 22.5 | 2.1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m1 | 17.0 | 31.6 | 13.2 | 14.2 | 0 | 0 | 58.4 | 0 | 0 |
+| m2 | 14.6 | 49.9 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m3 | 36.6 | 20.0 | 31.8 | 0 | 0 | 0 | 5.6 | 0 | 0 |
+| m4 | 27.3 | 7.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m5 | 7.4 | 29.2 | 0 | 17.7 | 0 | 0 | 0 | 0 | 0 |
+
+Pose error at the cap: n1 1.60, n2 0.45, n3 0.37, n4 1.33, n5 0.28, m1 0.32, m2 1.49, m3 0.71, m4 0.35, m5 0.40. The `5a546bf` ten was 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. Yaw at the cap is +2.4°, +0.4°, −1.6°, −5.4°, +0.3° on n1–n5 and −2.4°, +0.1°, 0.0°, +2.4°, +0.6° on m1–m5.
+
+The rejected-translation share, outside the 1.2 s after each `pinned` line, is the part of the final error from a 0.5 s step whose wheels moved more than 0.02 m, whose planner moved less than 0.4 of that, and whose true shell moved more than 0.5 of that. It is +0.61, +0.09, +0.83, +1.12, +0.21 on n1–n5 and +0.32, +0.51, +0.73, +0.05, −0.20 on m1–m5. The same gate on the `5a546bf` logs reads +0.30, +0.64, +0.64, +0.21, +0.22 and −0.43, +0.62, +0.26, +0.83, +0.44. The notes for that ten listed +0.30, +0.69, +0.58, +0.23, +0.20 and −0.54, +0.64, +0.26, +0.84, +0.44. n2 and m4 are the runs this keep cuts. n1, n3, n4, and m3 are larger.
+
+The longest `(0, 0)` stretch is 55 s on n3, from t=67 s to t=122 s, phase `go`, true motion 0.6 cm. The command is zero after a reverse. The next decision that moves it is `pile_leave` at t=122 s, after `camera_stuck`. n4 sits 40 s from t=560 s to the cap, pile `src=hold`, bubble 0.02 m, dead-end refusals, true motion 0.3 cm. m4 sits 40 s from t=523 s to t=563 s, the same hold, bubble 0.03 m, true motion 2.2 cm. n5 sits 20 s from t=185 s to t=205 s and then logs `stall, backing out`. The other six stretches are 3.5 s at the start.

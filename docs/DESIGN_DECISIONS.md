@@ -757,3 +757,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Releasing the pin on a spin, or while the pitch is already past the rest gate. Touching the 2 s reverse clock.
 
 **Outcome.** The repeated pin on a real reverse is gone from the runs that had it. Visited means are 18.67 and 17.99. Pose error is lower on the north runs that were above 1 m, and higher on two −0.35 runs.
+
+## 2026-11-11 — An agreed wheel step with a moving nose is kept
+
+**Mission parameter.** A wheel step both hubs agree on, whose forward nose has moved more than the existing 0.04 m since the view was called still, is not dropped by the frozen-view check and is not rewound by the floor-still hold. A flat nose, a pivot, and a pitched shell still drop. Nothing else moves.
+
+**Change.** `_keep_agreed_nose` is that test. The frozen-view drop skips it. The floor-still rewind arms a new anchor and returns instead of putting x and y back. The nose is the one stored when the depth signature last changed. Agreement is a non-zero hub step that is not a commanded spin and not opposite hub rotation. Pitch more than 0.12 rad from the learned rest refuses the keep. Commit `6b8ce43`.
+
+**Why.** Outside the pin holds the `5a546bf` ten still dropped translation while the wheels and the true shell moved together. The coarse depth signature can stay still while the nose range moves.
+
+**Evidence.** Mapping tests: 170 passed. An opening nose keeps the step. A flat nose drops it. A pivot drops it. A pitched shell drops it. The floor-still hold keeps the pose when the nose reads 1.08 m and rewinds it when the nose reads 1.00 m. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 16.42, 13.01, 17.52, 13.27, 10.15 (mean 14.07, sd 2.94) against 18.67 (sd 4.36). −0.35 visited 18.94, 16.10, 23.72, 13.19, 11.05 (mean 16.60, sd 4.97) against 17.99 (sd 2.44). Pose error: n 1.60, 0.45, 0.37, 1.33, 0.28 and m 0.32, 1.49, 0.71, 0.35, 0.40, against 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. The rejected-translation share is +0.61, +0.09, +0.83, +1.12, +0.21 and +0.32, +0.51, +0.73, +0.05, −0.20. The same gate on the previous logs is +0.30, +0.64, +0.64, +0.21, +0.22 and −0.43, +0.62, +0.26, +0.83, +0.44. No mapper done line. Lowest `up_z` is 0.998. No sample below 0.95. The longest `(0, 0)` is 55 s on n3. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Keeping a pivot, a flat nose, or a shell pitched more than 0.12 rad from rest. Changing the pin release, the floor-blank hold, or the weak-shift hold. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
+
+**Outcome.** The keep is in. Visited means are 14.07 and 16.60, below 18.67 and 17.99. Pose-error means are 0.81 m and 0.65 m, against 0.84 m and 0.75 m. n2 and m4 lose most of the rejected-translation share. n1, n3, n4, and m3 gain it. The long zeros are a stopped shell.

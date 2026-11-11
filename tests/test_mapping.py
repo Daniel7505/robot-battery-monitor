@@ -1143,8 +1143,9 @@ def test_a_tipped_reverse_still_pins_when_the_nose_opens():
     assert bot._pin_until > 0.0
 
 
-def _travel_while_the_view_is_frozen(command, wheel_step, *, nose_shift: float, pitch: float = 0.0, tipped: bool = False) -> float:
-    """Same depth picture for long enough that the view is frozen. Return the pose change."""
+def test_an_opening_nose_still_drops_the_frozen_view_step():
+    """A frozen picture drops the wheel step. An opening nose does not keep it."""
+    from src.mapping.drive import wheel_speeds
     from src.mapping.explore import Explorer
 
     cam = _small_oak(64, 40)
@@ -1153,105 +1154,19 @@ def _travel_while_the_view_is_frozen(command, wheel_step, *, nose_shift: float, 
     bot.phase = "go"
     bot._replan_at = 1.0e9
     bot._confident_after = 0.0
-    if tipped:
-        bot._pitch_rest = 0.0
+    command = wheel_speeds(-0.10, 0.0)
     bot._commanded = command
-    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, pitch_rad=pitch, depth=depth)
-    nose = float(bot._last_clear[0])
+    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, depth=depth)
     bot._view_still_from = bot.t_s - 3.0
-    bot._view_still_nose = nose + nose_shift
     x0 = bot.odometry.x_m
+    step = -0.10 / WHEEL_RADIUS_M * 0.05
     left = right = 0.0
     for _ in range(12):
         bot._commanded = command
-        left += wheel_step[0]
-        right += wheel_step[1]
-        bot.step(
-            dt_s=0.05,
-            left_wheel_rad=left,
-            right_wheel_rad=right,
-            yaw_rate_rad_s=0.0,
-            pitch_rad=pitch,
-            depth=depth,
-        )
-    return bot.odometry.x_m - x0
-
-
-def test_an_opening_nose_keeps_an_agreed_wheel_step():
-    """The view signature is frozen and the nose has moved. Keep the step."""
-    from src.mapping.drive import wheel_speeds
-
-    step = -0.10 / WHEEL_RADIUS_M * 0.05
-    travelled = _travel_while_the_view_is_frozen(
-        wheel_speeds(-0.10, 0.0), (step, step), nose_shift=-0.08
-    )
-    assert travelled < -0.03
-
-
-def test_a_flat_nose_still_drops_the_frozen_view_step():
-    """The same nose is the still picture. The wheel step is not travel."""
-    from src.mapping.drive import wheel_speeds
-
-    step = -0.10 / WHEEL_RADIUS_M * 0.05
-    travelled = _travel_while_the_view_is_frozen(
-        wheel_speeds(-0.10, 0.0), (step, step), nose_shift=0.0
-    )
-    assert abs(travelled) < 0.02
-
-
-def test_a_pivot_drops_even_when_the_nose_opens():
-    """Opposite hubs are a pivot. The nose does not make that scrub travel."""
-    from src.mapping.drive import wheel_speeds
-
-    step = 0.30 / WHEEL_RADIUS_M * 0.05
-    travelled = _travel_while_the_view_is_frozen(
-        wheel_speeds(0.0, 0.70), (-step, step), nose_shift=-0.08
-    )
-    assert abs(travelled) < 0.02
-
-
-def test_floor_still_keeps_an_opening_nose_and_drops_a_flat_one():
-    """The floor-still rewind uses the same nose rule as the frozen view."""
-    from src.mapping.drive import wheel_speeds
-    from src.mapping.explore import Explorer
-
-    cam = _small_oak(64, 40)
-    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
-    bot._commanded = wheel_speeds(-0.10, 0.0)
-    bot._step_dt = 0.05
-    bot._floor_track.push = lambda *_a, **_k: "still"
-    bot._floor_track.confident_still = lambda: True
-    depth = np.ones((8, 8), dtype=np.float64)
-    floor = np.full((8, 8), 40.0)
-
-    def rewind(nose: float) -> float:
-        bot._arm_zupt_anchor(depth, floor, None, 0.0, 0.0)
-        bot._zupt_anchor["t"] = bot.t_s - 1.0
-        bot._zupt_anchor["x"] = 0.0
-        bot._zupt_anchor["y"] = 0.0
-        bot._zupt_wheels = (0.0, 0.0)
-        bot._view_still_nose = 1.0
-        bot.odometry.x_m = 0.08
-        bot._watch_zupt(depth, floor, None, 0.0, 0.0, 0.4, 0.4, nose)
-        return bot.odometry.x_m
-
-    assert rewind(1.08) == pytest_approx(0.08)
-    assert rewind(1.0) == pytest_approx(0.0)
-
-
-def test_a_pitched_shell_drops_even_when_the_nose_opens():
-    """Pitch past the rest gate is a climb. The opened nose does not count."""
-    from src.mapping.drive import wheel_speeds
-
-    step = -0.10 / WHEEL_RADIUS_M * 0.05
-    travelled = _travel_while_the_view_is_frozen(
-        wheel_speeds(-0.10, 0.0),
-        (step, step),
-        nose_shift=-0.08,
-        pitch=0.20,
-        tipped=True,
-    )
-    assert abs(travelled) < 0.02
+        left += step
+        right += step
+        bot.step(dt_s=0.05, left_wheel_rad=left, right_wheel_rad=right, yaw_rate_rad_s=0.0, depth=depth)
+    assert abs(bot.odometry.x_m - x0) < 0.02
 
 
 def test_a_still_scene_freezes_yaw_while_the_wheels_spin():
@@ -3664,6 +3579,51 @@ def test_a_doorway_lineup_is_not_a_stall():
     bot._approach_why = "straight"
     bot._progress_from = (0.0, 0.0, 0.0, True)
     assert not bot._translation_stalled()
+
+
+def _zero_go_bot():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._approach_why = "straight"
+    bot._commanded = (0.0, 0.0)
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    return bot
+
+
+def test_a_zero_command_in_go_past_five_seconds_takes_the_stall(capsys):
+    """Straight approach, (0, 0) for more than 5 s, same goal, shell still."""
+    bot = _zero_go_bot()
+    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0)
+    left, right = bot._go(False, 0.0)
+    assert "stall, backing out" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy is None
+    assert bot._blind_back
+
+
+def test_a_zero_command_under_five_seconds_is_not_a_stall():
+    bot = _zero_go_bot()
+    bot._zero_go = (7.5, 9.9, (3.0, 0.0), 0.0, 0.0)
+    bot._go(False, 0.0)
+    assert bot.goal_xy == (3.0, 0.0)
+    assert not bot._blind_back
+
+
+def test_a_moving_shell_does_not_take_the_zero_stall():
+    bot = _zero_go_bot()
+    bot.odometry.x_m = 0.10
+    bot._zero_go = (4.0, 9.9, (3.0, 0.0), 0.0, 0.0)
+    bot._go(False, 0.0)
+    assert bot.goal_xy == (3.0, 0.0)
+    assert not bot._blind_back
 
 
 def test_a_sixty_second_pile_drives_straight_out():

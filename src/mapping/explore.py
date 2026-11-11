@@ -186,6 +186,9 @@ GOAL_HOLD_M = 0.30
 # stall, blind or not. It is far under the 60 s a seed is allowed to sit
 # inside 0.45 m.
 STALL_WINDOW_S = 2.0
+# A straight or pivot approach is not a translation stall. A zero command
+# on that approach, with the same goal and a shell that has not moved, is.
+ZERO_APPROACH_S = 5.0
 PILE_LIMIT_S = 60.0
 # One-rule recovery. The disk is the same 0.45 m pile ball. It stays
 # expensive for a whole 600 s run, not the 30 s goal skip.
@@ -423,7 +426,10 @@ class Explorer:
         # uses this picture, not the odometry pose.
         self._view_sig: tuple | None = None
         self._view_still_from: float | None = None
-        self._view_still_nose: float | None = None
+        # t_start, t_last, goal, x, y. A straight or pivot approach whose
+        # command has been (0, 0). Not a map.
+        self._zero_go: tuple | None = None
+        self._zero_stall = False
         # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
         self._imu_samples: deque = deque()
         self._accel_bias = [0.0, 0.0]
@@ -661,7 +667,7 @@ class Explorer:
         # Ordinary braking (a visible wall inside the stop range) still
         # counts too, or the pose would sit a halt short of every wall.
         if depth is not None:
-            self._note_view(depth, clearance)
+            self._note_view(depth)
         forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
         in_contact = stalled or (self._view_blind and forward_cmd) or self.t_s < self._pin_until
         drop = False
@@ -678,16 +684,7 @@ class Explorer:
         # range comes back once the nose clears minimum range, and that
         # distance is how the pose leaves the jamb.
         if self._view_frozen() and not self._view_blind and abs(ds) > 1e-4:
-            # A coarse signature can stay still while the nose range moves.
-            # Hubs that agree, and a nose that has moved since this picture
-            # was called still, are the shell travelling. A flat nose, a
-            # pivot, and a pitched shell stay dropped.
-            if not self._keep_agreed_nose(
-                *self._step_hub_delta(left_wheel_rad, right_wheel_rad),
-                clearance,
-                pitch_rad,
-            ):
-                drop = True
+            drop = True
         # A commanded spin should leave the axle where it is. Encoder
         # translation on that command is one wheel scrubbing, which walked
         # the pose while the body pivoted in a few centimetres.
@@ -752,7 +749,6 @@ class Explorer:
             pitch_rad,
             left_wheel_rad,
             right_wheel_rad,
-            clearance,
         )
         corrected = False
         x, y, yaw = self.odometry.pose()
@@ -1554,40 +1550,6 @@ class Explorer:
             self._log("pinned, depth floor and visual still, wheel translation frozen")
         self._pin.reset()
 
-    def _step_hub_delta(self, left_rad: float, right_rad: float) -> tuple[float, float]:
-        prev_l = self.odometry._prev_left
-        prev_r = self.odometry._prev_right
-        if prev_l is None or prev_r is None:
-            return 0.0, 0.0
-        return (
-            self.odometry.quantize(left_rad) - prev_l,
-            self.odometry.quantize(right_rad) - prev_r,
-        )
-
-    def _shell_pitched(self, pitch_rad: float) -> bool:
-        rest = self._pitch_rest
-        return rest is not None and abs(float(pitch_rad) - rest) > 0.12
-
-    def _keep_agreed_nose(self, dl: float, dr: float, nose_m: float, pitch_rad: float) -> bool:
-        """Hubs agreed, and the nose has moved since the view went still.
-
-        A pivot is opposite hub rotation. A flat nose is the still picture
-        the drop was written for. A pitched shell is the climb.
-        """
-        if self._shell_pitched(pitch_rad):
-            return False
-        cmd_l, cmd_r = self._commanded
-        if abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0:
-            return False
-        if dl * dr < 0.0 and abs(dl) > 1e-4 and abs(dr) > 1e-4:
-            return False
-        if abs(dl) < 1e-6 and abs(dr) < 1e-6:
-            return False
-        nose0 = self._view_still_nose
-        if nose0 is None or float(nose0) >= 90.0 or float(nose_m) >= 90.0:
-            return False
-        return abs(float(nose_m) - float(nose0)) > PIN_NOSE_RELEASE_M
-
     def _reverse_nose_opened(self, nose_m: float, pitch_rad: float) -> bool:
         """A straight reverse whose forward range opened is not a still scene.
 
@@ -1660,7 +1622,6 @@ class Explorer:
         pitch: float,
         left_rad: float,
         right_rad: float,
-        nose_m: float = 99.0,
     ) -> None:
         """Freeze translation when the floor image has not moved.
 
@@ -1769,12 +1730,6 @@ class Explorer:
         dr = float(right_rad) - float(anchor["right"])
         claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
-        if self._keep_agreed_nose(dl, dr, nose_m, pitch):
-            # The floor picture is still and the nose is not. The hubs
-            # agreed on this travel, so the rewind would delete it.
-            self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
-            self._floor_track.reset()
-            return
         self.odometry.x_m = float(anchor["x"])
         self.odometry.y_m = float(anchor["y"])
         # Only the steps until the next picture. A latch that ran on
@@ -1876,6 +1831,8 @@ class Explorer:
 
     def _translation_stalled(self) -> bool:
         """Commands asked for translation and the shell has not covered 0.30 m."""
+        if self._zero_stall:
+            return True
         if self._progress_from is None or self._pivoting() or self._doorway_crossing():
             return False
         # Lining up on an opening looks like a stall. Dropping the goal there
@@ -1887,6 +1844,75 @@ class Explorer:
             return False
         x, y, _yaw = self.plan_pose()
         return math.hypot(x - x0, y - y0) < GOAL_HOLD_M
+
+    def _goal_key(self) -> tuple[float, float] | None:
+        if self.goal_xy is None:
+            return None
+        return (float(self.goal_xy[0]), float(self.goal_xy[1]))
+
+    def _same_goal(self, left, right) -> bool:
+        if left is None or right is None:
+            return left is None and right is None
+        return math.hypot(left[0] - right[0], left[1] - right[1]) < 0.45
+
+    def _drop_sitting_goal(self, pose) -> None:
+        """The stall escape cannot start. Leave this goal until the shell moves."""
+        x, y = float(pose[0]), float(pose[1])
+        if self.goal_xy is not None:
+            cells = list(self._goal_cells)
+            self._goal_hold = (float(self.goal_xy[0]), float(self.goal_xy[1]), x, y, cells)
+            self._remember_attempt(self.goal_xy[0], self.goal_xy[1], 2.2)
+        self.goal_xy = None
+        self._goal_cells = []
+        self.path_xy = []
+        self._backing = False
+        self._back_from = None
+        self._replan_at = self.t_s
+
+    def _zero_approach_stall(self, pose) -> tuple[float, float] | None:
+        """A straight or pivot approach that has sent (0, 0).
+
+        Those approaches are not a translation stall, so a shell that has
+        already stopped waits. Five seconds of that zero, the same goal,
+        and no shell motion takes the stall escape. A doorway crossing or
+        a reverse the block has already refused drops the goal instead.
+        """
+        goal = self._goal_key()
+        x, y = float(pose[0]), float(pose[1])
+        zero = abs(self._commanded[0]) < 1e-3 and abs(self._commanded[1]) < 1e-3
+        straight = self._approach_why in ("straight", "pivot")
+        if self.phase != "go" or not straight or not zero or self._blind_back:
+            self._zero_go = None
+            return None
+        if self._zero_go is None:
+            self._zero_go = (self.t_s, self.t_s, goal, x, y)
+            return None
+        t0, t_last, goal0, x0, y0 = self._zero_go
+        moved = math.hypot(x - x0, y - y0) >= STILL_M
+        if self.t_s - t_last > 0.25 or not self._same_goal(goal, goal0) or moved:
+            self._zero_go = (self.t_s, self.t_s, goal, x, y)
+            return None
+        self._zero_go = (t0, self.t_s, goal0, x0, y0)
+        if self.t_s - t0 <= ZERO_APPROACH_S:
+            return None
+        self._zero_go = None
+        blocked = self._doorway_crossing() or self.t_s < self._blind_back_until
+        if not blocked and self._on_blocked_heading() and self._block_reverse_dead:
+            blocked = True
+        if blocked:
+            self._drop_sitting_goal(pose)
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
+        self._zero_stall = True
+        try:
+            cmd = self._stall_escape(pose)
+        finally:
+            self._zero_stall = False
+        if cmd is None:
+            self._drop_sitting_goal(pose)
+            self._body_v, self._body_w = 0.0, 0.0
+            return 0.0, 0.0
+        return cmd
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""
@@ -2082,16 +2108,14 @@ class Explorer:
             return True
         return False
 
-    def _note_view(self, depth, nose_m: float) -> None:
+    def _note_view(self, depth) -> None:
         sig = self._depth_signature(depth)
         if self._view_sig is None or self._signature_changed(self._view_sig, sig):
             self._view_sig = sig
             self._view_still_from = self.t_s
-            self._view_still_nose = float(nose_m)
             return
         if self._view_still_from is None:
             self._view_still_from = self.t_s
-            self._view_still_nose = float(nose_m)
 
     def _view_frozen(self) -> bool:
         if self._view_sig is None or self._view_still_from is None:
@@ -2108,7 +2132,6 @@ class Explorer:
             return False
         if not self._motion_commanded():
             self._view_still_from = self.t_s
-            self._view_still_nose = float(self._last_clear[0])
             return False
         return True
 
@@ -3236,6 +3259,11 @@ class Explorer:
             if ruled is not None:
                 return ruled
         else:
+            zeroed = self._zero_approach_stall(pose)
+            if zeroed is not None:
+                if self._blind_back:
+                    self._mark("stall")
+                return zeroed
             stuck = self._stuck_escape(pose)
             if stuck is not None:
                 return stuck

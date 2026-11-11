@@ -1143,6 +1143,117 @@ def test_a_tipped_reverse_still_pins_when_the_nose_opens():
     assert bot._pin_until > 0.0
 
 
+def _travel_while_the_view_is_frozen(command, wheel_step, *, nose_shift: float, pitch: float = 0.0, tipped: bool = False) -> float:
+    """Same depth picture for long enough that the view is frozen. Return the pose change."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(1.4, -1.2, 0.0, 1.5, 1.2, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot._replan_at = 1.0e9
+    bot._confident_after = 0.0
+    if tipped:
+        bot._pitch_rest = 0.0
+    bot._commanded = command
+    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, pitch_rad=pitch, depth=depth)
+    nose = float(bot._last_clear[0])
+    bot._view_still_from = bot.t_s - 3.0
+    bot._view_still_nose = nose + nose_shift
+    x0 = bot.odometry.x_m
+    left = right = 0.0
+    for _ in range(12):
+        bot._commanded = command
+        left += wheel_step[0]
+        right += wheel_step[1]
+        bot.step(
+            dt_s=0.05,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            pitch_rad=pitch,
+            depth=depth,
+        )
+    return bot.odometry.x_m - x0
+
+
+def test_an_opening_nose_keeps_an_agreed_wheel_step():
+    """The view signature is frozen and the nose has moved. Keep the step."""
+    from src.mapping.drive import wheel_speeds
+
+    step = -0.10 / WHEEL_RADIUS_M * 0.05
+    travelled = _travel_while_the_view_is_frozen(
+        wheel_speeds(-0.10, 0.0), (step, step), nose_shift=-0.08
+    )
+    assert travelled < -0.03
+
+
+def test_a_flat_nose_still_drops_the_frozen_view_step():
+    """The same nose is the still picture. The wheel step is not travel."""
+    from src.mapping.drive import wheel_speeds
+
+    step = -0.10 / WHEEL_RADIUS_M * 0.05
+    travelled = _travel_while_the_view_is_frozen(
+        wheel_speeds(-0.10, 0.0), (step, step), nose_shift=0.0
+    )
+    assert abs(travelled) < 0.02
+
+
+def test_a_pivot_drops_even_when_the_nose_opens():
+    """Opposite hubs are a pivot. The nose does not make that scrub travel."""
+    from src.mapping.drive import wheel_speeds
+
+    step = 0.30 / WHEEL_RADIUS_M * 0.05
+    travelled = _travel_while_the_view_is_frozen(
+        wheel_speeds(0.0, 0.70), (-step, step), nose_shift=-0.08
+    )
+    assert abs(travelled) < 0.02
+
+
+def test_floor_still_keeps_an_opening_nose_and_drops_a_flat_one():
+    """The floor-still rewind uses the same nose rule as the frozen view."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    bot._commanded = wheel_speeds(-0.10, 0.0)
+    bot._step_dt = 0.05
+    bot._floor_track.push = lambda *_a, **_k: "still"
+    bot._floor_track.confident_still = lambda: True
+    depth = np.ones((8, 8), dtype=np.float64)
+    floor = np.full((8, 8), 40.0)
+
+    def rewind(nose: float) -> float:
+        bot._arm_zupt_anchor(depth, floor, None, 0.0, 0.0)
+        bot._zupt_anchor["t"] = bot.t_s - 1.0
+        bot._zupt_anchor["x"] = 0.0
+        bot._zupt_anchor["y"] = 0.0
+        bot._zupt_wheels = (0.0, 0.0)
+        bot._view_still_nose = 1.0
+        bot.odometry.x_m = 0.08
+        bot._watch_zupt(depth, floor, None, 0.0, 0.0, 0.4, 0.4, nose)
+        return bot.odometry.x_m
+
+    assert rewind(1.08) == pytest_approx(0.08)
+    assert rewind(1.0) == pytest_approx(0.0)
+
+
+def test_a_pitched_shell_drops_even_when_the_nose_opens():
+    """Pitch past the rest gate is a climb. The opened nose does not count."""
+    from src.mapping.drive import wheel_speeds
+
+    step = -0.10 / WHEEL_RADIUS_M * 0.05
+    travelled = _travel_while_the_view_is_frozen(
+        wheel_speeds(-0.10, 0.0),
+        (step, step),
+        nose_shift=-0.08,
+        pitch=0.20,
+        tipped=True,
+    )
+    assert abs(travelled) < 0.02
+
+
 def test_a_still_scene_freezes_yaw_while_the_wheels_spin():
     """Depth, floor, and vision unchanged. The gyro still reads its rest offset.
 

@@ -423,6 +423,7 @@ class Explorer:
         # uses this picture, not the odometry pose.
         self._view_sig: tuple | None = None
         self._view_still_from: float | None = None
+        self._view_still_nose: float | None = None
         # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
         self._imu_samples: deque = deque()
         self._accel_bias = [0.0, 0.0]
@@ -660,7 +661,7 @@ class Explorer:
         # Ordinary braking (a visible wall inside the stop range) still
         # counts too, or the pose would sit a halt short of every wall.
         if depth is not None:
-            self._note_view(depth)
+            self._note_view(depth, clearance)
         forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
         in_contact = stalled or (self._view_blind and forward_cmd) or self.t_s < self._pin_until
         drop = False
@@ -677,7 +678,16 @@ class Explorer:
         # range comes back once the nose clears minimum range, and that
         # distance is how the pose leaves the jamb.
         if self._view_frozen() and not self._view_blind and abs(ds) > 1e-4:
-            drop = True
+            # A coarse signature can stay still while the nose range moves.
+            # Hubs that agree, and a nose that has moved since this picture
+            # was called still, are the shell travelling. A flat nose, a
+            # pivot, and a pitched shell stay dropped.
+            if not self._keep_agreed_nose(
+                *self._step_hub_delta(left_wheel_rad, right_wheel_rad),
+                clearance,
+                pitch_rad,
+            ):
+                drop = True
         # A commanded spin should leave the axle where it is. Encoder
         # translation on that command is one wheel scrubbing, which walked
         # the pose while the body pivoted in a few centimetres.
@@ -742,6 +752,7 @@ class Explorer:
             pitch_rad,
             left_wheel_rad,
             right_wheel_rad,
+            clearance,
         )
         corrected = False
         x, y, yaw = self.odometry.pose()
@@ -1543,6 +1554,40 @@ class Explorer:
             self._log("pinned, depth floor and visual still, wheel translation frozen")
         self._pin.reset()
 
+    def _step_hub_delta(self, left_rad: float, right_rad: float) -> tuple[float, float]:
+        prev_l = self.odometry._prev_left
+        prev_r = self.odometry._prev_right
+        if prev_l is None or prev_r is None:
+            return 0.0, 0.0
+        return (
+            self.odometry.quantize(left_rad) - prev_l,
+            self.odometry.quantize(right_rad) - prev_r,
+        )
+
+    def _shell_pitched(self, pitch_rad: float) -> bool:
+        rest = self._pitch_rest
+        return rest is not None and abs(float(pitch_rad) - rest) > 0.12
+
+    def _keep_agreed_nose(self, dl: float, dr: float, nose_m: float, pitch_rad: float) -> bool:
+        """Hubs agreed, and the nose has moved since the view went still.
+
+        A pivot is opposite hub rotation. A flat nose is the still picture
+        the drop was written for. A pitched shell is the climb.
+        """
+        if self._shell_pitched(pitch_rad):
+            return False
+        cmd_l, cmd_r = self._commanded
+        if abs(cmd_l + cmd_r) < 0.4 and abs(cmd_l - cmd_r) > 1.0:
+            return False
+        if dl * dr < 0.0 and abs(dl) > 1e-4 and abs(dr) > 1e-4:
+            return False
+        if abs(dl) < 1e-6 and abs(dr) < 1e-6:
+            return False
+        nose0 = self._view_still_nose
+        if nose0 is None or float(nose0) >= 90.0 or float(nose_m) >= 90.0:
+            return False
+        return abs(float(nose_m) - float(nose0)) > PIN_NOSE_RELEASE_M
+
     def _reverse_nose_opened(self, nose_m: float, pitch_rad: float) -> bool:
         """A straight reverse whose forward range opened is not a still scene.
 
@@ -1615,6 +1660,7 @@ class Explorer:
         pitch: float,
         left_rad: float,
         right_rad: float,
+        nose_m: float = 99.0,
     ) -> None:
         """Freeze translation when the floor image has not moved.
 
@@ -1723,6 +1769,12 @@ class Explorer:
         dr = float(right_rad) - float(anchor["right"])
         claimed = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         spun = abs(dr - dl) * self.odometry.radius_m / max(self.odometry.track_m, 1e-6)
+        if self._keep_agreed_nose(dl, dr, nose_m, pitch):
+            # The floor picture is still and the nose is not. The hubs
+            # agreed on this travel, so the rewind would delete it.
+            self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+            self._floor_track.reset()
+            return
         self.odometry.x_m = float(anchor["x"])
         self.odometry.y_m = float(anchor["y"])
         # Only the steps until the next picture. A latch that ran on
@@ -2030,14 +2082,16 @@ class Explorer:
             return True
         return False
 
-    def _note_view(self, depth) -> None:
+    def _note_view(self, depth, nose_m: float) -> None:
         sig = self._depth_signature(depth)
         if self._view_sig is None or self._signature_changed(self._view_sig, sig):
             self._view_sig = sig
             self._view_still_from = self.t_s
+            self._view_still_nose = float(nose_m)
             return
         if self._view_still_from is None:
             self._view_still_from = self.t_s
+            self._view_still_nose = float(nose_m)
 
     def _view_frozen(self) -> bool:
         if self._view_sig is None or self._view_still_from is None:
@@ -2054,6 +2108,7 @@ class Explorer:
             return False
         if not self._motion_commanded():
             self._view_still_from = self.t_s
+            self._view_still_nose = float(self._last_clear[0])
             return False
         return True
 

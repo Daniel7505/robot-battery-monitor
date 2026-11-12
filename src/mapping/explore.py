@@ -186,9 +186,12 @@ GOAL_HOLD_M = 0.30
 # stall, blind or not. It is far under the 60 s a seed is allowed to sit
 # inside 0.45 m.
 STALL_WINDOW_S = 2.0
-# A straight or pivot approach is not a translation stall. A zero command
-# on that approach, with the same goal and a shell that has not moved, is.
+# One watchdog on the command that is actually sent. Five seconds of (0, 0)
+# with a still shell escalates. A repeat inside this window takes the next rung.
 ZERO_APPROACH_S = 5.0
+WATCH_REPEAT_S = 20.0
+# The opening sit, before the first motion. It is not a stall.
+STARTUP_IDLE_S = 3.5
 PILE_LIMIT_S = 60.0
 # One-rule recovery. The disk is the same 0.45 m pile ball. It stays
 # expensive for a whole 600 s run, not the 30 s goal skip.
@@ -426,9 +429,11 @@ class Explorer:
         # uses this picture, not the odometry pose.
         self._view_sig: tuple | None = None
         self._view_still_from: float | None = None
-        # t_start, t_last, goal, x, y. A straight or pivot approach whose
-        # command has been (0, 0). Not a map.
-        self._zero_go: tuple | None = None
+        # t_start, t_last, x, y of the final (0, 0) output. Not a branch.
+        self._watch_zero: tuple | None = None
+        self._watch_step = 0
+        self._watch_fired_at = -1.0e9
+        self.watch_fires = 0
         self._zero_stall = False
         # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
         self._imu_samples: deque = deque()
@@ -913,6 +918,7 @@ class Explorer:
     def _remember(self, speeds: tuple[float, float]) -> tuple[float, float]:
         if not self._simple_recovery():
             speeds = self._respect_escape_block(speeds)
+        speeds = self._watchdog(speeds)
         self._commanded = (float(speeds[0]), float(speeds[1]))
         self._mark_xy = self.odometry.pose()[:2]
         self._observe_pile()
@@ -1845,16 +1851,6 @@ class Explorer:
         x, y, _yaw = self.plan_pose()
         return math.hypot(x - x0, y - y0) < GOAL_HOLD_M
 
-    def _goal_key(self) -> tuple[float, float] | None:
-        if self.goal_xy is None:
-            return None
-        return (float(self.goal_xy[0]), float(self.goal_xy[1]))
-
-    def _same_goal(self, left, right) -> bool:
-        if left is None or right is None:
-            return left is None and right is None
-        return math.hypot(left[0] - right[0], left[1] - right[1]) < 0.45
-
     def _drop_sitting_goal(self, pose) -> None:
         """The stall escape cannot start. Leave this goal until the shell moves."""
         x, y = float(pose[0]), float(pose[1])
@@ -1869,92 +1865,94 @@ class Explorer:
         self._back_from = None
         self._replan_at = self.t_s
 
-    def _zero_branch(self) -> str | None:
-        """A go-phase sit whose command can stay (0, 0).
-
-        Straight and pivot are exempt from the translation stall. Contact
-        recovery and the empty path after a back are the other two.
-        """
-        if self._approach_why in ("straight", "pivot"):
-            return "approach"
-        if self._recover or self._approach_why == "recover":
-            return "contact"
-        if self.goal_xy is None and (self._approach_why == "back" or self._backing):
-            return "back"
-        return None
-
-    def _finish_zero(self, pose, branch: str) -> tuple[float, float]:
-        """Leave a zero sit. Stall, then pile-leave, then drop the goal.
-
-        Contact uses the cooldown a reverse that did not move already
-        sets. The empty path uses the ordinary 4 s replan gap. Neither
-        branch is still latched when this returns.
-        """
-        self._zero_go = None
-        back_blocked = (
+    def _back_out_blocked(self, pose) -> bool:
+        return (
             self._doorway_crossing()
             or self.t_s < self._blind_back_until
             or self._reverse_closed(pose)
             or (self._on_blocked_heading() and self._block_reverse_dead)
         )
-        if branch == "contact":
-            self._recover = False
-            self._recover_phase = ""
-            self._contact_until = max(self._contact_until, self.t_s + 2.0)
-        if branch == "back":
-            self._backing = False
-            self._back_from = None
-        if not back_blocked:
+
+    def _watch_blacklist(self, pose) -> None:
+        """Drop the goal and keep it out. The quarantine is the existing 30 s spot."""
+        x, y = float(pose[0]), float(pose[1])
+        gx, gy = (x, y) if self.goal_xy is None else (float(self.goal_xy[0]), float(self.goal_xy[1]))
+        self._quarantine = (gx, gy, self.t_s)
+        self._drop_sitting_goal(pose)
+
+    def _watch_rung(self, pose, rung: int) -> tuple[float, float] | None:
+        if rung == 0:
+            if self._back_out_blocked(pose):
+                return None
             self._zero_stall = True
             try:
                 cmd = self._stall_escape(pose)
             finally:
                 self._zero_stall = False
-            if cmd is not None:
-                return cmd
-        self._begin_pile_leave(pose)
-        leaving = self._leaving_command(pose)
-        if leaving is not None:
+            if cmd is None or (abs(cmd[0]) < 1e-3 and abs(cmd[1]) < 1e-3):
+                return None
+            self._mark("stall")
+            return cmd
+        if rung == 1:
+            self._begin_pile_leave(pose)
+            leaving = self._leaving_command(pose)
+            if leaving is None or (abs(leaving[0]) < 1e-3 and abs(leaving[1]) < 1e-3):
+                return None
             self._mark("pile_leave")
             return leaving
-        self._drop_sitting_goal(pose)
-        if branch == "back":
-            self._approach_why = ""
-            self._replan_at = self.t_s + 4.0
+        self._watch_blacklist(pose)
         self._body_v, self._body_w = 0.0, 0.0
         return 0.0, 0.0
 
-    def _zero_approach_stall(self, pose) -> tuple[float, float] | None:
-        """(0, 0) on a straight, pivot, contact, or after-back sit.
+    def _watch_escalate(self, pose) -> tuple[float, float]:
+        """One rung higher when the last fire was inside the repeat window."""
+        if self.t_s - self._watch_fired_at > WATCH_REPEAT_S:
+            step = 0
+        else:
+            step = min(2, self._watch_step + 1)
+        self._recover = False
+        self._recover_phase = ""
+        self._contact_until = max(self._contact_until, self.t_s + 2.0)
+        self._backing = False
+        self._back_from = None
+        chosen = 2
+        speeds = (0.0, 0.0)
+        for rung in range(step, 3):
+            cmd = self._watch_rung(pose, rung)
+            chosen = rung
+            if cmd is None:
+                continue
+            speeds = cmd
+            break
+        self._watch_step = chosen
+        self._watch_fired_at = self.t_s
+        self.watch_fires += 1
+        self._watch_zero = None
+        name = ("stall", "pile_leave", "drop")[chosen]
+        self._log(f"watchdog fire={self.watch_fires} rung={name}")
+        return speeds
 
-        Five seconds of that output, the same goal, and a shell that has
-        not moved takes the stall escape. A blocked back-out takes the
-        pile leave. If that cannot start either, the goal is dropped.
-        """
-        goal = self._goal_key()
-        x, y = float(pose[0]), float(pose[1])
-        zero = abs(self._commanded[0]) < 1e-3 and abs(self._commanded[1]) < 1e-3
-        branch = self._zero_branch()
-        if self.phase != "go" or branch is None or not zero or self._blind_back:
-            self._zero_go = None
-            return None
-        if self._zero_go is None:
-            self._zero_go = (self.t_s, self.t_s, goal, x, y, branch)
-            return None
-        t0, t_last, goal0, x0, y0, branch0 = self._zero_go
-        moved = math.hypot(x - x0, y - y0) >= STILL_M
-        if (
-            self.t_s - t_last > 0.25
-            or branch0 != branch
-            or not self._same_goal(goal, goal0)
-            or moved
-        ):
-            self._zero_go = (self.t_s, self.t_s, goal, x, y, branch)
-            return None
-        self._zero_go = (t0, self.t_s, goal0, x0, y0, branch)
+    def _watchdog(self, speeds: tuple[float, float]) -> tuple[float, float]:
+        """The final output. Branch does not matter. Startup, done, and settle do."""
+        if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle"):
+            self._watch_zero = None
+            return speeds
+        zero = abs(speeds[0]) < 1e-3 and abs(speeds[1]) < 1e-3
+        x, y, _yaw = self.plan_pose()
+        if not zero:
+            self._watch_zero = None
+            return speeds
+        if self._watch_zero is None:
+            self._watch_zero = (self.t_s, self.t_s, x, y)
+            return speeds
+        t0, t_last, x0, y0 = self._watch_zero
+        if math.hypot(x - x0, y - y0) >= STILL_M:
+            self._watch_zero = (self.t_s, self.t_s, x, y)
+            return speeds
+        self._watch_zero = (t0, self.t_s, x0, y0)
         if self.t_s - t0 <= ZERO_APPROACH_S:
-            return None
-        return self._finish_zero(pose, branch)
+            return speeds
+        return self._watch_escalate((x, y, _yaw))
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""
@@ -3301,11 +3299,6 @@ class Explorer:
             if ruled is not None:
                 return ruled
         else:
-            zeroed = self._zero_approach_stall(pose)
-            if zeroed is not None:
-                if self._blind_back:
-                    self._mark("stall")
-                return zeroed
             stuck = self._stuck_escape(pose)
             if stuck is not None:
                 return stuck

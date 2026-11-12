@@ -194,6 +194,8 @@ def test_static_depth_with_spinning_wheels_is_slip_not_motion():
     x, y, yaw = bot.pose()
     assert math.hypot(x, y) < 0.25
     assert abs(yaw) < math.radians(2.0)
+    assert saw_reverse
+    assert bot._attempts
     assert not bot.done
 
 
@@ -458,8 +460,8 @@ def test_a_forward_goal_is_not_driven_in_reverse():
     assert not bot._backing
 
 
-def test_a_corner_contact_is_not_its_own_recovery():
-    """A corner bump does not open a private reverse. Recover is the watchdog."""
+def test_a_corner_contact_reverses_until_the_camera_can_see():
+    from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M
     from src.mapping.explore import Explorer
 
     bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
@@ -470,8 +472,15 @@ def test_a_corner_contact_is_not_its_own_recovery():
     bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
     bot._proximity = {"tof_front_left": 0.02}
     bot._go(False, 0.2)
-    assert not bot._recover
-    assert bot._select_mode() == "approach"
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    assert bot._recover_need >= SIGHT_M - 0.02 - 1e-6
+    assert bot._recover_need > TOO_CLOSE_M
+    bot.odometry.x_m = -bot._recover_need
+    bot._proximity = {"tof_front_left": 0.29}
+    bot.t_s = 6.0
+    bot._go(False, 0.2)
+    assert bot._body_v == 0.0 and bot._body_w == 0.0
+    assert bot._recover_phase == "look"
 
 
 def test_a_recover_that_does_not_move_lets_go():
@@ -485,9 +494,10 @@ def test_a_recover_that_does_not_move_lets_go():
     bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
     bot._proximity = {"tof_front_left": 0.02}
     bot._go(False, 0.2)
-    assert not bot._recover
+    assert bot._body_v < 0.0
     bot.t_s = 5.7
     bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
     assert not bot._recover
 
 
@@ -1307,6 +1317,7 @@ def test_a_stuck_press_with_an_open_nose_backs_off():
             right += cmd_r * dt
     assert bot.zupt_events >= 1
     assert bot.wheels_lifted == 0
+    assert saw_reverse
     assert abs(bot.pose()[2]) < math.radians(1.0)
     assert math.hypot(*bot.pose()[:2]) < 0.08
 
@@ -1355,7 +1366,9 @@ def test_a_stuck_reverse_yields_after_the_hinges_spin_against_a_frozen_picture()
         else:
             left += cmd_l * dt
             right += cmd_r * dt
-    assert not bot._stuck_yield
+    assert saw_reverse
+    assert bot._stuck_yield
+    assert not (last[0] < -0.5 and last[1] < -0.5)
 
 
 def test_pile_leave_logs_why_the_rear_gap_won(capsys):
@@ -1373,8 +1386,30 @@ def test_pile_leave_logs_why_the_rear_gap_won(capsys):
     bot.t_s = 10.0
     bot._stuck_yield = True
     bot._stuck_reverse_m = 1.0
-    bot._leave_xy = (0.0, 0.0)
-    assert bot._select_mode() == "leave_area"
+    bot._go(False, 0.0)
+    out = capsys.readouterr().out
+    assert "pile_leave branch=straight_back:rear_clearer" in out
+    assert "fwd=0.40" in out
+    assert "rear=2.00" in out
+    assert "clip_fwd=0" in out
+    assert "yield=1" in out
+
+
+def test_a_pile_leave_branch_change_is_not_hidden_by_the_one_second_line(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._bubble_view = None
+    bot._last_clear = (1.0, 1.0, 1.0)
+    bot.t_s = 10.0
+    bot._leave_why = "nose_forward"
+    bot._log_pile_leave()
+    bot.t_s = 10.1
+    bot._leave_why = "fallback_reverse"
+    bot._log_pile_leave()
+    out = capsys.readouterr().out
+    assert "branch=nose_forward" in out
+    assert "branch=fallback_reverse" in out
 
 
 def test_a_still_floor_freezes_translation_while_the_view_turns():
@@ -1425,6 +1460,7 @@ def test_a_still_floor_freezes_translation_while_the_view_turns():
             left += cmd_l * dt
             right += cmd_r * dt
     assert bot.zupt_events >= 1
+    assert saw_reverse
     assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.08
     assert abs(bot.pose()[2]) > 0.015
 
@@ -1742,7 +1778,12 @@ def test_a_held_floor_cuts_the_blocked_reverse(capsys):
             break
     out = capsys.readouterr().out
     assert held_at is not None
+    assert reverse_at is not None
+    assert stopped_at is not None
+    assert stopped_at - reverse_at >= 1.5
+    assert stopped_at - reverse_at < 2.6
     assert math.hypot(*bot.pose()[:2]) < STILL_M
+    assert "blocked reverse did not move the shell" in out
     assert not bot._view_frozen()
 
 
@@ -1802,6 +1843,7 @@ def test_lifted_wheels_are_a_zero_velocity_update():
             left += cmd_l * dt
             right += cmd_r * dt
     assert bot.wheels_lifted >= 1
+    assert saw_reverse
     assert abs(bot.pose()[2]) < math.radians(1.0)
 
 
@@ -2388,6 +2430,7 @@ def test_stalled_hubs_turn_away_and_mark_the_contact():
         if left < -0.05 and right < -0.05:
             saw_reverse = True
     assert saw_forward
+    assert saw_reverse
     ahead = bot.grid.cell_of(0.28, 0.0)
     assert ahead is not None and bot.grid.labels()[ahead] != 1
 
@@ -3048,7 +3091,7 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     # The goal is straight ahead. The backup still reverses.
     bot.goal_xy = (1.5, 0.0)
     bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     assert bot.goal_xy is None
     assert bot._goal_hold is not None
@@ -3056,18 +3099,18 @@ def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved
     bot.t_s = 6.2
     # A pose write is not travel. Credit the reverse the wheels actually integrated.
     bot._escape_travel_m = 0.05
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     nose = bot.camera.translation[0] + bot.camera.min_range_m + BLIND_EXIT_MARGIN_M + 0.02
     bot._view_blind = False
     bot._last_clear = (nose, 1.0, 1.0)
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     bot.odometry.x_m = -0.35
     bot._escape_travel_m = 0.35
-    bot._stall_escape(bot.plan_pose())
+    bot._go(False, 0.28)
     assert not bot._blind_back
-    assert bot._goal_released()
+    assert bot._goal_hold is None
 
 
 def test_a_still_picture_with_commanded_motion_reverses_along_the_trail():
@@ -3088,8 +3131,7 @@ def test_a_still_picture_with_commanded_motion_reverses_along_the_trail():
     bot._view_still_from = 0.0
     bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
     left, right = bot._go(False, 0.28)
-    assert bot._select_mode() == "approach"
-    assert not (left < -0.5 and right < -0.5)
+    assert left < -0.5 and right < -0.5
 
 
 def test_a_stuck_spin_phase_reverses_and_leaves_the_spin():
@@ -3113,9 +3155,9 @@ def test_a_stuck_spin_phase_reverses_and_leaves_the_spin():
         yaw_rate_rad_s=0.001,
         depth=depth,
     )
-    assert left * right < 0.0
-    assert bot.phase == "spin"
-    assert bot._escape_block is None
+    assert left < -0.5 and right < -0.5
+    assert bot.phase == "go"
+    assert bot._escape_block is not None
 
 
 def test_a_seen_throat_is_crept_and_an_open_hall_is_not():
@@ -3294,9 +3336,10 @@ def test_a_refused_stall_reverse_advances_to_the_turn():
     assert bot._escape_phase == "turn"
     assert bot._blind_back
     assert bot._escape_travel_m == 0.15
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.0)
     assert left * right < 0
     assert abs(left) > 0.5 and abs(right) > 0.5
+    assert bot._motion_source == "stall"
     assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
 
 
@@ -3327,10 +3370,11 @@ def test_a_refused_stall_holds_the_small_pivot_when_the_spin_is_unsafe(monkeypat
     expected = wheel_speeds(0.0, 0.30)
     seen = []
     for _ in range(6):
-        speeds = bot._stall_escape(bot.plan_pose())
+        speeds = bot._go(False, 0.0)
         seen.append(speeds)
         assert speeds == expected
         assert speeds != (0.0, 0.0)
+        assert bot._motion_source == "stall"
         assert bot._escape_phase == "turn"
     assert len(set(seen)) == 1
 
@@ -3360,10 +3404,10 @@ def test_a_quiet_small_pivot_hands_off_to_the_drive():
     bot._block_reverse_dead = True
     bot._spin_safe = lambda _w: False
     drive = wheel_speeds(0.12, 0.0)
-    first = bot._stall_escape(bot.plan_pose())
+    first = bot._go(False, 0.0)
     assert first == drive
     assert bot._escape_phase == "drive"
-    second = bot._stall_escape(bot.plan_pose())
+    second = bot._go(False, 0.0)
     assert second == drive
     assert bot._escape_phase == "drive"
     assert second != wheel_speeds(0.0, 0.30)
@@ -3394,11 +3438,11 @@ def test_a_quiet_big_spin_still_flips():
     bot._escape_phase_travel = 0.0
     bot._block_reverse_dead = True
     bot._spin_safe = lambda _w: True
-    first = bot._stall_escape(bot.plan_pose())
+    first = bot._go(False, 0.0)
     assert first == wheel_speeds(0.12, 0.0)
     assert bot._escape_spin == -0.70
     assert bot._escape_phase == "turn"
-    second = bot._stall_escape(bot.plan_pose())
+    second = bot._go(False, 0.0)
     assert second == wheel_speeds(0.0, -0.70)
     assert bot._escape_phase == "turn"
 
@@ -3477,7 +3521,7 @@ def test_a_changing_depth_picture_is_not_camera_stuck():
     bot._body_v = 0.12
     bot._view_sig = (1.2, 0.4, ())
     bot._view_still_from = 4.8
-    assert not bot._camera_stuck()
+    assert bot._stuck_reason() is None
 
 
 def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
@@ -3492,8 +3536,8 @@ def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
     for i in range(6):
         bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
     left, right = bot._go(False, 0.28)
-    assert bot._select_mode() == "approach"
-    assert not (left < -0.5 and right < -0.5)
+    assert left < -0.5 and right < -0.5
+    assert bot._stuck_reason() == "imu_stuck"
 
 
 def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
@@ -3521,9 +3565,9 @@ def test_a_closed_sweep_reverses_along_the_driven_trail(monkeypatch):
     bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
     bot._view_blind = False
     bot._last_clear = (0.2, 0.2, 0.2)
+    monkeypatch.setattr(bot, "_straight_leave", lambda _pose: None)
     left, right = bot._go(False, 0.28)
-    assert bot._select_mode() == "approach"
-    assert not (left < -0.5 and right < -0.5)
+    assert left < -0.5 and right < -0.5
 
 
 def test_only_issue_writes_the_wheel_command():
@@ -3540,14 +3584,14 @@ def test_only_issue_writes_the_wheel_command():
 
 
 def test_modes_move_from_explore_to_approach_to_recover_to_leave():
-    bot = _zero_go_bot()
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
     bot.phase = "spin"
-    bot.path_xy = []
-    bot.goal_xy = None
     assert bot._select_mode() == "explore"
     bot.phase = "go"
     bot.goal_xy = (3.0, 0.0)
-    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot.path_xy = [(1.0, 0.0)]
     assert bot._select_mode() == "approach"
     bot._blind_back = True
     assert bot._select_mode() == "recover"
@@ -3698,11 +3742,10 @@ def test_a_sixty_second_pile_drives_straight_out():
     bot._last_clear = (1.2, 1.2, 1.2)
     bot.goal_xy = (1.5, 0.0)
     bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    bot._go(False, 0.28)
+    left, right = bot._go(False, 0.28)
     assert bot._pile_forced
-    assert bot._select_mode() == "approach"
-    bot._leave_xy = (0.0, 0.0)
-    assert bot._select_mode() == "leave_area"
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 0.3
 
 
 def test_a_visible_stall_turns_away_and_holds_the_goal():
@@ -3723,13 +3766,13 @@ def test_a_visible_stall_turns_away_and_holds_the_goal():
     bot._progress_from = (0.0, 0.0, 0.0, True)
     bot.goal_xy = (1.5, 0.0)
     bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -1.0 and right < -1.0
     assert bot.goal_xy is None
     assert bot._goal_hold is not None
     assert bot._regions and bot._regions[0].fails >= 1
     bot.t_s = 6.1
-    left, right = bot._stall_escape(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left * right < 0.0
 
 
@@ -3818,8 +3861,7 @@ def test_one_rule_reverses_along_the_trail_and_quarantines(monkeypatch):
     bot._last_clear = (1.2, 1.2, 1.2)
     bot.goal_xy = (1.5, 0.0)
     bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    bot._note_pile()
-    left, right = bot._one_rule_command(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -0.5 and right < -0.5
     assert bot.goal_xy is None
     assert bot._failure_zones == [(0.0, 0.0, 70.0)]
@@ -3841,8 +3883,7 @@ def test_trail_only_reverses_without_a_quarantine(monkeypatch):
     bot._last_clear = (1.2, 1.2, 1.2)
     bot.goal_xy = (1.5, 0.0)
     bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    bot._note_pile()
-    left, right = bot._one_rule_command(bot.plan_pose())
+    left, right = bot._go(False, 0.28)
     assert left < -0.5 and right < -0.5
     assert bot.goal_xy == (1.5, 0.0)
     assert bot._failure_zones == []
@@ -3865,7 +3906,7 @@ def test_one_rule_ignores_an_imu_stuck_and_a_blocked_heading(monkeypatch):
         bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
     bot._go(False, 0.28)
     assert bot._escape_block is None
-    assert bot._select_mode() == "approach"
+    assert bot._stuck_reason() == "imu_stuck"
     bot._escape_block = (30.0, 0.0, 0.0, 0.0)
     left, right = bot._issue(wheel_speeds(0.12, 0.0))
     assert left > 0.5 and right > 0.5
@@ -3920,7 +3961,7 @@ def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
 
     monkeypatch.setattr(bot, "_stall_escape", _stall)
     monkeypatch.setattr(bot, "_creep_through_gap", _creep)
-    left, right = bot._mode_command(0.28, 0.28, None, 0.0, 0.05)
+    left, right = bot._go(False, 0.28)
     assert left < -0.5 and right < -0.5
     bot._relief = None
     bot._motion_anchor = (0.0, 0.0, 0.0, 0.0)

@@ -785,3 +785,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Keeping the nose release. A separate change to the hold mark or to contact recovery. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
 
 **Outcome.** The nose keep is gone. The 5 s clock is in. North's visited mean is 15.95, below 18.67. −0.35's mean is 20.60, above 17.99. The long contact-recovery sit and the sit after a `back` are still there.
+
+## 2026-11-11 — The zero clock also covers contact and the empty path after a back
+
+**Mission parameter.** The 243 s n3 sit is contact recovery, and the 49 s m4 sit is an empty path after a back. Extend the same 5 s `(0, 0)` clock to those two branches. On expiry, stall, or pile-leave if the back-out is blocked, or drop the goal. Do not start the same branch again on the next tick.
+
+**Change.** `_zero_branch` names contact recovery and a `goal=none` back as well as straight and pivot. `_finish_zero` runs the stall escape, then `_begin_pile_leave`, then `_drop_sitting_goal`. Contact sets the existing 2 s `_contact_until`. The empty path clears `_backing` and waits the ordinary 4 s replan. Commit `bc55896`.
+
+**Why.** Both sits send `(0, 0)` while the shell is still, and the straight-or-pivot check never saw them.
+
+**Evidence.** Mapping tests: 175 passed. Each new branch takes the stall after 5 s, stays put under 5 s, and stays put when the shell has moved 0.10 m. Five 600 s runs of each seed, flags off, depth seeds 64 and 63, against the `998e957` ten. North visited 11.86, 17.42, 14.62, 12.21, 18.39 (mean 14.90, sd 2.96) against 15.95 (sd 5.10). −0.35 visited 22.65, 13.78, 9.58, 16.77, 11.67 (mean 14.89, sd 5.09) against 20.60 (sd 4.70). Pose means are 0.93 m and 0.94 m, against 0.65 m and 0.81 m. No mapper done line. Lowest `up_z` is 0.998. No sample below 0.95. The 243 s contact sit and the 49 s empty-back sit do not repeat. The longest `(0, 0)` is 244 s on m3, `src=hold` with the goal and the path still set after a `back`. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new cooldown number. A change to the hold mark while a goal is still set. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
+
+**Outcome.** Contact recovery and the empty path after a back no longer sit out the cap. Visited means are 14.90 and 14.89, below 15.95 and 20.60. A back that still holds a goal can sit, which is m3's 244 s.

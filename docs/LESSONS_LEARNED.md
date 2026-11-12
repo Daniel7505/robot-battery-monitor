@@ -1105,3 +1105,28 @@ North visited 15.56, 14.82, 8.80, 22.92, 17.67 (mean 15.95, sd 5.10) against 18.
 Pose error at the cap: n1 0.37, n2 1.03, n3 0.53, n4 0.50, n5 0.81, m1 1.31, m2 0.19, m3 0.51, m4 0.43, m5 1.62. The `5a546bf` ten was 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. Means are 0.65 m and 0.81 m, against 0.84 m and 0.75 m.
 
 The longest `(0, 0)` is 243 s on n3, from t=357 s to the cap, phase `go`. The branch is contact recovery: `action=recover`, `contact_bump`, pile `src` flipping between `hold` and `contact`, goal `(2.23, 0.93)` unchanged, bubble about 0.5 m. That look returns `(0, 0)`. It is not a straight or pivot approach, so the 5 s clock does not take it. m4 sits 49 s from t=532 s to t=581 s after a `back` at t=527 s, then `goal=none` and `src=hold`, until `pile_leave` at t=577 s. That approach is `back`, so the clock leaves it. n1's 14 s from t=578 s to t=592 s includes `stall, backing out` at t=588 s. The other seven longest stretches are 3.5 s at the start.
+
+## The zero clock covers contact and the empty path after a back
+
+Commit `bc55896`. The same 5 s clock now also runs while contact recovery is sending `(0, 0)`, and while the path is empty after a back with `goal=none`. Expiry takes the stall escape. A blocked back-out takes the pile leave. If that cannot start, the goal is dropped. Contact uses the existing 2 s cooldown a reverse that did not move already sets, so the look does not start again on the next tick. The empty path uses the ordinary 4 s replan gap and clears the back latch. Mapping tests: 175 passed.
+
+Five 600 s runs of each seed, flags off, against the `998e957` ten. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.998, on n3, m1, and m3. No sample is below 0.95.
+
+North visited 11.86, 17.42, 14.62, 12.21, 18.39 (mean 14.90, sd 2.96) against 15.95 (sd 5.10). −0.35 visited 22.65, 13.78, 9.58, 16.77, 11.67 (mean 14.89, sd 5.09) against 20.60 (sd 4.70). Pantry and storage stay at 0. Closet stays at 0. Laundry is 4.5 on n1. Bath is 29.7 on n5. Hall is 59.3 on n1 and 18.2 on n3.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 19.4 | 0 | 10.0 | 0 | 4.5 | 0 | 59.3 | 0 | 0 |
+| n2 | 25.5 | 33.2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n3 | 27.5 | 0.2 | 16.5 | 0 | 0 | 0 | 18.2 | 0 | 0 |
+| n4 | 14.1 | 31.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 8.6 | 57.0 | 0 | 29.7 | 0 | 0 | 0 | 0 | 0 |
+| m1 | 33.3 | 38.8 | 6.7 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m2 | 13.7 | 40.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m3 | 13.5 | 19.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m4 | 21.1 | 22.5 | 27.3 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m5 | 7.4 | 43.4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Pose error at the cap: n1 0.42, n2 1.18, n3 0.96, n4 0.96, n5 1.11, m1 0.76, m2 0.92, m3 0.61, m4 0.63, m5 1.79. The `998e957` ten was 0.37, 1.03, 0.53, 0.50, 0.81 and 1.31, 0.19, 0.51, 0.43, 1.62. Means are 0.93 m and 0.94 m, against 0.65 m and 0.81 m.
+
+The 243 s contact sit and the 49 s empty path after a back do not repeat. Nine of the ten longest `(0, 0)` stretches are 3.5 s at the start. m5's next stretch is 5.0 s, from t=304 s to t=309 s, and it logs `stall, backing out` at t=306 s. The longest is 244 s on m3, from t=356 s to the cap, phase `go`, pile `src=hold`, goal still set, path still set. The last decision is `pile_leave` and `back` at t=357.6 s, then the same goal. The approach stays `back` while a goal is held, so neither the contact branch nor the `goal=none` branch matches, and the clock does not take it.

@@ -799,3 +799,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new cooldown number. A change to the hold mark while a goal is still set. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
 
 **Outcome.** Contact recovery and the empty path after a back no longer sit out the cap. Visited means are 14.90 and 14.89, below 15.95 and 20.60. A back that still holds a goal can sit, which is m3's 244 s.
+
+## 2026-11-12 — One watchdog on the command that is sent
+
+**Mission parameter.** Each branch clock exposed the next branch. m3 sat 244 s on a back that still held a goal. One check, on the final `(0, 0)`, independent of which branch produced it.
+
+**Change.** The straight, pivot, contact, and empty-back clocks are deleted. `_watchdog` runs in `_remember`, after the escape block has rewritten the speeds. Five seconds of `(0, 0)` with the planner pose inside 0.04 m of where the zero started takes the stall escape, the pile leave if that back-out is blocked, or a goal drop plus the existing 30 s quarantine. A fire within 20 s starts one rung higher. The first 3.5 s, `done`, and `settle` are not a sit. Contact keeps its 2 s cooldown. Commit `b975857`.
+
+**Why.** The issued command is the same in every sit. Naming the branch left the next one out.
+
+**Evidence.** Mapping tests: 175 passed. Straight, pivot, contact, an empty back, and a back that still holds a goal each take the stall after 5 s. Under 5 s does not. A shell 0.10 m away does not. Three fires inside 20 s take stall, then pile leave, then drop. The start-up idle does not fire. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 16.07, 15.91, 17.47, 18.76, 11.97 (mean 16.04, sd 2.55) against 14.90 and 15.95. −0.35 visited 17.41, 22.75, 12.16, 11.58, 12.64 (mean 15.31, sd 4.76) against 14.89 and 20.60. Pose means are 0.71 m and 0.67 m, against 0.93 m and 0.94 m on `bc55896` and 0.65 m and 0.81 m on `998e957`. Watchdog fires are one `stall` on n4, one `stall` on m4, and zero on the other eight. The longest `(0, 0)` is 5.0 s, ended by that stall. No mapper done line. Lowest `up_z` is 0.996. No sample below 0.95. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Another branch name on the clock. A new blacklist duration. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
+
+**Outcome.** The 244 s sit does not repeat. The longest zero is the 5 s the watchdog is written to wait. Visited means are 16.04 and 15.31. −0.35 is below the `998e957` mean of 20.60.

@@ -1130,3 +1130,28 @@ North visited 11.86, 17.42, 14.62, 12.21, 18.39 (mean 14.90, sd 2.96) against 15
 Pose error at the cap: n1 0.42, n2 1.18, n3 0.96, n4 0.96, n5 1.11, m1 0.76, m2 0.92, m3 0.61, m4 0.63, m5 1.79. The `998e957` ten was 0.37, 1.03, 0.53, 0.50, 0.81 and 1.31, 0.19, 0.51, 0.43, 1.62. Means are 0.93 m and 0.94 m, against 0.65 m and 0.81 m.
 
 The 243 s contact sit and the 49 s empty path after a back do not repeat. Nine of the ten longest `(0, 0)` stretches are 3.5 s at the start. m5's next stretch is 5.0 s, from t=304 s to t=309 s, and it logs `stall, backing out` at t=306 s. The longest is 244 s on m3, from t=356 s to the cap, phase `go`, pile `src=hold`, goal still set, path still set. The last decision is `pile_leave` and `back` at t=357.6 s, then the same goal. The approach stays `back` while a goal is held, so neither the contact branch nor the `goal=none` branch matches, and the clock does not take it.
+
+## One watchdog on the issued command
+
+Commit `b975857`. The straight, pivot, contact, and empty-back clocks are gone. `_remember` is where the final wheel command is stored, after the escape block. If that output has been `(0, 0)` for more than 5 s and the planner pose has not moved 0.04 m, the watchdog fires. The first rung is the stall escape. A blocked back-out takes the pile leave. The next rung drops the goal and quarantines that spot for the existing 30 s. A fire inside 20 s of the last one starts one rung higher. The opening 3.5 s, `done`, and `settle` do not count. Contact still uses its 2 s cooldown. Mapping tests: 175 passed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.996, on m2. No sample is below 0.95.
+
+North visited 16.07, 15.91, 17.47, 18.76, 11.97 (mean 16.04, sd 2.55) against 14.90 (sd 2.96) on `bc55896` and 15.95 (sd 5.10) on `998e957`. −0.35 visited 17.41, 22.75, 12.16, 11.58, 12.64 (mean 15.31, sd 4.76) against 14.89 (sd 5.09) and 20.60 (sd 4.70). Pantry and storage stay at 0. Closet is 69.6 on m3. Laundry is 36.0 on m4 and 21.0 on m2. Hall is 53.3 on m4 and 31.9 on m2.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 19.7 | 39.1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n2 | 6.2 | 67.1 | 0 | 0.6 | 0 | 0 | 0 | 0 | 0 |
+| n3 | 25.2 | 33.1 | 0 | 0.5 | 0 | 0 | 0 | 0 | 0 |
+| n4 | 32.9 | 20.4 | 5.4 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 11.0 | 37.0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m1 | 31.4 | 5.9 | 22.9 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m2 | 30.2 | 28.1 | 17.9 | 0 | 21.0 | 0 | 31.9 | 0 | 0 |
+| m3 | 7.1 | 25.7 | 0 | 12.2 | 0 | 69.6 | 0 | 0 | 0 |
+| m4 | 16.0 | 0.6 | 9.5 | 0 | 36.0 | 0 | 53.3 | 0 | 0 |
+| m5 | 16.5 | 9.1 | 30.7 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Pose error at the cap: n1 0.14, n2 0.30, n3 1.18, n4 0.97, n5 0.94, m1 0.45, m2 0.70, m3 0.56, m4 0.87, m5 0.78. Means are 0.71 m and 0.67 m. `bc55896` was 0.93 m and 0.94 m. `998e957` was 0.65 m and 0.81 m.
+
+Watchdog fires: n4 one `stall`, m4 one `stall`, and zero on the other eight. No `pile_leave` rung and no `drop` rung. The longest `(0, 0)` is 5.0 s, on n4 from t=273 s to t=278 s and on m4 from t=90 s to t=95 s. Both are phase `go` after a `back`, and the stall rung ends them. The other eight longest stretches are the 3.5 s start-up, which the watchdog does not count. The 244 s m3 sit does not repeat.

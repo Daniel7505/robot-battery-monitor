@@ -3693,6 +3693,62 @@ def test_a_zero_command_under_five_seconds_is_not_a_stall():
     assert not bot._blind_back
 
 
+def test_a_pivot_in_place_for_five_seconds_takes_the_stall(capsys):
+    """n2 spun on heading_off with the pose frozen. That is a sit."""
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+    bot.t_s = 14.9
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+    bot.t_s = 15.1
+    left, right = bot._issue(pivot)
+    assert "watchdog fire=1 rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot._blind_back
+
+
+def test_a_reverse_in_place_for_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    reverse = wheel_speeds(-0.10, 0.0)
+    left, right = bot._issue(reverse)
+    assert left == pytest_approx(reverse[0]) and right == pytest_approx(reverse[1])
+    bot.t_s = 15.1
+    left, right = bot._issue(reverse)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+
+
+def test_the_survey_spin_is_not_a_no_progress_sit():
+    bot = _zero_go_bot()
+    bot.phase = "spin"
+    bot._watch_zero = (4.0, 9.9, 0.0, 0.0)
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+
+
+def test_a_pivot_that_moves_the_pose_is_not_a_sit():
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    pivot = wheel_speeds(0.0, 0.70)
+    bot._issue(pivot)
+    bot.t_s = 16.0
+    bot.odometry.x_m = 0.10
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+
+
 def test_a_moving_shell_does_not_take_the_watchdog():
     bot = _zero_go_bot()
     bot.odometry.x_m = 0.10

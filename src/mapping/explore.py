@@ -186,8 +186,9 @@ GOAL_HOLD_M = 0.30
 # stall, blind or not. It is far under the 60 s a seed is allowed to sit
 # inside 0.45 m.
 STALL_WINDOW_S = 2.0
-# One watchdog on the command that is actually sent. Five seconds of (0, 0)
-# with a still shell escalates. A repeat inside this window takes the next rung.
+# One watchdog on the command that is actually sent. Five seconds with the
+# planner pose inside 0.04 m is a sit, even when the wheels are turning.
+# A repeat inside this window takes the next rung.
 ZERO_APPROACH_S = 5.0
 WATCH_REPEAT_S = 20.0
 # The opening sit, before the first motion. It is not a stall.
@@ -1995,26 +1996,27 @@ class Explorer:
         return speeds
 
     def _watchdog(self, speeds: tuple[float, float]) -> tuple[float, float]:
-        """The final output. Branch does not matter. Startup, done, and settle do."""
-        if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle"):
+        """The final output. A still planner pose is a sit, whatever the wheels say.
+
+        Startup, done, settle, and the survey spin are not a sit. A pivot
+        or a reverse in phase go that leaves the pose inside 0.04 m takes
+        the same ladder as (0, 0).
+        """
+        if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle", "spin"):
             self._watch_zero = None
             return speeds
-        zero = abs(speeds[0]) < 1e-3 and abs(speeds[1]) < 1e-3
-        x, y, _yaw = self.plan_pose()
-        if not zero:
-            self._watch_zero = None
-            return speeds
+        x, y, yaw = self.plan_pose()
         if self._watch_zero is None:
             self._watch_zero = (self.t_s, self.t_s, x, y)
             return speeds
-        t0, t_last, x0, y0 = self._watch_zero
+        t0, _t_last, x0, y0 = self._watch_zero
         if math.hypot(x - x0, y - y0) >= STILL_M:
             self._watch_zero = (self.t_s, self.t_s, x, y)
             return speeds
         self._watch_zero = (t0, self.t_s, x0, y0)
         if self.t_s - t0 <= ZERO_APPROACH_S:
             return speeds
-        return self._watch_escalate((x, y, _yaw))
+        return self._watch_escalate((x, y, yaw))
 
     def _note_translation(self) -> None:
         """Remember the last time the odometry actually moved."""

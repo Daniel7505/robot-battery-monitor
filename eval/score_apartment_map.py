@@ -294,13 +294,17 @@ def format_scores(scores: dict) -> str:
     wall = scores["wall_error_cm"]
     wall_txt = "nan" if wall != wall else f"{wall:.2f}"
     lines = [
-        f"occupancy_iou: {scores['occupancy_iou']:.4f}",
-        f"free_iou: {scores['free_iou']:.4f}",
         f"coverage_pct: {scores['coverage_pct']:.2f}",
-        f"wall_error_cm: {wall_txt}",
     ]
     if "visited_pct" in scores:
         lines.append(f"visited_pct: {scores['visited_pct']:.2f}")
+    lines.extend(
+        [
+            f"occupancy_iou: {scores['occupancy_iou']:.4f}",
+            f"free_iou: {scores['free_iou']:.4f}",
+            f"wall_error_cm: {wall_txt}",
+        ]
+    )
     for room in scores.get("rooms") or []:
         lines.append(
             f"room {room['room']} seen_pct: {room['seen_pct']:.1f} visited_pct: {room['visited_pct']:.1f}"

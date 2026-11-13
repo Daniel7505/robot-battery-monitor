@@ -3711,6 +3711,49 @@ def test_the_watchdog_does_not_fire_during_start_up():
     assert bot.watch_fires == 0
 
 
+def test_the_drop_rung_moves_within_two_ticks(capsys):
+    """A blocked leave used to return (0, 0) and sit. n5 did that for 26 s."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._leave_xy = (0.0, 0.0)
+    bot._bubble_view = BubbleView(1.0, 1.0, 1.0, 0.05, 0.05)
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+    speeds = [(left, right)]
+    if abs(left) < 1e-3 and abs(right) < 1e-3:
+        speeds.append(bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05))
+    assert any(abs(a) > 1e-3 or abs(b) > 1e-3 for a, b in speeds)
+    assert bot.mode in ("explore", "leave_area")
+    assert bot.done is False
+
+
+def test_a_stable_map_with_no_frontier_logs_done_without_stopping(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 20.0
+    bot._frontier_open = False
+    bot._note_done_would_fire()
+    bot.t_s = 23.9
+    bot._note_done_would_fire()
+    assert "done would fire" not in capsys.readouterr().out
+    bot.t_s = 24.5
+    bot._note_done_would_fire()
+    assert "done would fire: no reachable frontier, map stable" in capsys.readouterr().out
+    assert bot.done is False
+    assert bot.phase != "done"
+    bot.grid.log[0, :20] = bot.grid.occ_thresh
+    bot.t_s = 30.0
+    bot._note_done_would_fire()
+    assert "done would fire" not in capsys.readouterr().out
+
+
 def test_a_repeated_watchdog_fire_takes_the_next_rung(capsys):
     bot = _zero_go_bot()
     _issued_zero(bot)

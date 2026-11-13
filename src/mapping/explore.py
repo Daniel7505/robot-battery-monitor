@@ -436,6 +436,12 @@ class Explorer:
         self._watch_fired_at = -1.0e9
         self.watch_fires = 0
         self._zero_stall = False
+        # None until a plan runs. False means the last plan had no reachable
+        # frontier. The done line below only logs; it does not stop the run.
+        self._frontier_open: bool | None = None
+        self._done_sig: tuple[float, int, int] | None = None
+        self._done_logged = False
+        self._done_check_at = 0.0
         # (t, |wheel yaw rate|, |gyro yaw rate|, wheel speed, horiz accel or None)
         self._imu_samples: deque = deque()
         self._accel_bias = [0.0, 0.0]
@@ -857,6 +863,7 @@ class Explorer:
         self._note_pile()
         self._note_crumb()
         self._watch_motion()
+        self._note_done_would_fire()
         # One owner. The mode is chosen here. Only _issue stores the wheels.
         return self._issue(self._mode_command(left_clear, right_clear, view, ds, dt))
 
@@ -1924,8 +1931,40 @@ class Explorer:
             self._mark("pile_leave")
             return leaving
         self._watch_blacklist(pose)
-        self._body_v, self._body_w = 0.0, 0.0
-        return 0.0, 0.0
+        return self._resume_after_drop(pose)
+
+    def _resume_after_drop(self, pose) -> tuple[float, float]:
+        """The goal is quarantined. Leave the spot, or spin and look again.
+
+        The drop used to return (0, 0). The next ticks then stayed in the
+        same hold, and the watchdog fired drop again. A leave that still
+        has a non-zero command is leave_area. Otherwise this is explore.
+        """
+        self._blind_back = False
+        self._blind_back_from = None
+        self._recover = False
+        self._recover_phase = ""
+        self._relief = None
+        self._backing = False
+        self._back_from = None
+        leaving = None
+        if self._leave_xy is not None:
+            leaving = self._leaving_command(pose)
+            if leaving is not None and not self._simple_recovery():
+                leaving = self._respect_escape_block(leaving)
+        if leaving is not None and (abs(leaving[0]) > 1e-3 or abs(leaving[1]) > 1e-3):
+            self.mode = "leave_area"
+            self.phase = "go"
+            self._mark("pile_leave")
+            return leaving
+        self._leave_xy = None
+        self._pile_forced = False
+        self.phase = "spin"
+        self._spin_start = None
+        self._spin_then = None
+        self.mode = "explore"
+        self._mark("spin")
+        return self._spin()
 
     def _watch_escalate(self, pose) -> tuple[float, float]:
         """One rung higher when the last fire was inside the repeat window."""
@@ -3628,6 +3667,7 @@ class Explorer:
         self._prefer_near = False
         x, y, yaw = self.plan_pose()
         if depth > 6:
+            self._frontier_open = False
             self._no_frontier()
             return
         rooms = segment_map(self.grid.labels(), self.grid.res)
@@ -3657,9 +3697,11 @@ class Explorer:
         )
         self._note_refusals(report)
         if chosen is None:
+            self._frontier_open = False
             self._log_quit(report.get("quit"), "select_goal", "none")
             self._no_frontier()
             return
+        self._frontier_open = True
         goal, path = chosen
         if self._quarantine is not None:
             qx, qy, qt = self._quarantine
@@ -3826,6 +3868,33 @@ class Explorer:
             return 0.0, 0.0
         self._log_stop("settle", "holding")
         return 0.0, 0.0
+
+    def _note_done_would_fire(self) -> None:
+        """Log a seen-map done. The run keeps going.
+
+        No reachable frontier, and the known and occupied counts stay
+        inside the settle hold's 8 cells for that hold's 4 s. This does
+        not set ``done`` and does not change the phase.
+        """
+        if self._frontier_open is not False:
+            self._done_sig = None
+            self._done_logged = False
+            return
+        if self.t_s < self._done_check_at:
+            return
+        self._done_check_at = self.t_s + 0.5
+        labels = self.grid.labels()
+        known = int((labels >= 0).sum())
+        occupied = int((labels == 1).sum())
+        sig = self._done_sig
+        if sig is None or abs(known - sig[1]) > 8 or abs(occupied - sig[2]) > 8:
+            self._done_sig = (self.t_s, known, occupied)
+            self._done_logged = False
+            return
+        if self._done_logged or self.t_s - sig[0] < 4.0:
+            return
+        self._done_logged = True
+        self._log("done would fire: no reachable frontier, map stable")
 
     def _log_stop(self, where: str, branch: str) -> None:
         """Repeat the quit fields when a no-frontier or settle branch ends."""

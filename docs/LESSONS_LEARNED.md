@@ -1155,3 +1155,32 @@ North visited 16.07, 15.91, 17.47, 18.76, 11.97 (mean 16.04, sd 2.55) against 14
 Pose error at the cap: n1 0.14, n2 0.30, n3 1.18, n4 0.97, n5 0.94, m1 0.45, m2 0.70, m3 0.56, m4 0.87, m5 0.78. Means are 0.71 m and 0.67 m. `bc55896` was 0.93 m and 0.94 m. `998e957` was 0.65 m and 0.81 m.
 
 Watchdog fires: n4 one `stall`, m4 one `stall`, and zero on the other eight. No `pile_leave` rung and no `drop` rung. The longest `(0, 0)` is 5.0 s, on n4 from t=273 s to t=278 s and on m4 from t=90 s to t=95 s. Both are phase `go` after a `back`, and the stall rung ends them. The other eight longest stretches are the 3.5 s start-up, which the watchdog does not count. The 244 s m3 sit does not repeat.
+
+## Four modes, one command writer
+
+Commits `c3e7031` and `081cddc`. The controller names the mode on each tick: `explore` (spin, settle, idle), `approach` (`phase == go`), `recover` (blind back, contact recovery, relief, the stuck escape, or the one-rule command), `leave_area` (a leave target, a forced pile, or the pile-leave command). `_issue` is the function that stores the wheel command leaving the controller. `__init__` still sets the starting `(0, 0)`. The watchdog ladder is the `b975857` ladder: 5 s of `(0, 0)` with the planner pose inside 0.04 m, then stall, then pile leave, then a goal drop with the existing 30 s quarantine. A repeat inside 20 s starts one rung higher. The 3.5 s start-up, `done`, and `settle` stay excluded.
+
+`c3e7031` also deleted the stuck escape, the pile-leave helpers, relief, and contact recovery. Those branches issue a non-zero command, so the watchdog, which only replaces `(0, 0)`, did not stand in for them. Five 600 s runs of each seed on that commit: north visited 2.43, 2.52, 9.39, 3.68, 4.86 (mean 4.58, sd 2.87) and −0.35 visited 8.95, 6.23, 4.31, 12.25, 3.69 (mean 7.09, sd 3.54). `081cddc` puts those drives back and keeps the mode names and the single writer. Against `b975857` the controller diff is 13 lines removed and 42 lines added (3,809 lines to 3,838). Mapping tests: 177 passed. The new tests check that `_issue` is the only writer of the outgoing command and that the mode order is explore, approach, recover, leave_area.
+
+Five 600 s runs of each seed on `081cddc`, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Seen % is `coverage_pct` from `eval/score_apartment_map.py` on the saved map: the share of ground-truth free cells the map labels known.
+
+North visited 20.28, 15.70, 17.77, 16.26, 11.32 (mean 16.27, sd 3.29) against 16.04 (sd 2.55) on `b975857`. Seen 92.03, 94.45, 96.54, 86.45, 87.85 (mean 91.46, sd 4.28). −0.35 visited 11.36, 19.35, 24.66, 20.84, 23.82 (mean 20.01, sd 5.30) against 15.31 (sd 4.76). Seen 88.92, 94.27, 96.35, 97.72, 93.28 (mean 94.11, sd 3.38). The ten-run visited mean is 18.14 against 15.68. North is inside the noise. The −0.35 mean is 4.7 points higher. The command each branch returns is the same command it returned on `b975857`. Pantry and storage stay at 0 visited. Closet and laundry stay at 0 visited in this sample.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 42.1 | 11.0 | 0.5 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n2 | 8.7 | 36.8 | 0 | 31.0 | 0 | 0 | 27.9 | 0 | 0 |
+| n3 | 9.6 | 40.5 | 0 | 45.6 | 0 | 0 | 7.5 | 0 | 0 |
+| n4 | 11.8 | 57.5 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| n5 | 21.3 | 0.9 | 9.1 | 0 | 0 | 0 | 19.4 | 0 | 0 |
+| m1 | 16.1 | 22.6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m2 | 25.8 | 29.5 | 15.9 | 0 | 0 | 0 | 15.2 | 0 | 0 |
+| m3 | 30.0 | 60.7 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m4 | 18.0 | 19.7 | 0 | 62.1 | 0 | 0 | 52.1 | 0 | 0 |
+| m5 | 41.1 | 31.8 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Pose error at the cap: n1 0.58, n2 0.75, n3 0.89, n4 0.89, n5 0.31, m1 0.90, m2 0.99, m3 0.65, m4 1.33, m5 1.87. Means are 0.68 m and 1.15 m. `b975857` was 0.71 m and 0.67 m.
+
+Watchdog fires: n1 one `stall`, n5 six `drop`, and zero on the other eight. No `pile_leave` rung. The longest `(0, 0)` is 26.6 s on n5, from t=505.3 s to t=531.9 s, phase `go`, `src=hold`, goal already none. The drop rung returns `(0, 0)`, so each fire starts another 5 s of the same command. The six drop lines are t=497.8, 506.8, 511.8, 516.8, 521.8, and 526.8 s. Pile leave takes the wheels at t=528.4 s. n1's longest zero is 5.0 s, from t=429.6 s to t=434.6 s, ended by the stall rung. The other eight longest stretches are the 3.5 s start-up.
+
+Lowest `up_z` is 0.933, on n5, for about 0.4 s at t=493.5–493.9 s. The shell is back above 0.98 by t=494.3 s. The other nine stay at or above 0.998. No run finishes inverted.

@@ -813,3 +813,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Another branch name on the clock. A new blacklist duration. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
 
 **Outcome.** The 244 s sit does not repeat. The longest zero is the 5 s the watchdog is written to wait. Visited means are 16.04 and 15.31. −0.35 is below the `998e957` mean of 20.60.
+
+## 2026-11-13 — Four modes and one owner of the wheel command
+
+**Mission parameter.** Stop adding a clock per branch. Name the controller mode, and give one function the wheel command that leaves the controller. Keep the `b975857` watchdog. Remove a recovery branch only where that watchdog already replaces it.
+
+**Change.** Each tick sets `mode` to `explore`, `approach`, `recover`, or `leave_area`. `_issue` stores `self._commanded` after the escape block and the watchdog. `__init__` still sets the starting `(0, 0)`. The ladder is unchanged: 5 s of `(0, 0)` with the planner pose inside 0.04 m, then stall, then pile leave, then a goal drop with the existing 30 s quarantine. A repeat inside 20 s starts one rung higher. Commit `081cddc`.
+
+**Why.** The branch clocks were already one watchdog. The remaining split was which function was allowed to publish the wheels, and what the controller called the situation it was in.
+
+**Evidence.** Mapping tests: 177 passed. One test reads the source and requires a single assignment of the outgoing command. One test walks explore, then approach, then recover, then leave_area. Deleting the stuck escape, pile-leave helpers, relief, and contact recovery (`c3e7031`) left north at visited mean 4.58 (sd 2.87) and −0.35 at 7.09 (sd 3.54), because those branches issue a non-zero speed and the watchdog only replaces `(0, 0)`. `081cddc` restores them. The controller diff against `b975857` is 13 lines removed and 42 added. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 20.28, 15.70, 17.77, 16.26, 11.32 (mean 16.27, sd 3.29) against 16.04 (sd 2.55). Seen, the scorer's `coverage_pct`, is 92.03, 94.45, 96.54, 86.45, 87.85 (mean 91.46, sd 4.28). −0.35 visited 11.36, 19.35, 24.66, 20.84, 23.82 (mean 20.01, sd 5.30) against 15.31 (sd 4.76). Seen 88.92, 94.27, 96.35, 97.72, 93.28 (mean 94.11, sd 3.38). Pose means are 0.68 m and 1.15 m, against 0.71 m and 0.67 m. Watchdog fires are one `stall` on n1 and six `drop` on n5. The longest `(0, 0)` is 26.6 s on n5. The drop rung returns `(0, 0)`, and the sit runs until pile leave at t=528.4 s. No mapper done line. Lowest `up_z` is 0.933 for 0.4 s on n5; the shell is upright again by t=494.3 s. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new timeout, blacklist, or rung. Deleting a branch that still issues a non-zero command. Changing geometry, the world, friction, motors, sensors, clearance, IMU usage, the 2 s reverse clock, the 0.45 m unvisited-stand cap, or pantry and storage. Switching the done condition to seen % (that is the next round).
+
+**Outcome.** The mode and the single writer are in. The non-zero recovery drives stay, after the deletion ten showed the visited collapse. North's visited mean moved 0.23. −0.35's visited mean is 20.01 against 15.31. The 5 s sit cap is missed on n5, where the top watchdog rung is itself `(0, 0)`.

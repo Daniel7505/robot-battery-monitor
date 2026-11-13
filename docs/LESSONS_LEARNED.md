@@ -1211,3 +1211,19 @@ Visited, secondary. North 18.18, 12.15, 18.94, 19.45, 15.40 (mean 16.82, sd 3.04
 Pose error at the cap: n1 0.09, n2 0.45, n3 0.94, n4 0.42, n5 1.83, m1 0.51, m2 1.17, m3 0.97, m4 0.85, m5 0.54. Means are 0.75 m and 0.81 m. `081cddc` was 0.68 m and 1.15 m.
 
 Watchdog fires: m5 one `stall`, and zero on the other nine. No `pile_leave` rung and no `drop` rung. The longest `(0, 0)` is 5.0 s on m5, from t=280.0 s to t=285.0 s, phase `go`. The stall rung at t=281.5 s ends it, and the command is a reverse by t=285.5 s. The other nine longest stretches are the 3.5 s start-up. The 26.6 s n5 sit does not repeat. This sample never reached the drop rung, so the new handoff was not the command on these ten. Lowest `up_z` is 0.999, on m5. No run finishes inverted.
+
+## A still pose is a sit even when the wheels turn
+
+Commit `317f719`. The watchdog no longer requires `(0, 0)`. Five seconds with the planner pose inside the existing 0.04 m takes the stall rung, then pile leave, then the drop with the existing 30 s quarantine. A repeat inside 20 s still starts one rung higher. Startup, `done`, `settle`, and the survey spin stay out of the clock. The survey spin is the opening full turn. The `heading_off` loop is phase `go`. Mapping tests: 183 passed. Against `9c58a66`, `explore.py` is 13 lines added and 11 removed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. The would-fire line does not appear. Lowest `up_z` is 0.998. No run finishes inverted.
+
+Seen, primary. North 89.31, 94.57, 93.64, 96.48, 94.36 (mean 93.67, sd 2.65) against 76.98 (sd 24.48) on `9c58a66` and 91.46 (sd 4.28) on `081cddc`. −0.35 93.48, 90.40, 95.91, 95.42, 95.76 (mean 94.20, sd 2.34) against 90.51 (sd 8.96) and 94.11 (sd 3.38). The ten-run seen mean is 93.93 against 83.75 and 92.79.
+
+Visited, secondary. North 18.69, 11.14, 17.79, 21.80, 13.94 (mean 16.67, sd 4.17) against 16.82 and 16.27. −0.35 14.23, 19.26, 12.47, 17.87, 15.08 (mean 15.78, sd 2.75) against 17.28 and 20.01. The ten-run visited mean is 16.23 against 17.05 and 18.14.
+
+A wing crossing is at least 2 s in the bedroom, bath, or closet and 2 s in the hall, kitchen, or laundry. North crosses on n1, n4, and n5. −0.35 crosses on m1, m4, and m5. n2 stays in the living room and the kitchen and still scores seen 94.57. n3 stays in the bedroom, the living room, and the bath.
+
+Pose error at the cap: n1 0.55, n2 1.19, n3 1.48, n4 0.21, n5 1.75, m1 0.54, m2 1.22, m3 0.91, m4 0.34, m5 1.16. Means are 1.04 m and 0.83 m. `9c58a66` was 0.75 m and 0.81 m. `081cddc` was 0.68 m and 1.15 m.
+
+The longest planner-pose sit, xy inside 0.04 m, is 56.6 s on n2, from t=52.4 s to t=109.0 s. The others are n1 37.8 s, n3 31.5 s, n4 41.8 s, n5 31.5 s, m1 35.8 s, m2 30.0 s, m3 26.4 s, m4 36.2 s, m5 38.0 s. The clock restarts after each fire, and the next command often does not translate, so one frozen pose is several 5 s rungs. Every run fires the drop rung. North fires are 31 `stall`, 13 `pile_leave`, 79 `drop`. −0.35 fires are 40 `stall`, 19 `pile_leave`, 65 `drop`. The drop handoff runs. It does not end the frozen pose by itself.

@@ -841,3 +841,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new duration. Ending the run on the would-fire line. Shortening the 2 s reverse clock. Reading `oak_imu` as a controller input. Changing geometry, the world, friction, motors, sensors, or clearance.
 
 **Outcome.** The drop handoff is in and tested. This ten never reached the drop rung. The 26.6 s sit does not repeat. The ten-run seen mean is 9.0 points lower. The ten-run visited mean moved 1.1 points.
+
+## 2026-11-13 — A still pose is a sit, wheels turning or not
+
+**Mission parameter.** The `heading_off` pivot on n2 of `9c58a66` held the planner pose inside 0.04 m while the wheels turned, so the zero-only watchdog never started. Any issued command with that still pose for 5 s takes the existing ladder.
+
+**Change.** `_watchdog` times the planner pose, not a zero command. Five seconds inside `STILL_M` takes stall, then pile leave, then the drop and the existing 30 s quarantine. A repeat inside 20 s starts one rung higher. Startup, `done`, `settle`, and phase `spin` do not start the clock. Commit `317f719`.
+
+**Why.** The survey spin is the opening full turn and stays out, the same way settle stays out. The loop in the logs was phase `go`.
+
+**Evidence.** Mapping tests: 183 passed. A pivot issued across 5.1 s with a frozen pose takes `rung=stall`. The same pivot at 4.9 s stays a pivot. A pose 0.10 m away stays a pivot. A reverse in place takes the stall. The survey spin past 5 s does not. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. Seen means are 93.67 (sd 2.65) and 94.20 (sd 2.34), against 76.98 and 90.51 on `9c58a66` and 91.46 and 94.11 on `081cddc`. The ten-run seen mean is 93.93 against 83.75 and 92.79. Visited means are 16.67 (sd 4.17) and 15.78 (sd 2.75). The ten-run visited mean is 16.23 against 17.05 and 18.14. Pose means are 1.04 m and 0.83 m. Every run fires `drop`. The longest planner-still span is 56.6 s on n2. No mapper done line. The would-fire line does not appear. Lowest `up_z` is 0.998. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new duration. Counting the survey spin as a sit. Ending the run on the would-fire line. Changing geometry, the world, or the sensors.
+
+**Outcome.** The pivot loop now enters the ladder, and the drop rung runs on every seed. Seen recovers the `9c58a66` hole: the ten-run mean is 10 points higher than that ten and about 1 point above `081cddc`. A frozen pose can still outlast one rung, because the next command often does not translate and the 5 s clock starts again.

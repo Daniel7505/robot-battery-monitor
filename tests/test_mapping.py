@@ -3736,6 +3736,23 @@ def test_the_survey_spin_is_not_a_no_progress_sit():
     assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
 
 
+def test_a_frozen_pose_with_the_rear_blocked_drives_forward(capsys):
+    """A pivot on a blocked reverse does not get another pivot."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._bubble_view = BubbleView(1.5, 1.0, 1.0, 0.04, 0.04)
+    bot._last_clear = (1.2, 1.2, 1.2)
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left > 0.5 and right > 0.5
+    assert bot._watch_straight
+    assert not bot._blind_back
+    left, right = bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+
+
 def test_a_pivot_that_moves_the_pose_is_not_a_sit():
     bot = _zero_go_bot()
     bot._watch_zero = None

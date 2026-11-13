@@ -437,6 +437,8 @@ class Explorer:
         self._watch_fired_at = -1.0e9
         self.watch_fires = 0
         self._zero_stall = False
+        # After a sit, keep a straight command until the pose moves 0.04 m.
+        self._watch_straight = False
         # None until a plan runs. False means the last plan had no reachable
         # frontier. The done line below only logs; it does not stop the run.
         self._frontier_open: bool | None = None
@@ -887,6 +889,14 @@ class Explorer:
                 self.mode = "recover"
                 self._mark("one_rule" if self.recovery_mode == "one_rule" else "trail_only")
                 return ruled
+        if not self.done and not self._simple_recovery() and self._watch_straight:
+            pose = self.plan_pose()
+            straight = self._straight_leave(pose)
+            if self._command_translates(straight):
+                self.mode = "leave_area"
+                self._mark("pile_leave")
+                return straight
+            self._watch_straight = False
         if not self.done and not self._simple_recovery():
             stuck = self._stuck_escape(self.plan_pose())
             if stuck is not None:
@@ -1911,27 +1921,64 @@ class Explorer:
         self._quarantine = (gx, gy, self.t_s)
         self._drop_sitting_goal(pose)
 
+    def _command_translates(self, cmd) -> bool:
+        """A straight reverse or creep. A pure pivot does not move the pose."""
+        if cmd is None:
+            return False
+        travel = abs(0.5 * (float(cmd[0]) + float(cmd[1])) * WHEEL_RADIUS_M)
+        return travel >= 0.04
+
+    def _arm_watch_straight(self) -> None:
+        """The next ticks stay on the straight leave until the pose moves."""
+        self._watch_straight = True
+        self._blind_back = False
+        self._blind_back_from = None
+        self._recover = False
+        self._recover_phase = ""
+        self._relief = None
+
+    def _watch_pick(self, pose, proposed) -> tuple[float, float] | None:
+        """Prefer a command that translates. The open straight is that command.
+
+        A pivot leaves the pose inside 0.04 m, so the ladder would fire
+        again on the same spot. The straight leave already chooses the
+        side that is not blocked.
+        """
+        if self._command_translates(proposed):
+            return proposed
+        straight = self._straight_leave(pose)
+        if self._command_translates(straight):
+            self._arm_watch_straight()
+            return straight
+        return None
+
     def _watch_rung(self, pose, rung: int) -> tuple[float, float] | None:
         if rung == 0:
-            if self._back_out_blocked(pose):
-                return None
-            self._zero_stall = True
-            try:
-                cmd = self._stall_escape(pose)
-            finally:
-                self._zero_stall = False
-            if cmd is None or (abs(cmd[0]) < 1e-3 and abs(cmd[1]) < 1e-3):
+            cmd = None
+            if not self._back_out_blocked(pose):
+                self._zero_stall = True
+                try:
+                    cmd = self._stall_escape(pose)
+                finally:
+                    self._zero_stall = False
+            picked = self._watch_pick(pose, cmd)
+            if picked is None:
                 return None
             self._mark("stall")
-            return cmd
+            return picked
         if rung == 1:
             self._begin_pile_leave(pose)
             leaving = self._leaving_command(pose)
-            if leaving is None or (abs(leaving[0]) < 1e-3 and abs(leaving[1]) < 1e-3):
+            picked = self._watch_pick(pose, leaving)
+            if picked is None:
                 return None
             self._mark("pile_leave")
-            return leaving
+            return picked
         self._watch_blacklist(pose)
+        picked = self._watch_pick(pose, None)
+        if picked is not None:
+            self._mark("pile_leave")
+            return picked
         return self._resume_after_drop(pose)
 
     def _resume_after_drop(self, pose) -> tuple[float, float]:
@@ -2004,6 +2051,7 @@ class Explorer:
         """
         if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle", "spin"):
             self._watch_zero = None
+            self._watch_straight = False
             return speeds
         x, y, yaw = self.plan_pose()
         if self._watch_zero is None:
@@ -2012,6 +2060,7 @@ class Explorer:
         t0, _t_last, x0, y0 = self._watch_zero
         if math.hypot(x - x0, y - y0) >= STILL_M:
             self._watch_zero = (self.t_s, self.t_s, x, y)
+            self._watch_straight = False
             return speeds
         self._watch_zero = (t0, self.t_s, x0, y0)
         if self.t_s - t0 <= ZERO_APPROACH_S:

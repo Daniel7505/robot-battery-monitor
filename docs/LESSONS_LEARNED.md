@@ -1184,3 +1184,30 @@ Pose error at the cap: n1 0.58, n2 0.75, n3 0.89, n4 0.89, n5 0.31, m1 0.90, m2 
 Watchdog fires: n1 one `stall`, n5 six `drop`, and zero on the other eight. No `pile_leave` rung. The longest `(0, 0)` is 26.6 s on n5, from t=505.3 s to t=531.9 s, phase `go`, `src=hold`, goal already none. The drop rung returns `(0, 0)`, so each fire starts another 5 s of the same command. The six drop lines are t=497.8, 506.8, 511.8, 516.8, 521.8, and 526.8 s. Pile leave takes the wheels at t=528.4 s. n1's longest zero is 5.0 s, from t=429.6 s to t=434.6 s, ended by the stall rung. The other eight longest stretches are the 3.5 s start-up.
 
 Lowest `up_z` is 0.933, on n5, for about 0.4 s at t=493.5–493.9 s. The shell is back above 0.98 by t=494.3 s. The other nine stay at or above 0.998. No run finishes inverted.
+
+## The drop rung leaves, or it spins
+
+Commit `9c58a66`. The drop rung still quarantines the goal for the existing 30 s. It then hands the wheels to `leave_area` when that leave command is non-zero, and to `explore` (the survey spin) when the leave is blocked. The stall rung and the pile-leave rung are unchanged. A log line, `done would fire: no reachable frontier, map stable`, is written when the planner has no reachable frontier and the known and occupied counts stay inside 8 cells for the existing 4 s settle hold. The line does not set `done` and does not end the run. Seen % (`coverage_pct`) is the first number in the scorer's text. Visited % stays beside it. Mapping tests: 179 passed. Against `081cddc`, `explore.py` is 71 lines added and 2 removed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. The would-fire line does not appear.
+
+Seen, primary. North 94.88, 38.88, 65.69, 92.11, 93.36 (mean 76.98, sd 24.48) against 91.46 (sd 4.28) on `081cddc`. −0.35 95.55, 93.01, 95.87, 74.63, 93.47 (mean 90.51, sd 8.96) against 94.11 (sd 3.38). The ten-run seen mean is 83.75 against 92.79.
+
+Visited, secondary. North 18.18, 12.15, 18.94, 19.45, 15.40 (mean 16.82, sd 3.04) against 16.27 (sd 3.29). −0.35 19.41, 14.75, 17.58, 18.72, 15.92 (mean 17.28, sd 1.93) against 20.01 (sd 5.30). The ten-run visited mean is 17.05 against 18.14.
+
+| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| n1 | 6.0 | 35.2 | 0 | 63.0 | 0 | 0 | 35.5 | 0 | 0 |
+| n2 | 17.6 | 0 | 5.6 | 0 | 37.0 | 0 | 68.4 | 0 | 0 |
+| n3 | 6.6 | 62.7 | 0 | 15.8 | 0 | 53.1 | 0 | 0 | 0 |
+| n4 | 34.7 | 0 | 7.1 | 0 | 56.7 | 0 | 39.2 | 0 | 0 |
+| n5 | 26.1 | 2.8 | 27.7 | 0 | 0 | 0 | 5.3 | 0 | 0 |
+| m1 | 21.6 | 28.1 | 14.6 | 0.6 | 0 | 0 | 78.0 | 0 | 0 |
+| m2 | 16.2 | 39.6 | 0.4 | 0 | 0 | 0 | 0 | 0 | 0 |
+| m3 | 7.4 | 36.5 | 0 | 51.3 | 0 | 24.1 | 3.2 | 0 | 0 |
+| m4 | 14.7 | 26.7 | 0 | 60.6 | 0 | 0 | 0 | 0 | 0 |
+| m5 | 17.0 | 0 | 9.2 | 17.0 | 59.2 | 0 | 88.7 | 0 | 0 |
+
+Pose error at the cap: n1 0.09, n2 0.45, n3 0.94, n4 0.42, n5 1.83, m1 0.51, m2 1.17, m3 0.97, m4 0.85, m5 0.54. Means are 0.75 m and 0.81 m. `081cddc` was 0.68 m and 1.15 m.
+
+Watchdog fires: m5 one `stall`, and zero on the other nine. No `pile_leave` rung and no `drop` rung. The longest `(0, 0)` is 5.0 s on m5, from t=280.0 s to t=285.0 s, phase `go`. The stall rung at t=281.5 s ends it, and the command is a reverse by t=285.5 s. The other nine longest stretches are the 3.5 s start-up. The 26.6 s n5 sit does not repeat. This sample never reached the drop rung, so the new handoff was not the command on these ten. Lowest `up_z` is 0.999, on m5. No run finishes inverted.

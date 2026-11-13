@@ -827,3 +827,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new timeout, blacklist, or rung. Deleting a branch that still issues a non-zero command. Changing geometry, the world, friction, motors, sensors, clearance, IMU usage, the 2 s reverse clock, the 0.45 m unvisited-stand cap, or pantry and storage. Switching the done condition to seen % (that is the next round).
 
 **Outcome.** The mode and the single writer are in. The non-zero recovery drives stay, after the deletion ten showed the visited collapse. North's visited mean moved 0.23. −0.35's visited mean is 20.01 against 15.31. The 5 s sit cap is missed on n5, where the top watchdog rung is itself `(0, 0)`.
+
+## 2026-11-13 — The drop rung moves, and seen % is the reported score
+
+**Mission parameter.** The drop rung must not leave the shell at `(0, 0)`. After the goal drop and the existing 30 s quarantine, the next command is `leave_area` or `explore`. Seen % is the number the report leads with. A done condition is logged when there is no reachable frontier and the map has been stable, and the run still goes to the time cap.
+
+**Change.** `_resume_after_drop` keeps a leave command that is still non-zero, and otherwise starts the survey spin. The stall rung and the pile-leave rung are unchanged. `done would fire: no reachable frontier, map stable` is logged when the last plan found nothing and the known and occupied counts stay inside 8 cells for the existing 4 s settle hold. `done` stays false. `format_scores` prints `coverage_pct` first and `visited_pct` second. Commit `9c58a66`.
+
+**Why.** n5 of `081cddc` sat 26.6 s because the drop rung returned `(0, 0)` and the next tick produced the same hold. The seen fraction is the score the next round will use to decide the run is finished.
+
+**Evidence.** Mapping tests: 179 passed. The drop test blocks the leave and requires a non-zero command on that tick or the next, with the mode `explore` or `leave_area`, and `done` still false. The stable-map test logs the would-fire line at 4.5 s and stays out of `phase == done`. A map change of 20 cells resets the hold. Five 600 s runs of each seed, flags off, depth seeds 64 and 63, against the `081cddc` ten. Seen means are 76.98 (sd 24.48) and 90.51 (sd 8.96), against 91.46 and 94.11. The ten-run seen mean is 83.75 against 92.79. Visited means are 16.82 (sd 3.04) and 17.28 (sd 1.93), against 16.27 and 20.01. The ten-run visited mean is 17.05 against 18.14. Pose means are 0.75 m and 0.81 m, against 0.68 m and 1.15 m. One `stall` fire, on m5. The longest `(0, 0)` is 5.0 s, ended by that stall. The would-fire line does not appear. No mapper done line. Lowest `up_z` is 0.999. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new duration. Ending the run on the would-fire line. Shortening the 2 s reverse clock. Reading `oak_imu` as a controller input. Changing geometry, the world, friction, motors, sensors, or clearance.
+
+**Outcome.** The drop handoff is in and tested. This ten never reached the drop rung. The 26.6 s sit does not repeat. The ten-run seen mean is 9.0 points lower. The ten-run visited mean moved 1.1 points.

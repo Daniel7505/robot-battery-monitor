@@ -886,7 +886,7 @@ class Explorer:
         """Pick the mode, then the proposal. Recovery is not a second writer."""
         self.mode = self._select_mode()
         if not self.done and self._watch_creep:
-            creep = self._watch_doorway_creep(self.plan_pose())
+            creep = self._watch_keep_creep(self.plan_pose())
             if creep is not None:
                 self.mode = "approach"
                 self._mark("narrow_gap")
@@ -1530,6 +1530,67 @@ class Explorer:
         """The existing throat creep. A doorway sit does not drop the goal."""
         return self._creep_through_gap(pose, DOOR_SPEED_M_S, 0.0, 0.0)
 
+    def _goal_already_reached(self, pose) -> bool:
+        """The shell is inside the 0.8 m quarantine of the goal. That goal still drops."""
+        if self.goal_xy is None:
+            return False
+        return (
+            math.hypot(float(pose[0]) - float(self.goal_xy[0]), float(pose[1]) - float(self.goal_xy[1]))
+            < FRONTIER_REGION_M
+        )
+
+    def _path_door_in_reach(self, pose) -> bool:
+        """The goal path crosses a door cell and the shell is within 0.8 m of it.
+
+        The door mask is the one the last plan already computed. A goal the
+        shell has reached is not a door to creep. Ground truth is not read.
+        """
+        doors = self.room_doors
+        if doors is None or self.goal_xy is None or not self.path_xy or self._goal_already_reached(pose):
+            return False
+        points = [(float(pose[0]), float(pose[1]))]
+        points.extend((float(p[0]), float(p[1])) for p in self.path_xy)
+        points.append((float(self.goal_xy[0]), float(self.goal_xy[1])))
+        height, width = doors.shape
+        res = self.grid.res
+        for (x0, y0), (x1, y1) in zip(points, points[1:]):
+            span = math.hypot(x1 - x0, y1 - y0)
+            steps = max(1, int(math.ceil(span / res)))
+            for i in range(steps + 1):
+                t = i / steps
+                cell = self.grid.cell_of(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+                if cell is None:
+                    continue
+                row, col = cell
+                if not (0 <= row < height and 0 <= col < width) or not bool(doors[row, col]):
+                    continue
+                cx, cy = self.grid.cell_center(row, col)
+                if math.hypot(float(pose[0]) - cx, float(pose[1]) - cy) < FRONTIER_REGION_M:
+                    return True
+        return False
+
+    def _watch_door_path_creep(self, pose) -> tuple[float, float] | None:
+        """Creep at the door speed. The goal stays, and the ladder does not advance.
+
+        This is the throat command without the shoulder test. The sit that
+        loses a far-wing goal is in front of the opening, where the shoulders
+        are not yet in the throat.
+        """
+        if not self._path_door_in_reach(pose):
+            return None
+        if self._shell_clips(DOOR_SPEED_M_S, 0.0):
+            return None
+        self._body_v, self._body_w = DOOR_SPEED_M_S, 0.0
+        self._note_approach("straight", DOOR_SPEED_M_S, 0.0)
+        return wheel_speeds(DOOR_SPEED_M_S, 0.0)
+
+    def _watch_keep_creep(self, pose) -> tuple[float, float] | None:
+        """A throat, or a door still on the goal path. Either one keeps the goal."""
+        creep = self._watch_doorway_creep(pose)
+        if creep is not None:
+            return creep
+        return self._watch_door_path_creep(pose)
+
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
         """A translation command the hubs did not follow. A spin in place is not a stall.
 
@@ -2080,7 +2141,7 @@ class Explorer:
         self._watch_zero = (t0, self.t_s, x0, y0)
         if self.t_s - t0 <= ZERO_APPROACH_S:
             return speeds
-        creep = self._watch_doorway_creep((x, y, yaw))
+        creep = self._watch_keep_creep((x, y, yaw))
         if creep is not None:
             self._watch_creep = True
             self._watch_straight = False

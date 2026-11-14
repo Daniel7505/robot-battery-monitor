@@ -3801,6 +3801,79 @@ def test_an_open_floor_sit_still_drops_the_goal(capsys):
     assert bot._quarantine is not None
 
 
+def _mark_door(bot, x, y):
+    """One cell of the plan's existing door mask. Not a new doorway test."""
+    cell = bot.grid.cell_of(x, y)
+    assert cell is not None
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    doors[cell] = True
+    bot.room_doors = doors
+    return cell
+
+
+def test_a_door_on_the_path_creeps_and_keeps_the_far_goal(capsys):
+    """The shell is within 0.8 m of a door the goal path crosses. Shoulders are not in the throat."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    _mark_door(bot, 0.40, 0.0)
+    assert not bot._narrow_gap(bot.plan_pose())
+    assert bot._path_door_in_reach(bot.plan_pose())
+    left, right = bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "watchdog doorway creep" in out
+    assert "rung=drop" not in out
+    assert "rung=stall" not in out
+    assert bot.watch_fires == 0
+    assert bot._watch_step == 2
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot._quarantine is None
+    assert left > 0.5 and right > 0.5
+    left, right = bot._mode_command(99.0, 99.0, None, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot._quarantine is None
+
+
+def test_a_reached_goal_still_drops_at_the_door(capsys):
+    """The shell is already inside 0.8 m of the goal. The door does not keep it."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (0.50, 0.0)
+    bot.path_xy = [(0.40, 0.0), (0.50, 0.0)]
+    _mark_door(bot, 0.40, 0.0)
+    assert bot._goal_already_reached(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
+def test_a_door_beyond_0_8_m_still_drops(capsys):
+    """The path crosses a door the shell has not reached. That sit still drops."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.6, 0.0), (3.0, 0.0)]
+    _mark_door(bot, 1.60, 0.0)
+    assert not bot._path_door_in_reach(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
 def test_a_pivot_that_moves_the_pose_is_not_a_sit():
     bot = _zero_go_bot()
     bot._watch_zero = None

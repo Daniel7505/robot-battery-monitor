@@ -869,3 +869,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A second freeze on wheel integration. The floor check already holds translation while the pose is frozen. A new duration. Changing geometry, the world, or the sensors.
 
 **Outcome.** Pose error at the cap is lower. Seen on −0.35 is lower: m2 is 59.92 and m5 is 78.73, both in the bedroom and the living room. The straight leave does not by itself end a frozen pose. The drop rung still runs, and the longest still is 47.9 s.
+
+## 2026-11-14 — A doorway sit creeps and keeps the goal
+
+**Mission parameter.** On `cb637d8`, m2 and m5 reached a doorway, were marked too tight, and the straight leave plus the drop replaced the goal on the far side. A fire while the existing narrow-gap test is true should creep and keep that goal. Open-floor sits still take the straight leave and the drop.
+
+**Change.** `_watchdog` calls `_creep_through_gap` at the existing door speed before the ladder. A creep does not set the quarantine, does not advance the rung, and is repeated until the pose moves 0.04 m or the throat test fails. Commit `76933cb`.
+
+**Why.** The doorway was the place the new leave was backing out of. The creep is the command that path already uses for a seen throat.
+
+**Evidence.** Mapping tests: 186 passed. A frozen pose in the existing throat test creeps, keeps the goal, and does not log a drop. The same pose on an open floor with the ladder already at the drop rung still quarantines the goal. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North seen 96.89, 92.88, 90.73, 96.29, 90.15 (mean 93.39, sd 3.10). −0.35 seen 91.63, 92.38, 95.72, 57.78, 81.14 (mean 83.73, sd 15.50). The ten-run seen mean is 88.56 against 88.67 on `cb637d8` and 93.94 on `317f719`. Visited means are 14.82 and 15.82. Pose means are 0.89 m and 0.90 m. Doorway-creep lines total 81. The longest planner-still span is 48.7 s. No mapper done line. Lowest `up_z` is 0.861 for about 4 s on n1. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new door speed. Quarantining a doorway goal. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage. A pitch-gate retry. Reading `oak_imu` as a controller input.
+
+**Outcome.** The creep fires in every run. The ten-run seen mean matches `cb637d8` and stays about 5 points under `317f719`. m4 spends 460 s in the bath and scores 57.78. Keeping the goal did not by itself get that shell out of the bath.

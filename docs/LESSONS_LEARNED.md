@@ -1247,3 +1247,15 @@ Seen, primary. North 95.79, 97.80, 89.34, 87.52, 94.37 (mean 92.96, sd 4.36) aga
 Visited, secondary. North 20.44, 23.98, 16.55, 14.57, 21.14 (mean 19.33, sd 3.76) against 16.67. −0.35 19.82, 16.27, 15.42, 21.33, 9.40 (mean 16.45, sd 4.64) against 15.78. The ten-run visited mean is 17.89 against 16.23.
 
 The longest planner-still span is 47.9 s on n1, t=339–387. The others are n2 31.5 s, n3 31.5 s, n4 33.5 s, n5 31.5 s, m1 30.7 s, m2 35.0 s, m3 21.0 s, m4 27.3 s, m5 33.5 s. The 31.5 s spans that start at t=0 are the survey spin, which the clock does not count. North fires 30 `stall`, 18 `pile_leave`, 60 `drop`. −0.35 fires 30 `stall`, 18 `pile_leave`, 95 `drop`. Pose means are 0.68 m and 0.58 m, against 1.04 m and 0.83 m. A wing crossing, 2 s in the bedroom wing and 2 s in the hall or kitchen, happens on n3, m1, and m2.
+
+## A doorway sit creeps and keeps the goal
+
+Commit `76933cb`. If the watchdog fires while `_narrow_gap` is true, the command is the existing throat creep at `DOOR_SPEED_M_S`. The goal is not quarantined and the ladder step does not advance. An open floor still takes the straight leave and the drop. The following ticks stay on the creep until the pose moves 0.04 m or the throat test fails. Mapping tests: 186 passed. Against `cb637d8`, `explore.py` is 23 lines added.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `time_cap`. No mapper done line. The would-fire line does not appear. Lowest `up_z` is 0.861, on n1, for about 4 s at t=258–262 s. The shell is upright again by t=262 s. No run finishes inverted.
+
+Seen, primary. North 96.89, 92.88, 90.73, 96.29, 90.15 (mean 93.39, sd 3.10) against 92.96 on `cb637d8` and 93.67 on `317f719`. −0.35 91.63, 92.38, 95.72, 57.78, 81.14 (mean 83.73, sd 15.50) against 84.37 and 94.20. The ten-run seen mean is 88.56 against 88.67 and 93.94. m4 spends 460 s in the bath and scores 57.78. m5 stays in the kitchen and the hall and scores 81.14.
+
+Visited, secondary. North 16.14, 17.05, 13.18, 16.29, 11.43 (mean 14.82, sd 2.40) against 19.33 and 16.67. −0.35 18.80, 18.25, 14.43, 15.95, 11.66 (mean 15.82, sd 2.92) against 16.45 and 15.78. The ten-run visited mean is 15.32 against 17.89 and 16.23.
+
+Doorway-creep lines: n1 12, n2 9, n3 3, n4 8, n5 2, m1 10, m2 5, m3 13, m4 11, m5 8. North ladder fires are 33 `stall`, 20 `pile_leave`, 88 `drop`. −0.35 fires are 34 `stall`, 20 `pile_leave`, 70 `drop`. The longest planner-still span is 48.7 s on n2, t=501–550. The others are n1 32.8 s, n3 38.9 s, n4 31.5 s, n5 34.6 s, m1 40.4 s, m2 30.7 s, m3 29.8 s, m4 23.5 s, m5 24.2 s. Pose means are 0.89 m and 0.90 m, against 0.68 m and 0.58 m on `cb637d8`.

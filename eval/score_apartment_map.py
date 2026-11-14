@@ -33,7 +33,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from eval.apartment_gt_grid import GtGrid, rasterize, spawn_pose  # noqa: E402
+from eval.apartment_gt_grid import GtGrid, load_solids, rasterize, spawn_pose  # noqa: E402
+from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M, SHELL_TAIL_M  # noqa: E402
 
 
 def load_run(path: Path) -> tuple[np.ndarray, dict]:
@@ -131,12 +132,121 @@ def score_labels(gt: GtGrid, pred: np.ndarray) -> dict:
     }
 
 
-def score_run(path: Path, gt: GtGrid | None = None) -> dict:
+def shell_visited(gt: GtGrid, poses: np.ndarray) -> np.ndarray:
+    """Cells the rectangular shell drove over.
+
+    ``poses`` is N×3 of x, y, yaw in the apartment frame (the ground-truth
+    pose log, not the robot's odometry). Scoring only.
+    """
+    res = gt.resolution_m
+    height, width = gt.labels.shape
+    visited = np.zeros((height, width), dtype=bool)
+    if poses.size == 0:
+        return visited
+    cols = np.arange(width)
+    rows = np.arange(height)
+    cc, rr = np.meshgrid(cols, rows)
+    xw = gt.origin_xy[0] + (cc + 0.5) * res
+    yw = gt.origin_xy[1] + (rr + 0.5) * res
+    reach = math.hypot(max(SHELL_NOSE_M, SHELL_TAIL_M), SHELL_HALF_M) + res
+    for x, y, theta in poses:
+        c = math.cos(float(theta))
+        s = math.sin(float(theta))
+        c0 = max(0, int(math.floor((float(x) - reach - gt.origin_xy[0]) / res)))
+        c1 = min(width, int(math.ceil((float(x) + reach - gt.origin_xy[0]) / res)))
+        r0 = max(0, int(math.floor((float(y) - reach - gt.origin_xy[1]) / res)))
+        r1 = min(height, int(math.ceil((float(y) + reach - gt.origin_xy[1]) / res)))
+        if c1 <= c0 or r1 <= r0:
+            continue
+        dx = xw[r0:r1, c0:c1] - float(x)
+        dy = yw[r0:r1, c0:c1] - float(y)
+        bx = c * dx + s * dy
+        by = -s * dx + c * dy
+        inside = (bx >= -SHELL_TAIL_M) & (bx <= SHELL_NOSE_M) & (np.abs(by) <= SHELL_HALF_M)
+        visited[r0:r1, c0:c1] |= inside
+    return visited
+
+
+def load_gt_poses(folder: Path) -> np.ndarray | None:
+    path = folder / "gt_pose_log.csv"
+    if not path.is_file():
+        return None
+    data = np.loadtxt(path, delimiter=",", skiprows=1)
+    if data.size == 0:
+        return None
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    # 8 ms physics rows. The shell moves millimetres between every fourth sample.
+    data = data[::4]
+    return np.column_stack((data[:, 1], data[:, 2], data[:, 4]))
+
+
+def floor_coverage(gt: GtGrid, pred: np.ndarray, visited: np.ndarray, solids) -> list[dict]:
+    """Seen and visited percent of each floor solid. Seen is a map label."""
+    res = gt.resolution_m
+    height, width = gt.labels.shape
+    cols = np.arange(width)
+    rows = np.arange(height)
+    cc, rr = np.meshgrid(cols, rows)
+    xw = gt.origin_xy[0] + (cc + 0.5) * res
+    yw = gt.origin_xy[1] + (rr + 0.5) * res
+    free = gt.labels == 0
+    known = pred >= 0
+    out = []
+    for solid in solids:
+        if not solid.name.startswith("APT_FLOOR_"):
+            continue
+        inside = (
+            (xw >= solid.xmin)
+            & (xw <= solid.xmax)
+            & (yw >= solid.ymin)
+            & (yw <= solid.ymax)
+            & free
+        )
+        count = int(np.count_nonzero(inside))
+        if count == 0:
+            continue
+        out.append(
+            {
+                "room": solid.name.removeprefix("APT_FLOOR_").lower(),
+                "floor_m2": count * res * res,
+                "seen_pct": 100.0 * int(np.count_nonzero(inside & known)) / count,
+                "visited_pct": 100.0 * int(np.count_nonzero(inside & visited)) / count,
+            }
+        )
+    out.sort(key=lambda item: -item["floor_m2"])
+    return out
+
+
+def attach_visited(scores: dict, gt: GtGrid, pred: np.ndarray, folder: Path) -> dict:
+    """Add visited % beside seen %. No pose log leaves the scores unchanged."""
+    poses = load_gt_poses(folder)
+    if poses is None:
+        return scores
+    visited = shell_visited(gt, poses)
+    free = gt.labels == 0
+    count = int(np.count_nonzero(free))
+    merged = dict(scores)
+    merged["visited_pct"] = (100.0 * int(np.count_nonzero(free & visited)) / count) if count else 0.0
+    merged["rooms"] = floor_coverage(gt, pred, visited, load_solids())
+    return merged
+
+
+def score_run(
+    path: Path,
+    gt: GtGrid | None = None,
+    spawn: tuple[float, float, float] | None = None,
+) -> dict:
     labels, meta = load_run(path)
     grid = gt if gt is not None else rasterize(resolution_m=float(meta.get("resolution_m", 0.05)))
-    sx, sy, yaw = spawn_pose()
+    if spawn is None:
+        sx, sy, yaw = spawn_pose()
+    else:
+        sx, sy, yaw = spawn
     pred = warp_to_ground_truth(labels, meta, grid, (sx, sy), yaw)
-    return score_labels(grid, pred)
+    scores = score_labels(grid, pred)
+    folder = path if path.is_dir() else path.parent
+    return attach_visited(scores, grid, pred, folder)
 
 
 def _paint(path: Path, gt: GtGrid, pred: np.ndarray, scores: dict) -> None:
@@ -183,12 +293,23 @@ def _paint(path: Path, gt: GtGrid, pred: np.ndarray, scores: dict) -> None:
 def format_scores(scores: dict) -> str:
     wall = scores["wall_error_cm"]
     wall_txt = "nan" if wall != wall else f"{wall:.2f}"
-    return (
-        f"occupancy_iou: {scores['occupancy_iou']:.4f}\n"
-        f"free_iou: {scores['free_iou']:.4f}\n"
-        f"coverage_pct: {scores['coverage_pct']:.2f}\n"
-        f"wall_error_cm: {wall_txt}\n"
+    lines = [
+        f"coverage_pct: {scores['coverage_pct']:.2f}",
+    ]
+    if "visited_pct" in scores:
+        lines.append(f"visited_pct: {scores['visited_pct']:.2f}")
+    lines.extend(
+        [
+            f"occupancy_iou: {scores['occupancy_iou']:.4f}",
+            f"free_iou: {scores['free_iou']:.4f}",
+            f"wall_error_cm: {wall_txt}",
+        ]
     )
+    for room in scores.get("rooms") or []:
+        lines.append(
+            f"room {room['room']} seen_pct: {room['seen_pct']:.1f} visited_pct: {room['visited_pct']:.1f}"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -207,13 +328,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="World file whose ButlerBot yaw is the spawn heading. Default is apartment.wbt.",
     )
+    parser.add_argument(
+        "--spawn",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "YAW"),
+        default=None,
+        help="Spawn x y yaw when the world file is the stock apartment, not this seed.",
+    )
     args = parser.parse_args(argv)
     run = args.run
     labels, meta = load_run(run)
     gt = rasterize(resolution_m=float(meta.get("resolution_m", 0.05)))
-    sx, sy, yaw = spawn_pose(world=args.world)
+    if args.spawn is None:
+        sx, sy, yaw = spawn_pose(world=args.world)
+    else:
+        sx, sy, yaw = (float(v) for v in args.spawn)
     pred = warp_to_ground_truth(labels, meta, gt, (sx, sy), yaw)
     scores = score_labels(gt, pred)
+    folder = run if run.is_dir() else run.parent
+    scores = attach_visited(scores, gt, pred, folder)
     text = format_scores(scores)
     print(text, end="")
     folder = run if run.is_dir() else run.parent

@@ -59,6 +59,21 @@ if [ -n "$TAG" ]; then
 fi
 export RBM_WORLD_FILE="$WORLD"
 
+# Apartment mapping must be the skid-steer. Warehouse worlds do not name
+# apartment_mapper, so this check leaves them alone.
+if grep -q 'controller "apartment_mapper"' "$WORLD"; then
+  if [ -z "${PY:-}" ]; then
+    echo "ERROR: $WORLD uses apartment_mapper but python is missing, so the ButlerBotSkid check cannot run." >&2
+    exit 1
+  fi
+  PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PY" -c '
+import sys
+from src.mapping.world_guard import require_mapping_world_is_skid
+path = sys.argv[1]
+require_mapping_world_is_skid(open(path, encoding="utf-8").read(), path)
+' "$WORLD"
+fi
+
 echo "ButlerBot Webots Digital Twin"
 echo "Dashboard: $DASHBOARD_URL"
 echo "World:     $WORLD"

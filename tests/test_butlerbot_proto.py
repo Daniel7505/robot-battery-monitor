@@ -136,10 +136,11 @@ def test_mapping_sensors_are_opt_in_and_do_not_change_the_warehouse_robot():
     assert "us_front" not in warehouse
     assert "floor_cam" not in warehouse
     apartment = (ROOT / "webots" / "worlds" / "apartment.wbt").read_text(encoding="utf-8")
-    expanded = expand_world_text(apartment)
-    assert 'name "us_left"' in expanded
-    assert 'name "floor_cam"' in expanded
-    assert "mappingSensors.value" not in expanded
+    assert "ButlerBotSkid {" in apartment
+    assert "mappingSensors TRUE" in apartment
+    skid = (ROOT / "webots" / "protos" / "ButlerBotSkid.proto").read_text(encoding="utf-8")
+    assert 'name "us_left"' in skid
+    assert 'name "floor_cam"' in skid
 
 
 def test_warehouse_gyro_and_wheel_encoders_stay_clean():

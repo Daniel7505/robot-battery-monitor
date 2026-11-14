@@ -120,6 +120,24 @@ if ($TrackTag) {
 }
 # The controller checks Webots really loaded this world (a reset / reload in an
 # old Webots window keeps that window's world and environment).
+# Apartment mapping must be the skid-steer. Warehouse worlds do not name
+# apartment_mapper, so this check leaves them alone.
+$worldText = Get-Content -Raw -Path $WorldFile
+if ($worldText -match 'controller "apartment_mapper"') {
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        Write-Host "ERROR: $WorldFile uses apartment_mapper but python is missing, so the ButlerBotSkid check cannot run." -ForegroundColor Red
+        exit 1
+    }
+    $env:PYTHONPATH = $ProjectRoot
+    & python -c @"
+import sys
+from src.mapping.world_guard import require_mapping_world_is_skid
+path = sys.argv[1]
+require_mapping_world_is_skid(open(path, encoding='utf-8').read(), path)
+"@ $WorldFile
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 $env:RBM_WORLD_FILE = $WorldFile
 
 Write-Host "ButlerBot Webots Digital Twin" -ForegroundColor Cyan

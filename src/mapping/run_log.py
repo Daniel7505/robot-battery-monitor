@@ -8,6 +8,7 @@ logger can append to the same folder.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,6 +25,25 @@ def publish_current(repo_root: Path, run_dir: Path) -> None:
     pointer = Path(repo_root) / "logs" / "mapping_runs" / "CURRENT"
     pointer.parent.mkdir(parents=True, exist_ok=True)
     pointer.write_text(str(Path(run_dir).resolve()) + "\n", encoding="utf-8")
+
+
+def record_end_run(directory: Path, reason: str) -> Path:
+    """Keep the end reason after the world is stopped.
+
+    The pose logger quits the simulation as soon as ``mapping_done``
+    exists. Webots can drop the controller's stdout from that same step,
+    so the printed ``end_run`` line never reaches the log. This file is
+    written and flushed first.
+    """
+    folder = Path(directory)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "end_run.txt"
+    line = f"MAPPING end_run reason={reason}\n"
+    with path.open("w", encoding="utf-8") as handle:
+        handle.write(line)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
 
 
 class RunLog:

@@ -855,3 +855,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new duration. Counting the survey spin as a sit. Ending the run on the would-fire line. Changing geometry, the world, or the sensors.
 
 **Outcome.** The pivot loop now enters the ladder, and the drop rung runs on every seed. Seen recovers the `9c58a66` hole: the ten-run mean is 10 points higher than that ten and about 1 point above `081cddc`. A frozen pose can still outlast one rung, because the next command often does not translate and the 5 s clock starts again.
+
+## 2026-11-14 — A non-translating rung takes the open straight
+
+**Mission parameter.** On `317f719` the ladder re-fires because the escape is often a pivot, and the planner pose stays inside 0.04 m for 26–57 s. The rung should issue a command that can translate. Wheel integration changes only if the pose breakdown says un-rewound wheel travel is a top source.
+
+**Change.** `_watch_pick` keeps a stall or pile-leave command that already translates. A pivot, or a reverse whose side is blocked, is replaced by `_straight_leave`. The next ticks stay on that straight until the pose moves 0.04 m. If neither side translates, that fire tries the next rung, and the drop still ends in the survey spin. Commit `cb637d8`.
+
+**Why.** The long spans are pivots. On n2 from t=52 s to t=109 s the planner moves 0.10 m, the shell moves 0.70 m, and 88% of the commands are pivots. The floor check already logs `translation frozen` inside those spans and the wheel arc is not kept, so a second integration stop would not move the body.
+
+**Evidence.** The `317f719` ten, no new runs for the split. Sum of absolute error steps: frozen 32.8 m, straight 25.7 m, other 18.7 m, pivot 3.4 m, zero 0.3 m, contact 0.2 m. Final yaw averages 2.5°. The miss is xy. Floor-still lines inside frozen spans: 479. Outside: 334. Mapping tests: 184 passed. A rear-blocked frozen pose takes a forward straight on the stall rung, and the next tick stays on it. Five 600 s runs of each seed, flags off, depth seeds 64 and 63, against the `317f719` means 93.67 and 94.20. North seen 95.79, 97.80, 89.34, 87.52, 94.37 (mean 92.96, sd 4.36). −0.35 seen 96.74, 59.92, 91.65, 94.82, 78.73 (mean 84.37, sd 15.37). The ten-run seen mean is 88.67 against 93.94. Visited means are 19.33 and 16.45 against 16.67 and 15.78. Pose means are 0.68 m and 0.58 m against 1.04 m and 0.83 m. The longest planner-still span is 47.9 s. Every run still fires `drop`. No mapper done line. Lowest `up_z` is 0.998. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A second freeze on wheel integration. The floor check already holds translation while the pose is frozen. A new duration. Changing geometry, the world, or the sensors.
+
+**Outcome.** Pose error at the cap is lower. Seen on −0.35 is lower: m2 is 59.92 and m5 is 78.73, both in the bedroom and the living room. The straight leave does not by itself end a frozen pose. The drop rung still runs, and the longest still is 47.9 s.

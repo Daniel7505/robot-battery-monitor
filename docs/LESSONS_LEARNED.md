@@ -1227,3 +1227,23 @@ A wing crossing is at least 2 s in the bedroom, bath, or closet and 2 s in the h
 Pose error at the cap: n1 0.55, n2 1.19, n3 1.48, n4 0.21, n5 1.75, m1 0.54, m2 1.22, m3 0.91, m4 0.34, m5 1.16. Means are 1.04 m and 0.83 m. `9c58a66` was 0.75 m and 0.81 m. `081cddc` was 0.68 m and 1.15 m.
 
 The longest planner-pose sit, xy inside 0.04 m, is 56.6 s on n2, from t=52.4 s to t=109.0 s. The others are n1 37.8 s, n3 31.5 s, n4 41.8 s, n5 31.5 s, m1 35.8 s, m2 30.0 s, m3 26.4 s, m4 36.2 s, m5 38.0 s. The clock restarts after each fire, and the next command often does not translate, so one frozen pose is several 5 s rungs. Every run fires the drop rung. North fires are 31 `stall`, 13 `pile_leave`, 79 `drop`. −0.35 fires are 40 `stall`, 19 `pile_leave`, 65 `drop`. The drop handoff runs. It does not end the frozen pose by itself.
+
+## Where the 317f719 pose error comes from
+
+No controller change. The ten above, commit `317f719`. Estimate and ground truth are compared every 0.2 s. A bin inside a planner span that stays within 0.04 m for at least 5 s is frozen. Otherwise the wheel command names the bin: pivot, straight, contact, zero, or other. The step is the change in the world-frame error vector. Final position error averages 0.93 m. Final yaw averages 2.5° in magnitude, so the miss is xy.
+
+Sum of the absolute error steps across the ten: frozen 32.8 m, straight 25.7 m, other 18.7 m, pivot 3.4 m, zero 0.3 m, contact 0.2 m. The net vector that remains is also largest in the frozen bins on seven runs (0.66, 0.99, 0.77, 0.18, 0.72, 0.34, 0.51, 0.41, 0.13, 0.56 m). Straight driving is second (net 0.08 to 0.66 m). Contact does not move the total.
+
+The long frozen spans themselves add little. On n2 from t=52 s to t=109 s the planner path is 0.10 m, the true path is 0.70 m, and the error goes from 0.12 m to 0.17 m. The command is a pivot on 88% of the samples. Wheel translation in that window is 0.60 m and is not kept: the planner stays inside the 0.04 m ball. `floor still, translation frozen` is logged 479 times inside frozen spans and 334 times outside. The floor check is already refusing that wheel arc. Stopping integration a second time would not be a new hold.
+
+## A rung that does not translate takes the open straight
+
+Commit `cb637d8`. When the stall or pile-leave command is a pivot, or the reverse side is blocked, the rung takes `_straight_leave`, which already picks the open side. The following ticks stay on that straight until the planner pose moves 0.04 m. If neither side can translate, the fire falls through to the next rung, and the drop still ends in the survey spin. Wheel integration is unchanged. Mapping tests: 184 passed. Against `317f719`, `explore.py` is 60 lines added and 11 removed.
+
+Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `time_cap`. No mapper done line. The would-fire line does not appear. Lowest `up_z` is 0.998. No run finishes inverted.
+
+Seen, primary. North 95.79, 97.80, 89.34, 87.52, 94.37 (mean 92.96, sd 4.36) against 93.67 (sd 2.65). −0.35 96.74, 59.92, 91.65, 94.82, 78.73 (mean 84.37, sd 15.37) against 94.20 (sd 2.34). The ten-run seen mean is 88.67 against 93.94. m2 at 59.92 and m5 at 78.73 are the drop. Both spend the run in the bedroom and the living room.
+
+Visited, secondary. North 20.44, 23.98, 16.55, 14.57, 21.14 (mean 19.33, sd 3.76) against 16.67. −0.35 19.82, 16.27, 15.42, 21.33, 9.40 (mean 16.45, sd 4.64) against 15.78. The ten-run visited mean is 17.89 against 16.23.
+
+The longest planner-still span is 47.9 s on n1, t=339–387. The others are n2 31.5 s, n3 31.5 s, n4 33.5 s, n5 31.5 s, m1 30.7 s, m2 35.0 s, m3 21.0 s, m4 27.3 s, m5 33.5 s. The 31.5 s spans that start at t=0 are the survey spin, which the clock does not count. North fires 30 `stall`, 18 `pile_leave`, 60 `drop`. −0.35 fires 30 `stall`, 18 `pile_leave`, 95 `drop`. Pose means are 0.68 m and 0.58 m, against 1.04 m and 0.83 m. A wing crossing, 2 s in the bedroom wing and 2 s in the hall or kitchen, happens on n3, m1, and m2.

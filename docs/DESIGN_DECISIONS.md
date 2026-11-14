@@ -883,3 +883,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new door speed. Quarantining a doorway goal. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage. A pitch-gate retry. Reading `oak_imu` as a controller input.
 
 **Outcome.** The creep fires in every run. The ten-run seen mean matches `cb637d8` and stays about 5 points under `317f719`. m4 spends 460 s in the bath and scores 57.78. Keeping the goal did not by itself get that shell out of the bath.
+
+## 2026-11-14 — The −0.35 gap is inside the seed noise
+
+**Mission parameter.** `76933cb` left the ten-run seen mean at 88.56, and its pose means rose to 0.89 m and 0.90 m. The question is whether the `317f719` −0.35 five, all at or above 90, was that depth seed or a real gap. No controller change.
+
+**Change.** None. Five more 600 s −0.35 runs on `317f719` and the same five on `76933cb`. Depth seed 63 is already used, so these are depth seeds 71, 72, 73, 74, and 75. Flags off. Spawn (6.10, 4.70), yaw 1.2208.
+
+**Why.** One depth seed cannot separate a commit effect from a lucky draw. The same new seeds on both commits make the comparison paired.
+
+**Evidence.** `317f719` seeds 71–75 seen 50.37, 77.50, 94.51, 95.90, 92.47 (mean 82.15, sd 19.23). `76933cb` on those seeds 92.65, 71.80, 86.02, 84.94, 92.89 (mean 85.66, sd 8.57). Pooled with the depth-63 fives: `317f719` 88.17 (sd 14.39) and `76933cb` 84.70 (sd 11.85). The gap is 3.5 points and the standard error of the difference is 5.9. The paired difference on the new seeds averages −3.51. Seed 71 on `317f719` spends 465 s in the hall and scores 50.37. Seed 72 on that commit spends 469 s in the bedroom and scores 77.50. On `76933cb`, seed 72 stays in the bedroom (71.80), seed 73 in the hall (86.02), and seed 74 in the kitchen (84.94). Longest planner-still span is 48.5 s on `317f719` and 93.7 s on `76933cb` seed 74. Lowest `up_z` is 0.843 for 4.7 s on `317f719` seed 71; the shell ends upright. No run finishes inverted. Per-run pose, visited, and still spans are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Treating the depth-63 five as the `317f719` −0.35 mean. A controller change on the strength of that five. Re-running `cb637d8`; its depth-63 −0.35 mean of 84.37 already sits with the `76933cb` ten.
+
+**Outcome.** The clean set was depth seed 63. The pooled −0.35 gap between `317f719` and `76933cb` is smaller than the noise.

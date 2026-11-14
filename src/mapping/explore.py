@@ -439,6 +439,8 @@ class Explorer:
         self._zero_stall = False
         # After a sit, keep a straight command until the pose moves 0.04 m.
         self._watch_straight = False
+        # A doorway sit keeps the existing creep, and the goal, until the pose moves.
+        self._watch_creep = False
         # None until a plan runs. False means the last plan had no reachable
         # frontier. The done line below only logs; it does not stop the run.
         self._frontier_open: bool | None = None
@@ -883,6 +885,13 @@ class Explorer:
     def _mode_command(self, left_clear, right_clear, view, ds, dt) -> tuple[float, float]:
         """Pick the mode, then the proposal. Recovery is not a second writer."""
         self.mode = self._select_mode()
+        if not self.done and self._watch_creep:
+            creep = self._watch_doorway_creep(self.plan_pose())
+            if creep is not None:
+                self.mode = "approach"
+                self._mark("narrow_gap")
+                return creep
+            self._watch_creep = False
         if not self.done and self._simple_recovery():
             ruled = self._one_rule_command(self.plan_pose())
             if ruled is not None:
@@ -1517,6 +1526,10 @@ class Explorer:
         self._note_approach("straight", creep_v, creep_w)
         return wheel_speeds(creep_v, creep_w)
 
+    def _watch_doorway_creep(self, pose) -> tuple[float, float] | None:
+        """The existing throat creep. A doorway sit does not drop the goal."""
+        return self._creep_through_gap(pose, DOOR_SPEED_M_S, 0.0, 0.0)
+
     def _wheels_stalled(self, left_rad: float, right_rad: float, dt: float) -> bool:
         """A translation command the hubs did not follow. A spin in place is not a stall.
 
@@ -2052,6 +2065,7 @@ class Explorer:
         if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle", "spin"):
             self._watch_zero = None
             self._watch_straight = False
+            self._watch_creep = False
             return speeds
         x, y, yaw = self.plan_pose()
         if self._watch_zero is None:
@@ -2061,10 +2075,19 @@ class Explorer:
         if math.hypot(x - x0, y - y0) >= STILL_M:
             self._watch_zero = (self.t_s, self.t_s, x, y)
             self._watch_straight = False
+            self._watch_creep = False
             return speeds
         self._watch_zero = (t0, self.t_s, x0, y0)
         if self.t_s - t0 <= ZERO_APPROACH_S:
             return speeds
+        creep = self._watch_doorway_creep((x, y, yaw))
+        if creep is not None:
+            self._watch_creep = True
+            self._watch_straight = False
+            self._watch_zero = None
+            self._mark("narrow_gap")
+            self._log("watchdog doorway creep")
+            return creep
         return self._watch_escalate((x, y, yaw))
 
     def _note_translation(self) -> None:

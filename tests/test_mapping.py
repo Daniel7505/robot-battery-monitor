@@ -3753,6 +3753,54 @@ def test_a_frozen_pose_with_the_rear_blocked_drives_forward(capsys):
     assert left > 0.5 and right > 0.5
 
 
+def _stamp_throat(bot) -> None:
+    """The same seen throat the creep test uses. Clearance is the existing band."""
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot._last_clear = (0.8, 0.5, 0.5)
+
+
+def test_a_doorway_sit_creeps_and_keeps_the_goal(capsys):
+    """A frozen pose in a throat creeps through. The goal is not quarantined."""
+    bot = _zero_go_bot()
+    _stamp_throat(bot)
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.4, 0.0), (2.0, 0.0)]
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    assert bot._narrow_gap(bot.plan_pose())
+    left, right = bot._issue(wheel_speeds(0.0, 0.70))
+    out = capsys.readouterr().out
+    assert "watchdog doorway creep" in out
+    assert "rung=drop" not in out
+    assert "rung=stall" not in out
+    assert bot.goal_xy == (2.0, 0.0)
+    assert bot._quarantine is None
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 1.2
+    left, right = bot._mode_command(0.5, 0.5, None, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.goal_xy == (2.0, 0.0)
+    assert bot._quarantine is None
+
+
+def test_an_open_floor_sit_still_drops_the_goal(capsys):
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    assert not bot._narrow_gap(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
 def test_a_pivot_that_moves_the_pose_is_not_a_sit():
     bot = _zero_go_bot()
     bot._watch_zero = None

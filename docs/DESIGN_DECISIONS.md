@@ -897,3 +897,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating the depth-63 five as the `317f719` −0.35 mean. A controller change on the strength of that five. Re-running `cb637d8`; its depth-63 −0.35 mean of 84.37 already sits with the `76933cb` ten.
 
 **Outcome.** The clean set was depth seed 63. The pooled −0.35 gap between `317f719` and `76933cb` is smaller than the noise.
+
+## 2026-11-14 — A far-wing goal is dropped at the doorway
+
+**Mission parameter.** Thirteen of the twenty −0.35 runs on `317f719` and `76933cb` never spend 2 s in the other wing. The question is whether the block is goal selection, the doorway, or the escape ladder. No controller change and no new runs.
+
+**Change.** None. The proposed change, not implemented: a watchdog fire whose goal path crosses an existing door cell, while the shell is still within the existing 0.8 m of that door, keeps the goal and issues the existing throat creep. A goal the shell has already reached still takes the drop.
+
+**Why.** The far wing is scored and, on eleven of the thirteen trapped runs, selected many times. The drop then quarantines that goal point. The `76933cb` creep only arms once the shoulders are already in the throat, and these sits are in front of door G, the west-hall entry, or door H. The same openings are crossed by the runs that do spend time in both wings.
+
+**Evidence.** Final-map rescore, with the live floor-plate credit, puts a far-wing cluster in the scored set on every trapped run. Far-goal endings: drop quarantine 25, pile-leave 21, a nearer home-wing frontier 18, `stuck, next goal` 14, `too_tight` 11, frontier ban 5. Door G holds the shell for 77–263 s on the bedroom-trapped runs. The west-hall entry holds it for 205–348 s on the hall-trapped runs. `76933cb` seed 72 logs 9 drops and 1 creep at door G. Seed 63 m5 logs 19 drops and 0 creeps at the entry. Two runs are goal selection instead: seed 63 m3 stays in the closet after two south goals, and seed 74 selects the bath twice while the kitchen score stays just ahead. The twenty −0.35 seen scores have sd 13.0. About 170 seeds of one spawn put the standard error of the mean near 1 point, which is the bar at which a 2-point change is past the noise. A commit-versus-commit difference needs about 340 seeds of that spawn on each side. Counts and door times are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Treating the distance penalty as the reason the other wing is never chosen. It loses some goals to a nearer frontier, and it is the whole story on two runs. It is not the story on the other eleven. A new door distance or a new creep speed. Re-running `cb637d8`.
+
+**Outcome.** The binding failure is the ladder quarantining a goal the shell has not reached, at a doorway the other runs do pass. Goal selection is the failure on the closet run and on seed 74.

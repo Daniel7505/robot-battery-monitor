@@ -953,3 +953,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A controller change on this five. The depth seed is not 64, so the seen gap is not the same comparison as the old north five. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
 
 **Outcome.** Crossing matches `76933cb` and is under `317f719`. Seen is about 7 points under both earlier north means, on the two runs that never enter the south wing. Pose, visited, and `up_z` stay with the earlier north fives.
+
+## 2026-11-15 — The 8 s swap holds a goal already at a door
+
+**Mission parameter.** Seeds 78 and 80 lost a far-wing goal to the 8 s, 1.25× replan while the shell was already within 0.8 m of a door on that path. The swap may not take a replacement whose path does not cross a door. A replacement that does cross a door is unchanged.
+
+**Change.** After both existing checks have allowed the swap, `_replan_would_leave_the_door` keeps the goal and logs `replan hold`. The door test is the one already used for the doorway creep: a door cell on the current path, within `FRONTIER_REGION_M`. Commit `dbbe08d`.
+
+**Why.** The watchdog creep only runs after a 5 s sit. The replan was taking the goal in the gap between fires.
+
+**Evidence.** Mapping tests: 193 passed. A path through a door 0.4 m ahead keeps the goal when the offered path crosses no door, even though 8 s have passed and the new score is 10×. A path that also crosses that door is taken. A door 1.6 m ahead does not hold. A swap inside the 8 s wait does not count as a hold. Ten 600 s runs, flags off. North seeds 71–75 cross 3 of 5 against 1 of 5 (Fisher p=0.52). −0.35 seeds 76–80 cross 4 of 5 against 2 of 5 (Fisher p=0.52). The hold line fired 0 times on every run. The first goals match `58157dd` and then diverge, so these flips are not a hold firing. Seen means are 84.94 and 94.43. Lowest `up_z` is 0.994. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new distance. A new score ratio. Holding when the new path also crosses a door. Counting the 8 s wait as a hold. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
+
+**Outcome.** The hold is in and the tests cover it. It did not fire on these ten seeds. Crossing moved from 1 of 5 to 3 of 5 on the north spawn and from 2 of 5 to 4 of 5 on seeds 76–80. Neither Fisher test is past the noise.

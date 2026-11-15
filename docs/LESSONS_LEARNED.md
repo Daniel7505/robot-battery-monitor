@@ -1320,3 +1320,13 @@ The swap that fits seeds 78 and 80, not implemented: while the shell is within t
 Same commit `58157dd`. Five 600 s runs, north spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75, flags off. The earlier north fives used depth seed 64. All five write `time_cap`. Lowest `up_z` is 1.000. No run finishes inverted.
 
 Crossing N, N, N, Y, N. One of five. `317f719` north crossed 3 of 5. `76933cb` north crossed 1 of 5. Seen 90.77, 93.53, 77.12, 92.74, 79.08 (mean 86.65, sd 7.90) against 93.67 and 93.39. Visited 16.57, 18.92, 15.61, 19.57, 12.82 (mean 16.70, sd 2.71) against 16.67 and 14.82. Pose 0.80, 0.34, 0.60, 1.38, 1.05 m (mean 0.84) against 1.04 m and 0.89 m. Longest planner-still span: 36.9 s, 20.4 s, 25.8 s, 17.7 s (t=0–18, the survey), 17.7 s (t=0–18, the survey). Seeds 73 and 75 stay in the north wing and are the low seen scores.
+
+## The 8 s swap holds a goal that is already at a door
+
+Commit `dbbe08d`, on top of `58157dd`. After the existing 8 s and the 1.25× score check have both allowed a swap, the swap still does not run when the shell is within 0.8 m of a door on the current path and the new path crosses no door. A replacement that also crosses a door is unchanged. A door more than 0.8 m ahead does not hold. The 8 s wait itself is not a hold. Mapping tests: 193 passed.
+
+Ten 600 s runs, flags off. North spawn, depth seeds 71–75, paired with the `58157dd` north five (1 of 5 crossed). −0.35, depth seeds 76–80, paired with `58157dd` on those seeds (76 and 77 crossed, 78–80 did not). Crossing is the primary score. The replan-hold line fired 0 times on every run. The first goals match the `58157dd` logs and then diverge, so the crossing changes are not a hold firing.
+
+North crossing Y on 73, 74, and 75: 3 of 5 against 1 of 5. Fisher exact two-sided p=0.52. Pairs: 71 N/N, 72 N/N, 73 N→Y, 74 Y/Y, 75 N→Y. Seen 89.49, 86.57, 81.90, 96.46, 70.28 (mean 84.94, sd 9.75) against 86.65. Visited 14.94, 10.14, 20.73, 21.97, 16.73 (mean 16.90) against 16.70. Pose 1.53, 0.44, 1.18, 0.36, 0.36 m (mean 0.77) against 0.84 m. Longest still 39.5, 25.9, 20.4, 41.4, 21.3 s. Lowest `up_z` is 1.000.
+
+−0.35 crossing Y, Y, Y, Y, N: 4 of 5 against 2 of 5. Fisher p=0.52. Pairs: 76 Y/Y, 77 Y/Y, 78 N→Y, 79 N→Y, 80 N/N. Seen 97.38, 88.51, 96.16, 92.86, 97.26 (mean 94.43, sd 3.78) against 88.48 on those seeds. Visited 16.60, 15.07, 22.31, 14.20, 15.85 (mean 16.81) against 19.70. Pose 0.30, 0.13, 0.44, 0.45, 1.15 m (mean 0.49) against 0.59 m. Longest still 43.0, 18.6, 26.0, 25.6, 26.6 s. Lowest `up_z` is 0.994 on seed 76. No sample is under 0.95. No run finishes inverted.

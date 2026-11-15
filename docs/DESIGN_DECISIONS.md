@@ -981,3 +981,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new radius. Reading the true pose. A live ten of `d648fe8` before this replay was in. Treating one seed as a paired trial past t=43 s.
 
 **Outcome.** The hold now matches the throat the logs actually had, and it survives the clear. One seed still crosses or not. A single paired seed is not evidence.
+
+## 2026-11-15 — The throat hold on the live ten
+
+**Mission parameter.** The question is what each `replan hold` did in the next 30 s. Crossing stays the primary score. The comparison is the pooled rate on these seeds against `58157dd` and `dbbe08d` together. A seed that flips after t=43 s is divergence, which the repeated seed 78 already measured.
+
+**Change.** None. The ten runs the `d648fe8` controller. `fcc22da` is the replay note on top of it.
+
+**Why.** `dbbe08d` logged the hold zero times. The replay showed the door-cell test missing a throat, and the clear dropping the goal before the swap. This ten is whether that fix fires, and whether a fire is followed by a crossing.
+
+**Evidence.** Ten 600 s runs, flags off. North seeds 71–75 cross N, N, N, Y, N, one of five. −0.35 seeds 76–80 cross Y, Y, N, N, Y, three of five. Pooled 4 of 10 against 10 of 20 (Fisher p=0.71). The hold fired 45 times. Three of those put the shell 0.40 m through the held goal's opening within 30 s: north seed 73 through door G at t=122, on two fires, and −0.35 seed 76 through door G at t=241. Twenty fires keep the goal and the shell stays put: eight of them 3.4 m from the west-hall entry, eleven of them 3.4 m from door G, and one at door G. Twenty-two fires lose the goal inside 30 s. Nine of those are a later select with no stuck, ban, or pile between the hold and the new goal. The other thirteen are `stuck`, pile-leave, `rung=stall`, a frontier ban, or `rung=drop`. Seeds 79 and 80 fire 0 times. Seed 80 crosses. Seed 78 fires once at t=56.8, loses that goal at t=67.6, and at t=437 the rear hubs are at 0.300 with `up_z` at −0.01 through the cap. Seen means are 85.99 and 89.66. Counts and the per-fire lines are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Reading 4 of 10 against 10 of 20 as a paired result. The goals on one repeated seed already differ at t=42.6 s. A new distance. A new score ratio. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
+
+**Outcome.** The hold fires. One fire on seed 76 is followed by a real passage through door G. Most fires either sit out of reach of a wing door or lose the goal inside 30 s, including at the door. Crossing on this ten is 4 of 10, and seed 80 crosses with the hold silent.

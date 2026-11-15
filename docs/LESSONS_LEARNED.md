@@ -1346,3 +1346,66 @@ Commit `d648fe8`. A throat counts as the door, and the saved goal survives the c
 ## One depth seed is not one trajectory
 
 Three 600 s runs, −0.35, depth seed 78, the code loaded before `d648fe8`, flags off. Crossing Y, N, Y. Seen 95.65, 87.95, 96.04. Pose 0.15, 0.86, 0.95 m. The planner poses differ by 1 mm at t=18.0 s. The goal lines differ at t=42.6 s. Ground truth differs by 1 cm at t=48.6 s. A paired comparison of one seed cannot be read past that.
+
+## The throat hold fires on the live ten
+
+Same controller as `d648fe8`. The tree was `fcc22da`, which only adds the replay note. Ten 600 s runs, flags off. North spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75. −0.35, depth seeds 76–80. All ten write `time_cap`.
+
+Crossing. North N, N, N, Y, N, one of five. `58157dd` on that north five was one of five. `dbbe08d` was three of five. −0.35 Y, Y, N, N, Y, three of five. `58157dd` on seeds 76–80 was two of five. `dbbe08d` was four of five. Pooled, 4 of 10 against 10 of 20 on those two commits and these seeds. Fisher exact two-sided p=0.71. The repeated seed 78 above already splits goals at t=42.6 s, so a flip on one seed is run-to-run divergence.
+
+The `replan hold` line fired 45 times on eight runs. Seeds 79 and 80 fired 0 times, and seed 80 still crossed. A fire counts as crossed when, inside 30 s, ground truth is 0.40 m onto the held goal's side of a named opening and still within 1.2 m of that opening. Three fires do that. Twenty are still stuck with the goal kept. Twenty-two lose the goal inside 30 s: nine to a later select with no stuck, ban, or pile in between, five to `stuck`, three to pile-leave, two to `rung=stall`, two to a frontier ban, and one to `rung=drop`.
+
+North seed 71, 11 fires, cross N, bedroom wing 18 s, south wing 0. Seen 89.98, visited 22.08, pose 0.62 m, still 27.2 s (t=51–79), `up_z` 1.000.
+
+- t=170.7. Ground truth (4.97, 6.70), 2.01 m from door G. Held goal (7.89, 8.12). New goal (4.92, 9.45) at t=178.7. Planner moved 0.38 m. No stuck, ban, or pile in between.
+- t=266.3, 267.2, 275.5, 286.2, 300.5, 311.5, 329.4, 334.4. Eight fires at about (7.2, 3.0), 3.4–4.0 m from the west-hall entry. Held goal (6.75, 4.09). Each one is still stuck, and the next hold keeps that goal.
+- t=342.3. Same spot, same goal. Pile-leave at t=349.9. The replacement goal is logged after the 30 s.
+- t=493.8. Ground truth (3.69, 5.18), 0.05 m from door G. Held goal (2.98, 7.30). `rung=stall` at t=495.1. New goal (3.60, 6.10) at t=498.1. Planner moved 0.27 m. The shell goes back into the living room, out to x=6.15.
+
+North seed 72, 1 fire, cross N, bedroom wing 500 s, south wing 0. Seen 88.04, visited 17.64, pose 0.88 m, still 17.7 s (t=0–18, the survey), `up_z` 0.998.
+
+- t=51.8. Ground truth (5.10, 6.28), 1.80 m from door G. Held goal (6.03, 6.61). New goal (2.76, 3.36) at t=68.8. Planner moved 0.64 m. No stuck, ban, or pile in between.
+
+North seed 73, 23 fires, cross N, bedroom wing 61 s, south wing 0. Seen 89.05, visited 21.40, pose 0.68 m, still 28.3 s (t=252–280), `up_z` 1.000.
+
+- t=39.4 and t=43.6. Near door G, 0.82 m and 1.07 m. Held goal (3.00, 5.18). Frontier ban at t=56.1. New goal (6.59, 6.58) at t=60.3. Planner moved 0.14 m. The stuck at t=43.6 is the second hold.
+- t=71.4 and t=77.0. Held goal (6.59, 6.58). New goal (2.94, 3.34) at t=84.9. Planner moved 0.84 m. No stuck, ban, or pile in between.
+- t=90.3. `imu_stuck` at t=90.9. New goal (2.99, 4.95) at t=105.3. Planner moved 0.73 m.
+- t=94.3 and t=101.3. Same held goal (2.94, 3.34). Both cross door G. The shell goes from x=4.45 to x=3.17 at y≈5.1 by t=122. That opening enters the bedroom wing. South wing time stays 0.
+- t=222.1. Ground truth (7.56, 3.24), 4.12 m from the entry. Held goal (1.21, 5.57). New goal (3.96, 1.97) at t=234.1. Planner moved 2.41 m. No stuck, ban, or pile in between.
+- t=366.1 and t=374.1. Held goal (3.96, 7.02). `stuck, next goal` at t=381.7. New goal (6.04, 5.38). Planner moved 0.86 m.
+- t=413.5, 419.2, 424.6, 430.0, 436.6, 442.4, 447.8, 453.6, 459.1, 483.6. Ten fires near (5.6, 7.9), 3.4 m from door G. Held goal (5.19, 8.57). Still stuck, and the next hold keeps the goal.
+- t=490.6. Same spot, same goal. Still stuck. Move 0.35 m inside 30 s.
+- t=558.0. `camera_stuck` at t=563.2. t=568.1 lets the next select through. New goal (4.58, 0.88) at t=575.1. Planner moved 1.20 m.
+
+North seed 74, 4 fires, cross Y, bedroom wing 58 s, south wing 342 s. Seen 73.31, visited 21.75, pose 0.15 m, still 27.9 s (t=91–119), `up_z` 1.000.
+
+- t=50.8. Ground truth (3.36, 5.01), 0.37 m from door G. Held goal (2.88, 3.35). Still stuck. The next hold keeps the goal. Move 0.41 m.
+- t=80.6. Same goal. `rung=drop` at t=82.8. New goal (2.81, 5.07) at t=83.6. Planner moved 1.30 m.
+- t=121.4. Ground truth (4.04, 4.97), 0.37 m from door G. Held goal (2.81, 5.07). `stuck` at t=126.5. New goal (5.69, 6.55) at t=129.8. Planner moved 0.68 m.
+- t=209.2. Ground truth (3.83, 5.21), 0.14 m from door G. Held goal (2.36, 6.29). New goal (4.46, 0.84) at t=217.2. Planner moved 3.85 m. No stuck, ban, or pile in between. Inside that 30 s the shell drives south in the living room, x≈4.2, from y=5.20 to y=0.81.
+
+North seed 75, 2 fires, cross N, bedroom wing 0, south wing 304 s. Seen 89.58, visited 16.34, pose 0.61 m, still 76.0 s (t=256–332), `up_z` 0.979 for 0.3 s at t=564 and 1.000 at the cap.
+
+- t=545.8. Ground truth (3.60, 1.53), 0.28 m from the west-hall entry. Held goal (8.78, 0.45). Pile-leave at t=562.6. Move 0.10 m. The replacement goal is logged after the 30 s.
+- t=589.9. Ground truth (3.91, 1.65), 0.24 m from the entry. Held goal (3.00, 2.33). `rung=stall` at t=590.8. Move 0.09 m.
+
+−0.35 seed 76, 2 fires, cross Y, bedroom wing 100 s, south wing 159 s. Seen 90.33, visited 17.04, pose 0.66 m, still 22.5 s (t=516–538), `up_z` 1.000.
+
+- t=94.9. Ground truth (4.65, 5.55), 1.03 m from door G. Held goal (−0.48, 5.06). New goal (4.10, 4.98) at t=98.9. Planner moved 0.39 m. No stuck, ban, or pile in between.
+- t=226.4. Ground truth (3.99, 4.69), 0.52 m from door G. Held goal (1.92, 5.73). The shell crosses door G by t=241, from x=3.99 to x=3.01 at y≈5.2, and stays there.
+
+−0.35 seed 77, 1 fire, cross Y, bedroom wing 228 s, south wing 173 s. Seen 87.26, visited 22.01, pose 0.53 m, still 25.5 s (t=245–270), `up_z` 1.000.
+
+- t=240.7. Ground truth (3.61, 1.64), 0.16 m from the west-hall entry. Held goal (0.19, 1.13). `rung=pile_leave` at t=246.3. Move 0.46 m. The shell does not pass that opening in the 30 s.
+
+−0.35 seed 78, 1 fire, cross N, bedroom wing 0, south wing 424 s. Seen 86.77, visited 11.57, pose 0.63 m, still 164.8 s (t=435–600), `up_z` −0.020.
+
+- t=56.8. Ground truth (4.65, 2.68), 1.30 m from the entry. Held goal (6.58, 0.99). New goal (7.05, 0.98) at t=67.6. Planner moved 2.38 m. No stuck, ban, or pile in between.
+- At t=437 s the shell is at (3.59, 1.40), on the west-hall entry. Rear hubs go to 0.300, body z to 0.19, and `up_z` goes to −0.01. It is still there at the cap. Door G stays at 0.87 m or more. The hold has already released.
+
+−0.35 seed 79, 0 fires, cross N, bedroom wing 0, south wing 541 s. Seen 86.72, visited 7.95, pose 0.93 m, still 47.2 s (t=383–430), `up_z` 1.000. Door G comes to 1.10 m. The entry comes to 0.72 m. Door H stays at 2.55 m.
+
+−0.35 seed 80, 0 fires, cross Y, bedroom wing 379 s, south wing 153 s. Seen 97.21, visited 21.41, pose 0.03 m, still 20.8 s (t=421–441), `up_z` 1.000.
+
+Seen, secondary. North 89.98, 88.04, 89.05, 73.31, 89.58 (mean 85.99, sd 7.13) against 86.65 and 84.94. −0.35 90.33, 87.26, 86.77, 86.72, 97.21 (mean 89.66, sd 4.48) against 88.48 and 94.43. Visited means 19.84 (sd 2.65) and 16.00 (sd 6.14). Pose means 0.59 m and 0.56 m.

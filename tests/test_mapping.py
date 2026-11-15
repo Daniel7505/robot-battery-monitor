@@ -3958,6 +3958,50 @@ def test_a_replan_far_from_the_door_still_swaps(monkeypatch, capsys):
     assert bot.goal_xy == (0.0, 3.0)
 
 
+def test_seed78_throat_keeps_the_bedroom_goal(monkeypatch, capsys):
+    """58157dd seed 78 at t=274 s. Creeping, planner pose 0.86 m from the true door.
+
+    Twelve seconds later the bedroom goal (-0.80, 2.73) was replaced by the
+    outside goal (2.12, 3.28). No door cell was under the shell (place=room).
+    The throat test was already true.
+    """
+    bot = _zero_go_bot()
+    bot.odometry.x_m = -3.97
+    bot.odometry.y_m = 0.21
+    bot.grid.stamp_footprint(-3.97, 0.21, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(-3.97 + 0.35, 0.21 + side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot._last_clear = (0.8, 0.5, 0.5)
+    assert bot._narrow_gap(bot.plan_pose())
+    bot.t_s = 286.4
+    bot._goal_since = 274.3
+    bot._goal_score = 1.0
+    bot.goal_xy = (-0.80, 2.73)
+    bot.path_xy = [(-3.97, 0.21), (-0.80, 2.73)]
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    labels = np.zeros(bot.grid.labels().shape, dtype=np.int32)
+    monkeypatch.setattr(
+        "src.mapping.explore.segment_map",
+        lambda *_a, **_k: {"labels": labels, "names": {}, "doors": doors},
+    )
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (2.12, 3.28), [(-3.97, 0.21), (2.12, 3.28)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold=1" in out
+    assert bot.goal_xy == (-0.80, 2.73)
+    # Stuck, next goal clears the goal. The throat still has it.
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot._plan()
+    assert bot.replan_holds == 2
+    assert bot.goal_xy == (-0.80, 2.73)
+
+
 def test_the_eight_second_wait_is_not_a_replan_hold(monkeypatch, capsys):
     bot = _zero_go_bot()
     bot.t_s = 12.0

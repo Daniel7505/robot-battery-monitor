@@ -438,6 +438,8 @@ class Explorer:
         self.watch_fires = 0
         # Times the 8 s / 1.25x swap was refused because the shell is at a door.
         self.replan_holds = 0
+        # Last goal kept while the shell is in a throat. Survives a clear.
+        self._door_goal = None
         self._zero_stall = False
         # After a sit, keep a straight command until the pose moves 0.04 m.
         self._watch_straight = False
@@ -1580,13 +1582,62 @@ class Explorer:
         points.append((float(self.goal_xy[0]), float(self.goal_xy[1])))
         return self._polyline_crosses_door(points, pose)
 
-    def _replan_would_leave_the_door(self, pose, new_path) -> bool:
-        """The shell is at a door on this goal, and the new path crosses none."""
-        if not self._path_door_in_reach(pose):
-            return False
+    def _new_path_crosses_door(self, pose, new_path) -> bool:
         points = [(float(pose[0]), float(pose[1]))]
         points.extend((float(p[0]), float(p[1])) for p in new_path)
-        return not self._polyline_crosses_door(points)
+        return self._polyline_crosses_door(points)
+
+    def _note_door_goal(self, pose) -> None:
+        """Remember a goal the shell is taking through a throat.
+
+        Seed 78 at t=274 s was creeping, and the planner pose was 0.86 m
+        from the true door, so a door cell on the path was not within 0.8 m.
+        The throat test was already true. A later clear (stuck, pile, ban)
+        drops goal_xy; this copy is what the next plan restores.
+        """
+        if self.goal_xy is not None and self.path_xy and (
+            self._narrow_gap(pose) or self._path_door_in_reach(pose)
+        ):
+            self._door_goal = (
+                (float(self.goal_xy[0]), float(self.goal_xy[1])),
+                list(self.path_xy),
+                float(self._goal_score),
+                list(self._goal_cells),
+                (float(pose[0]), float(pose[1])),
+            )
+            return
+        saved = self._door_goal
+        if saved is None:
+            return
+        ax, ay = saved[4]
+        if not self._narrow_gap(pose) and math.hypot(float(pose[0]) - ax, float(pose[1]) - ay) >= FRONTIER_REGION_M:
+            self._door_goal = None
+
+    def _hold_door_goal(self, pose, new_goal, new_path) -> bool:
+        """The 8 s / 1.25x swap, or a fresh select after a clear, would leave the throat."""
+        saved = self._door_goal
+        if saved is None:
+            return False
+        if math.hypot(float(new_goal[0]) - saved[0][0], float(new_goal[1]) - saved[0][1]) < 0.45:
+            return False
+        ax, ay = saved[4]
+        at_door = (
+            self._narrow_gap(pose)
+            or self._path_door_in_reach(pose)
+            or math.hypot(float(pose[0]) - ax, float(pose[1]) - ay) < FRONTIER_REGION_M
+        )
+        if not at_door:
+            return False
+        return not self._new_path_crosses_door(pose, new_path)
+
+    def _restore_door_goal(self) -> None:
+        xy, path, score, cells, _anchor = self._door_goal
+        self.goal_xy = xy
+        self.path_xy = list(path)
+        self._goal_cells = list(cells)
+        self._goal_score = float(score)
+        self.phase = "go"
+        self.done = False
 
     def _watch_door_path_creep(self, pose) -> tuple[float, float] | None:
         """Creep at the door speed. The goal stays, and the ladder does not advance.
@@ -3828,6 +3879,7 @@ class Explorer:
         self.room_labels = rooms["labels"]
         self.room_names = rooms["names"]
         self.room_doors = rooms["doors"]
+        self._note_door_goal((x, y, yaw))
         report: dict = {}
         banned = set(self._ban_set()) | self._held_cells()
         aim = None
@@ -3906,12 +3958,13 @@ class Explorer:
             new_score = float(report.get("score") or 0.0)
             if self._goal_score > 0.0 and new_score < self._goal_score * 1.25:
                 return
-            # The 1.25x swap is allowed. It still may not leave a door the
-            # shell is already within 0.8 m of, unless the new path crosses one.
-            if self._replan_would_leave_the_door((x, y, yaw), path):
-                self.replan_holds += 1
-                self._log(f"replan hold={self.replan_holds}")
-                return
+        # The swap is allowed, or the goal was cleared and this is a fresh
+        # select. Neither may leave a throat for a path that crosses no door.
+        if self._hold_door_goal((x, y, yaw), goal, path):
+            self.replan_holds += 1
+            self._log(f"replan hold={self.replan_holds}")
+            self._restore_door_goal()
+            return
         same = (
             self.goal_xy is not None
             and math.hypot(goal[0] - self.goal_xy[0], goal[1] - self.goal_xy[1]) < 0.2

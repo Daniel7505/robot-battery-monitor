@@ -911,3 +911,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating the distance penalty as the reason the other wing is never chosen. It loses some goals to a nearer frontier, and it is the whole story on two runs. It is not the story on the other eleven. A new door distance or a new creep speed. Re-running `cb637d8`.
 
 **Outcome.** The binding failure is the ladder quarantining a goal the shell has not reached, at a doorway the other runs do pass. Goal selection is the failure on the closet run and on seed 74.
+
+## 2026-11-14 — A door on the path keeps the goal
+
+**Mission parameter.** The crossing rate is the primary score. The 2 s test on the twenty earlier −0.35 runs is 7 of 20. Seen % is secondary. A watchdog fire at a door the goal path still crosses should creep and keep that goal. A goal the shell has reached still drops.
+
+**Change.** `_watch_keep_creep` creeps at the existing door speed when the path crosses a door cell and the shell is within `FRONTIER_REGION_M` (0.8 m) of that cell. The goal stays, and the ladder does not advance. The same creep repeats until the pose moves 0.04 m or the door test fails. A goal inside 0.8 m still takes the drop. The shoulder test is unchanged. Commit `58157dd`.
+
+**Why.** The sits that lose the far wing are in front of the opening. The shoulders are not in the throat, so the `76933cb` creep does not arm, and the drop quarantines the goal.
+
+**Evidence.** Mapping tests: 189 passed. A path through a door 0.4 m ahead creeps, keeps the goal, and does not advance the ladder. The next tick still creeps. A goal 0.5 m away still drops. A door 1.6 m ahead still drops. Ten 600 s −0.35 runs, depth seeds 71–80, flags off. Crossing Y, Y, Y, Y, Y, Y, Y, N, N, N, seven of ten. Seeds 71–75 are five of five, against 1 of 5 on `76933cb` (Fisher p=0.048) and 2 of 5 on `317f719` (p=0.17). The ten against those fives is p=0.12 and p=0.33. Seen mean 91.11 (sd 6.31). The three misses never come within 0.8 m of door G or door H. Lowest `up_z` is 0.996. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A new door distance. A new creep speed. Quarantining a goal the shell has not reached. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
+
+**Outcome.** The crossing rate on seeds 71–75 is five of five, where `76933cb` was one of five. Three of the ten still never reach the door, so the creep has nothing to keep.

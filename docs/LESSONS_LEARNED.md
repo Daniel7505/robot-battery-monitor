@@ -1288,3 +1288,17 @@ The opening the body sits in:
 The runs that do cross use those same openings. `317f719` seed 63 m5 spends 236 s within 0.55 m of door H and still spends 132 s in the bath. The opening is passable. The far goal has to survive the sit.
 
 The twenty −0.35 seen scores have sd 13.0 around a mean of 86.4. A trapped run often still scores above 90, because the living room sees the other wing, so seen is a noisy proxy for the crossing. The standard error of a mean of n seeds is 13/sqrt(n). A 2-point change is past that noise when the standard error is about 1 point, which is about 170 seeds of one spawn. A difference between two commits needs about 340 seeds of that spawn on each commit for a standard error of 1 point. Five seeds leave a standard error near 6 points.
+
+## A door on the goal path keeps the goal
+
+Commit `58157dd`. A watchdog fire whose goal path crosses a door cell, while the shell is within the existing 0.8 m of that door, issues the existing throat creep. The goal is not quarantined and the ladder does not advance. A goal the shell has already reached, inside that same 0.8 m, still takes the drop. The shoulder test is unchanged for a throat the shell is already in. Mapping tests: 189 passed.
+
+The primary score is the wing crossing: 2 s on a bedroom-wing floor and 2 s on a hall or kitchen floor. The twenty earlier −0.35 runs cross on 7 of 20. Ten new 600 s −0.35 runs, depth seeds 71–80, flags off. All ten write `time_cap`. Lowest `up_z` is 0.996. No run finishes inverted.
+
+Crossing, primary. Y, Y, Y, Y, Y, Y, Y, N, N, N. Seven of ten. Seeds 71–75 are five of five. `76933cb` on seeds 71–75 crossed 1 of 5. Fisher exact two-sided p against that five is 0.12 for the ten, and 0.048 for seeds 71–75 alone. `317f719` on seeds 71–75 crossed 2 of 5. The same test gives p=0.33 for the ten and p=0.17 for seeds 71–75.
+
+Time in the other wing, the smaller of the two wings: 118, 159, 238, 124, 16, 84, 35, 0, 0, 0 s. North and south seconds are 118/361, 159/402, 310/238, 124/236, 16/314, 321/84, 422/35, 0/216, 432/0, 0/319. Seed 78 stays in the south wing, seed 79 in the north, seed 80 in the south. None of those three comes within 0.8 m of door G or door H, so the new creep does not fire there.
+
+Seen, secondary. 86.95, 96.56, 97.44, 94.62, 93.09, 95.08, 84.21, 85.31, 97.51, 80.29 (mean 91.11, sd 6.31). Visited 13.35, 17.24, 18.32, 18.73, 17.59, 29.32, 21.51, 16.19, 17.36, 14.12 (mean 18.37, sd 4.48). Pose 0.39, 0.80, 0.94, 0.33, 0.80, 0.82, 0.25, 0.92, 0.55, 0.43 m (mean 0.62). Longest planner-still span: 17.8 s (t=0–18, the survey), 27.9 s, 35.0 s, 28.0 s, 19.4 s, 24.0 s, 35.5 s, 26.7 s, 20.4 s, 17.7 s (t=0–18, the survey).
+
+Drops and creeps while the shell is within 0.8 m of the door. Door G: drops 0 on every seed, creeps 0, 0, 0, 0, 0, 1, 3, 0, 0, 0. Door H: drops 0, 0, 5, 7, 3, 0, 0, 0, 0, 0 and creeps 0, 4, 0, 12, 8, 0, 0, 0, 0, 0.

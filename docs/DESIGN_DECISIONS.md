@@ -967,3 +967,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new distance. A new score ratio. Holding when the new path also crosses a door. Counting the 8 s wait as a hold. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
 
 **Outcome.** The hold is in and the tests cover it. It did not fire on these ten seeds. Crossing moved from 1 of 5 to 3 of 5 on the north spawn and from 2 of 5 to 4 of 5 on seeds 76–80. Neither Fisher test is past the noise.
+
+## 2026-11-15 — A throat keeps the goal the door-cell test missed
+
+**Mission parameter.** `dbbe08d` never logged a hold. Replay the listed replacements on `58157dd` seeds 78 and 80 and cover the clause that actually failed. No live run of the fix.
+
+**Change.** A throat (`_narrow_gap`) counts as being at the door, and that goal is kept when the next select, including one after stuck or pile has cleared `goal_xy`, does not cross a door. Commit `d648fe8`.
+
+**Why.** At t=274 s on seed 78 the shell was creeping, `place=room`, and the planner pose was 1.04 m from the true entry while the true shell was 0.23 m from it. The 0.8 m door-cell test never saw the sit. Other losses are `stuck, next goal`, pile-leave, a dead end, a stall, or a frontier ban, which clear the goal before the 8 s swap.
+
+**Evidence.** The replacement distances and mechanisms are in `docs/LESSONS_LEARNED.md`. The test is that logged state: pose (−3.97, 0.21), goal (−0.80, 2.73), offer (2.12, 3.28), 12.1 s later, throat true, no door cell. The goal stays, and it stays after a clear. Mapping tests: 194 passed. Three runs of depth seed 78 on the code from before this commit: crossing Y, N, Y, seen 95.65, 87.95, 96.04, pose 0.15, 0.86, 0.95 m. Planner poses split by 1 mm at t=18.0 s. Goals differ at t=42.6 s.
+
+**Rejected.** A new radius. Reading the true pose. A live ten of `d648fe8` before this replay was in. Treating one seed as a paired trial past t=43 s.
+
+**Outcome.** The hold now matches the throat the logs actually had, and it survives the clear. One seed still crosses or not. A single paired seed is not evidence.

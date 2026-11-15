@@ -1330,3 +1330,19 @@ Ten 600 s runs, flags off. North spawn, depth seeds 71–75, paired with the `58
 North crossing Y on 73, 74, and 75: 3 of 5 against 1 of 5. Fisher exact two-sided p=0.52. Pairs: 71 N/N, 72 N/N, 73 N→Y, 74 Y/Y, 75 N→Y. Seen 89.49, 86.57, 81.90, 96.46, 70.28 (mean 84.94, sd 9.75) against 86.65. Visited 14.94, 10.14, 20.73, 21.97, 16.73 (mean 16.90) against 16.70. Pose 1.53, 0.44, 1.18, 0.36, 0.36 m (mean 0.77) against 0.84 m. Longest still 39.5, 25.9, 20.4, 41.4, 21.3 s. Lowest `up_z` is 1.000.
 
 −0.35 crossing Y, Y, Y, Y, N: 4 of 5 against 2 of 5. Fisher p=0.52. Pairs: 76 Y/Y, 77 Y/Y, 78 N→Y, 79 N→Y, 80 N/N. Seen 97.38, 88.51, 96.16, 92.86, 97.26 (mean 94.43, sd 3.78) against 88.48 on those seeds. Visited 16.60, 15.07, 22.31, 14.20, 15.85 (mean 16.81) against 19.70. Pose 0.30, 0.13, 0.44, 0.45, 1.15 m (mean 0.49) against 0.59 m. Longest still 43.0, 18.6, 26.0, 25.6, 26.6 s. Lowest `up_z` is 0.994 on seed 76. No sample is under 0.95. No run finishes inverted.
+
+## Why the hold missed seeds 78 and 80
+
+No new live run for the fix. The `58157dd` logs, planner pose against the true doors, at the instant the next goal is logged.
+
+Seed 78. t=267.6 s: planner 0.86 m from the west-hall entry, true shell 0.19 m, after `rung=stall`. t=286.4 s: planner 1.04 m, true shell 0.23 m, 12.1 s after the bedroom goal, no stall and no clear. That one is the 8 s / 1.25× swap. The log had already said `narrow gap`, and `place=room`, so no door cell was under the shell. t=425.7 s: a dead-end refusal, planner 1.78 m.
+
+Seed 80. t=95 s: planner 0.05 m, after `rung=stall`. t=113.6 s: `stuck, next goal` clears the goal, planner 0.14 m. t=125.6 s: creep, then a new goal 12 s later, planner 0.23 m. t=210.9 s: the next goal is the bedroom bridge. t=298.7 s: pile-leave clears the goal. t=306.6 s and t=314.5 s are 7.9 s apart, inside the 8 s keep. t=330.3 s: planner 0.83 m, 8.0 s, creeping. t=425.3 s: planner 1.20 m, 8.0 s, not at a door. t=489.2 s: frontier ban. t=518.3 s: planner 1.59 m. t=556.6 s: stuck clears the goal, planner 0.70 m. t=568.6 s: creep, planner 0.59 m.
+
+The 0.8 m door-cell test uses the planner pose. On the one clean swap, that pose was a metre from the true door while the shell was in the throat. The other losses clear the goal first, so the swap branch never runs.
+
+Commit `d648fe8`. A throat counts as the door, and the saved goal survives the clear. The test is the t=274 s state: pose (−3.97, 0.21), goal (−0.80, 2.73), outside offer (2.12, 3.28), 12.1 s later. The goal stays, including after it is cleared. Mapping tests: 194 passed. No live run of this commit.
+
+## One depth seed is not one trajectory
+
+Three 600 s runs, −0.35, depth seed 78, the code loaded before `d648fe8`, flags off. Crossing Y, N, Y. Seen 95.65, 87.95, 96.04. Pose 0.15, 0.86, 0.95 m. The planner poses differ by 1 mm at t=18.0 s. The goal lines differ at t=42.6 s. Ground truth differs by 1 cm at t=48.6 s. A paired comparison of one seed cannot be read past that.

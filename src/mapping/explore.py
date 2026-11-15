@@ -436,6 +436,8 @@ class Explorer:
         self._watch_step = 0
         self._watch_fired_at = -1.0e9
         self.watch_fires = 0
+        # Times the 8 s / 1.25x swap was refused because the shell is at a door.
+        self.replan_holds = 0
         self._zero_stall = False
         # After a sit, keep a straight command until the pose moves 0.04 m.
         self._watch_straight = False
@@ -1539,20 +1541,14 @@ class Explorer:
             < FRONTIER_REGION_M
         )
 
-    def _path_door_in_reach(self, pose) -> bool:
-        """The goal path crosses a door cell and the shell is within 0.8 m of it.
-
-        The door mask is the one the last plan already computed. A goal the
-        shell has reached is not a door to creep. Ground truth is not read.
-        """
+    def _polyline_crosses_door(self, points, pose=None) -> bool:
+        """A door cell on this polyline. With a pose, the cell is within 0.8 m."""
         doors = self.room_doors
-        if doors is None or self.goal_xy is None or not self.path_xy or self._goal_already_reached(pose):
+        if doors is None or len(points) < 2:
             return False
-        points = [(float(pose[0]), float(pose[1]))]
-        points.extend((float(p[0]), float(p[1])) for p in self.path_xy)
-        points.append((float(self.goal_xy[0]), float(self.goal_xy[1])))
         height, width = doors.shape
         res = self.grid.res
+        near = None if pose is None else (float(pose[0]), float(pose[1]))
         for (x0, y0), (x1, y1) in zip(points, points[1:]):
             span = math.hypot(x1 - x0, y1 - y0)
             steps = max(1, int(math.ceil(span / res)))
@@ -1564,10 +1560,33 @@ class Explorer:
                 row, col = cell
                 if not (0 <= row < height and 0 <= col < width) or not bool(doors[row, col]):
                     continue
-                cx, cy = self.grid.cell_center(row, col)
-                if math.hypot(float(pose[0]) - cx, float(pose[1]) - cy) < FRONTIER_REGION_M:
-                    return True
+                if near is not None:
+                    cx, cy = self.grid.cell_center(row, col)
+                    if math.hypot(near[0] - cx, near[1] - cy) >= FRONTIER_REGION_M:
+                        continue
+                return True
         return False
+
+    def _path_door_in_reach(self, pose) -> bool:
+        """The goal path crosses a door cell and the shell is within 0.8 m of it.
+
+        The door mask is the one the last plan already computed. A goal the
+        shell has reached is not a door to creep. Ground truth is not read.
+        """
+        if self.goal_xy is None or not self.path_xy or self._goal_already_reached(pose):
+            return False
+        points = [(float(pose[0]), float(pose[1]))]
+        points.extend((float(p[0]), float(p[1])) for p in self.path_xy)
+        points.append((float(self.goal_xy[0]), float(self.goal_xy[1])))
+        return self._polyline_crosses_door(points, pose)
+
+    def _replan_would_leave_the_door(self, pose, new_path) -> bool:
+        """The shell is at a door on this goal, and the new path crosses none."""
+        if not self._path_door_in_reach(pose):
+            return False
+        points = [(float(pose[0]), float(pose[1]))]
+        points.extend((float(p[0]), float(p[1])) for p in new_path)
+        return not self._polyline_crosses_door(points)
 
     def _watch_door_path_creep(self, pose) -> tuple[float, float] | None:
         """Creep at the door speed. The goal stays, and the ladder does not advance.
@@ -3886,6 +3905,12 @@ class Explorer:
                 return
             new_score = float(report.get("score") or 0.0)
             if self._goal_score > 0.0 and new_score < self._goal_score * 1.25:
+                return
+            # The 1.25x swap is allowed. It still may not leave a door the
+            # shell is already within 0.8 m of, unless the new path crosses one.
+            if self._replan_would_leave_the_door((x, y, yaw), path):
+                self.replan_holds += 1
+                self._log(f"replan hold={self.replan_holds}")
                 return
         same = (
             self.goal_xy is not None

@@ -3874,6 +3874,109 @@ def test_a_door_beyond_0_8_m_still_drops(capsys):
     assert bot._quarantine is not None
 
 
+def _patched_door(bot, x, y):
+    """segment_map stand-in with one door cell. _plan replaces the mask itself."""
+    cell = bot.grid.cell_of(x, y)
+    assert cell is not None
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    doors[cell] = True
+    labels = np.zeros(bot.grid.labels().shape, dtype=np.int32)
+
+    def _rooms(*_args, **_kwargs):
+        return {"labels": labels, "names": {}, "doors": doors}
+
+    return _rooms
+
+
+def _offer(score, goal, path):
+    def _select(*_args, **kwargs):
+        report = kwargs.get("report")
+        if report is not None:
+            report["score"] = score
+        return goal, path
+
+    return _select
+
+
+def test_a_replan_at_a_door_keeps_a_goal_the_new_path_leaves(monkeypatch, capsys):
+    """8 s have passed and the new score wins. The path does not cross a door, so the goal stays."""
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold=1" in out
+    assert bot.replan_holds == 1
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot.path_xy[0] == (0.40, 0.0)
+
+
+def test_a_replan_at_a_door_may_take_another_door_path(monkeypatch, capsys):
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.40, 3.0), [(0.40, 0.0), (0.40, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (0.40, 3.0)
+
+
+def test_a_replan_far_from_the_door_still_swaps(monkeypatch, capsys):
+    """The door is on the path and more than 0.8 m away. The 1.25x swap stands."""
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.60, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 1.60, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (0.0, 3.0)
+
+
+def test_the_eight_second_wait_is_not_a_replan_hold(monkeypatch, capsys):
+    bot = _zero_go_bot()
+    bot.t_s = 12.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (3.0, 0.0)
+
+
 def test_a_pivot_that_moves_the_pose_is_not_a_sit():
     bot = _zero_go_bot()
     bot._watch_zero = None

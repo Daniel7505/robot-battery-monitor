@@ -18,13 +18,12 @@ RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 import traceback
 
 import numpy as np
-from controller import Supervisor
+from controller import Robot
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -300,58 +299,8 @@ def _straight_probe(robot, timestep_ms: int, log: RunLog, folder: str, seconds: 
             return
 
 
-def _spawn_from_env():
-    raw = (os.environ.get("RBM_SPAWN") or "").replace(",", " ").split()
-    if len(raw) != 3:
-        return None
-    try:
-        return float(raw[0]), float(raw[1]), float(raw[2])
-    except ValueError:
-        return None
-
-
-def _note_apartment_floor(robot, explorer) -> None:
-    """Floor plates, and the spawn as odom zero. Not the inertial unit.
-
-    Read once before the shell drives. A loop of free cells past the
-    plates then cannot take the length of the whole loop. ``RBM_SPAWN``
-    is the placement written into the world. The node pose is the same
-    number when the supervisor read works.
-    """
-    try:
-        from eval.apartment_gt_grid import load_solids
-    except Exception as exc:
-        print(f"MAPPING floor plates unavailable {exc}", flush=True)
-        return
-    boxes = [
-        (s.xmin, s.xmax, s.ymin, s.ymax)
-        for s in load_solids()
-        if s.name.startswith("APT_FLOOR_")
-    ]
-    if not boxes:
-        print("MAPPING floor plates unavailable", flush=True)
-        return
-    spawn = _spawn_from_env()
-    if spawn is None:
-        try:
-            node = robot.getSelf()
-            pos = node.getPosition()
-            rot = node.getOrientation()
-            # Local +x in the world. The matrix is row-major, local to world.
-            yaw = math.atan2(float(rot[3]), float(rot[0]))
-            spawn = (float(pos[0]), float(pos[1]), yaw)
-        except Exception as exc:
-            print(f"MAPPING floor plates unavailable {exc}", flush=True)
-            return
-    explorer.note_floor_plates(boxes, spawn)
-    print(
-        f"MAPPING floor plates {len(boxes)} spawn {spawn[0]:.2f} {spawn[1]:.2f} {spawn[2]:.3f}",
-        flush=True,
-    )
-
-
 def main() -> None:
-    robot = Supervisor()
+    robot = Robot()
     timestep = int(robot.getBasicTimeStep())
     dt = timestep / 1000.0
     hubs = _Drive(robot)
@@ -425,7 +374,6 @@ def main() -> None:
     next_note = 2.0
     next_oracle_miss = 5.0
     saved = False
-    floor_noted = False
     # The hubs almost never sit still once exploration starts, and the
     # gyro bias is a rest reading. Hold for a few seconds so that
     # reading is learned before it is integrated. Motors stay at zero.
@@ -435,9 +383,6 @@ def main() -> None:
         calibrate_s = 3.5
     try:
         while robot.step(timestep) != -1:
-            if not floor_noted:
-                _note_apartment_floor(robot, explorer)
-                floor_noted = True
             now = float(robot.getTime())
             if oracle_on:
                 if _feed_oracle(explorer, folder):

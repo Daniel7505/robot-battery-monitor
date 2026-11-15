@@ -386,19 +386,7 @@ Two other shapes in the same ten runs, same actuator fact: north run 2 at t=200 
 
 **Outcome.** The translation is the wheel step, trusted because the forward range leaves the slip band and the floor image never becomes the still picture the pitch gate waits on. The pitch is already measured. It did not veto the travel.
 
-## 2026-11-09 — The raw pitch gate dropped level driving
-
-**Mission parameter.** Apply the existing 0.12 rad pitch gate to wheel translation without waiting for a still floor image, so a climb does not count as progress. Revert if it does not help or if it regresses.
-
-**Change.** Commit `2db10f5` dropped the wheel step when `oak_imu` pitch was more than 0.12 rad from the learned rest, and logged that pitch. The commit was reverted. The floor-still branch is again the only user of that threshold.
-
-**Why.** On the saved island climb the body really did pitch past 0.12 rad, and the pose followed the wheels. On the matched runs the same comparison fired while ground truth stayed level.
-
-**Evidence.** New north run 1 logs `shell pitched 0.11 rad` at times when `up_z` is 1.000, the hubs are z=0.080, and the speed is about 0.10 m/s. Matched five-run means: north 13.64 (sd 6.81) with the gate, 21.93 (sd 3.86) on `9ebb7cd`. −0.35 16.83 (sd 3.06) with the gate, 10.86 (sd 1.95) without. No `up_z` below 0.5 in any of the twenty runs. The movie run stayed 2.9 m from the island. Counts are in `docs/LESSONS_LEARNED.md`.
-
-**Rejected.** Shipping the gate. Calling the −0.35 rise a win. A new threshold. Editing the IMU noise or the proto.
-
-**Outcome.** Wheel translation is not dropped from pitch alone. The island climb is still trusted wheel travel. A later pitch veto has to be a tip of the body, not one reading against a single rest sample.
+`2db10f5` dropped wheel translation on raw pitch past 0.12 rad and was reverted after it fired on level driving (north visited 13.64 against 21.93).
 
 ## 2026-11-09 — A flat floor frame is not wheel travel
 
@@ -758,19 +746,7 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Outcome.** The repeated pin on a real reverse is gone from the runs that had it. Visited means are 18.67 and 17.99. Pose error is lower on the north runs that were above 1 m, and higher on two −0.35 runs.
 
-## 2026-11-11 — An agreed wheel step with a moving nose is kept
-
-**Mission parameter.** A wheel step both hubs agree on, whose forward nose has moved more than the existing 0.04 m since the view was called still, is not dropped by the frozen-view check and is not rewound by the floor-still hold. A flat nose, a pivot, and a pitched shell still drop. Nothing else moves.
-
-**Change.** `_keep_agreed_nose` is that test. The frozen-view drop skips it. The floor-still rewind arms a new anchor and returns instead of putting x and y back. The nose is the one stored when the depth signature last changed. Agreement is a non-zero hub step that is not a commanded spin and not opposite hub rotation. Pitch more than 0.12 rad from the learned rest refuses the keep. Commit `6b8ce43`.
-
-**Why.** Outside the pin holds the `5a546bf` ten still dropped translation while the wheels and the true shell moved together. The coarse depth signature can stay still while the nose range moves.
-
-**Evidence.** Mapping tests: 170 passed. An opening nose keeps the step. A flat nose drops it. A pivot drops it. A pitched shell drops it. The floor-still hold keeps the pose when the nose reads 1.08 m and rewinds it when the nose reads 1.00 m. Five 600 s runs of each seed, flags off, depth seeds 64 and 63. North visited 16.42, 13.01, 17.52, 13.27, 10.15 (mean 14.07, sd 2.94) against 18.67 (sd 4.36). −0.35 visited 18.94, 16.10, 23.72, 13.19, 11.05 (mean 16.60, sd 4.97) against 17.99 (sd 2.44). Pose error: n 1.60, 0.45, 0.37, 1.33, 0.28 and m 0.32, 1.49, 0.71, 0.35, 0.40, against 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. The rejected-translation share is +0.61, +0.09, +0.83, +1.12, +0.21 and +0.32, +0.51, +0.73, +0.05, −0.20. The same gate on the previous logs is +0.30, +0.64, +0.64, +0.21, +0.22 and −0.43, +0.62, +0.26, +0.83, +0.44. No mapper done line. Lowest `up_z` is 0.998. No sample below 0.95. The longest `(0, 0)` is 55 s on n3. Counts are in `docs/LESSONS_LEARNED.md`.
-
-**Rejected.** Keeping a pivot, a flat nose, or a shell pitched more than 0.12 rad from rest. Changing the pin release, the floor-blank hold, or the weak-shift hold. Reading `oak_imu` as a new input. Moving the 0.45 m cap or the 2 s reverse clock. Opening pantry or storage.
-
-**Outcome.** The keep is in. Visited means are 14.07 and 16.60, below 18.67 and 17.99. Pose-error means are 0.81 m and 0.65 m, against 0.84 m and 0.75 m. n2 and m4 lose most of the rejected-translation share. n1, n3, n4, and m3 gain it. The long zeros are a stopped shell.
+`6b8ce43` kept an agreed wheel step when the nose had opened and was reverted after visited means fell to 14.07 and 16.60.
 
 ## 2026-11-11 — The nose keep is reverted, and a zero approach takes the stall
 
@@ -954,19 +930,7 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Outcome.** Crossing matches `76933cb` and is under `317f719`. Seen is about 7 points under both earlier north means, on the two runs that never enter the south wing. Pose, visited, and `up_z` stay with the earlier north fives.
 
-## 2026-11-15 — The 8 s swap holds a goal already at a door
-
-**Mission parameter.** Seeds 78 and 80 lost a far-wing goal to the 8 s, 1.25× replan while the shell was already within 0.8 m of a door on that path. The swap may not take a replacement whose path does not cross a door. A replacement that does cross a door is unchanged.
-
-**Change.** After both existing checks have allowed the swap, `_replan_would_leave_the_door` keeps the goal and logs `replan hold`. The door test is the one already used for the doorway creep: a door cell on the current path, within `FRONTIER_REGION_M`. Commit `dbbe08d`.
-
-**Why.** The watchdog creep only runs after a 5 s sit. The replan was taking the goal in the gap between fires.
-
-**Evidence.** Mapping tests: 193 passed. A path through a door 0.4 m ahead keeps the goal when the offered path crosses no door, even though 8 s have passed and the new score is 10×. A path that also crosses that door is taken. A door 1.6 m ahead does not hold. A swap inside the 8 s wait does not count as a hold. Ten 600 s runs, flags off. North seeds 71–75 cross 3 of 5 against 1 of 5 (Fisher p=0.52). −0.35 seeds 76–80 cross 4 of 5 against 2 of 5 (Fisher p=0.52). The hold line fired 0 times on every run. The first goals match `58157dd` and then diverge, so these flips are not a hold firing. Seen means are 84.94 and 94.43. Lowest `up_z` is 0.994. Counts are in `docs/LESSONS_LEARNED.md`.
-
-**Rejected.** A new distance. A new score ratio. Holding when the new path also crosses a door. Counting the 8 s wait as a hold. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
-
-**Outcome.** The hold is in and the tests cover it. It did not fire on these ten seeds. Crossing moved from 1 of 5 to 3 of 5 on the north spawn and from 2 of 5 to 4 of 5 on seeds 76–80. Neither Fisher test is past the noise.
+`dbbe08d` held a door-path goal against the 8 s swap, and the hold line fired 0 times.
 
 ## 2026-11-15 — A throat keeps the goal the door-cell test missed
 

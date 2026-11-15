@@ -90,29 +90,6 @@ def _parab(corr: np.ndarray, row: int, col: int, *, axis: int) -> float:
     return max(-0.6, min(0.6, 0.5 * (vm - vp) / den))
 
 
-def image_shift_px(prev, curr) -> tuple[float, float, float] | None:
-    """Pixel shift of ``curr`` relative to ``prev``.
-
-    None means the floor has nothing to track. The row and column are the
-    same peak ``FloorFlow`` integrates; callers that only need "did it
-    move" use the magnitude. A creep of door speed is many pixels across
-    a fifth of a second, and a body that is sitting still stays under a
-    couple of pixels.
-
-    The peak is cyclic with the image width. On this 32 px camera one
-    period is about 3.9 cm of floor, and a shift of one period comes back
-    as a high-quality zero. Callers that decide "stuck" must not compare
-    across more than half of that.
-    """
-    before = np.asarray(prev, dtype=np.float64)
-    after = np.asarray(curr, dtype=np.float64)
-    if before.ndim == 3:
-        before = before.mean(axis=2)
-    if after.ndim == 3:
-        after = after.mean(axis=2)
-    return _shift_peak(before, after)
-
-
 def _as_gray(image) -> np.ndarray | None:
     if image is None:
         return None

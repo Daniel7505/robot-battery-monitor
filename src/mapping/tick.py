@@ -12,7 +12,6 @@ is not read.
 
 from __future__ import annotations
 
-import json
 import math
 import os
 
@@ -156,22 +155,6 @@ def log_major(
     summary.append(f"frontier_clear_events {_plan_counts['frontier_clear']}")
     with open(os.path.join(folder, "summary.txt"), "w", encoding="utf-8") as handle:
         handle.write("\n".join(summary) + "\n")
-
-
-def log_decision(event: dict) -> None:
-    """Append one JSON object. Off unless ``RBM_DECISION_LOG=1``.
-
-    The line goes to ``$RBM_MAP_DIR/decision.jsonl``. It is not printed,
-    so a normal mapping log does not grow when the switch is off.
-    """
-    if not decision_log_enabled():
-        return
-    folder = os.environ.get("RBM_MAP_DIR")
-    if not folder:
-        return
-    path = os.path.join(folder, "decision.jsonl")
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event, separators=(",", ":")) + "\n")
 
 
 def centre_yaw(left_m: float, right_m: float) -> float:

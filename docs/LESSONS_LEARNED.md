@@ -546,26 +546,7 @@ Dead ends: calling the planner motion visual odometry or a scan match. Those yaw
 
 Outcome: the climb is trusted wheel travel. The pose gate saw that travel and kept the reverse. The pitch the robot already measures did not get a vote, because the floor image never became the still picture that gate waits for. The smallest next change, not made here, is to let that existing pitch gate drop wheel translation when the shell is tipped, without waiting for a still floor image.
 
-## The pitch gate fired on level driving
-
-Symptom: the note above said to drop wheel translation when `oak_imu` pitch is more than 0.12 rad from the learned rest, without waiting for a still floor image. That change was committed as `2db10f5` and then taken back.
-
-How it was checked. The threshold stayed 0.12 rad. The line logs the IMU pitch. Unit tests: a 0.20 rad pitch drops the wheel step and the blocked-heading reverse; a level reading and a 10 mm rise over the 0.22 m axle spacing (about 0.045 rad) do not. Mapping, floor, twin, skid, and the warehouse proto test passed, 176. Postgres was not up, so database tests were skipped.
-
-A 50 s start at north run 4's pre-climb pose stayed upright and never logged a pitch drop. The same north spawn was then run five times with the change and five times on `9ebb7cd`, depth seed 64, and the same five for −0.35, depth seed 63. Flags off. All twenty reached 600 s. No run had `up_z` below 0.5. The movie run (new north 1) never came closer than 2.9 m to the island face, so there is no clip of a tip.
-
-| code | seed | visited % | mean | sd | min up_z | max hub z |
-| --- | --- | --- | ---: | ---: | --- | --- |
-| pitch gate | north | 10.52, 16.59, 3.17, 18.25, 19.67 | 13.64 | 6.81 | 0.998, 1, 1, 1, 1 | 0.094, 0.082, 0.081, 0.082, 0.082 |
-| `9ebb7cd` | north | 16.41, 19.66, 23.70, 26.12, 23.78 | 21.93 | 3.86 | 1, 1, 1, 1, 1 | 0.083, 0.081, 0.083, 0.081, 0.083 |
-| pitch gate | −0.35 | 19.88, 16.19, 16.23, 19.53, 12.34 | 16.83 | 3.06 | all 1 | 0.084, 0.081, 0.081, 0.084, 0.083 |
-| `9ebb7cd` | −0.35 | 10.26, 8.32, 13.31, 12.23, 10.16 | 10.86 | 1.95 | 1, 1, 0.999, 1, 1 | 0.082, 0.083, 0.083, 0.082, 0.081 |
-
-On new north run 1 the log says `shell pitched 0.11 rad, wheel translation dropped` at t=105.2, 111.9, 125.9, 130.6, 351.9, 483.9, 537.6, 589.5 s. At each of those times the ground-truth body is level: `up_z` 1.000, hubs z=0.080, and the speed is often 0.10 m/s. The printed 0.11 rad is the IMU pitch, and the gate compares it with the learned rest, so a rest a little below zero plus a reading near 0.11 rad crosses 0.12. The body had not tipped. Dropping the wheel step there freezes the planner pose while the shell is driving. North's visited mean fell from 21.93 to 13.64 on the matched seeds. −0.35 moved the other way. Neither difference is a coverage result to keep. No run in this pair inverted, so the gate was not shown stopping the island climb.
-
-Dead ends: keeping the gate because −0.35's mean rose. Lowering 0.12 rad. A new knob. Treating the unit-test pitch of 0.20 as what the device reports on a level floor.
-
-Outcome: `2db10f5` is reverted. The 0.12 rad check is still only the floor-still branch. A pitch veto on every wheel step needs a rest that is not one noisy sample, and this round does not add that.
+Commit `2db10f5` dropped wheel translation on raw pitch past 0.12 rad and was reverted: it fired while the body was level, and north visited fell from 21.93 to 13.64.
 
 ## A flat floor frame does not confirm wheel travel
 
@@ -1048,32 +1029,7 @@ n3 from t=70 s to t=95 s is not that miss. The true shell stays near (4.47, 5.66
 
 The next fix, not made here: a wheel step the two hubs agree on, and whose forward nose has moved more than the existing 0.04 m since the picture was called still, should not be dropped by the frozen-view check or rewound by the floor-still hold. A flat nose still drops. A pivot still drops. A pitched shell still drops. The test is a frozen depth signature with a straight reverse and a nose that opens by more than 0.04 m, which keeps the wheel step, against the same signature with a flat nose, which still drops it.
 
-## An agreed step with a moving nose is kept
-
-Commit `6b8ce43`. The frozen-view drop and the floor-still rewind both keep a wheel step the two hubs agree on when the forward nose has moved more than 0.04 m since the picture was called still. A flat nose still drops. Opposite hubs, and a commanded pivot, still drop. A pitch more than 0.12 rad from the learned rest still drops. The pin release, the floor-blank hold, and the weak-shift hold are unchanged. Mapping tests: 170 passed.
-
-Five 600 s runs of each seed, flags off. Depth seed 64 on north and 63 on −0.35. All ten write `end_run.txt` with `time_cap`. No mapper done line. Lowest `up_z` is 0.998, on m5. No sample is below 0.95.
-
-North visited 16.42, 13.01, 17.52, 13.27, 10.15 (mean 14.07, sd 2.94) against 18.67 (sd 4.36). −0.35 visited 18.94, 16.10, 23.72, 13.19, 11.05 (mean 16.60, sd 4.97) against 17.99 (sd 2.44). Pantry and storage stay at 0. Laundry and closet stay at 0. Bath is 14.2 on m1 and 17.7 on m5. Hall is 58.4 on m1, 10.1 on n2, 5.6 on m3, 3.8 on n1, and 3.2 on n3. Bedroom is 45.0 on n4 and 49.9 on m2. Kitchen is 57.6 on n3.
-
-| run | living | bedroom | kitchen | bath | laundry | closet | hall | storage | pantry |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| n1 | 19.7 | 35.3 | 6.8 | 0 | 0 | 0 | 3.8 | 0 | 0 |
-| n2 | 21.4 | 1.3 | 24.8 | 0 | 0 | 0 | 10.1 | 0 | 0 |
-| n3 | 24.1 | 0 | 57.6 | 0 | 0 | 0 | 3.2 | 0 | 0 |
-| n4 | 10.5 | 45.0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| n5 | 22.5 | 2.1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| m1 | 17.0 | 31.6 | 13.2 | 14.2 | 0 | 0 | 58.4 | 0 | 0 |
-| m2 | 14.6 | 49.9 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| m3 | 36.6 | 20.0 | 31.8 | 0 | 0 | 0 | 5.6 | 0 | 0 |
-| m4 | 27.3 | 7.3 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| m5 | 7.4 | 29.2 | 0 | 17.7 | 0 | 0 | 0 | 0 | 0 |
-
-Pose error at the cap: n1 1.60, n2 0.45, n3 0.37, n4 1.33, n5 0.28, m1 0.32, m2 1.49, m3 0.71, m4 0.35, m5 0.40. The `5a546bf` ten was 1.28, 0.79, 0.95, 0.85, 0.35 and 0.24, 1.19, 0.93, 1.06, 0.34. Yaw at the cap is +2.4°, +0.4°, −1.6°, −5.4°, +0.3° on n1–n5 and −2.4°, +0.1°, 0.0°, +2.4°, +0.6° on m1–m5.
-
-The rejected-translation share, outside the 1.2 s after each `pinned` line, is the part of the final error from a 0.5 s step whose wheels moved more than 0.02 m, whose planner moved less than 0.4 of that, and whose true shell moved more than 0.5 of that. It is +0.61, +0.09, +0.83, +1.12, +0.21 on n1–n5 and +0.32, +0.51, +0.73, +0.05, −0.20 on m1–m5. The same gate on the `5a546bf` logs reads +0.30, +0.64, +0.64, +0.21, +0.22 and −0.43, +0.62, +0.26, +0.83, +0.44. The notes for that ten listed +0.30, +0.69, +0.58, +0.23, +0.20 and −0.54, +0.64, +0.26, +0.84, +0.44. n2 and m4 are the runs this keep cuts. n1, n3, n4, and m3 are larger.
-
-The longest `(0, 0)` stretch is 55 s on n3, from t=67 s to t=122 s, phase `go`, true motion 0.6 cm. The command is zero after a reverse. The next decision that moves it is `pile_leave` at t=122 s, after `camera_stuck`. n4 sits 40 s from t=560 s to the cap, pile `src=hold`, bubble 0.02 m, dead-end refusals, true motion 0.3 cm. m4 sits 40 s from t=523 s to t=563 s, the same hold, bubble 0.03 m, true motion 2.2 cm. n5 sits 20 s from t=185 s to t=205 s and then logs `stall, backing out`. The other six stretches are 3.5 s at the start.
+Commit `6b8ce43` kept an agreed wheel step when the nose had opened; it was reverted after visited means fell to 14.07 and 16.60.
 
 ## The nose keep was a regression
 
@@ -1321,15 +1277,7 @@ Same commit `58157dd`. Five 600 s runs, north spawn (5.80, 5.60), yaw 2.2, depth
 
 Crossing N, N, N, Y, N. One of five. `317f719` north crossed 3 of 5. `76933cb` north crossed 1 of 5. Seen 90.77, 93.53, 77.12, 92.74, 79.08 (mean 86.65, sd 7.90) against 93.67 and 93.39. Visited 16.57, 18.92, 15.61, 19.57, 12.82 (mean 16.70, sd 2.71) against 16.67 and 14.82. Pose 0.80, 0.34, 0.60, 1.38, 1.05 m (mean 0.84) against 1.04 m and 0.89 m. Longest planner-still span: 36.9 s, 20.4 s, 25.8 s, 17.7 s (t=0–18, the survey), 17.7 s (t=0–18, the survey). Seeds 73 and 75 stay in the north wing and are the low seen scores.
 
-## The 8 s swap holds a goal that is already at a door
-
-Commit `dbbe08d`, on top of `58157dd`. After the existing 8 s and the 1.25× score check have both allowed a swap, the swap still does not run when the shell is within 0.8 m of a door on the current path and the new path crosses no door. A replacement that also crosses a door is unchanged. A door more than 0.8 m ahead does not hold. The 8 s wait itself is not a hold. Mapping tests: 193 passed.
-
-Ten 600 s runs, flags off. North spawn, depth seeds 71–75, paired with the `58157dd` north five (1 of 5 crossed). −0.35, depth seeds 76–80, paired with `58157dd` on those seeds (76 and 77 crossed, 78–80 did not). Crossing is the primary score. The replan-hold line fired 0 times on every run. The first goals match the `58157dd` logs and then diverge, so the crossing changes are not a hold firing.
-
-North crossing Y on 73, 74, and 75: 3 of 5 against 1 of 5. Fisher exact two-sided p=0.52. Pairs: 71 N/N, 72 N/N, 73 N→Y, 74 Y/Y, 75 N→Y. Seen 89.49, 86.57, 81.90, 96.46, 70.28 (mean 84.94, sd 9.75) against 86.65. Visited 14.94, 10.14, 20.73, 21.97, 16.73 (mean 16.90) against 16.70. Pose 1.53, 0.44, 1.18, 0.36, 0.36 m (mean 0.77) against 0.84 m. Longest still 39.5, 25.9, 20.4, 41.4, 21.3 s. Lowest `up_z` is 1.000.
-
-−0.35 crossing Y, Y, Y, Y, N: 4 of 5 against 2 of 5. Fisher p=0.52. Pairs: 76 Y/Y, 77 Y/Y, 78 N→Y, 79 N→Y, 80 N/N. Seen 97.38, 88.51, 96.16, 92.86, 97.26 (mean 94.43, sd 3.78) against 88.48 on those seeds. Visited 16.60, 15.07, 22.31, 14.20, 15.85 (mean 16.81) against 19.70. Pose 0.30, 0.13, 0.44, 0.45, 1.15 m (mean 0.49) against 0.59 m. Longest still 43.0, 18.6, 26.0, 25.6, 26.6 s. Lowest `up_z` is 0.994 on seed 76. No sample is under 0.95. No run finishes inverted.
+Commit `dbbe08d` held a door-path goal against the 8 s swap, and the hold line fired 0 times, so the crossing changes are run-to-run divergence.
 
 ## Why the hold missed seeds 78 and 80
 

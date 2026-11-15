@@ -40,7 +40,6 @@ from src.mapping.body import (
     ROBOT_RADIUS_M,
     SPIN_RAD_S,
     REAR_DEPTH,
-    STOP_CLEARANCE_M,
     TURN_AIM_M,
     TURN_CLEAR_M,
     WHEEL_RADIUS_M,
@@ -198,7 +197,6 @@ PILE_LIMIT_S = 60.0
 # expensive for a whole 600 s run, not the 30 s goal skip.
 FAILURE_R_M = 0.45
 FAILURE_HOLD_S = 600.0
-FAILURE_COST = 40.0
 LEAVE_CLEAR_M = 0.70
 
 
@@ -313,8 +311,6 @@ class Explorer:
         self._confident_after = 0.0
         self._last_spin_t = -100.0
         self._nudge_at = 0.0
-        self._match_proposal: tuple[float, float, float] | None = None
-        self._match_proposal_t = -10.0
         self._view_blind = False
         self._blind_frames = 0
         self._slip_debt_m = 0.0
@@ -329,7 +325,6 @@ class Explorer:
         self.slip_events = 0
         self.wall_applied_yaw = 0.0
         self._wall_prev = 0.0
-        self.frontiers_left = 0
         self._last_clear = (99.0, 99.0, 99.0)
         self._held_clear: tuple[float, float, float] | None = None
         self._bubble_gap: float | None = None
@@ -417,7 +412,6 @@ class Explorer:
         self._pile_stats: dict | None = None
         self._pile_log_at = -1.0
         self._pile_prev: tuple[float, float, float, float] | None = None
-        self._pile_reported: tuple[float, float, float] | None = None
         self._pose_samples: list[tuple[float, float, float]] = []
         self._est_next = 0.0
         self._est_center: tuple[float, float, float] | None = None
@@ -1180,7 +1174,6 @@ class Explorer:
             f"rules={rule_txt}"
         )
         self._log("pile_why " + self._pile_why(stats, dur))
-        self._pile_reported = (t0, x0, y0)
         self._pile_stats = None
         self._pile_log_at = -1.0
 
@@ -2340,7 +2333,6 @@ class Explorer:
             self._pile_forced = False
             self._pile_logged = False
             self._pile_prev = None
-            self._pile_reported = None
             return
         if self.t_s - t0 < PILE_LIMIT_S:
             return
@@ -3974,7 +3966,6 @@ class Explorer:
         self._goal_cells = pending
         self._goal_score = float(report.get("score") or 0.0)
         self._pocket = bool(report.get("tight"))
-        self.frontiers_left = 1
         self.phase = "go"
         self.done = False
         if not same:
@@ -4009,7 +4000,6 @@ class Explorer:
             self.done = False
             self._log_stop("no_frontier", "final_scan")
             return
-        self.frontiers_left = 0
         self.goal_xy = None
         self._goal_cells = []
         self.path_xy = []
@@ -4073,7 +4063,6 @@ class Explorer:
             self._log_stop("settle", "map_changed")
             return 0.0, 0.0
         if self.t_s - self._settle_since >= 4.0 and self._confident():
-            self.frontiers_left = 0
             self.phase = "done"
             self.done = True
             self._log("done: no reachable frontier after a final scan, map stable while stopped")

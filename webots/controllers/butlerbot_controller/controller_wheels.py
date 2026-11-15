@@ -162,22 +162,6 @@ def _wheel_rad_s(
     return (pos - prev) / dt
 
 
-def _symmetric_brake_cmd(motion_sign: float, speed_m_s: float) -> float:
-    """Latched-direction gentle brake — same cmd on both wheels.
-
-    Direction is latched at ABS request time so GPS jitter cannot reverse
-    the oppose command mid-stop.
-    """
-    if _teleop is not None:
-        return _teleop.abs_brake_wheel_velocity_latched(motion_sign, speed_m_s)
-    if motion_sign == 0.0 or speed_m_s < STOP_SPEED_M_S:
-        return 0.0
-    equiv = speed_m_s / WHEEL_RADIUS_M
-    cap = MAX_BRAKE_WHEEL_V if speed_m_s >= 0.45 else 9.0
-    mag = max(MIN_BRAKE_WHEEL_V, min(cap, equiv * 1.05))
-    return -motion_sign * mag
-
-
 class AbsBrakeController:
     """Coast-first ABS stop sequence for linear cruise and in-place spin.
 

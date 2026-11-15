@@ -1302,3 +1302,21 @@ Time in the other wing, the smaller of the two wings: 118, 159, 238, 124, 16, 84
 Seen, secondary. 86.95, 96.56, 97.44, 94.62, 93.09, 95.08, 84.21, 85.31, 97.51, 80.29 (mean 91.11, sd 6.31). Visited 13.35, 17.24, 18.32, 18.73, 17.59, 29.32, 21.51, 16.19, 17.36, 14.12 (mean 18.37, sd 4.48). Pose 0.39, 0.80, 0.94, 0.33, 0.80, 0.82, 0.25, 0.92, 0.55, 0.43 m (mean 0.62). Longest planner-still span: 17.8 s (t=0–18, the survey), 27.9 s, 35.0 s, 28.0 s, 19.4 s, 24.0 s, 35.5 s, 26.7 s, 20.4 s, 17.7 s (t=0–18, the survey).
 
 Drops and creeps while the shell is within 0.8 m of the door. Door G: drops 0 on every seed, creeps 0, 0, 0, 0, 0, 1, 3, 0, 0, 0. Door H: drops 0, 0, 5, 7, 3, 0, 0, 0, 0, 0 and creeps 0, 4, 0, 12, 8, 0, 0, 0, 0, 0.
+
+## Seeds 78, 79, and 80 sat at the other openings
+
+No controller change. The zero creep and drop counts at door G and door H were events, not the trajectory. Seed 78 comes within 0.23 m of door G for 18 s and spends 163 s at the west-hall entry. Seed 79 comes within 0.07 m of door G for 17 s and spends 128 s at the bed-bath walkway. Seed 80 comes within 0.62 m of door G for 5 s and spends 260 s at the west-hall entry. Door H stays at 1.88 m, 2.42 m, and 1.64 m. The living-kitchen opening is used for 156 s, 18 s, and 157 s.
+
+Seed 78 stays south (living 384 s, kitchen 212 s). Six of 44 goals are north. Bath at t=255 s and bedroom at t=274 s, both at the west-hall entry, are replaced by an outside frontier. Bath at t=418 s is replaced by an outside frontier. Closet and bedroom from t=578 s to the cap are not taken to a door. At the cap the winner is the bedroom, score 7.50, and the runner-up is the living room, 6.93. No drop and no pile-leave on those goals. The cause is goal selection.
+
+Seed 79 stays north (bedroom 431 s, living 168 s). Seventeen goals are the kitchen or the hall. From the living room the kitchen goal is piled, replaced, crept at the living-kitchen line (t=50 s and t=74 s), and piled again. From the bedroom it is banned, drop-quarantined at t=289 s, crept at the bed-bath walkway at t=530 s, piled, and drop-quarantined through the cap. At the cap the winner is the bath. A kitchen cluster is scored and loses to the living room. The cause is the ladder. Door H is not the opening it tried.
+
+Seed 80 stays south (kitchen 312 s, living 282 s, hall 4 s). Seventeen goals are north. The creep fires at the west-hall entry at t=103 s, t=114 s, t=195 s, and t=557 s, and the next goal is an outside frontier, the living room, or another north point. One frontier ban. At the cap the winner is the bedroom, score 23.7, and the runner-up is the bath. The cause is goal selection. The path to the north exists. The replan drops it before the shell reaches door H.
+
+The swap that fits seeds 78 and 80, not implemented: while the shell is within the existing 0.8 m of a door on the current path, a replan does not replace that goal with one whose path does not cross a door. The 8 s, 1.25× rule is what lets the outside frontier and the living room take the goal between watchdog fires. Seed 79 still needs the drop to leave a kitchen goal alone after the creep stalls at the bed-bath walkway. That hold does not cover a creep that fails.
+
+## North spawn on the door-path creep
+
+Same commit `58157dd`. Five 600 s runs, north spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75, flags off. The earlier north fives used depth seed 64. All five write `time_cap`. Lowest `up_z` is 1.000. No run finishes inverted.
+
+Crossing N, N, N, Y, N. One of five. `317f719` north crossed 3 of 5. `76933cb` north crossed 1 of 5. Seen 90.77, 93.53, 77.12, 92.74, 79.08 (mean 86.65, sd 7.90) against 93.67 and 93.39. Visited 16.57, 18.92, 15.61, 19.57, 12.82 (mean 16.70, sd 2.71) against 16.67 and 14.82. Pose 0.80, 0.34, 0.60, 1.38, 1.05 m (mean 0.84) against 1.04 m and 0.89 m. Longest planner-still span: 36.9 s, 20.4 s, 25.8 s, 17.7 s (t=0–18, the survey), 17.7 s (t=0–18, the survey). Seeds 73 and 75 stay in the north wing and are the low seen scores.

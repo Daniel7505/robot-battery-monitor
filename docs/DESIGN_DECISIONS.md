@@ -925,3 +925,31 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new door distance. A new creep speed. Quarantining a goal the shell has not reached. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
 
 **Outcome.** The crossing rate on seeds 71–75 is five of five, where `76933cb` was one of five. Three of the ten still never reach the door, so the creep has nothing to keep.
+
+## 2026-11-15 — Seeds 78–80 lose the goal between fires
+
+**Mission parameter.** Seeds 78, 79, and 80 of the `58157dd` ten logged no creep and no drop within 0.8 m of door G or door H. The question is whether the far wing was never chosen, the path never aimed at an opening, or the ladder cleared the goal. No controller change.
+
+**Change.** None. The proposed change, not implemented: while the shell is within the existing 0.8 m of a door on the current path, a replan does not replace that goal with one whose path does not cross a door.
+
+**Why.** The far wing is the winner at the cap on seeds 78 and 80, and it is selected during the run on all three. The 8 s, 1.25× swap hands that goal to an outside frontier or the living room while the shell is already at the west-hall entry or the living-kitchen opening. Door H is never the opening they reach.
+
+**Evidence.** Seed 78: door G 0.23 m for 18 s, west-hall entry 163 s, door H 1.88 m. Six north goals. Three are replaced by an outside frontier. Cap winner is the bedroom, score 7.50, runner-up the living room. Seed 79: door G 0.07 m for 17 s, bed-bath walkway 128 s, door H 2.42 m. Seventeen kitchen goals. Creep at the kitchen line, then pile-leave and a drop through the cap at the bed-bath walkway. Cap winner is the bath. Seed 80: door G 0.62 m for 5 s, west-hall entry 260 s, door H 1.64 m. Seventeen north goals. Creep at the entry four times, then the goal is replaced. Cap winner is the bedroom, score 23.7, runner-up the bath. Seeds 78 and 80 are goal selection. Seed 79 is the ladder. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Treating the zero event counts as "the shell never reached the door." Calling door H the route. A new door distance. Implementing the swap hold in this round.
+
+**Outcome.** The shell is at a real opening with a far-wing goal, and a replan takes the goal away before the next watchdog fire. The swap hold is the change for seeds 78 and 80. Seed 79's drop after a stalled creep is a separate failure.
+
+## 2026-11-15 — North spawn after the door-path creep
+
+**Mission parameter.** `58157dd` raised the −0.35 crossing rate. The same code on the north spawn should not give that rate back. Seen stays secondary.
+
+**Change.** None. Five 600 s runs, spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75, flags off. The earlier north fives used depth seed 64.
+
+**Why.** A creep that keeps a far goal on −0.35 can also hold the shell in the wing it starts toward.
+
+**Evidence.** Crossing N, N, N, Y, N. One of five, against 3 of 5 on `317f719` and 1 of 5 on `76933cb`. Seen 90.77, 93.53, 77.12, 92.74, 79.08 (mean 86.65, sd 7.90) against 93.67 and 93.39. Visited mean 16.70 against 16.67 and 14.82. Pose mean 0.84 m against 1.04 m and 0.89 m. Longest still span 36.9 s. Lowest `up_z` is 1.000. Seeds 73 and 75 stay in the north wing. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** A controller change on this five. The depth seed is not 64, so the seen gap is not the same comparison as the old north five. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
+
+**Outcome.** Crossing matches `76933cb` and is under `317f719`. Seen is about 7 points under both earlier north means, on the two runs that never enter the south wing. Pose, visited, and `up_z` stay with the earlier north fives.

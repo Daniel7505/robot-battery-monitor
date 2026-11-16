@@ -2,6 +2,8 @@
 
 Read this before changing apartment mapping. Append what the latest sim actually showed. Do not write a cause the logs did not support. The choice that followed a lesson goes in [`docs/DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md). Update that file at the end of every round.
 
+Before calling a failure new, check the matching chapter in [`docs/LOGBOOK.md`](LOGBOOK.md). A tip, a stall, a doorway sit, and a seen-percent swing have all been logged before.
+
 ## What this robot is
 
 The apartment machine is `ButlerBotSkid`: four driven wheels, no casters. Hubs at y = ±0.17 m (track 0.34 m), wheel radius 0.08 m, nose and tail 0.19 m, side face 0.227 m. The side faces are 0.454 m apart (17.9 in). The tires stick out to about 0.195 m from the centreline, 0.390 m across (15.4 in). Planning inflation stays 0.20 m at cruise. A creep through a throat the robot itself sees uses the side face plus 2 cm (0.247 m) instead of the 0.30 m pivot aim. The depth camera is an OAK-D Lite at (0.14, 0, 0.78), pitched 5°, minimum range 0.35 m. A reading of nose = 0.12 m is the blind placeholder, not a measured gap.

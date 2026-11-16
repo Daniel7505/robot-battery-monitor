@@ -959,3 +959,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Reading 4 of 10 against 10 of 20 as a paired result. The goals on one repeated seed already differ at t=42.6 s. A new distance. A new score ratio. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
 
 **Outcome.** The hold fires. One fire on seed 76 is followed by a real passage through door G. Most fires either sit out of reach of a wing door or lose the goal inside 30 s, including at the door. Crossing on this ten is 4 of 10, and seed 80 crosses with the hold silent.
+
+## 2026-11-15 — The mapper does not read the floor plan
+
+**Mission parameter.** The controller uses no ground truth. The spawn is the robot's own start. Floor plates are prior map knowledge, so they leave goal selection. Truth reads stay in the harness for metrics. The throat hold is unchanged. If the outside-loop credit was what stopped the ring, report that and do not patch it in this round.
+
+**Change.** The mapper is a `Robot`. It does not call `getSelf`, `getPosition`, or `getOrientation`, and it does not import the world-solids file. Goal length is the cell count. Commit `edfd172`.
+
+**Why.** From `058387a` through `28b6536` those plates, and the true spawn when `RBM_SPAWN` was unset, changed which frontier won. A real robot does not have that map.
+
+**Evidence.** `test_mapper_has_no_pose_or_map_foresight` passes. Goal selection with no plates returns a goal, and on the old ring fixture the outside ring still wins. Pytest: 1130 passed, 1 skipped. Ten 600 s runs, flags off, seeds 71–80. Crossing 6 of 10 against 4 of 10 on `d648fe8`. Every run selects a goal more than 0.35 m off the floor plates. The shell spends 0 s off the plates. Seen means 84.20 and 83.92 against 85.99 and 89.66. Lowest `up_z` is −0.019 on seed 79. Counts are in `docs/LESSONS_LEARNED.md`.
+
+**Rejected.** Piping the plates in from the harness. Narrowing the throat hold with named door coordinates. A new length rule for the outside ring in this round. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
+
+**Outcome.** The mapper no longer sees the plan or the true pose. The outside ring is chosen again, and the shell stays on the floor. Crossing on this ten is 6 of 10. The −0.35 seen mean is about 6 points under the plate ten.

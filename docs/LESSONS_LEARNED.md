@@ -1357,3 +1357,13 @@ North seed 75, 2 fires, cross N, bedroom wing 0, south wing 304 s. Seen 89.58, v
 −0.35 seed 80, 0 fires, cross Y, bedroom wing 379 s, south wing 153 s. Seen 97.21, visited 21.41, pose 0.03 m, still 20.8 s (t=421–441), `up_z` 1.000.
 
 Seen, secondary. North 89.98, 88.04, 89.05, 73.31, 89.58 (mean 85.99, sd 7.13) against 86.65 and 84.94. −0.35 90.33, 87.26, 86.77, 86.72, 97.21 (mean 89.66, sd 4.48) against 88.48 and 94.43. Visited means 19.84 (sd 2.65) and 16.00 (sd 6.14). Pose means 0.59 m and 0.56 m.
+
+## The plates were prior knowledge
+
+From `058387a` through `28b6536` the mapper imported the apartment floor rectangles and, when `RBM_SPAWN` was unset, read the true spawn once. Those values shortened a frontier that sat off the plates. The live tens in that span, including the `d648fe8` ten, used that credit. The pose logger still records the simulator pose for scoring. The mapper does not.
+
+Commit `edfd172`. The mapper is a `Robot`. It does not call `getSelf`, `getPosition`, or `getOrientation`, and it does not import the world-solids file. Odometry zero is the robot's own start. Goal length is the cell count. `test_mapper_has_no_pose_or_map_foresight` passes. Goal selection with no plates still returns a goal, and on the old ring fixture the outside ring still wins. That loop is not patched in this round. Pytest: 1130 passed, 1 skipped.
+
+Ten 600 s runs, flags off, the same seeds as the `d648fe8` ten. North crossing N, Y, Y, N, N, two of five, against N, N, N, Y, N. −0.35 N, Y, Y, Y, Y, four of five, against Y, Y, N, N, Y. Pooled 6 of 10 against 4 of 10. Every run selected at least one goal more than 0.35 m off every floor plate (7, 1, 2, 6, 4 and 8, 2, 6, 3, 3). The shell spent 0 s off those plates on every run. The body did not leave the apartment. The planner did pick the outside ring.
+
+Seen, north 93.50, 74.88, 90.70, 81.13, 80.79 (mean 84.20, sd 7.69) against 85.99. −0.35 65.69, 75.80, 96.41, 89.34, 92.37 (mean 83.92, sd 12.80) against 89.66. Visited 20.00, 14.57, 25.99, 14.55, 12.98 (mean 17.62, sd 5.38) against 19.84, and 14.44, 14.29, 21.86, 15.41, 16.93 (mean 16.59, sd 3.13) against 16.00. Pose means 0.71 m and 0.76 m against 0.59 m and 0.56 m. Longest still 28.8, 21.8, 49.6, 27.3, 70.9 s and 36.9, 24.3, 24.8, 110.1, 22.7 s. Lowest `up_z` is −0.019 on seed 79, at (3.57, 2.17) from t=495 s through the cap. The other nine stay at or above 0.998.

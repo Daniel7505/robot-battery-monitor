@@ -982,8 +982,8 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Why.** The frontier loop does not hand the next aim to an outside planner, and it does not stop to show what the robot just saw.
 
-**Evidence.** `test_mapper_has_no_pose_or_map_foresight` passes and now requires `driver.py` and `brain_port.py` on the mapper's import closure. `driver_smoke.py` is not on that closure. `tests/test_driver.py`: 14 passed. `tests/test_mapping.py`: 192 passed. The stall clock in the driver is `STALL_WINDOW_S`, which is 2 s. The headless smoke is the logbook line for this note.
+**Evidence.** `test_mapper_has_no_pose_or_map_foresight` passes and now requires `driver.py` and `brain_port.py` on the mapper's import closure. `driver_smoke.py` is not on that closure. `tests/test_driver.py`: 14 passed. `tests/test_mapping.py`: 192 passed. The stall clock in the driver is `STALL_WINDOW_S`, which is 2 s. Headless smoke on the stock spawn: `go_to 0.6 0`, `go_to 1.1 0`, `turn_to 0.4`, `look`, `stop`. Statuses ready, arrived, arrived, arrived, arrived, stopped. First stop estimate (0.32, 0.00), travel 0.320 / 0.320 / 0.335 m. Second (0.82, 0.00), 0.499 / 0.500 / 0.522 m. The pose logger moved 0.82 m. Webots exited 0. No live ten.
 
 **Rejected.** Pausing by becoming a supervisor. Reading the pose log from the driver or the snapshot. A new pitch gate. Shortening the 2 s clock. A live ten.
 
-**Outcome.** With the flag off, the explorer still plans its own goals. With the flag on, one command runs, the hubs stop, a snapshot is written, and the simulation waits. The smoke result is recorded in the logbook.
+**Outcome.** With the flag off, the explorer still plans its own goals. With the flag on, the smoke's four aims each arrived, the stop ended the run, and the pose logger's travel was 0.82 m. The snapshot paths from that run are under `/tmp/driver_smoke/driver/stops/`.

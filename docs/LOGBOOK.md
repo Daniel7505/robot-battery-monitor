@@ -13,6 +13,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 7. [Measurement, variance, and false wins](#7-measurement-variance-and-false-wins)
 8. [Integrity and ground-truth leaks](#8-integrity-and-ground-truth-leaks)
 9. [Reverted experiments](#9-reverted-experiments)
+10. [Waypoint driver](#10-waypoint-driver)
 
 ## 1. Tip-overs and climbs
 
@@ -567,3 +568,13 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** The hold line fired 0 times on ten runs. Crossing moved (north 3 of 5 against 1 of 5, seeds 76–80 4 of 5 against 2 of 5) with Fisher p=0.52.
 - **Lesson:** The condition did not match the logged sits. The crossing differences are divergence. The later throat hold is `d648fe8`, not a claim that this one worked.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#why-the-hold-missed-seeds-78-and-80) · [Decision](DESIGN_DECISIONS.md#2026-11-15-seeds-7880-lose-the-goal-between-fires)
+
+## 10. Waypoint driver
+
+### 2026-11-17 — One command, then a stop
+
+- **Commit:** `ae27189`
+- **Tried:** `RBM_DRIVER=1`. Four fixed aims in the robot's odometry frame, then `stop`. Headless, stock spawn. No live ten.
+- **Result:** Statuses ready, arrived, arrived, arrived, arrived, stopped. First stop estimate (0.32, 0.00), commanded 0.320 m, wheel 0.320 m, floor 0.335 m. Second (0.82, 0.00), 0.499 / 0.500 / 0.522 m. Harness pose log moved 0.82 m. Webots exited 0.
+- **Lesson:** The driver can take an outside aim, stop, and wait, without reading the simulator pose.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-waypoint-waits-for-the-next-command) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-waypoint-driver-stops-and-waits)

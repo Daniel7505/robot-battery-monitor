@@ -57,7 +57,7 @@ def _wait_status(folder: Path, proc: subprocess.Popen, previous: str, timeout_s:
             name = pointer.read_text(encoding="utf-8").strip()
             status_path = folder / "driver" / name / "status.json"
             if name and name != previous and status_path.is_file():
-                return name, read_status(status_path)
+                return name, read_status(status_path.parent)
         time.sleep(0.1)
     raise SystemExit(f"no new snapshot after {previous!r}\n{_tail(folder)}")
 

@@ -581,7 +581,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-17 — Arrived was the frontier radius
 
-- **Commit:** the note that follows `7189455`
+- **Commit:** `a1cb535`
 - **Tried:** A waypoint used `ARRIVE_M` (0.28 m), the distance at which a frontier counts as reached. The smoke stopped 0.28 m short and the estimate agreed.
 - **Result:** Arrival is now 0.05 m, and the last 0.35 m is slower. The same smoke: `go_to 0.6 0` estimate (0.55, −0.00), remaining 0.050 m, wheel 0.549 m, floor 0.588 m, truth (6.103, 5.246). `go_to 1.1 0` estimate (1.05, −0.01), remaining 0.050 m, wheel 0.500 m, floor 0.552 m, truth (6.106, 5.740). Both status arrived. Turn and look arrived. Truth travel 1.04 m. A go_to that cannot close the gap is `stopped_short`.
 - **Lesson:** 0.28 m is a frontier, not a named point.

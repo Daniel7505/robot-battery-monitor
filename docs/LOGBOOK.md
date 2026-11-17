@@ -589,7 +589,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-17 — The turn used the 12° pivot gate
 
-- **Commit:** the note after `a1cb535`
+- **Commit:** `f0e942e`
 - **Tried:** `turn_to 0.40` arrived at estimated yaw 0.194. That gap is `PIVOT_EXIT_RAD` (12°). During `look`, floor travel was 0.902 m while the wheels reported 0.014 m.
 - **Result:** A heading arrives inside 0.05 rad. Inside the existing 12° the spin scales down with the error. The same smoke: turn estimate yaw 0.351, remaining 0.049 rad, truth yaw 1.899 (from 1.581). Look floor 0.001 m, marked unreliable; truth moved about 0.8 cm. The pose update already drops a floor shift when the yaw in that window exceeds 0.08 rad, so the controller does not write the spin into the pose.
 - **Lesson:** 12° is a pivot release, not a named heading. A floor slide during a spin is the picture rotating.

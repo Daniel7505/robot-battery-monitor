@@ -287,6 +287,9 @@ class Explorer:
         self._loop = LoopCloser()
         self.phase = "spin"
         self.mode = "explore"
+        # None keeps frontier exploration. The waypoint driver sets this
+        # only when RBM_DRIVER is on. It is not a pose from the simulator.
+        self._waypoint = None
         self.done = False
         self.t_s = 0.0
         self.goal_xy: tuple[float, float] | None = None
@@ -853,6 +856,9 @@ class Explorer:
 
     def _mode_command(self, left_clear, right_clear, view, ds, dt) -> tuple[float, float]:
         """Pick the mode, then the proposal. Recovery is not a second writer."""
+        if self._waypoint is not None:
+            self.mode = "approach"
+            return self._waypoint.wheels(self, left_clear, right_clear, view, dt)
         self.mode = self._select_mode()
         if not self.done and self._watch_creep:
             creep = self._watch_keep_creep(self.plan_pose())
@@ -2157,6 +2163,10 @@ class Explorer:
         or a reverse in phase go that leaves the pose inside 0.04 m takes
         the same ladder as (0, 0).
         """
+        # A waypoint already stops itself. The sit ladder would replace a
+        # scan with an escape after five seconds.
+        if self._waypoint is not None:
+            return speeds
         if self.t_s < STARTUP_IDLE_S or self.done or self.phase in ("done", "settle", "spin"):
             self._watch_zero = None
             self._watch_straight = False

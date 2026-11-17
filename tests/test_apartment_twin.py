@@ -581,7 +581,9 @@ def test_mapper_has_no_pose_or_map_foresight():
     """The explorer and everything it imports stay off the scoring files and the true pose.
 
     The pose logger is a different controller. It may call getPosition. The
-    mapper's import closure must not include it.
+    mapper's import closure must not include it. The waypoint driver, the
+    snapshot port, and the command script are on that same rule. The smoke
+    script is the harness and is not imported here.
     """
     mapper = CONTROLLER_ROOT / "apartment_mapper"
     seeds = [path for path in mapper.rglob("*.py") if path.is_file()]
@@ -590,6 +592,10 @@ def test_mapper_has_no_pose_or_map_foresight():
     names = {path.name for path in loaded}
     assert "apartment_mapper.py" in names
     assert "apartment_pose_logger.py" not in names
+    # The waypoint driver and the snapshot port are on this same closure.
+    assert "driver.py" in names
+    assert "brain_port.py" in names
+    assert "driver_smoke.py" not in names
     hits = []
     for path in loaded:
         text = path.read_text(encoding="utf-8")
@@ -597,6 +603,9 @@ def test_mapper_has_no_pose_or_map_foresight():
             if token in text or token in text.lower():
                 hits.append(f"{path.relative_to(ROOT)}: {token}")
     assert hits == []
+    cli = (ROOT / "scripts" / "driver_command.py").read_text(encoding="utf-8")
+    for token in _MAPPER_BANNED:
+        assert token not in cli and token not in cli.lower()
 
 
 def test_recovery_mode_flag_is_opt_in():

@@ -973,3 +973,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Piping the plates in from the harness. Narrowing the throat hold with named door coordinates. A new length rule for the outside ring in this round. Shortening the 2 s reverse clock. Raising the 0.45 m cap. Opening pantry or storage.
 
 **Outcome.** The mapper no longer sees the plan or the true pose. The outside ring is chosen again, and the shell stays on the floor. Crossing on this ten is 6 of 10. The −0.35 seen mean is about 6 points under the plate ten.
+
+## 2026-11-17 — A waypoint driver stops and waits
+
+**Mission parameter.** An outside planner names one aim at a time, in the robot's own odometry frame. `RBM_DRIVER` stays off unless set, so frontier exploration is unchanged. No geometry, world, proto, friction, motor, sensor, or clearance change. No lidar. The 2 s reverse clock stays. `oak_imu` is not a new controller input. The simulator pose stays in the pose logger.
+
+**Change.** On, the mapper reads `go_to x y`, `turn_to yaw`, `look` (or `scan`), and `stop` from `driver/command.json`. The wheels still go through pursuit, the live veto, and the footprint veto. The floor check is the one already inside the explorer step. The command stops on arrival, on an existing stuck reason, when 2 s pass without getting closer, on its own timeout, or when the existing wheels-lifted count rises. The stop folder holds the camera PNGs, the robot's occupancy image and JSON, its pose estimate, commanded versus wheel versus floor travel, the status, and a pack book. The controller does not step again until the next command file appears. `scripts/driver_command.py` reads the latest snapshot and writes that file. `scripts/driver_smoke.py` is the harness, not a mapper import.
+
+**Why.** The frontier loop does not hand the next aim to an outside planner, and it does not stop to show what the robot just saw.
+
+**Evidence.** `test_mapper_has_no_pose_or_map_foresight` passes and now requires `driver.py` and `brain_port.py` on the mapper's import closure. `driver_smoke.py` is not on that closure. `tests/test_driver.py`: 14 passed. `tests/test_mapping.py`: 192 passed. The stall clock in the driver is `STALL_WINDOW_S`, which is 2 s. The headless smoke is the logbook line for this note.
+
+**Rejected.** Pausing by becoming a supervisor. Reading the pose log from the driver or the snapshot. A new pitch gate. Shortening the 2 s clock. A live ten.
+
+**Outcome.** With the flag off, the explorer still plans its own goals. With the flag on, one command runs, the hubs stop, a snapshot is written, and the simulation waits. The smoke result is recorded in the logbook.

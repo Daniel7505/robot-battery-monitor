@@ -11,6 +11,10 @@ read that log. ``RBM_ORACLE_POSE=1`` hands the planner its own pose from
 replace the stacked recoveries. The default is the stacked behavior.
 ``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
 veto use one rectangle. Goal scores are unchanged.
+``RBM_DRIVER`` is off unless set. On, an outside command file names one
+waypoint in the robot's own odometry frame. At each stop this process
+writes a snapshot and does not step again until the next command file
+appears. The simulator pose is not in that snapshot.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
 RBM_MAP_MAX_S if that is set. Artifacts go to logs/mapping_runs/.
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import traceback
 
 import numpy as np
@@ -30,7 +35,9 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
+from src.mapping.brain_port import wait_for_command, write_stop
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
+from src.mapping.driver import WaypointDriver
 from src.mapping.explore import Explorer
 from src.mapping.noise import noisy_accel, noisy_depth
 from src.mapping.run_log import RunLog, default_run_dir, publish_current, record_end_run
@@ -228,6 +235,129 @@ class _Drive:
             motor.setVelocity(left if side == "left" else right)
 
 
+def _camera_color(device, width: int, height: int):
+    """RGB copy of one camera frame. The buffer is only valid until the next read."""
+    if device is None:
+        return None
+    try:
+        raw = device.getImage()
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    flat = np.frombuffer(raw, dtype=np.uint8)
+    if flat.size < width * height * 4:
+        return None
+    bgra = flat[: width * height * 4].reshape(height, width, 4)
+    return np.ascontiguousarray(bgra[:, :, [2, 1, 0]])
+
+
+def _latch_zero(robot, timestep: int, hubs) -> bool:
+    """Send a zero and take one step so the hubs actually stop."""
+    hubs.set(0.0, 0.0)
+    return robot.step(timestep) != -1
+
+
+def _driver_shots(rgb, rgb_w, rgb_h, floor_cam, floor_w, floor_h, rear, rear_w, rear_h) -> dict:
+    shots = {}
+    oak = _camera_color(rgb, rgb_w, rgb_h)
+    if oak is not None:
+        shots["oak"] = oak
+    floor = _camera_color(floor_cam, floor_w, floor_h)
+    if floor is not None:
+        shots["floor"] = floor
+    back = _camera_color(rear, rear_w, rear_h)
+    if back is not None:
+        shots["rear"] = back
+    return shots
+
+
+def _write_driver_stop(folder, index, driver, explorer, now, shots) -> None:
+    report = driver.report(explorer)
+    pose = report["pose"]
+    print(
+        f"MAPPING driver {report['status']} t={now:.1f}s "
+        f"pose=({pose['x_m']:.2f},{pose['y_m']:.2f},{pose['yaw_rad']:.2f}) "
+        f"travel cmd={report['travel']['commanded_m']:.3f} "
+        f"wheel={report['travel']['wheel_m']:.3f} "
+        f"floor={report['travel']['floor_m']:.3f} "
+        f"battery={report['battery']['pct']:.1f}%",
+        flush=True,
+    )
+    write_stop(folder, index, report, now, shots, explorer.grid.labels(), explorer.grid.meta())
+
+
+def _end_driver(folder: str, now: float, reason: str) -> None:
+    record_end_run(folder, reason)
+    print(f"MAPPING end_run reason={reason}", flush=True)
+    _finish(folder, now)
+
+
+def _service_driver(robot, timestep, hubs, driver, explorer, folder, now, grab, state, run_cap: bool) -> str:
+    """Pause for a command, or keep driving.
+
+    Returns ``drive``, ``resume``, ``coast``, or ``quit``. ``coast`` holds
+    the brakes until the pose logger stops the world. This function does
+    not read the simulator pose.
+    """
+    if driver.quitting:
+        return "coast"
+    if run_cap and not state["booted"]:
+        _write_driver_stop(folder, state["index"], driver, explorer, now, grab())
+        _end_driver(folder, now, "time_cap")
+        driver.quitting = True
+        return "coast"
+    if not state["booted"]:
+        _write_driver_stop(folder, state["index"], driver, explorer, now, grab())
+        state["index"] += 1
+        state["booted"] = True
+        print("MAPPING driver paused", flush=True)
+        if not _latch_zero(robot, timestep, hubs):
+            return "quit"
+        cmd = wait_for_command(folder)
+        print(f"MAPPING driver command {_command_text(cmd)}", flush=True)
+        driver.arm(cmd, explorer)
+        if driver.outcome == "stopped":
+            _write_driver_stop(folder, state["index"], driver, explorer, now, grab())
+            _end_driver(folder, now, "driver_stop")
+            driver.quitting = True
+            return "coast"
+        return "resume"
+    if run_cap and driver.outcome is None and driver.armed:
+        driver.outcome = "timeout"
+        driver.detail = "run cap"
+        driver.armed = False
+    if driver.outcome:
+        if not _latch_zero(robot, timestep, hubs):
+            return "quit"
+        _write_driver_stop(folder, state["index"], driver, explorer, now, grab())
+        state["index"] += 1
+        if driver.outcome == "stopped" or run_cap:
+            _end_driver(folder, now, "driver_stop" if driver.outcome == "stopped" else "time_cap")
+            driver.quitting = True
+            return "coast"
+        print("MAPPING driver paused", flush=True)
+        cmd = wait_for_command(folder)
+        print(f"MAPPING driver command {_command_text(cmd)}", flush=True)
+        driver.arm(cmd, explorer)
+        if driver.outcome == "stopped":
+            _write_driver_stop(folder, state["index"], driver, explorer, now, grab())
+            _end_driver(folder, now, "driver_stop")
+            driver.quitting = True
+            return "coast"
+        return "resume"
+    return "drive"
+
+
+def _command_text(cmd: dict) -> str:
+    kind = cmd.get("cmd")
+    if kind == "go_to":
+        return f"go_to {cmd['x']:.2f} {cmd['y']:.2f}"
+    if kind == "turn_to":
+        return f"turn_to {cmd['yaw']:.2f}"
+    return str(kind)
+
+
 def _finish(folder: str, now: float) -> None:
     try:
         with open(os.path.join(folder, "mapping_done"), "w", encoding="utf-8") as handle:
@@ -357,6 +487,15 @@ def main() -> None:
         floor=use_floor,
         loop=_flag("RBM_LOOP", True),
     )
+    driver = None
+    driver_state = {"booted": False, "index": 0}
+    if _flag("RBM_DRIVER", False):
+        driver = WaypointDriver()
+        explorer._waypoint = driver
+        # The survey spin is the explorer's own start. A waypoint uses the
+        # same reflexes without that spin choosing a frontier.
+        explorer.phase = "go"
+        print("MAPPING driver on", flush=True)
     oracle_on = _flag("RBM_ORACLE_POSE", False)
     if oracle_on:
         print("MAPPING oracle pose for the planner; the map still uses the estimate")
@@ -472,7 +611,6 @@ def main() -> None:
                 rear_depth=rear_image,
                 rear_rgb=rear_color,
             )
-            hubs.set(left_cmd, right_cmd)
             log.write_wheels(
                 now,
                 float(left_enc.getValue()),
@@ -498,8 +636,40 @@ def main() -> None:
                 odom.still_s,
                 odom.moving_s,
             )
+            if driver is not None:
+                def _grab():
+                    rear_w, rear_h = 80, 48
+                    if rear_rgb_dev is not None and hasattr(rear_rgb_dev, "getWidth"):
+                        try:
+                            rear_w = int(rear_rgb_dev.getWidth())
+                            rear_h = int(rear_rgb_dev.getHeight())
+                        except Exception:
+                            rear_w, rear_h = 80, 48
+                    return _driver_shots(
+                        rgb, rgb_w, rgb_h, floor_cam, floor_w, floor_h, rear_rgb_dev, rear_w, rear_h
+                    )
+
+                action = _service_driver(
+                    robot,
+                    timestep,
+                    hubs,
+                    driver,
+                    explorer,
+                    folder,
+                    now,
+                    _grab,
+                    driver_state,
+                    max_s is not None and now >= max_s,
+                )
+                if action == "quit":
+                    break
+                if action == "resume":
+                    continue
+                if action == "coast":
+                    left_cmd, right_cmd = 0.0, 0.0
+            hubs.set(left_cmd, right_cmd)
             timed_out = max_s is not None and now >= max_s
-            if timed_out and not explorer.done:
+            if driver is None and timed_out and not explorer.done:
                 explorer.done = True
                 explorer.phase = "done"
                 # The file is written before mapping_done, which is what

@@ -573,7 +573,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-17 — One command, then a stop
 
-- **Commit:** `ae27189`
+- **Commit:** `ae27189`, notes `77c3ab8`
 - **Tried:** `RBM_DRIVER=1`. Four fixed aims in the robot's odometry frame, then `stop`. Headless, stock spawn. No live ten.
 - **Result:** Statuses ready, arrived, arrived, arrived, arrived, stopped. First stop estimate (0.32, 0.00), commanded 0.320 m, wheel 0.320 m, floor 0.335 m. Second (0.82, 0.00), 0.499 / 0.500 / 0.522 m. Harness pose log moved 0.82 m. Webots exited 0.
 - **Lesson:** The driver can take an outside aim, stop, and wait, without reading the simulator pose.

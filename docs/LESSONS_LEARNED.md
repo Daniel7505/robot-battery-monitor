@@ -1375,3 +1375,7 @@ Seen, north 93.50, 74.88, 90.70, 81.13, 80.79 (mean 84.20, sd 7.69) against 85.9
 `RBM_DRIVER` is off unless set. On, the mapper does not pick frontiers. It drives one command from `driver/command.json` — `go_to` or `turn_to` in its own odometry frame, `look`, or `stop` — through the existing pursuit, vetoes, and floor check. It stops on arrival, stuck, blocked, timeout, or the existing wheels-lifted count, writes a snapshot, and does not step until the next command file appears. The snapshot is the robot's cameras, its own grid, and its own pose. The pose logger still holds the simulator pose.
 
 The headless smoke on the stock spawn, commit after `ae27189`, sent `go_to 0.6 0`, `go_to 1.1 0`, `turn_to 0.4`, `look`, and `stop`. Statuses were ready, arrived, arrived, arrived, arrived, stopped. The first stop's estimate was (0.32, 0.00) with commanded 0.320 m, wheel 0.320 m, floor 0.335 m. The second was (0.82, 0.00), commanded 0.499 m, wheel 0.500 m, floor 0.522 m. The harness pose log moved 0.82 m. No live ten.
+
+## Arrived was the frontier radius
+
+`ARRIVE_M` is 0.28 m. That is how close a frontier cell has to be. The waypoint driver used it, so both smoke aims stopped 0.28 m short and the estimate agreed. A named point now arrives at 0.05 m, and the last 0.35 m is slower than cruise. A go_to that cannot close that gap reports `stopped_short` and the remaining distance. The rerun of the same four aims stopped at (0.55, −0.00) and (1.05, −0.01). No live ten.

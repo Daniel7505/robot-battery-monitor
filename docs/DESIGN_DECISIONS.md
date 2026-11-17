@@ -987,3 +987,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Pausing by becoming a supervisor. Reading the pose log from the driver or the snapshot. A new pitch gate. Shortening the 2 s clock. A live ten.
 
 **Outcome.** With the flag off, the explorer still plans its own goals. With the flag on, the smoke's four aims each arrived, the stop ended the run, and the pose logger's travel was 0.82 m. The snapshot paths from that run are under `/tmp/driver_smoke/driver/stops/`.
+
+## 2026-11-17 — A waypoint arrives at 5 cm
+
+**Mission parameter.** A named point is not a frontier. `ARRIVE_M` stays 0.28 m for frontier goals. No geometry, world, proto, sensor, or motor change. No live ten.
+
+**Change.** A `go_to` is arrived when the odometry estimate is within 0.05 m of the commanded point. Inside 0.35 m the forward speed eases from cruise down to 0.06 m/s. If the 2 s clock or the command timeout ends the `go_to` while it is still outside 0.05 m, the status is `stopped_short` and the snapshot carries `remaining_m`.
+
+**Why.** The first smoke stopped at (0.32, 0.00) for `go_to 0.6 0` and (0.82, 0.00) for `go_to 1.1 0`. Both gaps are 0.28 m, and the estimate matched the stop. That is `ARRIVE_M`, not a pose error.
+
+**Evidence.** `tests/test_driver.py`, `tests/test_mapping.py`, and `test_mapper_has_no_pose_or_map_foresight`: 208 passed. Same headless smoke: first stop estimate (0.550, −0.002), remaining 0.050 m, wheel 0.549 m, floor 0.588 m, truth (6.103, 5.246). Second (1.051, −0.006), remaining 0.050 m, wheel 0.500 m, floor 0.552 m, truth (6.106, 5.740). Turn and look arrived. Truth travel 1.04 m. Webots exited 0.
+
+**Rejected.** Shrinking `ARRIVE_M` for the explorer. Reading the pose log to decide arrival.
+
+**Outcome.** Arrived means about 5 cm. A `go_to` that cannot finish says how far is left.

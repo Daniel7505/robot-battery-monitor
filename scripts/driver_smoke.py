@@ -70,6 +70,48 @@ def _tail(folder: Path) -> str:
     return "\n".join(lines[-80:])
 
 
+def _print_stop(folder: Path, waypoint: dict, status: dict) -> None:
+    pose = status.get("pose") or {}
+    travel = status.get("travel") or {}
+    gt = _gt_near(folder, float(status.get("t_s") or 0.0))
+    target = ""
+    if waypoint.get("cmd") == "go_to":
+        target = f"target=({waypoint['x']:.2f},{waypoint['y']:.2f}) "
+    elif waypoint.get("cmd") == "turn_to":
+        target = f"target_yaw={waypoint['yaw']:.2f} "
+    gt_txt = "none" if gt is None else f"({gt[0]:.3f},{gt[1]:.3f},{gt[2]:.3f})"
+    print(
+        f"SMOKE {waypoint['cmd']} {target}"
+        f"est=({pose.get('x_m')},{pose.get('y_m')},{pose.get('yaw_rad')}) "
+        f"wheel={travel.get('wheel_m')} floor={travel.get('floor_m')} "
+        f"gt={gt_txt} status={status.get('status')} remaining={status.get('remaining_m')}",
+        flush=True,
+    )
+
+
+def _gt_near(folder: Path, t_s: float) -> tuple[float, float, float] | None:
+    """Simulator pose nearest ``t_s``. The harness log only. The driver does not read it."""
+    path = folder / "gt_pose_log.csv"
+    if not path.is_file():
+        return None
+    best = None
+    best_dt = 1e9
+    for line in path.read_text(encoding="utf-8").splitlines()[1:]:
+        parts = line.split(",")
+        if len(parts) < 5:
+            continue
+        try:
+            t = float(parts[0])
+            sample = (float(parts[1]), float(parts[2]), float(parts[4]))
+        except ValueError:
+            continue
+        dt = abs(t - float(t_s))
+        if dt < best_dt:
+            best_dt = dt
+            best = sample
+    return best
+
+
 def _gt_travel(folder: Path) -> float | None:
     path = folder / "gt_pose_log.csv"
     if not path.is_file():
@@ -143,11 +185,7 @@ def main() -> int:
             publish_command(folder, waypoint)
             previous, status = _wait_status(folder, proc, previous, 120.0)
             seen.append(status)
-            print(
-                f"SMOKE {waypoint['cmd']} -> {status.get('status')} "
-                f"pose={status.get('pose')} detail={status.get('detail')}",
-                flush=True,
-            )
+            _print_stop(folder, waypoint, status)
         publish_command(folder, {"cmd": "stop"})
         previous, status = _wait_status(folder, proc, previous, 60.0)
         seen.append(status)
@@ -178,21 +216,33 @@ def main() -> int:
     if seen[-1].get("status") != "stopped":
         problems.append(f"stop was {seen[-1].get('status')}")
     for item, status in zip(WAYPOINTS, seen[1:-1]):
-        if status.get("status") not in ("arrived", "stuck", "blocked", "timeout", "tilt_warning"):
+        if status.get("status") not in (
+            "arrived",
+            "stuck",
+            "blocked",
+            "stopped_short",
+            "timeout",
+            "tilt_warning",
+        ):
             problems.append(f"{item['cmd']} status {status.get('status')}")
         if (status.get("pose") or {}).get("frame") != "odometry":
             problems.append(f"{item['cmd']} pose frame")
-    first = seen[1]
-    pose = first.get("pose") or {}
-    if first.get("status") != "arrived" or float(pose.get("x_m") or 0.0) < 0.3:
-        problems.append(f"first go_to {first.get('status')} pose={pose} detail={first.get('detail')}")
+    for index, (x_m, y_m) in ((1, (0.6, 0.0)), (2, (1.1, 0.0))):
+        status = seen[index]
+        pose = status.get("pose") or {}
+        gap = math.hypot(float(pose.get("x_m") or 0.0) - x_m, float(pose.get("y_m") or 0.0) - y_m)
+        if status.get("status") != "arrived" or gap > 0.08:
+            problems.append(
+                f"go_to ({x_m},{y_m}) {status.get('status')} pose={pose} gap={gap:.3f} "
+                f"detail={status.get('detail')}"
+            )
     outcome = folder / "driver" / "stops" / "0001"
     for name in ("status.json", "map.json", "map.png", "oak.png"):
         if not (outcome / name).is_file():
             problems.append(f"missing {outcome / name}")
     gt = _gt_travel(folder)
     print(f"SMOKE gt_travel_m={gt}", flush=True)
-    if gt is None or gt < 0.4:
+    if gt is None or gt < 0.9:
         problems.append(f"harness travel {gt}")
     summary = {
         "exit": proc.returncode,

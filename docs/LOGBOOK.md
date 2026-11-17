@@ -578,3 +578,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Statuses ready, arrived, arrived, arrived, arrived, stopped. First stop estimate (0.32, 0.00), commanded 0.320 m, wheel 0.320 m, floor 0.335 m. Second (0.82, 0.00), 0.499 / 0.500 / 0.522 m. Harness pose log moved 0.82 m. Webots exited 0.
 - **Lesson:** The driver can take an outside aim, stop, and wait, without reading the simulator pose.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-waypoint-waits-for-the-next-command) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-waypoint-driver-stops-and-waits)
+
+### 2026-11-17 — Arrived was the frontier radius
+
+- **Commit:** the note that follows `7189455`
+- **Tried:** A waypoint used `ARRIVE_M` (0.28 m), the distance at which a frontier counts as reached. The smoke stopped 0.28 m short and the estimate agreed.
+- **Result:** Arrival is now 0.05 m, and the last 0.35 m is slower. The same smoke: `go_to 0.6 0` estimate (0.55, −0.00), remaining 0.050 m, wheel 0.549 m, floor 0.588 m, truth (6.103, 5.246). `go_to 1.1 0` estimate (1.05, −0.01), remaining 0.050 m, wheel 0.500 m, floor 0.552 m, truth (6.106, 5.740). Both status arrived. Turn and look arrived. Truth travel 1.04 m. A go_to that cannot close the gap is `stopped_short`.
+- **Lesson:** 0.28 m is a frontier, not a named point.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#arrived-was-the-frontier-radius) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-waypoint-arrives-at-5-cm)

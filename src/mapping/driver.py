@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from src.mapping.body import ARRIVE_M, CRUISE_M_S, SPIN_RAD_S, WHEEL_RADIUS_M
+from src.mapping.body import CRUISE_M_S, SPIN_RAD_S, WHEEL_RADIUS_M
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.explore import PIVOT_EXIT_RAD, STALL_WINDOW_S, STILL_M
 from src.mapping.frontiers import astar, motion_blocked, traversable
@@ -20,6 +20,12 @@ from src.mapping.odometry import wrap_rad
 from src.mapping.tick import choose_motion, live_veto
 
 
+# A frontier is "there" at 0.28 m (``ARRIVE_M``). A named point is not a
+# frontier: the estimate has to be within about 5 cm of the command.
+WAYPOINT_ARRIVE_M = 0.05
+# Ease off inside this distance so the last centimetres are not at cruise.
+_EASE_M = 0.35
+_CREEP_M_S = 0.06
 # Same finish as the survey spin. A look is that turn, then a stop.
 _LOOK_DONE_RAD = 2.0 * math.pi - 0.08
 # The existing "the heading did move" step. The clock beside it is
@@ -77,6 +83,7 @@ class WaypointDriver:
         self.floor_m = 0.0
         self.wh_used = 0.0
         self.tilt_warning = False
+        self.remaining_m = None
         self._t = 0.0
         self._timeout_s = 15.0
         self._still_from = 0.0
@@ -106,6 +113,7 @@ class WaypointDriver:
         self.wheel_m = 0.0
         self.floor_m = 0.0
         self.tilt_warning = False
+        self.remaining_m = None
         self._t = 0.0
         self._path = None
         self._path_at = -1.0
@@ -146,6 +154,7 @@ class WaypointDriver:
             },
             "battery": self.battery(),
             "command": self.command,
+            "remaining_m": None if self.remaining_m is None else round(self.remaining_m, 4),
         }
 
     def wheels(self, explorer, left_clear, right_clear, view, dt) -> tuple[float, float]:
@@ -170,26 +179,26 @@ class WaypointDriver:
         x, y, yaw = _pose(explorer)
         goal = (float(self.command["x"]), float(self.command["y"]))
         dist = math.hypot(goal[0] - x, goal[1] - y)
-        if dist <= ARRIVE_M:
-            return self._stop("arrived", f"within {ARRIVE_M:.2f} m")
+        if dist <= WAYPOINT_ARRIVE_M:
+            return self._stop("arrived", f"within {WAYPOINT_ARRIVE_M:.2f} m", remaining_m=dist)
         head = _head_err(x, y, yaw, self.command)
         closer = dist <= self._best_dist - STILL_M or head <= self._best_head - _YAW_STEP_RAD
         if closer:
             self._best_dist = min(self._best_dist, dist)
             self._best_head = min(self._best_head, head)
             self._reset_window(explorer)
-        elif self._stall():
+        elif self._stall(short_m=dist):
             return 0.0, 0.0
         if self._t >= self._timeout_s:
-            return self._stop("timeout", "command time")
+            return self._stop("stopped_short", f"{dist:.2f} m short", remaining_m=dist)
         why = _stuck(explorer)
         if why:
-            return self._stop("stuck", why)
+            return self._stop("stuck", why, remaining_m=dist)
         self._note_window_motion(explorer)
         path = self._path_to(explorer, goal)
-        pursuit_v, pursuit_w, arrived = pure_pursuit((x, y, yaw), path, arrive_m=ARRIVE_M)
+        pursuit_v, pursuit_w, arrived = pure_pursuit((x, y, yaw), path, arrive_m=WAYPOINT_ARRIVE_M)
         if arrived:
-            return self._stop("arrived", f"within {ARRIVE_M:.2f} m")
+            return self._stop("arrived", f"within {WAYPOINT_ARRIVE_M:.2f} m", remaining_m=dist)
         choice = choose_motion(
             view=view,
             pursuit_v=pursuit_v,
@@ -204,6 +213,10 @@ class WaypointDriver:
         w = float(choice.w)
         if motion_blocked(explorer.grid, (x, y, yaw), v, w):
             v, w = 0.0, 0.0
+        # The veto picked a legal motion. Near the point, do not keep cruise:
+        # the 5 cm gate would be crossed in one fast step.
+        if v > 0.0:
+            v = min(v, _approach_speed(dist))
         self._remember(v, w)
         left, right = wheel_speeds(v, w)
         self._note_command(left, right, dt)
@@ -254,19 +267,22 @@ class WaypointDriver:
         self._note_command(left, right, dt)
         return left, right
 
-    def _stall(self) -> bool:
+    def _stall(self, short_m: float | None = None) -> bool:
         """Stop when this window has lasted the existing 2 s.
 
         Commanded motion the body did not follow is stuck. A window that
-        never moved, or moved without getting closer, is blocked.
+        never moved, or moved without getting closer, is blocked. A go_to
+        that is still outside 5 cm is stopped_short, not arrived.
         """
         if self._t - self._still_from < STALL_WINDOW_S - 1e-6:
             return False
         sent = self._window_translated or self._window_spun
         if sent and not self._window_moved:
-            self._stop("stuck", "no motion for 2 s")
+            self._stop("stuck", "no motion for 2 s", remaining_m=short_m)
+        elif short_m is not None and short_m > WAYPOINT_ARRIVE_M:
+            self._stop("stopped_short", f"{short_m:.2f} m short", remaining_m=short_m)
         else:
-            self._stop("blocked", "no closer for 2 s")
+            self._stop("blocked", "no closer for 2 s", remaining_m=short_m)
         return True
 
     def _remember(self, v: float, w: float) -> None:
@@ -299,10 +315,12 @@ class WaypointDriver:
         self._window_spun = False
         self._window_moved = False
 
-    def _stop(self, status: str, detail: str) -> tuple[float, float]:
+    def _stop(self, status: str, detail: str, remaining_m: float | None = None) -> tuple[float, float]:
         self.outcome = status
         self.detail = detail
         self.armed = False
+        if remaining_m is not None:
+            self.remaining_m = float(remaining_m)
         if status == "tilt_warning":
             self.tilt_warning = True
         return 0.0, 0.0
@@ -323,6 +341,15 @@ class WaypointDriver:
         scale = (abs(float(left)) + abs(float(right))) / (2.0 * _CRUISE_RAD_S)
         watts = 2.0 * _MOTOR_W * min(1.5, scale)
         self.wh_used += watts * float(dt) / 3600.0
+
+
+def _approach_speed(dist_m: float) -> float:
+    """Cruise until the last 0.35 m, then a straight ease down to a creep."""
+    if dist_m >= _EASE_M:
+        return CRUISE_M_S
+    span = _EASE_M - WAYPOINT_ARRIVE_M
+    frac = max(0.0, (float(dist_m) - WAYPOINT_ARRIVE_M) / span)
+    return _CREEP_M_S + (CRUISE_M_S - _CREEP_M_S) * frac
 
 
 def _timeout_s(cmd: dict, pose: tuple[float, float]) -> float:

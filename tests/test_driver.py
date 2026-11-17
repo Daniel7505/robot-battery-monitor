@@ -68,14 +68,39 @@ def test_parse_accepts_the_four_commands():
         parse_command({"cmd": "wander"})
 
 
-def test_go_to_arrives_when_the_estimate_is_already_there():
+def test_go_to_arrives_within_five_centimetres():
     bot = _Bot()
-    bot.odometry.x_m = 0.6
+    bot.odometry.x_m = 0.56
     driver = WaypointDriver()
-    driver.arm({"cmd": "go_to", "x": 0.7, "y": 0.0}, bot)
+    driver.arm({"cmd": "go_to", "x": 0.6, "y": 0.0}, bot)
     left, right = driver.wheels(bot, 5.0, 5.0, _open(), 0.05)
     assert (left, right) == (0.0, 0.0)
     assert driver.outcome == "arrived"
+    assert driver.remaining_m == pytest.approx(0.04, abs=1e-6)
+
+
+def test_the_frontier_radius_is_not_arrival():
+    """0.28 m short is the old frontier gate. A waypoint is still driving."""
+    bot = _Bot()
+    bot.odometry.x_m = 0.32
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 0.6, "y": 0.0}, bot)
+    left, right = driver.wheels(bot, 5.0, 5.0, _open(), 0.05)
+    assert driver.outcome is None
+    assert left > 0.0 and right > 0.0
+    far = _Bot()
+    far_driver = WaypointDriver()
+    far_driver.arm({"cmd": "go_to", "x": 2.0, "y": 0.0}, far)
+    far_left, far_right = far_driver.wheels(far, 5.0, 5.0, _open(), 0.05)
+    close = _Bot()
+    close.odometry.x_m = 1.85
+    close_driver = WaypointDriver()
+    close_driver.arm({"cmd": "go_to", "x": 2.0, "y": 0.0}, close)
+    close_left, close_right = close_driver.wheels(close, 5.0, 5.0, _open(), 0.05)
+    far_v = 0.5 * (far_left + far_right) * 0.08
+    close_v = 0.5 * (close_left + close_right) * 0.08
+    assert far_v > 0.2
+    assert close_v < far_v * 0.7
 
 
 def test_an_open_command_the_pose_does_not_follow_is_stuck():
@@ -92,7 +117,7 @@ def test_an_open_command_the_pose_does_not_follow_is_stuck():
     assert driver._t >= STALL_WINDOW_S - 1e-6
 
 
-def test_a_vetoed_command_that_cannot_move_is_blocked():
+def test_a_vetoed_go_to_stops_short_with_the_gap():
     bot = _Bot()
     bot.grid.log[:] = bot.grid.l_max
     driver = WaypointDriver()
@@ -101,7 +126,9 @@ def test_a_vetoed_command_that_cannot_move_is_blocked():
         driver.wheels(bot, 0.05, 0.05, _shut(), 0.05)
         if driver.outcome:
             break
-    assert driver.outcome == "blocked"
+    assert driver.outcome == "stopped_short"
+    assert driver.remaining_m == pytest.approx(2.0, abs=0.05)
+    assert driver.report(bot)["remaining_m"] == pytest.approx(2.0, abs=0.05)
 
 
 def test_timeout_fires_before_the_two_second_clock():
@@ -114,8 +141,19 @@ def test_timeout_fires_before_the_two_second_clock():
         outcome = driver.outcome
         if outcome:
             break
-    assert outcome == "timeout"
+    assert outcome == "stopped_short"
+    assert driver.remaining_m == pytest.approx(2.0, abs=0.05)
     assert driver._t < STALL_WINDOW_S
+    turn = WaypointDriver()
+    turn.arm({"cmd": "turn_to", "yaw": 1.0}, bot, timeout_s=0.2)
+    for _ in range(8):
+        # Hold the heading so the turn does not finish.
+        bot.odometry.yaw_rad = 0.0
+        bot.odometry.yaw_unwrapped_rad = 0.0
+        turn.wheels(bot, 5.0, 5.0, _open(), 0.1)
+        if turn.outcome:
+            break
+    assert turn.outcome == "timeout"
 
 
 def test_wheels_lifted_is_a_tilt_warning_and_not_a_new_pitch_input():

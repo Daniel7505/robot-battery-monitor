@@ -1001,3 +1001,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Shrinking `ARRIVE_M` for the explorer. Reading the pose log to decide arrival.
 
 **Outcome.** Arrived means about 5 cm. A `go_to` that cannot finish says how far is left.
+
+## 2026-11-17 — A heading arrives at 0.05 rad
+
+**Mission parameter.** A named heading is not a pivot. `PIVOT_EXIT_RAD` stays 12° for the explorer. No new env var. No geometry or sensor change. No live ten.
+
+**Change.** A `turn_to` is arrived when the estimate is within `WAYPOINT_YAW_RAD` (0.05 rad) of the command. Until the existing 12° release the rate is `SPIN_RAD_S`. Inside it, that rate scales with the remaining error, and it does not fall below the rate at the 0.05 rad gate. A turn that stops outside the gate is `stopped_short` with `remaining_rad`. While the command is a spin, floor-camera samples are not added to `floor_m`, and `floor_reliable` is false. The fusion gate that already drops a fast-yaw floor correction is unchanged.
+
+**Why.** `turn_to 0.40` arrived at yaw 0.194. The gap is 12°. During `look`, floor travel was 0.902 m because the patch shift of a spin was summed as translation. The pose does not take that shift.
+
+**Evidence.** Full pytest: 1120 passed, 28 skipped (Postgres and docker). `test_mapper_has_no_pose_or_map_foresight` passed. Same smoke: turn estimate yaw 0.351, remaining 0.049 rad, truth yaw 1.899 from 1.581. Look floor 0.001 m, `floor_reliable` false. Truth moved about 0.8 cm during the look.
+
+**Rejected.** A new ease angle or a new creep rate. Changing the 0.08 rad floor gate in the fusion.
+
+**Outcome.** Arrived on a heading means about 0.05 rad. A spin's floor shift is not reported as travel.

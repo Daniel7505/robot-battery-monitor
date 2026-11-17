@@ -586,3 +586,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Arrival is now 0.05 m, and the last 0.35 m is slower. The same smoke: `go_to 0.6 0` estimate (0.55, −0.00), remaining 0.050 m, wheel 0.549 m, floor 0.588 m, truth (6.103, 5.246). `go_to 1.1 0` estimate (1.05, −0.01), remaining 0.050 m, wheel 0.500 m, floor 0.552 m, truth (6.106, 5.740). Both status arrived. Turn and look arrived. Truth travel 1.04 m. A go_to that cannot close the gap is `stopped_short`.
 - **Lesson:** 0.28 m is a frontier, not a named point.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#arrived-was-the-frontier-radius) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-waypoint-arrives-at-5-cm)
+
+### 2026-11-17 — The turn used the 12° pivot gate
+
+- **Commit:** the note after `a1cb535`
+- **Tried:** `turn_to 0.40` arrived at estimated yaw 0.194. That gap is `PIVOT_EXIT_RAD` (12°). During `look`, floor travel was 0.902 m while the wheels reported 0.014 m.
+- **Result:** A heading arrives inside 0.05 rad. Inside the existing 12° the spin scales down with the error. The same smoke: turn estimate yaw 0.351, remaining 0.049 rad, truth yaw 1.899 (from 1.581). Look floor 0.001 m, marked unreliable; truth moved about 0.8 cm. The pose update already drops a floor shift when the yaw in that window exceeds 0.08 rad, so the controller does not write the spin into the pose.
+- **Lesson:** 12° is a pivot release, not a named heading. A floor slide during a spin is the picture rotating.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)

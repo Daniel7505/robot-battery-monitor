@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 
-from src.mapping.body import CRUISE_M_S, SPIN_RAD_S, WHEEL_RADIUS_M
+from src.mapping.body import CRUISE_M_S, SPIN_RAD_S, WHEEL_RADIUS_M, WHEEL_TRACK_M
 from src.mapping.drive import pure_pursuit, wheel_speeds
 from src.mapping.explore import PIVOT_EXIT_RAD, STALL_WINDOW_S, STILL_M
 from src.mapping.frontiers import astar, motion_blocked, traversable
@@ -26,6 +26,9 @@ WAYPOINT_ARRIVE_M = 0.05
 # Ease off inside this distance so the last centimetres are not at cruise.
 _EASE_M = 0.35
 _CREEP_M_S = 0.06
+# A pivot is "lined up" at ``PIVOT_EXIT_RAD`` (12°). A named heading is
+# not a pivot: the estimate has to be within about 0.05 rad (3°).
+WAYPOINT_YAW_RAD = 0.05
 # Same finish as the survey spin. A look is that turn, then a stop.
 _LOOK_DONE_RAD = 2.0 * math.pi - 0.08
 # The existing "the heading did move" step. The clock beside it is
@@ -84,6 +87,9 @@ class WaypointDriver:
         self.wh_used = 0.0
         self.tilt_warning = False
         self.remaining_m = None
+        self.remaining_rad: float | None = None
+        self.floor_unreliable = False
+        self._spinning = False
         self._t = 0.0
         self._timeout_s = 15.0
         self._still_from = 0.0
@@ -114,6 +120,9 @@ class WaypointDriver:
         self.floor_m = 0.0
         self.tilt_warning = False
         self.remaining_m = None
+        self.remaining_rad = None
+        self.floor_unreliable = False
+        self._spinning = False
         self._t = 0.0
         self._path = None
         self._path_at = -1.0
@@ -151,10 +160,14 @@ class WaypointDriver:
                 "commanded_m": round(self.commanded_m, 4),
                 "wheel_m": round(self.wheel_m, 4),
                 "floor_m": round(self.floor_m, 4),
+                # False while this command was a spin. The floor camera
+                # reads that rotation as a slide. The metres above omit it.
+                "floor_reliable": not self.floor_unreliable,
             },
             "battery": self.battery(),
             "command": self.command,
             "remaining_m": None if self.remaining_m is None else round(self.remaining_m, 4),
+            "remaining_rad": None if self.remaining_rad is None else round(self.remaining_rad, 4),
         }
 
     def wheels(self, explorer, left_clear, right_clear, view, dt) -> tuple[float, float]:
@@ -225,20 +238,22 @@ class WaypointDriver:
     def _turn(self, explorer, view, dt: float) -> tuple[float, float]:
         _x, _y, yaw = _pose(explorer)
         err = wrap_rad(float(self.command["yaw"]) - yaw)
-        if abs(err) <= PIVOT_EXIT_RAD:
-            return self._stop("arrived", "heading within 12 deg")
-        if abs(err) <= self._best_err - _YAW_STEP_RAD:
-            self._best_err = abs(err)
+        gap = abs(err)
+        if gap <= WAYPOINT_YAW_RAD:
+            return self._stop("arrived", f"within {WAYPOINT_YAW_RAD:.2f} rad", remaining_rad=gap)
+        if gap <= self._best_err - _YAW_STEP_RAD:
+            self._best_err = gap
             self._reset_window(explorer)
-        elif self._stall():
+        elif self._stall(short_rad=gap):
             return 0.0, 0.0
         if self._t >= self._timeout_s:
-            return self._stop("timeout", "command time")
+            return self._stop("stopped_short", f"{gap:.2f} rad short", remaining_rad=gap)
         why = _stuck(explorer)
         if why:
-            return self._stop("stuck", why)
+            return self._stop("stuck", why, remaining_rad=gap)
         self._note_window_motion(explorer)
-        return self._spin(explorer, view, dt, SPIN_RAD_S if err > 0.0 else -SPIN_RAD_S)
+        rate = _turn_rate(gap)
+        return self._spin(explorer, view, dt, rate if err > 0.0 else -rate)
 
     def _look(self, explorer, view, dt: float) -> tuple[float, float]:
         turned = abs(_yaw_u(explorer) - self._yaw0)
@@ -267,22 +282,25 @@ class WaypointDriver:
         self._note_command(left, right, dt)
         return left, right
 
-    def _stall(self, short_m: float | None = None) -> bool:
+    def _stall(self, short_m: float | None = None, short_rad: float | None = None) -> bool:
         """Stop when this window has lasted the existing 2 s.
 
         Commanded motion the body did not follow is stuck. A window that
         never moved, or moved without getting closer, is blocked. A go_to
-        that is still outside 5 cm is stopped_short, not arrived.
+        still outside 5 cm, or a turn still outside 0.05 rad, is
+        stopped_short, not arrived.
         """
         if self._t - self._still_from < STALL_WINDOW_S - 1e-6:
             return False
         sent = self._window_translated or self._window_spun
         if sent and not self._window_moved:
-            self._stop("stuck", "no motion for 2 s", remaining_m=short_m)
+            self._stop("stuck", "no motion for 2 s", remaining_m=short_m, remaining_rad=short_rad)
         elif short_m is not None and short_m > WAYPOINT_ARRIVE_M:
             self._stop("stopped_short", f"{short_m:.2f} m short", remaining_m=short_m)
+        elif short_rad is not None and short_rad > WAYPOINT_YAW_RAD:
+            self._stop("stopped_short", f"{short_rad:.2f} rad short", remaining_rad=short_rad)
         else:
-            self._stop("blocked", "no closer for 2 s", remaining_m=short_m)
+            self._stop("blocked", "no closer for 2 s", remaining_m=short_m, remaining_rad=short_rad)
         return True
 
     def _remember(self, v: float, w: float) -> None:
@@ -315,12 +333,20 @@ class WaypointDriver:
         self._window_spun = False
         self._window_moved = False
 
-    def _stop(self, status: str, detail: str, remaining_m: float | None = None) -> tuple[float, float]:
+    def _stop(
+        self,
+        status: str,
+        detail: str,
+        remaining_m: float | None = None,
+        remaining_rad: float | None = None,
+    ) -> tuple[float, float]:
         self.outcome = status
         self.detail = detail
         self.armed = False
         if remaining_m is not None:
             self.remaining_m = float(remaining_m)
+        if remaining_rad is not None:
+            self.remaining_rad = float(remaining_rad)
         if status == "tilt_warning":
             self.tilt_warning = True
         return 0.0, 0.0
@@ -330,17 +356,39 @@ class WaypointDriver:
         self.wheel_m += abs(float(getattr(odom, "last_ds_m", 0.0)))
         fusion = getattr(explorer, "_fusion", None)
         sample = getattr(fusion, "scene_floor_m", None) if fusion is not None else None
-        if sample is not None:
-            self.floor_m += abs(float(sample))
+        if sample is None:
+            return
+        # The sample is from the command already sent. A spin slides the
+        # floor picture without sliding the shell. Leave those metres out.
+        if self._spinning:
+            self.floor_unreliable = True
+            return
+        self.floor_m += abs(float(sample))
 
     def _note_command(self, left: float, right: float, dt: float) -> None:
         v = 0.5 * (float(left) + float(right)) * WHEEL_RADIUS_M
+        w = (float(right) - float(left)) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+        self._spinning = abs(v) < 0.02 and abs(w) >= 0.1
         self.commanded_m += abs(v) * float(dt)
         if _CRUISE_RAD_S <= 0.0 or dt <= 0.0:
             return
         scale = (abs(float(left)) + abs(float(right))) / (2.0 * _CRUISE_RAD_S)
         watts = 2.0 * _MOTOR_W * min(1.5, scale)
         self.wh_used += watts * float(dt) / 3600.0
+
+
+def _turn_rate(err_rad: float) -> float:
+    """Full spin until the existing 12° release, then scale that spin with the error.
+
+    The floor is the same spin at the 0.05 rad gate, so the last step is
+    not taken at 0.70 rad/s. No separate creep rate.
+    """
+    gap = abs(float(err_rad))
+    if gap >= PIVOT_EXIT_RAD:
+        return SPIN_RAD_S
+    scaled = SPIN_RAD_S * gap / PIVOT_EXIT_RAD
+    floor = SPIN_RAD_S * WAYPOINT_YAW_RAD / PIVOT_EXIT_RAD
+    return max(floor, scaled)
 
 
 def _approach_speed(dist_m: float) -> float:

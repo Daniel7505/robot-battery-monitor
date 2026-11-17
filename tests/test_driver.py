@@ -153,7 +153,8 @@ def test_timeout_fires_before_the_two_second_clock():
         turn.wheels(bot, 5.0, 5.0, _open(), 0.1)
         if turn.outcome:
             break
-    assert turn.outcome == "timeout"
+    assert turn.outcome == "stopped_short"
+    assert turn.remaining_rad == pytest.approx(1.0, abs=0.05)
 
 
 def test_wheels_lifted_is_a_tilt_warning_and_not_a_new_pitch_input():
@@ -167,6 +168,48 @@ def test_wheels_lifted_is_a_tilt_warning_and_not_a_new_pitch_input():
     text = (ROOT / "src" / "mapping" / "driver.py").read_text(encoding="utf-8")
     assert "oak_imu" not in text
     assert "pitch" not in text.lower()
+
+
+def test_twelve_degrees_short_is_not_a_finished_turn():
+    """The smoke stopped at 0.194 for a 0.40 command. That is the 12° pivot gate."""
+    bot = _Bot()
+    bot.odometry.yaw_rad = 0.194
+    bot.odometry.yaw_unwrapped_rad = 0.194
+    driver = WaypointDriver()
+    driver.arm({"cmd": "turn_to", "yaw": 0.40}, bot)
+    left, right = driver.wheels(bot, 5.0, 5.0, _open(), 0.05)
+    assert driver.outcome is None
+    w = (right - left) * 0.08 / 0.34
+    assert 0.1 < abs(w) < 0.70
+    done = _Bot()
+    done.odometry.yaw_rad = 0.36
+    done.odometry.yaw_unwrapped_rad = 0.36
+    finished = WaypointDriver()
+    finished.arm({"cmd": "turn_to", "yaw": 0.40}, done)
+    assert finished.wheels(done, 5.0, 5.0, _open(), 0.05) == (0.0, 0.0)
+    assert finished.outcome == "arrived"
+    assert finished.remaining_rad == pytest.approx(0.04, abs=1e-6)
+
+
+def test_a_spin_does_not_book_floor_shift_as_travel():
+    bot = _Bot()
+    driver = WaypointDriver()
+    driver.arm({"cmd": "look"}, bot)
+    driver.wheels(bot, 5.0, 5.0, _open(), 0.05)
+    bot._fusion.scene_floor_m = 0.20
+    bot.odometry.yaw_unwrapped_rad += 0.15
+    bot.odometry.yaw_rad += 0.15
+    driver.wheels(bot, 5.0, 5.0, _open(), 0.05)
+    assert driver.floor_m == pytest.approx(0.0)
+    report = driver.report(bot)
+    assert report["travel"]["floor_reliable"] is False
+    straight = _Bot()
+    straight._fusion.scene_floor_m = 0.004
+    other = WaypointDriver()
+    other.arm({"cmd": "go_to", "x": 1.0, "y": 0.0}, straight)
+    other.wheels(straight, 5.0, 5.0, _open(), 0.05)
+    assert other.floor_m == pytest.approx(0.004)
+    assert other.report(straight)["travel"]["floor_reliable"] is True
 
 
 def test_turn_and_look_finish_on_the_estimate():

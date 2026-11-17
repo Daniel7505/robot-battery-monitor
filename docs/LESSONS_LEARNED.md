@@ -1379,3 +1379,9 @@ The headless smoke on the stock spawn, commit after `ae27189`, sent `go_to 0.6 0
 ## Arrived was the frontier radius
 
 `ARRIVE_M` is 0.28 m. That is how close a frontier cell has to be. The waypoint driver used it, so both smoke aims stopped 0.28 m short and the estimate agreed. A named point now arrives at 0.05 m, and the last 0.35 m is slower than cruise. A go_to that cannot close that gap reports `stopped_short` and the remaining distance. The rerun of the same four aims stopped at (0.55, −0.00) and (1.05, −0.01). No live ten.
+
+## The turn used the 12° pivot gate
+
+`PIVOT_EXIT_RAD` is 12°. The waypoint turn used it, so `turn_to 0.40` stopped at estimated yaw 0.194 and still said arrived. A named heading now arrives at 0.05 rad. Inside that existing 12° the spin rate is the existing `SPIN_RAD_S` scaled by the remaining error. A turn that cannot close the gap is `stopped_short` with `remaining_rad`.
+
+The look reported 0.902 m of floor travel. The downward camera correlates a patch. A spin in place moves that patch sideways, and the driver was summing the shift as metres. The pose update does not. `MotionFusion._apply_shift` returns without applying a floor correction when the yaw in the window is more than 0.08 rad, because that peak is the rotation. The snapshot now leaves those samples out of `floor_m` and sets `floor_reliable` false. The controller's use of the floor picture is unchanged. The rerun: turn yaw 0.351, remaining 0.049 rad; look floor 0.001 m, unreliable. No live ten.

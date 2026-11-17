@@ -84,7 +84,9 @@ def _print_stop(folder: Path, waypoint: dict, status: dict) -> None:
         f"SMOKE {waypoint['cmd']} {target}"
         f"est=({pose.get('x_m')},{pose.get('y_m')},{pose.get('yaw_rad')}) "
         f"wheel={travel.get('wheel_m')} floor={travel.get('floor_m')} "
-        f"gt={gt_txt} status={status.get('status')} remaining={status.get('remaining_m')}",
+        f"gt={gt_txt} status={status.get('status')} "
+        f"remaining_m={status.get('remaining_m')} remaining_rad={status.get('remaining_rad')} "
+        f"floor_reliable={(status.get('travel') or {}).get('floor_reliable')}",
         flush=True,
     )
 
@@ -227,6 +229,17 @@ def main() -> int:
             problems.append(f"{item['cmd']} status {status.get('status')}")
         if (status.get("pose") or {}).get("frame") != "odometry":
             problems.append(f"{item['cmd']} pose frame")
+    turn = seen[3]
+    yaw = float((turn.get("pose") or {}).get("yaw_rad") or 0.0)
+    yaw_err = abs(math.atan2(math.sin(yaw - 0.4), math.cos(yaw - 0.4)))
+    if turn.get("status") != "arrived" or yaw_err > 0.08:
+        problems.append(f"turn_to {turn.get('status')} yaw={yaw:.3f} err={yaw_err:.3f}")
+    look = seen[4]
+    look_travel = look.get("travel") or {}
+    if look_travel.get("floor_reliable") is not False:
+        problems.append(f"look floor marked reliable {look_travel}")
+    if float(look_travel.get("floor_m") or 0.0) > 0.15:
+        problems.append(f"look floor travel {look_travel.get('floor_m')}")
     for index, (x_m, y_m) in ((1, (0.6, 0.0)), (2, (1.1, 0.0))):
         status = seen[index]
         pose = status.get("pose") or {}

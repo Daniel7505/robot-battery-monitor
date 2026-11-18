@@ -642,3 +642,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Every wheel step in that window is 0.8 mm, all under the pin's 1.5 mm quiet floor. A per-frame floor or rear reading of that step is zeroed before the 0.45 ratio, so the pin's sums stay still. No floor-slip line and no pursuit-arc skip in the window. The skip needs 0.12 rad of yaw, and this reverse does not yaw. There is no logged 2 cm floor window with scene matching the wheels, which is what the home leg had.
 - **Lesson:** The scene-follows-wheels release does not have a measurement to hang on here. The pin stays.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)
+
+### 2026-11-18 — The raw pin sums are not the shell
+
+- **Commit:** logbook only. The trace was removed. The pin is unchanged.
+- **Tried:** North seed 74 again, to robot t=460 s, with the raw floor and rear-depth shift logged before the 1.5 mm quiet floor.
+- **Result:** On the four late pin windows, each 0.05 m of wheels, the raw floor sum is 0.028–0.032 m and the rear depth is 0.014 m then 0. Truth in each window is 0.021 m. On the 18 earlier pin windows the shell's truth path is about 0 and the raw floor sum is still about 0.03 m. A later reverse that was not pinned has wheels −0.50 m, truth 0.46 m, raw floor 0.55 m, raw rear 0.40 m.
+- **Lesson:** Putting the 1.5 mm quiet floor on the window sum would make a still scene read about 0.03 m. The stuck pin would not close. The pin stays.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)

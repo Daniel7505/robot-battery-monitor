@@ -650,3 +650,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** On the four late pin windows, each 0.05 m of wheels, the raw floor sum is 0.028–0.032 m and the rear depth is 0.014 m then 0. Truth in each window is 0.021 m. On the 18 earlier pin windows the shell's truth path is about 0 and the raw floor sum is still about 0.03 m. A later reverse that was not pinned has wheels −0.50 m, truth 0.46 m, raw floor 0.55 m, raw rear 0.40 m.
 - **Lesson:** Putting the 1.5 mm quiet floor on the window sum would make a still scene read about 0.03 m. The stuck pin would not close. The pin stays.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)
+
+### 2026-11-18 — Seed 77's loop closure was the wrong room
+
+- **Commit:** logbook only. The trace was removed. Loop closure is unchanged.
+- **Tried:** The closure at explorer t=400.4 s on −0.35 seed 77, pose `(-1.64, 0.48, 2.28)`. Compared the estimate on either side with the pose log. A rerun did not repeat that match. It accepted a different one, and that trace has the votes.
+- **Result:** The ten's closure moved the error from 0.18 m to 0.49 m and the yaw error from −0.005 rad to −0.090 rad. The y coordinate landed on the truth. The x coordinate moved from 4.66 m to 5.11 m while the truth stayed at 4.62 m. The gyro integral did not move. A 0.50 m jump is inside the 0.70 m ceiling once the keyframe is more than about 4.8 m of path behind, and 0.085 rad is under the yaw cap at every eligible keyframe. On the whole ten: seed 77 away, seed 78's first away (0.09→0.34 m), seed 78's second flat, north 71 toward (0.63→0.11 m). The rerun's closure was keyframe 3, 6 of 6 landmarks, no runner-up, median residual 0.049 m, travelled 26.6 m, correction 0.43 m against a 0.70 m cap, yaw −0.013 rad, and the error fell 0.50→0.15 m.
+- **Lesson:** Seed 77's closure was a wrong place, not a good shift with a bad yaw. Rejecting a yaw correction larger than the existing 0.08 rad would drop it and keep north 71. It would not drop seed 78's first closure.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-the-pose-miss-is-a-reverse-the-pin-froze)

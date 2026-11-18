@@ -4162,6 +4162,51 @@ def test_the_drop_rung_moves_within_two_ticks(capsys):
     assert bot.done is False
 
 
+def test_a_dead_reverse_on_drop_starts_the_spin(capsys):
+    """The straight leave was the reverse the block had already killed, so drop never spun."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._last_clear = (0.2, 1.2, 1.2)
+    bot._bubble_view = BubbleView(0.10, 1.0, 1.0, 1.0, 0.10)
+    bot._block_reverse_dead = True
+    bot._block_dead_pose = (0.0, 0.0, 0.0)
+    bot._block_turns_tried = 2
+    bot._block_turn_sign = 0.0
+    bot._leave_xy = (0.0, 0.0)
+    straight = bot._straight_leave(bot.plan_pose())
+    assert straight is not None and straight[0] < -0.5 and straight[1] < -0.5
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.phase == "spin"
+    assert bot.mode == "explore"
+    assert bot._spin_start is not None
+    assert not bot._watch_straight
+    assert left * right < 0
+
+
+def test_an_allowed_straight_on_drop_still_leaves(capsys):
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._bubble_view = BubbleView(1.2, 1.0, 1.0, 1.0, 1.0)
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.phase == "go"
+    assert bot._watch_straight
+    assert bot._spin_start is None
+    assert left > 0.5 and right > 0.5
+    left, right = bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.phase == "go"
+
+
 def test_a_stable_map_with_no_frontier_logs_done_without_stopping(capsys):
     from src.mapping.explore import Explorer
 

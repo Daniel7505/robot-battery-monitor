@@ -2083,11 +2083,14 @@ class Explorer:
 
         A pivot leaves the pose inside 0.04 m, so the ladder would fire
         again on the same spot. The straight leave already chooses the
-        side that is not blocked.
+        side that is not blocked. A reverse the escape block has already
+        killed is not that side, and drop then reaches the spin.
         """
         if self._command_translates(proposed):
             return proposed
         straight = self._straight_leave(pose)
+        if straight is not None and not self._simple_recovery():
+            straight = self._respect_escape_block(straight)
         if self._command_translates(straight):
             self._arm_watch_straight()
             return straight

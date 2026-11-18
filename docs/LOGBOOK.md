@@ -613,7 +613,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-18 — A sliding turn is not the lip
 
-- **Commit:** this change. No new constant.
+- **Commit:** `3546a1a`. No new constant.
 - **Tried:** The home-leg trace had floor scene within a few percent of the wheel claim on every window, including the nine the 0.08 rad gate refused to write. A lip's picture does not slide. The rewind now skips when the yaw has moved 0.12 rad and either the wheels claimed under 2 cm or the floor scene is at least 30% of that wheel window. A step the pose did not trust is booked as 0 applied metres. Same sixteen-command route, rendering on, depth seed 1.
 - **Result:** `go_to 0 0` pose error 0.083 m, was 0.237 m. The leg moved the error from 0.072 m to 0.083 m. Final stop 0.091 m, was 0.241 m. No wall-contact row. Lowest `up_z` 1.000. Heading error at the stop is 0.025 rad, was 0.014. Pytest 1124 passed, 28 skipped.
 - **Lesson:** A floor scene that matches the wheels is the drive. A still picture with the same wheel claim is still the lip.

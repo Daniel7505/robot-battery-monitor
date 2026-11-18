@@ -634,3 +634,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Seed 74 yaw stays inside 0.03 rad. Robot t=113 s a blank-floor hold: truth 0.19 m, estimate 0.04 m, error +0.12. The same hold repeats. Robot t=449–453 s the pin, four lines, straight reverse: wheels −0.47 m, truth 0.41 m, estimate 0.004 m, error 0.63→1.03. Seed 77's early pins are the same hold. At robot t=404.1 s one sample jumps the estimate 0.50 m and the yaw −0.085 rad. The gyro integral does not move. The line is `loop closure pose=(-1.64,0.48,2.28)` at explorer t=400.4 s. The 0.10 rad heading then walks the error from 0.47 m to 0.97 m over the later drive. Of 775 skips, 762 are a translating shell. One is a spin with 1.7 cm of truth motion and 2.1 cm of wheel claim.
 - **Lesson:** These two caps are the blank-floor hold, the pin, and one bad loop closure. The new skip is not the miss.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-the-pose-miss-is-a-reverse-the-pin-froze)
+
+### 2026-11-18 — The pinned reverse did not show a floor slide
+
+- **Commit:** logbook only. The pin is unchanged.
+- **Tried:** North seed 74, robot t=449–453 s. A straight reverse, wheels −0.47 m, truth 0.41 m, estimate 0.004 m. Four `pinned` lines. Checked against the 2026-11-10 pin decision before any release.
+- **Result:** Every wheel step in that window is 0.8 mm, all under the pin's 1.5 mm quiet floor. A per-frame floor or rear reading of that step is zeroed before the 0.45 ratio, so the pin's sums stay still. No floor-slip line and no pursuit-arc skip in the window. The skip needs 0.12 rad of yaw, and this reverse does not yaw. There is no logged 2 cm floor window with scene matching the wheels, which is what the home leg had.
+- **Lesson:** The scene-follows-wheels release does not have a measurement to hang on here. The pin stays.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)

@@ -602,3 +602,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Every command arrived. No backoff. No wall-contact row. Lowest `up_z` 1.000. Each look turned the estimate 6.20–6.21 rad and the truth 6.19–6.21 rad. Pose error was 0.01 m outbound and 0.24 m at the return home. Yaw error stayed inside 0.014 rad. Floor travel on the looks was 0.000–0.001 m and marked unreliable.
 - **Lesson:** The route fit the open floor. The position estimate walked about a quarter metre by the time the shell came home. The heading did not.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — The home leg froze the turn
+
+- **Commit:** logbook only. The trace used to read the leg was removed.
+- **Tried:** Rerun the same prefix through `go_to 0 0`, rendering off, depth seed 1. One temporary trace of wheel `ds`, the trust flags, and each floor decision. No controller change left in.
+- **Result:** From sim t=88.64 s to t=90.60 s the pose sat at (0.428, 0.043) while the wheels claimed 0.208 m, the shell moved 0.168 m, and yaw changed −0.92 rad. The log line is `floor still, translation frozen` at explorer t=85.1 s. Nine floor windows in that hold measured 0.20 m and were dropped because the yaw window was 0.10 rad. After the hold, wheels 0.387 m, estimate path 0.386 m, floor 0.386 m, truth 0.395 m.
+- **Lesson:** The missing 0.17 m is the still-floor rewind during a turn that was also driving. The wheels' extra over the truth is the forward part of that same turn, about 0.04 m, not a pure spin.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)

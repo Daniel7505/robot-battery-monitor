@@ -618,3 +618,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** `go_to 0 0` pose error 0.083 m, was 0.237 m. The leg moved the error from 0.072 m to 0.083 m. Final stop 0.091 m, was 0.241 m. No wall-contact row. Lowest `up_z` 1.000. Heading error at the stop is 0.025 rad, was 0.014. Pytest 1124 passed, 28 skipped.
 - **Lesson:** A floor scene that matches the wheels is the drive. A still picture with the same wheel claim is still the lip.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — The sliding-turn ten
+
+- **Commit:** logbook only. No controller change. The ten is `3546a1a`.
+- **Tried:** The `edfd172` ten. Explorer, driver off, flags off, rendering off, 600 s. North spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75. −0.35 spawn (6.10, 4.70), yaw 1.2208, depth seeds 76–80. A harness print counted the new skip. It did not change the decision.
+- **Result:** Cap pose, north 0.28, 0.63, 0.27, 0.94, 0.12 (mean 0.45) against 0.71. −0.35 0.15, 0.82, 0.25, 0.13, 0.34 (mean 0.34) against 0.76. Time-average pose 0.24, 0.37, 0.27, 0.51, 0.19 (mean 0.32) and 0.14, 0.36, 0.30, 0.18, 0.15 (mean 0.23). Seen 88.72, 94.01, 93.83, 91.23, 89.40 (mean 91.44) against 84.20, and 96.33, 76.47, 87.38, 94.25, 95.85 (mean 90.06) against 83.92. Crossing 6 of 10: north Y, N, N, Y, Y and −0.35 N, N, Y, Y, Y. Longest still 59, 18, 52, 19, 31 s and 30, 18, 18, 18, 77 s. No tip. Lowest `up_z` is 0.999. Skip / lip-freeze: north 81/51, 87/12, 74/43, 75/17, 36/135 and −0.35 30/103, 83/16, 105/40, 125/19, 79/30. Totals 775 and 466.
+- **Lesson:** The long-run pose error came down. The lip freeze still runs. The new skip runs more often than that freeze.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)

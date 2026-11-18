@@ -594,3 +594,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** A heading arrives inside 0.05 rad. Inside the existing 12° the spin scales down with the error. The same smoke: turn estimate yaw 0.351, remaining 0.049 rad, truth yaw 1.899 (from 1.581). Look floor 0.001 m, marked unreliable; truth moved about 0.8 cm. The pose update already drops a floor shift when the yaw in that window exceeds 0.08 rad, so the controller does not write the spin into the pose.
 - **Lesson:** 12° is a pivot release, not a named heading. A floor slide during a spin is the picture rotating.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — Watch party, one recorded route
+
+- **Commit:** logbook only. No controller change.
+- **Tried:** `RBM_DRIVER=1`, `RBM_MOVIE=1`, rendering on, stock spawn. Sixteen commands: look, out to (1.2, 0), look, face 1.57, to (1.2, 0.8), look, face 3.14, to (0.4, 0.8), look, face −1.57, to (0.4, 0), home, face 0, look, stop.
+- **Result:** Every command arrived. No backoff. No wall-contact row. Lowest `up_z` 1.000. Each look turned the estimate 6.20–6.21 rad and the truth 6.19–6.21 rad. Pose error was 0.01 m outbound and 0.24 m at the return home. Yaw error stayed inside 0.014 rad. Floor travel on the looks was 0.000–0.001 m and marked unreliable.
+- **Lesson:** The route fit the open floor. The position estimate walked about a quarter metre by the time the shell came home. The heading did not.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)

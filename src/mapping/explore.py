@@ -700,7 +700,9 @@ class Explorer:
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
         self._note_imu(dt, yaw_rate_rad_s, accel_m_s2)
         self._mark_visited()
-        applied = 0.0 if drop or spin_cmd else ds
+        # A held step did not move the pose. Booking the raw wheel metres
+        # told the next floor window they were already in.
+        applied = 0.0 if drop or spin_cmd or held_trans else ds
         self._path_m += abs(applied)
         if self._blind_back:
             # Pose jumps from a match are not travel. Only integrated
@@ -1756,7 +1758,25 @@ class Explorer:
             "left_spin": False,
             "still_hits": 0,
             "misses": 0,
+            "scene_m": float(self._fusion.floor_scene_m),
+            "scene_raw_m": float(self._fusion.floor_scene_raw_m),
         }
+
+    def _floor_followed_the_wheels(self, anchor: dict) -> bool:
+        """The floor picture slid with the hubs since this anchor.
+
+        The same 1.2 cm and 30% the stall already uses. A fast yaw does
+        not erase the window: the correction gate can refuse it and the
+        sum here still counts. An open window counts only after a short
+        step has left the still band, so a lip's noise does not.
+        """
+        fusion = self._fusion
+        scene = float(fusion.floor_scene_m) - float(anchor.get("scene_m", 0.0))
+        raw = float(fusion.floor_scene_raw_m) - float(anchor.get("scene_raw_m", 0.0))
+        if fusion._floor_track.motion_samples > 0:
+            scene += math.hypot(fusion._floor_dx, fusion._floor_dy)
+            raw += abs(fusion._floor.raw_m)
+        return raw > 0.012 and scene >= 0.30 * raw
 
     def _zupt_travel(self, left_rad: float, right_rad: float) -> float:
         """Wheel travel since the previous floor step, in metres.
@@ -1864,12 +1884,19 @@ class Explorer:
         # leaves that picture still. Rewinding the gyro to the anchor
         # deleted a pivot in one sample (the door heading jumped 29°).
         # Forward wheel travel with that same still picture is the lip:
-        # the shell is yawing and not driving. A pure pivot is not.
+        # the shell is yawing and not driving. A pure pivot claims under
+        # 2 cm and is not the lip. A pursuit arc claims more, and the
+        # short steps close on the yaw, so they call the arc still. The
+        # floor windows still slid with the hubs, including the ones over
+        # 0.08 rad that are not written back as a correction. A lip's
+        # picture does not slide. The 2 cm test stays for that picture.
         yaw_moved = abs(self.odometry.yaw_unwrapped_rad - float(anchor["yaw"]))
         dl_now = float(left_rad) - float(anchor["left"])
         dr_now = float(right_rad) - float(anchor["right"])
         claimed_now = abs(0.5 * (dl_now + dr_now)) * self.odometry.radius_m
-        if yaw_moved >= 0.12 and claimed_now < 0.02:
+        if yaw_moved >= 0.12 and (
+            claimed_now < 0.02 or self._floor_followed_the_wheels(anchor)
+        ):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()
             return

@@ -1528,6 +1528,125 @@ def test_a_pure_pivot_with_a_still_floor_freezes_translation_only():
     assert abs(bot.pose()[2]) > 0.20
 
 
+def _turning_drive(floor_moves: bool):
+    """Forward speed plus a yaw, at the simulator's 8 ms step.
+
+    The short floor steps close on the yaw arc and call the picture
+    still. A moving floor is the pursuit arc. A fixed floor is the lip.
+    """
+    from src.mapping.explore import Explorer
+    from src.mapping.floor_flow import metres_per_px
+
+    cam = _small_oak(64, 40)
+    rng = np.random.default_rng(4)
+    floor0 = rng.normal(40.0, 12.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    rgb = np.zeros((40, 64), dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    v = 0.10
+    yaw_rate = 0.47
+    half = yaw_rate * WHEEL_TRACK_M / 2.0
+    wheel_l = (v - half) / WHEEL_RADIUS_M
+    wheel_r = (v + half) / WHEEL_RADIUS_M
+    dt = 0.008
+    left = right = 0.0
+    travel = 0.0
+    pixels = 0.0
+    mpp = metres_per_px()
+    for _ in range(int(2.0 / dt)):
+        bot._commanded = (wheel_l, wheel_r)
+        travel += v * dt
+        pixels += (v * dt) / mpp
+        floor = np.roll(floor0, int(round(pixels)), axis=0) if floor_moves else floor0
+        wall = max(0.6, 2.2 - travel) if floor_moves else 2.2
+        depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(wall, -1.2, 0.0, wall + 0.1, 1.2, 2.0)])
+        left += wheel_l * dt
+        right += wheel_r * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=yaw_rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    return bot, travel
+
+
+def test_a_turning_drive_whose_floor_slides_is_not_rewound():
+    """The home leg. Short steps said still. The floor windows matched the wheels.
+
+    Those windows were over 0.08 rad, so they were not a correction.
+    They are enough to keep the rewind from deleting the arc.
+    """
+    bot, travel = _turning_drive(floor_moves=True)
+    moved = math.hypot(bot.pose()[0], bot.pose()[1])
+    assert bot.zupt_events == 0
+    assert moved > 0.15
+    assert abs(moved - travel) < 0.05
+    assert abs(bot.pose()[2]) > 0.5
+
+
+def test_a_turning_lip_with_a_still_floor_still_freezes():
+    """Same arc, picture fixed. That is the lip. The 2 cm claim still rewinds."""
+    bot, _travel = _turning_drive(floor_moves=False)
+    assert bot.zupt_events >= 1
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.05
+    assert abs(bot.pose()[2]) > 0.5
+
+
+def test_a_held_step_is_not_booked_as_applied_travel():
+    """The pose did not take the step. The floor interval must not be told it did."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(2.2, -1.2, 0.0, 2.3, 1.2, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False)
+    bot._fusion.floor.noise_px = 0.0
+    bot._zupt_trans_until = 1.0e9
+    bot._commanded = (2.0, 2.0)
+    step = 0.01 / WHEEL_RADIUS_M
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=step,
+        right_wheel_rad=step,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    assert bot._fusion._floor.applied_m == pytest_approx(0.0, abs=1e-9)
+    assert bot._path_m == pytest_approx(0.0, abs=1e-9)
+    bot._zupt_trans_until = -1.0
+    bot._commanded = (2.0, 2.0)
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=step * 2.0,
+        right_wheel_rad=step * 2.0,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    assert bot._path_m > 0.005
+
+
 def test_a_real_spin_is_not_stuck_when_the_floor_picture_stays():
     """The survey rotates about the downward camera, so that picture barely translates.
 

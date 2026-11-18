@@ -70,6 +70,10 @@ class MotionFusion:
         self._floor_dx = 0.0
         self._floor_dy = 0.0
         self._floor_q = 0.0
+        # Judged floor windows, including ones a fast yaw refuses to write
+        # into the pose. The rewind reads this. It is not a correction.
+        self.floor_scene_m = 0.0
+        self.floor_scene_raw_m = 0.0
         # Short steps. A single correlation across 2 cm wraps on this camera.
         self._floor_track = ShortFloorTrack()
 
@@ -278,6 +282,11 @@ class MotionFusion:
         if kind != "floor" and abs(interval.yaw_rad) > 0.08:
             return ""
         scene = math.hypot(float(dx_m), float(dy_m))
+        if kind == "floor":
+            # The yaw gate below can refuse this as a correction. The
+            # metres stay here so a rewind can tell a slide from a lip.
+            self.floor_scene_m += scene
+            self.floor_scene_raw_m += abs(float(raw))
         # Wheels turned, the sensor says the body did not. Drop the travel.
         # A forward camera only counts when that travel should have moved
         # the tracked pixels by several pixels and they stayed put.

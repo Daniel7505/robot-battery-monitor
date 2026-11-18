@@ -203,6 +203,31 @@ def test_a_yaw_on_a_still_floor_is_still_a_stall():
     assert fuse.floor_updates == 0
 
 
+def test_a_yaw_rejected_floor_window_still_keeps_its_scene():
+    """The correction is refused. The metres stay for the rewind."""
+    image = np.random.default_rng(4).normal(40.0, 8.0, size=(32, 32))
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(visual=False, floor=True, rng=np.random.default_rng(1))
+    fuse.floor.noise_px = 0.0
+    assert fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image) == ""
+    note = ""
+    for i in range(1, 6):
+        odom.x_m += 0.005
+        noted = fuse.observe(
+            odom,
+            ds_raw_m=0.005,
+            ds_applied_m=0.005,
+            dyaw_rad=0.03,
+            floor=np.roll(image, i * 4, axis=0),
+        )
+        if noted:
+            note = noted
+    assert note != "slip"
+    assert fuse.floor_updates == 0
+    assert fuse.floor_scene_m > 0.01
+    assert fuse.floor_scene_raw_m > 0.012
+
+
 def test_a_moving_floor_is_not_a_stall_when_the_metres_under_read():
     """The nominal scale reads about half of a real step.
 

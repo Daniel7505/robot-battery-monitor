@@ -610,3 +610,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** From sim t=88.64 s to t=90.60 s the pose sat at (0.428, 0.043) while the wheels claimed 0.208 m, the shell moved 0.168 m, and yaw changed −0.92 rad. The log line is `floor still, translation frozen` at explorer t=85.1 s. Nine floor windows in that hold measured 0.20 m and were dropped because the yaw window was 0.10 rad. After the hold, wheels 0.387 m, estimate path 0.386 m, floor 0.386 m, truth 0.395 m.
 - **Lesson:** The missing 0.17 m is the still-floor rewind during a turn that was also driving. The wheels' extra over the truth is the forward part of that same turn, about 0.04 m, not a pure spin.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — A sliding turn is not the lip
+
+- **Commit:** this change. No new constant.
+- **Tried:** The home-leg trace had floor scene within a few percent of the wheel claim on every window, including the nine the 0.08 rad gate refused to write. A lip's picture does not slide. The rewind now skips when the yaw has moved 0.12 rad and either the wheels claimed under 2 cm or the floor scene is at least 30% of that wheel window. A step the pose did not trust is booked as 0 applied metres. Same sixteen-command route, rendering on, depth seed 1.
+- **Result:** `go_to 0 0` pose error 0.083 m, was 0.237 m. The leg moved the error from 0.072 m to 0.083 m. Final stop 0.091 m, was 0.241 m. No wall-contact row. Lowest `up_z` 1.000. Heading error at the stop is 0.025 rad, was 0.014. Pytest 1124 passed, 28 skipped.
+- **Lesson:** A floor scene that matches the wheels is the drive. A still picture with the same wheel claim is still the lip.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)

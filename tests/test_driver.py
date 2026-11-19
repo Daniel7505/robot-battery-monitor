@@ -140,6 +140,45 @@ def test_a_straight_door_the_rectangle_clips_still_drives():
     assert left > 0.0 and right > 0.0
 
 
+def _vw(left: float, right: float) -> tuple[float, float]:
+    v = 0.5 * (left + right) * 0.08
+    w = (right - left) * 0.08 / 0.34
+    return v, w
+
+
+def test_a_door_back_off_is_not_redecided_every_frame():
+    """A side gap that flickers used to swap creep and reverse every tick.
+
+    The back-off stays for the 2 s clock. The next command is a turn
+    toward the opening, not another creep on the heading that failed.
+    """
+    bot = _Bot()
+    for x in (0.25, 0.45, 0.65):
+        bot.grid.log[bot.grid.cell_of(x, 0.20)] = bot.grid.l_max
+        bot.grid.log[bot.grid.cell_of(x, -0.55)] = bot.grid.l_max
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    left, right = driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    held = _vw(left, right)
+    assert held[0] < -0.02
+    saw_turn = False
+    for _ in range(80):
+        left, right = driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        v, w = _vw(left, right)
+        if driver._backoff_vw is None:
+            assert abs(v) < 0.02
+            assert abs(w) > 0.05
+            saw_turn = True
+            break
+        assert v == pytest.approx(held[0], abs=1e-6)
+        assert w == pytest.approx(held[1], abs=1e-6)
+    assert saw_turn
+    assert driver._t >= STALL_WINDOW_S - 1e-6
+    assert driver.outcome is None
+
+
 def test_a_vetoed_go_to_stops_short_with_the_gap():
     bot = _Bot()
     bot.grid.log[:] = bot.grid.l_max

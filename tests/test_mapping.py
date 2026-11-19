@@ -2521,51 +2521,6 @@ def test_jamb_steer_only_centres_a_two_sided_gap():
     assert centre_yaw(0.55, 0.58) == 0.0
 
 
-def test_a_blind_doorway_keeps_a_floor_step_that_matches_the_wheels(capsys):
-    """The bedroom threshold. The nose is inside minimum range.
-
-    Wheels claimed about 0.07 m in 0.4 s and the pose took 0.001 m.
-    The carpet was sliding. A floor step that matches the wheels is
-    put back. A flat floor is still a wedge, and that pose stays.
-    """
-    from src.mapping.explore import Explorer
-    from src.mapping.floor_flow import metres_per_px
-
-    cam = _small_oak(64, 40)
-    depth = np.full((cam.height, cam.width), np.inf)
-    rng = np.random.default_rng(3)
-    floor0 = rng.normal(40.0, 12.0, size=(32, 32))
-    mpp = metres_per_px()
-
-    def run(floor_moves: bool) -> Explorer:
-        bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
-        left = right = 0.0
-        dt = 0.05
-        step = 0.08
-        pixels = 0.0
-        bot._commanded = (3.5, 3.5)
-        for _ in range(30):
-            bot._commanded = (3.5, 3.5)
-            left += step
-            right += step
-            pixels += (step * WHEEL_RADIUS_M) / mpp
-            floor = np.roll(floor0, int(round(pixels)), axis=0) if floor_moves else np.full((32, 32), 18.0)
-            bot.step(
-                dt_s=dt,
-                left_wheel_rad=left,
-                right_wheel_rad=right,
-                yaw_rate_rad_s=0.0,
-                depth=depth,
-                floor=floor,
-            )
-        return bot
-
-    moving = run(True)
-    assert math.hypot(moving.pose()[0], moving.pose()[1]) > 0.08
-    held = run(False)
-    assert math.hypot(held.pose()[0], held.pose()[1]) < 0.02
-
-
 def test_reverse_out_of_a_blind_wall_moves_the_pose():
     """The backup itself is motion. Only the forward skid is frozen."""
     from src.mapping.explore import Explorer

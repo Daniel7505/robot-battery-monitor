@@ -51,3 +51,29 @@ Stop 3 is the new issue. At t=37.1 s the log is `pinned, depth floor and visual 
 | 3 | go_to 0.6 2.15 | stopped_short, 0.29 m | (0.42, 2.38, −0.36) | (3.67, 5.02, 1.26) | 0.117 |
 
 No `pinned` line. Max pose error 0.123 m at t=43.2 s. Truth x reached 3.663, through the shared wall. At explorer t=37.2 s the log is `floor blank, wheel translation held std=0.1`. That hold rewound x,y to its anchor once the wheels had claimed 0.02 m on a floor image with std under 2. The drive stopped on that jump. The blank-floor hold was not changed.
+
+## Blank floor, `73b14c6`
+
+A floor image with std under 2 is not a vote. If this frame's forward picture changed — a tracked translation, or a picture that moved and did not fit (`moved`, `few_tracks`, `no_fit`, `too_large`) — the step stays. A still picture, or no picture, still rewinds. Fusion off still rewinds, which is the flat-floor test and the climb. No new threshold. The cuts are the ones `_images_still` already uses.
+
+A tracked translation alone did not cover the doorway: the picture moved and the corners did not fit, and the hold still fired. `73b14c6` is the yield for that picture.
+
+## A new waypoint, `97229ea`
+
+`imu_stuck` ended a slide and the next `go_to` stopped in the same tick. The IMU samples and the camera clock were the previous command's. Arming a command clears them. The 2.5 s checks are unchanged. No new threshold.
+
+## Lap
+
+Stock spawn, living room. `RBM_MOVIE=1`. Short steps. Truth from the pose log only.
+
+| place | truth (x, y) | pos err | note |
+|---|---|---|---|
+| start, living | (6.096, 4.688) | 0.005 | look arrived |
+| living, toward the door | (4.954, 4.914) | 0.018 | `go_to 0.2 1.2` arrived |
+| living, at the door | (4.067, 4.909) | 0.028 | `go_to 0.25 2.1` arrived |
+| bedroom door | (3.745, 4.943) | 0.019 | `imu_stuck`. Shared-wall face is x=3.759 |
+| same door, next aim | (3.745, 4.943) | 0.033 | `imu_stuck` again. Wheels 0.39 m, floor 0.15 m |
+
+The bedroom interior, the bathroom, the hallway, and the return were not reached. The lap did not finish, so there is no lap movie.
+
+One earlier crossing, before the revert below, did enter the bedroom: truth (3.12, 5.18), pose error 0.091. From t=41.2 s to t=42.0 s the nose was blind, the wheels claimed 0.14 m, and the pose took 0.03 m. No blank-floor line in that window. Putting a blind step back when the floor said it matched then walked a later still shell from 0.053 m to 0.171 m while truth x stayed 3.74. That change is `cd59b13`, reverted by `4cb96aa`. The wedge rule stays.

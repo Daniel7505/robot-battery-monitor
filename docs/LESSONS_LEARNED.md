@@ -1407,3 +1407,19 @@ On the same hand drive the reverse `(-0.65, -2.35)` held from t=28.832 s to t=30
 Samples under 1.5 mm still add nothing to the quieted sums. A slow reverse is made of those samples, so the quieted floor stays under `max(0.012, 0.45 * wheel)` and the pin closes. The raw sum, before that zero, does not. Still windows are 0.024–0.034 m. Moving windows on the same pin are 0.056–0.064 m. `(0.034 + 0.056) / 2` is 0.045 m, and `RAW_FLOOR_M` is that midpoint. A window at or above it is not a pin. The still top, 0.034 m, still is. Commit `a23b846`.
 
 The same hand drive wrote no `pinned` line. Pose error on `go_to 0.4 2.7` was 0.009 m. On `go_to 0.6 2.15` truth x reached 3.663 and the error went from 0.007 m to 0.123 m. Explorer t=37.2 s is `floor blank, wheel translation held std=0.1`. That hold rewinds x,y when a floor image with std under 2 has already claimed 0.02 m of wheels. The drive stopped there.
+
+## A blank floor yields when the picture moved
+
+A floor image with std under 2 has nothing to track. It was rewinding x,y once the wheels had claimed 0.02 m, including when the forward picture had already changed. A tracked translation was not enough for the doorway: the picture moved and the corners did not fit, so visual odometry returned no translation, and the hold still fired.
+
+Commit `73b14c6`. The step stays when this frame's forward picture changed: a non-still tracked translation, or reason `moved`, `few_tracks`, `no_fit`, or `too_large`. Those reasons already exist. A still sample, or no sample, still rewinds. Fusion off still rewinds, so the flat-floor test and the climb stay. No new threshold.
+
+## A new waypoint starts its own stuck window
+
+`imu_stuck` ended the doorway slide. The next `go_to` stopped one tick later, with the same IMU samples. Commit `97229ea` clears the camera clock and the IMU samples when a command is armed. The 2.5 s checks are the same ones. A window that is left in place still says stuck.
+
+## The bedroom lap stopped at the door
+
+Living-room start, pose error 0.005 m. Two short steps, 0.018 m and 0.028 m, still in the living room. At the bedroom door, truth x 3.745, the shared-wall face is 3.759. `imu_stuck` fired, pose error 0.019 m, and the next aim fired it again, pose error 0.033 m. The shell did not go in. The bathroom, the hallway, and the return were not driven.
+
+An earlier crossing did enter, truth (3.12, 5.18), pose error 0.091 m. The nose was blind and the wheels' 0.14 m became 0.03 m of pose. Putting that step back when the floor said it matched walked a later still shell to 0.171 m. That change was reverted (`4cb96aa`). A blind forward command stays a wedge.

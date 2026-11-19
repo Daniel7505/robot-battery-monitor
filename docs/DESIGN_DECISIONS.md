@@ -1057,3 +1057,45 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Lowering `QUIET_M`. Putting the 1.5 mm floor on the window sum: a still scene would then read about 0.03 m and the stuck pin would not close. Using the 0.45 ratio on the raw sum: the still cloud is already above 0.023 m.
 
 **Outcome.** A slow move whose raw floor sum is in the logged moving band is not pinned. A still scene in the logged still band still is. The blank-floor hold is a separate rewind.
+
+## 2026-11-19 — A blank floor yields when the picture moved
+
+**Mission parameter.** A floor image with std under 2. No new threshold. No geometry change. Truth stays in the pose log.
+
+**Change.** The blank-floor rewind stays for a still forward picture and for no picture. It does not run when this frame's forward picture already changed. Commit `73b14c6`.
+
+**Why.** The picture is not evidence the wheels lied. Visual odometry already refuses to call a moved picture with no fit a still reading. The doorway was that case: std 0.1, and the corners did not fit, so a gate that waited for a tracked translation still rewound.
+
+**Evidence.** A flat floor with fusion off still rewinds, including the climb whose depth changes by a uniform offset. A flat floor in front of a still picture, fusion on, still rewinds. A flat floor whose picture changes, with or without a fitted translation, keeps the step. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Treating a missing sample with fusion off as agreement. That is the island test. Using the median range change as agreement. The climb's uniform offset looks like motion, and that hold has to stay.
+
+**Outcome.** A blank floor is dropped when the forward picture moved. A still picture, or no picture, still holds the step.
+
+## 2026-11-19 — A new waypoint starts its own stuck window
+
+**Mission parameter.** No new threshold. The 2.5 s camera clock and the 2.5 s IMU window stay.
+
+**Change.** `arm` clears `_view_still_from` and the IMU samples. Commit `97229ea`.
+
+**Why.** `imu_stuck` ended one doorway aim. The next aim stopped in the same tick because those samples were still the previous command's.
+
+**Evidence.** A real explorer with a filled IMU window reports `imu_stuck`. After `arm`, it does not, and the first wheel command is forward. Setting the stuck reason after `arm` still stops the command. The same hand drive then took a new aim instead of dying in one tick.
+
+**Rejected.** Ignoring `imu_stuck` for the rest of a command. A window that fills again still stops it.
+
+**Outcome.** A new waypoint is judged on its own 2.5 s. The checks themselves are unchanged.
+
+## 2026-11-19 — A blind forward step stays dropped
+
+**Mission parameter.** No new threshold. The wedge rule stays.
+
+**Change.** None kept. `cd59b13` put a blind forward step back when the floor tracker returned `moving` and the peak matched the wheels. `4cb96aa` reverts it.
+
+**Why.** At the bedroom door the nose is inside minimum range while the shell is still. The floor match put the wheel step into the pose. Truth x stayed 3.74 and the error went from 0.053 m to 0.171 m.
+
+**Evidence.** The revert is the tree. The lap after it stalls on `imu_stuck` at truth x 3.745 with pose error 0.033 m. The shell is not in the bedroom. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Keeping the restore. A floor peak that matches the wheels is not enough when the shell is sitting.
+
+**Outcome.** A forward command with a blind nose still drops the step. The lap did not reach the bathroom, the hallway, or the start again.

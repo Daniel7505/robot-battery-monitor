@@ -714,3 +714,27 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** The still top, 0.034 m, still pins. Seed 74's 0.8 mm steps with a raw sum of 0.056 m do not. A 0.060 m sum, the doorway crossing's moving band, does not. The same hand drive had no `pinned` line. `go_to 0.4 2.7` pose error 0.009 m. `go_to 0.6 2.15` reached truth x 3.663. Error 0.007 → 0.123. At explorer t=37.2 s the line is `floor blank, wheel translation held std=0.1`. The drive stopped there. `up_z` 1.000. No loop closure.
 - **Lesson:** The quiet floor was hiding a slow move whose raw sum is already above a still scene. The blank-floor hold is a separate rewind, and it fired on the crossing.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-raw-floor-sum-of-0045-m-opens-the-pin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-raw-floor-sum-of-0045-m-opens-the-pin)
+
+### 2026-11-19 — A blank floor yields when the picture moved
+
+- **Commit:** `73b14c6`. No new threshold.
+- **Tried:** A floor image with std under 2 was rewinding x,y after 0.02 m of wheels. The doorway picture had moved and the corners had not fitted, so a gate that waited for a tracked translation still rewound.
+- **Result:** The step stays when the forward picture changed. A still picture, or no picture, still rewinds. Fusion off still rewinds, including the climb. The flat-floor tests pass.
+- **Lesson:** A blank floor is not evidence the wheels lied. A still forward picture is.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-blank-floor-yields-when-the-picture-moved) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blank-floor-yields-when-the-picture-moved)
+
+### 2026-11-19 — A new waypoint starts its own stuck window
+
+- **Commit:** `97229ea`. No new threshold.
+- **Tried:** `imu_stuck` ended a doorway slide and the next aim stopped in the same tick.
+- **Result:** Arming a command clears the camera clock and the IMU samples. The 2.5 s checks are unchanged. A window left in place still says stuck.
+- **Lesson:** The stuck window belongs to the command that filled it.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-new-waypoint-starts-its-own-stuck-window) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-new-waypoint-starts-its-own-stuck-window)
+
+### 2026-11-19 — The bedroom lap stopped at the door
+
+- **Commit:** `4cb96aa` reverts `cd59b13`. The lap is log only after that.
+- **Tried:** Short waypoints from the living-room spawn toward the bedroom, then the bathroom, the hallway, and back. `RBM_MOVIE=1`. One trial put a blind forward step back when the floor peak matched the wheels.
+- **Result:** Start pose error 0.005 m. At the door, truth x 3.745, pose error 0.019 m, then 0.033 m, both `imu_stuck`. The shell did not enter. The floor-match restore walked a still shell to 0.171 m and was reverted. Bathroom, hallway, and the return were not driven. No lap movie.
+- **Lesson:** A blind forward command stays a wedge. A floor peak that matches the wheels does not make a sitting shell into travel.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-lap-stopped-at-the-door) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blind-forward-step-stays-dropped)

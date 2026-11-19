@@ -753,7 +753,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-19 — A straight slide whose floor followed is not frozen
 
-- **Commit:** this change. No new threshold.
+- **Commit:** `e050d1d`. No new threshold.
 - **Symptom:** `floor still, translation frozen`. The wheels and the shell move together. The estimate does not. Pose error grows. Not `pinned`. Not `floor blank`.
 - **Found:** Lap toward the bath walkway. Explorer t=50.8 s. From t=49.3 s to t=50.3 s the wheels and the truth both moved about 0.07 m and the pose stayed. Error on that step ended at 0.248 m.
 - **Cause:** The short floor steps were called still. The sliding-turn release only runs after 0.12 rad of yaw, and only then asks whether the floor scene followed the wheels. This stretch was straighter than that, so a scene that had already matched the wheels still rewound. Steps under 2 px were also left out of `moved_px`, so a creep of one pixel a window never left the still band.

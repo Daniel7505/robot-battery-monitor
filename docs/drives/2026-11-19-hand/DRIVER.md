@@ -93,4 +93,19 @@ The next run aimed at that center.
 | bedroom | (2.880, 5.213) | 0.063 |
 | bedroom, toward the walkway | (2.464, 4.964) | 0.248 |
 
-The last step stopped 0.30 m short. From t=50 s to t=55 s the truth path was 0.49 m and the estimate moved 0.32 m. `floor still, translation frozen` at t=50.8 s. Error 0.14 → 0.25 m. The drive stopped. The bathroom, the hallway, and the return were not driven. No lap movie. `up_z` 1.000.
+The last step stopped 0.30 m short. From t=50 s to t=55 s the truth path was 0.49 m and the estimate moved 0.32 m. `floor still, translation frozen` at t=50.8 s. Error 0.14 → 0.25 m. That line is not the pin and not the blank-floor hold. From t=49.3 s to t=50.3 s the wheels and the truth both moved about 0.07 m and the pose stayed. `e050d1d` does not rewind when the floor scene already matches the wheels, including a straight line. A scene that did not follow still rewinds.
+
+## After that release
+
+Door G on the center line, odometry x 0.43.
+
+| place | truth (x, y) | pos err |
+|---|---|---|
+| start, living | (6.096, 4.688) | 0.005 |
+| door G, living side | (5.050, 5.078) | 0.022 |
+| door G, at the face | (4.173, 5.134) | 0.032 |
+| bedroom | (3.328, 5.143) | 0.073 |
+| bedroom, toward the walkway | (2.567, 5.125) | 0.070 |
+| walkway mouth | (1.009, 4.858) | 0.078 |
+
+The walkway wall is world y 4.57. The shell stayed on the bedroom side. The south aim was unknown on the map, a straight line, and it stalled: `no motion for 2 s`. The bathroom, the hallway, and the return were not driven. No lap movie. `up_z` 1.000.

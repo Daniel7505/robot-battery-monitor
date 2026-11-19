@@ -1211,3 +1211,31 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A second frontier score. Reading the pose log from the mapper. A new constant for when to override.
 
 **Outcome.** Each stop names the frontier. The session took it, or overrode a seed speck, a return that left the walkway, and an unknown last cell. No new bug. The walkway snap stays open.
+
+## 2026-11-19 — A corner back-off reversed its own turn
+
+**Mission parameter.** No new threshold. `STALL_WINDOW_S` stays 2 s. The 12° step and the 5 cm arrival stay. No geometry or sensor change.
+
+**Change.** The heading after a back-off is computed once. Yaw toward it resets the 2 s clock the same way yaw toward the goal already does. A goal cell marked occupied is not a straight aim. The path ends on the last free cell on the line to that wall, and reaching that cell while the command is still outside 5 cm is `stopped_short`.
+
+**Why.** In the bedroom corner the reaim spin flipped 139 times in 2.7 s and the pose did not move. The bedroom goal had become an occupied cell, and the straight aim into it was the creep and reverse that never left.
+
+**Evidence.** `test_a_reaim_heading_does_not_flip_when_the_gap_flickers`. `test_a_goal_on_a_mapped_wall_stops_short_instead_of_driving_into_it`. `test_a_mapped_wall_is_not_a_straight_aim`. The same three commands then stopped 1.08 m short of the wall goal, and the return to (−0.33, −0.47) arrived.
+
+**Rejected.** Shortening the 2 s reverse. A new weight so a reverse loses to a clipped forward turn. A new threshold on the still-picture hold.
+
+**Outcome.** One back-off has one heading. A mapped wall is not driven through. The still-picture hold at the bedroom door is unchanged.
+
+## 2026-11-19 — The bedroom-door hold froze a moving shell
+
+**Mission parameter.** No controller change. No new threshold.
+
+**Change.** None. The window is recorded so it is not folded into the corner fix.
+
+**Why.** From t=33.0 s to t=33.4 s the estimate did not move and the truth moved 0.066 m. The blank-floor yield did not run, so this frame's forward picture did not count as moved. The hold then did what a still picture is supposed to do.
+
+**Evidence.** Pose log and `floor blank, wheel translation held` at explorer t=29.4, 29.6, and 29.8 s. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Releasing a picture the hold already calls still. That is a new rule.
+
+**Outcome.** The 0.030 m to 0.105 m step is that hold. It is not fixed.

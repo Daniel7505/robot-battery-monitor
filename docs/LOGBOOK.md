@@ -828,3 +828,21 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Tried:** At each waypoint stop, `select_goal` with the same arguments `_plan` uses. The goal is not taken. The path is drawn on the stop's map. `MAPPING frontier proposal` prints the point.
 - **Result:** One living-room session. Seen 0.15, 67.53, 76.48, 76.57, 76.91, 76.92, 76.93. Final pose error 0.185 m. Bath not entered. Pantry and storage not opened. The morning lap's map is not in the repo, so its seen % was not scored. No new bug. No movie.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-stop-prints-the-frontier-it-would-pick) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-stop-prints-the-frontier-it-would-pick)
+
+### 2026-11-19 — A corner back-off reversed its own turn
+
+- **Commit:** `194b88f`. No new threshold. The 2 s reverse clock stays.
+- **Symptom:** `stopped_short` 0.60 m, then 1.63 m, then `stuck, no motion for 2 s`. Pose error stayed under 0.17 m. The shell was in the bedroom corner by door G and did not leave.
+- **Found:** Same seed, the frontier-assist log. From t=67 s to t=69.7 s the yaw command flipped 139 times, full spin one way and a short spin the other. The wheels did not build speed. Earlier, the bedroom goal cell was occupied and the path was a straight aim into that wall, so creep and the 2 s reverse took turns.
+- **Cause:** The heading after a back-off is measured again every frame. A gap that appears and disappears reverses the spin, and the two commands cancel. A mapped wall was also aimed at as if it were unknown.
+- **Fix:** The heading is chosen once, when the reverse ends. Yaw toward that heading keeps the 2 s clock. A cell marked occupied is not a straight aim; the path stops on the last free cell, and that is `stopped_short` if the command is still outside 5 cm.
+- **Test:** `test_a_reaim_heading_does_not_flip_when_the_gap_flickers`. `test_a_goal_on_a_mapped_wall_stops_short_instead_of_driving_into_it`. `test_a_mapped_wall_is_not_a_straight_aim`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-corner-back-off-reversed-its-own-turn) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-corner-back-off-reversed-its-own-turn)
+
+### 2026-11-19 — The bedroom-door hold froze a moving shell
+
+- **Commit:** log only. No controller change.
+- **Tried:** The pose error 0.030 m at t=33.0 s and 0.105 m at t=34.0 s, on the frontier-assist bedroom crossing.
+- **Result:** From t=33.0 s to t=33.4 s the estimate stayed at (0.368, 2.353) and the truth moved 0.066 m. Error 0.030 → 0.095, then both moved and the error stayed 0.105. The lines are `floor blank, wheel translation held` at explorer t=29.4, 29.6, and 29.8 s, std 0.2–0.6. The yield did not run, so the forward picture did not count as moved.
+- **Open:** A release of that still picture would be a new rule. Not applied.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-door-hold-froze-a-moving-shell) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-bedroom-door-hold-froze-a-moving-shell)

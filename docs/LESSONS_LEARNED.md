@@ -1469,3 +1469,13 @@ The same route then reached the living-room start. Truth (5.915, 4.511), pose er
 A waypoint stop now asks `select_goal` and does not take the goal. The path is on that stop's map. The morning lap has no `map.npy` in the repo, and the movie is the viewpoint, so that lap's seen % is not recoverable.
 
 The frontier-assist session ended at seen 76.93 and pose error 0.185 m. The bedroom proposal was taken. A later proposal back into the living room was the way out of a corner. The hall goal's last cell is unknown, so the command used the last free cell on that path. It then stopped 4.48 m short. The blank-floor hold at the bedroom door is the still-picture hold. The walkway snap was not reached. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+## A corner back-off reversed its own turn
+
+From t=67 s to t=69.7 s the yaw command flipped 139 times. One command was a full spin, the next a short spin the other way. The wheels never got going, and the 2 s clock said no motion. The heading after a back-off was being measured again every frame, so a gap that flickered reversed it. Commit `194b88f` keeps the heading chosen when the reverse ends. Yaw toward that heading is progress on the same 2 s clock. A cell the map calls occupied is no longer a straight aim through the wall.
+
+The same three commands, after that change: the bedroom goal stopped 1.08 m short on the last free cell instead of rocking until t=57 s, and `go_to -0.33 -0.47` arrived back in the living room.
+
+## The bedroom-door hold froze a moving shell
+
+From t=33.0 s to t=33.4 s the estimate sat at (0.368, 2.353) while the truth moved 0.066 m. The error went from 0.030 m to 0.095 m and stayed near 0.105 m. The log is `floor blank, wheel translation held`, three lines, std 0.2 to 0.6. The yield for a picture that moved did not run. Releasing a picture the hold already calls still would be a new rule. It was not added.

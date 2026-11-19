@@ -194,3 +194,31 @@ Stop 4 did not move. `floor still, translation frozen` at explorer t=64.6 s. Ove
 Stop 5's goal cell is unknown, so a `go_to` of that cell is a straight aim. The cell before it is free and the driver's path to it is A*. That cell is world (3.85, 1.77), on the kitchen side of the hall. The command moved about 0.6 m and stopped 4.48 m short beside the long living-room frontier. Nose 0.55 m. No new freeze line. Error 0.185. The same hall proposal was still the next one. The drive stopped there.
 
 End, room seen %: living 98.9, bedroom 93.6, kitchen 99.3, bath 4.9, laundry 46.8, closet 33.1, hall 20.5, storage 0, pantry 0. Visited 6.6. The bath was not entered. Pantry and storage were not opened. `up_z` minimum 0.99992. No wall-contact sample. The walkway snap at t=54.8–55.5 s was not reached. No new controller bug. No movie.
+
+## Corner, then the door hold
+
+Stops 2–4 of that session. Pose error 0.165, 0.155, 0.163. From t=67.0 s to t=69.7 s the yaw command flipped 139 times. `194b88f` keeps one heading for the turn after a reverse, and a mapped wall is not a straight aim.
+
+The same commands after that change. The bedroom goal stopped 1.08 m short at t=28.2 s, pose (0.20, 2.13), instead of rocking until t=57 s. `go_to 0.50 4.40` then said `imu_stuck`. Net wheel yaw in the 2.5 s before it was about 0.22 rad/s and the gyro about 0.06 rad/s, which is the existing check. `go_to -0.33 -0.47` arrived at t=58.0 s.
+
+The pose step at the bedroom door, from the first session. At t=33.0 s the error was 0.030 m and the estimate was (0.368, 2.353). It was still there at t=33.4 s. The truth moved 0.066 m. The error was 0.095 m, and 0.105 m at t=34.0 s. `floor blank, wheel translation held` at explorer t=29.4, 29.6, and 29.8 s. The yield did not run. A still picture still rewinds. No new threshold. Not changed.
+
+## After the corner fix
+
+Stock spawn, depth seed 1, `RBM_DRIVER=1`, no movie. The route was living, bedroom, back through the corner, hall, bath door. It stopped on the living side of door G.
+
+| stop | t | result | proposal (odom) | decision | pos err | seen % |
+|---|---|---|---|---|---|---|
+| 0 | 3.5 | ready | (0.03, −0.12), 4 points | override, `look` | 0.000 | 0.15 |
+| 1 | 17.3 | look arrived | (−0.07, 3.17), bedroom | taken | 0.005 | 67.53 |
+| 2 | 28.0 | 1.08 m short | (0.46, 6.68), off the floor | override, `go_to 0.40 2.80` | 0.021 | 70.81 |
+| 3 | 34.5 | `imu_stuck` | (3.21, 5.17), straight aim | override, door center `go_to 0.43 2.39` | 0.034 | 72.95 |
+| 4 | 49.5 | 0.58 m short | (0.98, 3.73) | stopped | 0.036 | 73.78 |
+
+Stop 2 is the new wall rule. The goal cell was occupied, so the path ended on the last free cell, world (3.97, 4.90), still on the living side of the shared wall. The next proposal is outside the floor.
+
+Stop 3 is the existing imu check. In the 2.5 s before t=35 s the net wheel yaw was 0.22 rad/s and the gyro 0.06 rad/s. The truth moved 0.04 m. Not a new threshold.
+
+Stop 4's first command was `reverse_right`. Pursuit wanted a hard right. Every forward right turn and the right spin were `map:corner`. The reverse is the turn that still fits, and the 2 s clock then carried the shell from world (3.91, 4.89) to (4.10, 4.69). Changing that score would be a new weight. The drive stopped there. Hall and the bath door were not reached. Bedroom visited 0.
+
+Room seen % at stop 4: living 98.4, bedroom 85.3, kitchen 99.3, bath 1.8, laundry 46.8, closet 4.6, hall 20.5, storage 0.0, pantry 0.0. Bridge bedroom 100.0, bridge bed-bath 97.8, bridge entry 94.7, bridge laundry 58.3, bridge bath 0.0, bridge closet 0.0. Visited overall is the shell on the pose log; bedroom visited 0.0. Pantry and storage were not opened.

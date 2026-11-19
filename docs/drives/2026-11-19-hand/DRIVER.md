@@ -164,3 +164,33 @@ The 0.30 m short was the driver. The goal was beside the shell and inside the 0.
 | living, home | (5.915, 4.511) | 0.223 |
 
 `up_z` 1.000. No contact on the return.
+
+## Frontier assist
+
+The morning lap's map is not in the repo. `logs/mapping_runs/` is gitignored, and this machine has no `map.npy` or pose log from that run. `lap.mp4` is the pose logger's viewpoint, not an occupancy grid, so its seen % cannot be scored. No rerun.
+
+This session is stock spawn, depth seed 1, `RBM_DRIVER=1`, headless, no movie. At each stop the mapper runs the existing `select_goal` and prints `MAPPING frontier proposal`. The green path on `map.png` is that path. A magenta cell on it is occupied. The goal is blue. Seen % is `coverage_pct` on that stop's own grid. Pose error is the pose log.
+
+| stop | t | what happened | proposal (odom) | decision | pos err | seen % |
+|---|---|---|---|---|---|---|
+| 0 | 3.5 | ready | (0.03, −0.12), 4 points | override, `look` | 0.000 | 0.15 |
+| 1 | 17.3 | look arrived | (−0.07, 3.17), 33 points, bedroom | taken | 0.005 | 67.53 |
+| 2 | 56.9 | `stopped_short` 0.60 m | (−0.33, −0.47), living room | override, `go_to 0.50 4.40` | 0.165 | 76.48 |
+| 3 | 62.3 | `stopped_short` 1.63 m | (−0.33, −0.47), living room | taken | 0.155 | 76.57 |
+| 4 | 69.7 | `stuck`, no motion for 2 s | (−0.57, −1.57), living room | taken | 0.163 | 76.91 |
+| 5 | 91.0 | arrived | (−3.02, 3.14), hall, last cell unknown | override, last free cell `go_to -2.93 2.25` | 0.177 | 76.92 |
+| 6 | 96.1 | `stopped_short` 4.48 m | (−3.02, 3.14) again | stopped | 0.185 | 76.93 |
+
+Stop 0 is 29 free cells. The proposal sits 12 cm to the side of the shell. A look is what makes a doorway exist on the map.
+
+Stop 1's path crosses the shared wall at world y 5.07. Door G's opening is 4.72–5.54. The goal is in the bedroom.
+
+Stop 2's proposal goes back to the living room. The same map has a free path west, toward the bath walkway. The override aimed there. From t=33 s to t=34 s the error went 0.030 → 0.105. The line is `floor blank, wheel translation held` at explorer t=29.4 s, std 0.2. The forward picture did not count as moved, so the existing hold rewound. That hold was left in place. The shell then rocked near truth (3.05, 5.08) until the 2 s clock. `up_z` 1.000. No contact.
+
+Stop 3 is that west aim. The shell was already in the corner, nose about 0.5 m, and the command ended 1.63 m short. The living-room proposal was the way out, so the next one was taken.
+
+Stop 4 did not move. `floor still, translation frozen` at explorer t=64.6 s. Over that second the truth path is about 0. The line matches a shell that was sitting. The following proposal, further into the living room, arrived. Three `floor blank` lines at explorer t=70.1 s, std 0.5. Error 0.160 → 0.174, then 0.125 at t=76 s, 0.177 at the stop.
+
+Stop 5's goal cell is unknown, so a `go_to` of that cell is a straight aim. The cell before it is free and the driver's path to it is A*. That cell is world (3.85, 1.77), on the kitchen side of the hall. The command moved about 0.6 m and stopped 4.48 m short beside the long living-room frontier. Nose 0.55 m. No new freeze line. Error 0.185. The same hall proposal was still the next one. The drive stopped there.
+
+End, room seen %: living 98.9, bedroom 93.6, kitchen 99.3, bath 4.9, laundry 46.8, closet 33.1, hall 20.5, storage 0, pantry 0. Visited 6.6. The bath was not entered. Pantry and storage were not opened. `up_z` minimum 0.99992. No wall-contact sample. The walkway snap at t=54.8–55.5 s was not reached. No new controller bug. No movie.

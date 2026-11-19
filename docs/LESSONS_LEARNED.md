@@ -1463,3 +1463,9 @@ The kitchen goal was free and nothing was in contact. The shell drove past it an
 Commit `a5bc64a`. When the goal is inside the existing 0.25 m lookahead, that goal is the target. The in-front test already turns when the target is not ahead. No new threshold.
 
 The same route then reached the living-room start. Truth (5.915, 4.511), pose error 0.223 m.
+
+## The stop prints the frontier it would pick
+
+A waypoint stop now asks `select_goal` and does not take the goal. The path is on that stop's map. The morning lap has no `map.npy` in the repo, and the movie is the viewpoint, so that lap's seen % is not recoverable.
+
+The frontier-assist session ended at seen 76.93 and pose error 0.185 m. The bedroom proposal was taken. A later proposal back into the living room was the way out of a corner. The hall goal's last cell is unknown, so the command used the last free cell on that path. It then stopped 4.48 m short. The blank-floor hold at the bedroom door is the still-picture hold. The walkway snap was not reached. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.

@@ -1197,3 +1197,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Calling the kitchen stop a bad waypoint only. The same miss happened on later goals that sat on the free path.
 
 **Outcome.** A free goal inside the lookahead is turned to. The walkway snap is still open.
+
+## 2026-11-19 — The stop prints the frontier it would pick
+
+**Mission parameter.** No new threshold. No geometry, world, or sensor change. The simulator pose stays in the pose logger. `select_goal` is unchanged.
+
+**Change.** At a waypoint stop the mapper calls `select_goal` with the same arguments `_plan` uses, stores the goal and the path, draws that path on the stop's map, and prints one line. The waypoint command is still the outside file. The proposal is not driven.
+
+**Why.** The outside aim can be the robot's own next frontier, except when that frontier is the worse of the openings on the map.
+
+**Evidence.** `test_a_stop_proposal_is_the_existing_frontier_and_does_not_drive`. `test_the_snapshot_map_draws_the_frontier_path`. One session, seen 76.93 at the last stop, pose error 0.185 m. The morning lap's grid is not in the repo. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** A second frontier score. Reading the pose log from the mapper. A new constant for when to override.
+
+**Outcome.** Each stop names the frontier. The session took it, or overrode a seed speck, a return that left the walkway, and an unknown last cell. No new bug. The walkway snap stays open.

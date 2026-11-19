@@ -821,3 +821,10 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Living start pose error 0.005 m. Bedroom 0.062 m. Bathroom 0.106 m. Hall 0.123 m. Kitchen 0.117 m. Home, truth (5.915, 4.511), pose error 0.223 m. `up_z` 1.000. No contact on the return. Movie `docs/drives/2026-11-19-hand/lap.mp4`, `RBM_MOVIE=1`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m)
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-snap-made-the-013-m)
+
+### 2026-11-19 — The stop prints the frontier it would pick
+
+- **Commit:** `ee93f04`. No new threshold. The walkway snap stays open.
+- **Tried:** At each waypoint stop, `select_goal` with the same arguments `_plan` uses. The goal is not taken. The path is drawn on the stop's map. `MAPPING frontier proposal` prints the point.
+- **Result:** One living-room session. Seen 0.15, 67.53, 76.48, 76.57, 76.91, 76.92, 76.93. Final pose error 0.185 m. Bath not entered. Pantry and storage not opened. The morning lap's map is not in the repo, so its seen % was not scored. No new bug. No movie.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-stop-prints-the-frontier-it-would-pick) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-stop-prints-the-frontier-it-would-pick)

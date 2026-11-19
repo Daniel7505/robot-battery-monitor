@@ -693,48 +693,68 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-19 — A straight doorway command was zeroed
 
-- **Commit:** `7c24c91`. No new constant. The side-cost tax is unchanged.
-- **Tried:** One hand drive, `RBM_DRIVER=1`, `RBM_MOVIE=1`, headless, stock spawn, depth seed 1. Look, then `go_to 0.4 2.7` through the opening the map showed north of the spawn. The backup-camera overlay is `_path_on_own_map` drawn on that stop. Truth is the pose log only.
-- **Result:** The first run stuck at estimate (0.25, 1.77), yaw 1.57, pose error 0.01 m, nose 1.37 m. `choose_motion` had returned cruise. `motion_blocked` is the turn rectangle and it clipped the jamb, so the driver sent (0, 0) until the 2 s stall. After `7c24c91` the same aim passed that pose and stopped 0.49 m short at (0.24, 2.23), truth (3.85, 4.94), pose error 0.017 m. Truth x reached 3.787. A slide to (0.6, 2.15) then stuck: creep `(1.5, 1.5)` and straight reverse `(-1.25, -1.25)` swapped every 16 ms and the shell did not move. No loop closure. One `floor still, translation frozen` at t=28.3 s. No wall contact. Lowest `up_z` 1.000. Max pose error on the rerun 0.026 m, max yaw error 0.006 rad, final 0.015 m. The shell stayed in the living room and reached the bedroom doorway. Lifting the 0.10 m side tax while the nose had air failed the existing jamb-press test, so that tax stays.
-- **Lesson:** The rectangle is a turn check. A straight pass the nose test already allowed has to be sent. The doorway sit that remains is the side tax and the rectangle disagreeing, one tick at a time.
+- **Commit:** `7c24c91` (this branch `7a80219`). No new constant.
+- **Symptom:** `stuck, no motion for 2 s` in a doorway the nose still sees open. Command is `(0, 0)`. Pose error stays small.
+- **Found:** Hand drive, `go_to 0.4 2.7`. Estimate (0.25, 1.77), nose 1.37 m. The decision log had cruise, then zeros.
+- **Cause:** `choose_motion` returned a straight command. `motion_blocked` then applied the turn rectangle, the rectangle clipped the jamb, and the driver sent `(0, 0)`.
+- **Fix:** A straight command `map_veto` already accepted is not run through the turn rectangle again. The 0.10 m side tax stays.
+- **Test:** `test_a_straight_door_the_rectangle_clips_still_drives`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-straight-doorway-command-was-zeroed) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-straight-doorway-command-stays)
 
 ### 2026-11-19 — A back-off is kept for the 2 s clock
 
-- **Commit:** `6562ac6`. No new constant. The 0.10 m side tax and the pin are unchanged.
-- **Tried:** Once `choose_motion` picks a reverse, that command is kept until `STALL_WINDOW_S` (2 s). The next approach then faces the opening's centre, or steps off the failed heading by the existing 12° release. The 0.04 m jamb-press test still has to back off. Same hand drive: look, `go_to 0.4 2.7`, `go_to 0.6 2.15`.
-- **Result:** The reverse `(-0.65, -2.35)` held from t=28.832 s to t=30.840 s, then a spin. No 16 ms creep/reverse swap. That aim stopped 0.40 m short, pose error 0.023 m. The slide stopped 0.31 m short. At t=37.1 s one pin rewound x,y. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171. Yaw error stays under 0.01 rad. Truth x 3.58 is through the shared wall. `up_z` 1.000. No loop closure. The drive stopped on that jump. Pytest: the new chatter test, the 0.04 m jamb-press test, and the driver file passed.
-- **Lesson:** The frame-by-frame swap was the missing clock. The pose jump after the crossing is the existing pin, and it was left in place.
+- **Commit:** `6562ac6` (this branch `e504ada`). No new constant.
+- **Symptom:** Creep `(1.5, 1.5)` and straight reverse `(-1.25, -1.25)` swap every 16 ms. The encoders rock and the shell stays.
+- **Found:** The same doorway, after the rectangle fix, on `go_to 0.6 2.15`.
+- **Cause:** No memory. A side gap under 0.10 m scores reverse, the rectangle vetoes the yaw-away reverse, and the next frame scores creep.
+- **Fix:** The first reverse is kept until `STALL_WINDOW_S` (2 s). The next approach faces the opening's centre, or steps off the failed heading by the existing 12°.
+- **Test:** `test_a_door_back_off_is_not_redecided_every_frame`. The 0.04 m press is still `test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-back-off-is-kept-for-the-2-s-clock) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-back-off-is-kept-for-the-2-s-clock)
 
 ### 2026-11-19 — A raw floor sum of 0.045 m opens the pin
 
-- **Commit:** `a23b846`. One new threshold, `RAW_FLOOR_M`.
-- **Tried:** Per-frame samples under 1.5 mm are still zeroed. The raw floor sum over the 0.05 m wheel window is kept. Still scenes sum 0.024–0.034 m (north 85, truth 0). A real slow reverse sums 0.056–0.064 m (north 85, truth 0.05 m per window). The 0.45 ratio of that wheel window is 0.023 m, and the still cloud is already above it. The cut is the midpoint, (0.034 + 0.056) / 2 = 0.045, with 0.011 m of margin on each cloud. A sum at or above 0.045 m is not a pin. The stuck-pin tests stay on a still floor.
-- **Result:** The still top, 0.034 m, still pins. Seed 74's 0.8 mm steps with a raw sum of 0.056 m do not. A 0.060 m sum, the doorway crossing's moving band, does not. The same hand drive had no `pinned` line. `go_to 0.4 2.7` pose error 0.009 m. `go_to 0.6 2.15` reached truth x 3.663. Error 0.007 → 0.123. At explorer t=37.2 s the line is `floor blank, wheel translation held std=0.1`. The drive stopped there. `up_z` 1.000. No loop closure.
-- **Lesson:** The quiet floor was hiding a slow move whose raw sum is already above a still scene. The blank-floor hold is a separate rewind, and it fired on the crossing.
+- **Commit:** `a23b846` (this branch `ffc4c7e`). One threshold, `RAW_FLOOR_M` = 0.045 m.
+- **Symptom:** `pinned, depth floor and visual still`. Truth moves. The estimate does not. Pose error grows with no yaw error.
+- **Found:** After the back-off, `go_to 0.6 2.15`. Explorer t=37.1 s. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171.
+- **Cause:** Samples under 1.5 mm are zeroed, so a slow real move disappears. Still windows sum 0.024–0.034 m of raw floor. A real slow reverse sums 0.056–0.064 m. The 0.45 ratio of the 0.05 m wheel window is 0.023 m, and the still cloud is already above it.
+- **Fix:** A raw floor sum at or above 0.045 m, the midpoint of those two clouds, is not a pin. Each cloud keeps 0.011 m. The 1.5 mm quiet floor stays.
+- **Test:** `test_the_doorway_crossing_raw_floor_is_not_pinned` and `test_seed_74_slow_reverse_is_not_pinned`. A still sum still pins in `test_a_still_raw_floor_sum_stays_pinned`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-raw-floor-sum-of-0045-m-opens-the-pin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-raw-floor-sum-of-0045-m-opens-the-pin)
 
 ### 2026-11-19 — A blank floor yields when the picture moved
 
-- **Commit:** `73b14c6`. No new threshold.
-- **Tried:** A floor image with std under 2 was rewinding x,y after 0.02 m of wheels. The doorway picture had moved and the corners had not fitted, so a gate that waited for a tracked translation still rewound.
-- **Result:** The step stays when the forward picture changed. A still picture, or no picture, still rewinds. Fusion off still rewinds, including the climb. The flat-floor tests pass.
-- **Lesson:** A blank floor is not evidence the wheels lied. A still forward picture is.
+- **Commit:** `73b14c6` (this branch `96bc030`). No new threshold.
+- **Symptom:** `floor blank, wheel translation held std=0.1`. x,y rewind to the anchor after the wheels claim 0.02 m. The shell is moving.
+- **Found:** The drive after the pin cut. Explorer t=37.2 s, std 0.1. Error 0.007 → 0.123. Truth x 3.663, through the shared wall.
+- **Cause:** A floor image with std under 2 was treated as proof the wheels lied. The doorway picture had moved and the corners had not fitted, so visual odometry had no translation to offer, and the hold still rewound.
+- **Fix:** The step stays when this frame's forward picture changed: a tracked translation, or reason `moved`, `few_tracks`, `no_fit`, or `too_large`. A still picture, or no picture, still rewinds. Fusion off still rewinds.
+- **Test:** `test_a_blank_floor_yields_when_the_picture_moves_without_a_fit`. A still picture still rewinds in the same test. The island hold is `test_a_flat_floor_image_does_not_confirm_wheel_travel`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-blank-floor-yields-when-the-picture-moved) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blank-floor-yields-when-the-picture-moved)
 
 ### 2026-11-19 — A new waypoint starts its own stuck window
 
-- **Commit:** `97229ea`. No new threshold.
-- **Tried:** `imu_stuck` ended a doorway slide and the next aim stopped in the same tick.
-- **Result:** Arming a command clears the camera clock and the IMU samples. The 2.5 s checks are unchanged. A window left in place still says stuck.
-- **Lesson:** The stuck window belongs to the command that filled it.
+- **Commit:** `97229ea` (this branch `e4d0d3e`). No new threshold.
+- **Symptom:** The next `go_to` stops in the same tick with the previous `imu_stuck` or `camera_stuck`. Travel on the new command is 0.
+- **Found:** After `imu_stuck` at the bedroom door, `go_to 0.3 3.3` died at t=34.016 s, 16 ms later, same pose.
+- **Cause:** The 2.5 s camera clock and the IMU samples belong to the command that filled them. `arm` did not clear them, so `_stuck` was already true.
+- **Fix:** `arm` clears `_view_still_from` and the IMU samples. A window that fills again still stops the command.
+- **Test:** `test_a_new_waypoint_does_not_inherit_the_stuck_window`.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-new-waypoint-starts-its-own-stuck-window) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-new-waypoint-starts-its-own-stuck-window)
 
-### 2026-11-19 — The bedroom lap stopped at the door
+### 2026-11-19 — A blind forward step stays dropped
 
-- **Commit:** `4cb96aa` reverts `cd59b13`. The lap is log only after that.
-- **Tried:** Short waypoints from the living-room spawn toward the bedroom, then the bathroom, the hallway, and back. `RBM_MOVIE=1`. One trial put a blind forward step back when the floor peak matched the wheels.
-- **Result:** Start pose error 0.005 m. At the door, truth x 3.745, pose error 0.019 m, then 0.033 m, both `imu_stuck`. The shell did not enter. The floor-match restore walked a still shell to 0.171 m and was reverted. Bathroom, hallway, and the return were not driven. No lap movie.
-- **Lesson:** A blind forward command stays a wedge. A floor peak that matches the wheels does not make a sitting shell into travel.
+- **Commit:** `4cb96aa` reverts `cd59b13` (this branch `2f8489d` reverts `16fa742`). No new threshold.
+- **Symptom:** Pose error grows while the shell is sitting and the nose is blind. Wheels claim a step the body did not take.
+- **Found:** `cd59b13` put a blind forward step back when the floor peak matched the wheels. At the bedroom door the error went 0.053 → 0.171 m while truth x stayed 3.74.
+- **Cause:** A floor peak that matches the wheels is not proof the shell moved. A blind forward command is the wedge. Restoring it walked a still shell.
+- **Fix:** Reverted. A forward command with a blind nose still drops the step.
+- **Test:** `test_reverse_out_of_a_blind_wall_moves_the_pose`. The added test that required the restore was removed with it.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-lap-stopped-at-the-door) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blind-forward-step-stays-dropped)
+
+### 2026-11-19 — The south jamb was the waypoint
+
+- **Commit:** log only. No controller change.
+- **Tried:** The stop at truth (3.745, 4.943) against the shared wall. Door G's opening is world y 4.72–5.54, center (3.71, 5.13), odometry (0.43, 2.39). The lap goals were odometry x 0.25–0.28.
+- **Result:** A* followed that line. The same map had a free path at x 0.45–0.55. A center-line run entered the bedroom, pose error 0.061 m then 0.063 m. The next step, toward the bath walkway, ended at 0.248 m after `floor still, translation frozen` at t=50.8 s. The drive stopped. No bathroom, hallway, or return.
+- **Lesson:** The wall hit was the waypoint, on the south jamb. The map and the planner were not the cause.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-south-jamb-was-the-waypoint) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-south-jamb-was-the-waypoint)

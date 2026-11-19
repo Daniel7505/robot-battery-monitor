@@ -1423,3 +1423,9 @@ Commit `73b14c6`. The step stays when this frame's forward picture changed: a no
 Living-room start, pose error 0.005 m. Two short steps, 0.018 m and 0.028 m, still in the living room. At the bedroom door, truth x 3.745, the shared-wall face is 3.759. `imu_stuck` fired, pose error 0.019 m, and the next aim fired it again, pose error 0.033 m. The shell did not go in. The bathroom, the hallway, and the return were not driven.
 
 An earlier crossing did enter, truth (3.12, 5.18), pose error 0.091 m. The nose was blind and the wheels' 0.14 m became 0.03 m of pose. Putting that step back when the floor said it matched walked a later still shell to 0.171 m. That change was reverted (`4cb96aa`). A blind forward command stays a wedge.
+
+## The south jamb was the waypoint
+
+Truth (3.745, 4.943) sits on the south jamb of door G. The opening is world y 4.72–5.54, center (3.71, 5.13). In odometry that center is (0.43, 2.39) and the opening is x 0.02–0.84. The goals were x 0.25–0.28, about 0.15 m south of center, and the shell's side meets the jamb. A* on that stop's map followed the line it was given. The same map already had a free path at x 0.45–0.55. No controller change.
+
+A center-line run crossed. Bedroom truth (3.39, 5.18), pose error 0.061 m, then (2.88, 5.21), 0.063 m. The next step stopped 0.30 m short at truth (2.46, 4.96), pose error 0.248 m. From t=50 s to t=55 s the truth path was 0.49 m and the estimate 0.32 m. `floor still, translation frozen` at t=50.8 s. The drive stopped.

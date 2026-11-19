@@ -77,3 +77,20 @@ Stock spawn, living room. `RBM_MOVIE=1`. Short steps. Truth from the pose log on
 The bedroom interior, the bathroom, the hallway, and the return were not reached. The lap did not finish, so there is no lap movie.
 
 One earlier crossing, before the revert below, did enter the bedroom: truth (3.12, 5.18), pose error 0.091. From t=41.2 s to t=42.0 s the nose was blind, the wheels claimed 0.14 m, and the pose took 0.03 m. No blank-floor line in that window. Putting a blind step back when the floor said it matched then walked a later still shell from 0.053 m to 0.171 m while truth x stayed 3.74. That change is `cd59b13`, reverted by `4cb96aa`. The wedge rule stays.
+
+## Door center
+
+Truth (3.745, 4.943) is the south jamb of door G, not the opening. The opening is world y 4.72–5.54, center (3.71, 5.13). In the odometry frame that center is (0.43, 2.39), and the opening runs x 0.02–0.84. The lap goals were x 0.25–0.28. A* on the robot's map followed that line. The same map had a free path at x 0.45–0.55. The waypoint was the mistake. The map and the planner were not.
+
+The next run aimed at that center.
+
+| place | truth (x, y) | pos err |
+|---|---|---|
+| start, living | (6.096, 4.688) | 0.005 |
+| door center, living side | (5.052, 5.094) | 0.027 |
+| door center, at the face | (4.134, 5.151) | 0.039 |
+| bedroom, just inside | (3.388, 5.182) | 0.061 |
+| bedroom | (2.880, 5.213) | 0.063 |
+| bedroom, toward the walkway | (2.464, 4.964) | 0.248 |
+
+The last step stopped 0.30 m short. From t=50 s to t=55 s the truth path was 0.49 m and the estimate moved 0.32 m. `floor still, translation frozen` at t=50.8 s. Error 0.14 → 0.25 m. The drive stopped. The bathroom, the hallway, and the return were not driven. No lap movie. `up_z` 1.000.

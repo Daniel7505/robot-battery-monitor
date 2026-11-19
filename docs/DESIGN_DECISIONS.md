@@ -1099,3 +1099,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Keeping the restore. A floor peak that matches the wheels is not enough when the shell is sitting.
 
 **Outcome.** A forward command with a blind nose still drops the step. The lap did not reach the bathroom, the hallway, or the start again.
+
+## 2026-11-19 — The south jamb was the waypoint
+
+**Mission parameter.** No controller change. No new threshold. No geometry change.
+
+**Change.** None. The next aims use the door center the map already had free.
+
+**Why.** Door G is world y 4.72–5.54, center (3.71, 5.13), odometry (0.43, 2.39). The goals at odometry x 0.25–0.28 are the south jamb. A* followed them. A path at x 0.45–0.55 was already free on that map.
+
+**Evidence.** The center-line run reached bedroom truth (3.39, 5.18), pose error 0.061 m, then (2.88, 5.21), 0.063 m. The following step stopped at 0.248 m. `floor still, translation frozen` at t=50.8 s. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Treating the wall contact as a planner bug. The path was the waypoint.
+
+**Outcome.** The doorway is the center of the opening. The lap stopped in the bedroom when a still-floor freeze held the estimate while the shell moved.

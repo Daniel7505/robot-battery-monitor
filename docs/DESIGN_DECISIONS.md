@@ -1253,3 +1253,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Raising 0.50 to 1.5 without an audit. That value would pick the legal straight creep at this pose. It is a new weight.
 
 **Outcome.** The veto stays. The weight is not changed.
+
+## 2026-11-19 — An open nose reverses only when a side is pressed
+
+**Mission parameter.** The open-nose reverse penalty. No geometry, sensor, or new distance.
+
+**Change.** In `_costs`, an open-nose reverse adds 1.5 when neither side is inside `TOO_CLOSE_M`, and 0.50 when one is. `TOO_CLOSE_M` is the existing 0.10 m side-press distance.
+
+**Why.** The old 0.50 lost to door G's yaw term (desired yaw about −1.1, straight-command yaw cost about 1.2), so `reverse_right` won over a legal creep. A side inside 0.10 m is the jamb press, and that reverse has to stay.
+
+**Evidence.** `test_door_g_open_nose_does_not_reverse_into_the_south_jamb`. The three jamb back-off tests still reverse. Full suite: 1146 passed, 28 skipped.
+
+**Rejected.** 1.5 on every open-nose reverse. That failed the jamb back-off tests, because those poses have an open nose and a side inside 0.10 m.
+
+**Outcome.** Clear sides creep. A pressed side still backs off at 0.50. Revert this commit to restore 0.50 on every open-nose reverse.

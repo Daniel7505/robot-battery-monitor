@@ -17,6 +17,7 @@ import os
 
 from src.mapping.bubble import (
     BUBBLE_STANDOFF_M,
+    TOO_CLOSE_M,
     BubbleView,
     pivot_ready,
     stop_gap,
@@ -249,15 +250,18 @@ def _costs(
     if 0.12 < left_clear < 1.20 and 0.12 < right_clear < 1.20 and v > 0.16:
         door += 0.8
     side = 0.0
+    side_press = False
     if view is not None:
-        if view.left is not None and view.left < 0.10:
+        if view.left is not None and view.left < TOO_CLOSE_M:
+            side_press = True
             if v > 0.02:
                 side += 1.6
             if w > 0.05:
                 side += 2.0
             if v < -0.02 and w < -0.2:
                 side -= 0.8
-        if view.right is not None and view.right < 0.10:
+        if view.right is not None and view.right < TOO_CLOSE_M:
+            side_press = True
             if v > 0.02:
                 side += 1.6
             if w < -0.05:
@@ -273,7 +277,10 @@ def _costs(
         if abs(v) < 0.03:
             door += 0.40
         if v < -0.02:
-            door += 0.50
+            # 0.50 while a side is inside TOO_CLOSE_M, the jamb press.
+            # 1.5 when the nose is open and neither side is that close.
+            # Door G's yaw term beat 0.50 and reverse won over a straight creep.
+            door += 0.50 if side_press else 1.5
     total = pursuit + door + side
     return {
         "pursuit": round(pursuit, 3),

@@ -855,3 +855,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Cause:** The veto matches the jamb. `reverse_right` wins because the desired yaw is about −1.1 and the open-nose reverse penalty is 0.50, which is less than the yaw term of a straight command.
 - **Not applied:** Raise that 0.50. A value of 1.5 would have picked the legal straight creep at this pose. That is a new weight.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-door-g-right-turn-hits-the-south-jamb) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-door-g-right-turn-hits-the-south-jamb)
+
+### 2026-11-19 — An open nose reverses only when a side is pressed
+
+- **Old behavior:** Every open-nose reverse added 0.50. At door G the desired yaw was about −1.1, so that 0.50 lost to the straight command's yaw term and `reverse_right` won.
+- **Why:** Dan approved 1.5 only when neither side is inside `TOO_CLOSE_M` (0.10 m), the existing side-press distance. A side inside that distance still adds 0.50, so the jamb press still backs off. No new number. An unconditional 1.5 failed the three jamb back-off tests and was not kept.
+- **Test:** `test_door_g_open_nose_does_not_reverse_into_the_south_jamb`. The door-G pose with clear sides goes forward. The same pose with a side at 0.08 m still reverses. Full suite: 1146 passed, 28 skipped (Postgres down).
+- **Revert:** `git revert` of this commit. The subject is `Raise the open-nose reverse penalty when both sides are clear.` That puts 0.50 back on every open-nose reverse.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#an-open-nose-reverses-only-when-a-side-is-pressed) · [Decision](DESIGN_DECISIONS.md#2026-11-19-an-open-nose-reverses-only-when-a-side-is-pressed)

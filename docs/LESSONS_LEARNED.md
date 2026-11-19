@@ -1483,3 +1483,7 @@ From t=33.0 s to t=33.4 s the estimate sat at (0.368, 2.353) while the truth mov
 ## The door-G right turn hits the south jamb
 
 The rectangle's right turns enter world (3.67, 4.68) and (3.67, 4.73). The opening starts at y 4.72. Those cells are the south jamb, and the color frame shows that wall on the left. No occupied cell sits on the living side of the opening. `reverse_right` is chosen because the open-nose reverse penalty is 0.50 and the desired yaw is about −1.1. Raising 0.50 to 1.5 would be a new weight. Not applied.
+
+## An open nose reverses only when a side is pressed
+
+The old penalty was 0.50 on every open-nose reverse. Door G's yaw term, about 1.2, beat that, so the shell reversed into the south jamb instead of creeping straight. The penalty is now 1.5 when neither side is inside `TOO_CLOSE_M` (0.10 m) and stays 0.50 when a side is. That distance was already the side-press check. An unconditional 1.5 also stopped the jamb back-off, so it was not kept. Revert this commit to put 0.50 back on every open-nose reverse.

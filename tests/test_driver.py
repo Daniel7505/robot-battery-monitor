@@ -179,6 +179,41 @@ def test_a_door_back_off_is_not_redecided_every_frame():
     assert driver.outcome is None
 
 
+def test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose():
+    """The 2 s reverse leaves the doorway on purpose.
+
+    The closest point before that reverse is not the bar for the try
+    that follows. A shell that is closing again, and has not yet beaten
+    the old point, keeps the command.
+    """
+    bot = _Bot()
+    bot.odometry.x_m = 1.60
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 2.0, "y": 0.0}, bot)
+    assert driver._best_dist == pytest.approx(0.40, abs=1e-6)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    left, right = driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    assert _vw(left, right)[0] < -0.02
+    backed_up = False
+    for _ in range(50):
+        if driver._t > 0.4:
+            bot.odometry.x_m = 1.00
+            backed_up = True
+        driver.wheels(bot, 0.40, 1.2, close, 0.05)
+        if driver._backoff_vw is None:
+            break
+    assert backed_up
+    assert driver._backoff_vw is None
+    assert driver.outcome is None
+    assert driver._best_dist == pytest.approx(1.00, abs=0.02)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    for i in range(45):
+        bot.odometry.x_m = 1.00 + i * 0.003
+        driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        assert driver.outcome is None
+    assert driver._best_dist < 0.90
+
+
 def test_a_vetoed_go_to_stops_short_with_the_gap():
     bot = _Bot()
     bot.grid.log[:] = bot.grid.l_max

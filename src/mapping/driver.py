@@ -222,6 +222,11 @@ class WaypointDriver:
         if self._backoff_vw is not None:
             self._backoff_vw = None
             self._reaim = True
+            # The reverse was commanded, so the shell is farther from the
+            # goal on purpose. The point it just left is not the bar for
+            # the try that follows. Progress is from here, by the same 4 cm.
+            self._best_dist = dist
+            self._best_head = _head_err(x, y, yaw, self.command)
             self._reset_window(explorer)
         head = _head_err(x, y, yaw, self.command)
         closer = dist <= self._best_dist - STILL_M or head <= self._best_head - _YAW_STEP_RAD

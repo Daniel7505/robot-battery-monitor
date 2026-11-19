@@ -1029,3 +1029,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new doorway width. Dropping the 0.10 m side tax while the forward view is open. That failed the existing test that a 0.04 m left press must reverse off the jamb.
 
 **Outcome.** A straight command the nose test accepted is the command that is sent. The shell still sits when the side tax and the rectangle take turns.
+
+## 2026-11-19 — A back-off is kept for the 2 s clock
+
+**Mission parameter.** A reverse `choose_motion` has already accepted is held for `STALL_WINDOW_S` (2 s). The next approach does not reuse the heading that backed up. No new constant. The 0.10 m side tax stays. The pin stays. No geometry change.
+
+**Change.** `WaypointDriver` latches the first reverse and sends it until the 2 s clock ends. It then turns toward the centre of the opening, using the side march `_fittable_gap` already uses. If that centre is the failed heading, the turn is the existing 12° pivot release, away from the nearer jamb. Commit `6562ac6`.
+
+**Why.** The door-mouth command swapped creep and straight reverse every 16 ms. Each frame re-scored the side gap, and the rectangle had vetoed the yaw-away reverse, so the two straight commands cancelled.
+
+**Evidence.** `test_a_door_back_off_is_not_redecided_every_frame` holds the reverse across an open side reading and the next command is a turn. `test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it` still passes. The same hand drive held `(-0.65, -2.35)` for 2.008 s, then spun. Pose error on that aim was 0.023 m. The following aim's error grew 0.021 → 0.171 after one pin at t=37.1 s. The drive stopped. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Dropping the 0.10 m side tax. A new hold time. Releasing the pin on this drive.
+
+**Outcome.** A back-off runs for the 2 s clock, and the re-approach is not the heading that failed. The pose jump past the doorway is the existing pin.

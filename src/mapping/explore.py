@@ -1737,6 +1737,18 @@ class Explorer:
             return False
         return True
 
+    def _visual_saw_translation(self) -> bool:
+        """This frame's depth corners moved. A still picture did not.
+
+        ``scene_visual_still`` is the existing 4 mm gate. No sample is
+        not a confirmation: the island climb and a stuck reverse often
+        have nothing to track, and the blank floor still holds those.
+        """
+        moved = self._fusion.scene_visual_m
+        if moved is None or self._fusion.scene_visual_still:
+            return False
+        return True
+
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
         held_depth = None
         if depth is None and self._zupt_anchor is not None:
@@ -1855,6 +1867,21 @@ class Explorer:
             dl_b = float(left_rad) - float(anchor["left"])
             dr_b = float(right_rad) - float(anchor["right"])
             claimed_b = abs(0.5 * (dl_b + dr_b)) * self.odometry.radius_m
+            # A blank floor has nothing to track. It is not evidence the
+            # wheels lied. Depth corners already measured this step: a
+            # translation they saw is the move, and the flat picture is
+            # dropped. No reading, or a still picture, is the island face
+            # and the stuck reverse. Those keep the hold. The short-shift
+            # case is a picture that did move, and it still rewinds.
+            if (
+                claimed_b >= 0.02
+                and status == "blank"
+                and flat
+                and self._visual_saw_translation()
+            ):
+                self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+                self._floor_track.reset()
+                return
             if claimed_b >= 0.02:
                 self.odometry.x_m = float(anchor["x"])
                 self.odometry.y_m = float(anchor["y"])

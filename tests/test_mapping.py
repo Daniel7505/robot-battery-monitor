@@ -1810,6 +1810,46 @@ def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):
     assert left_c * right_c < 0
 
 
+def test_a_blank_floor_yields_when_the_depth_corners_moved(capsys):
+    """The doorway crossing. The floor image is flat. The shell is not.
+
+    std under 2 used to rewind x,y once the wheels claimed 0.02 m.
+    The depth corners of that crossing moved with the wheels, so the
+    floor is dropped and the pose keeps the step. A flat floor with a
+    still forward picture is still the island, and that hold stays.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    flat = np.full((32, 32), 18.0)
+    rgb = np.zeros((cam.height, cam.width), dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    travel = 0.0
+    for i in range(14):
+        left += step
+        right += step
+        travel += step * WHEEL_RADIUS_M
+        wall = max(0.6, 2.2 - travel)
+        depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(wall, -1.2, 0.0, wall + 0.1, 1.2, 2.0)])
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+            rgb=rgb,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) > 0.05
+    assert "floor blank, wheel translation held" not in capsys.readouterr().out
+
+
 def test_a_held_floor_cuts_the_blocked_reverse(capsys):
     """The pose pin is the progress clock the blocked reverse already uses.
 

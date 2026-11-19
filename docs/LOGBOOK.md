@@ -871,3 +871,10 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** Truth stayed at (3.89, 5.37). The estimate walked to (3.42, 5.43), error 0.47 m. Caster and front-right contact at t=93.7 s. `floor slip, wheel motion rejected`, then `imu_stuck`. Bedroom visited 0.2. Hall, bath, and closet were not entered.
 - **Open:** A straight command is not rechecked with the turn rectangle. Changing that, or the `imu_stuck` numbers, would be a new rule. Not applied.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-door-g-creep-meets-the-north-jamb) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-door-g-creep-meets-the-north-jamb)
+
+### 2026-11-19 — The side-clear penalty is reverted
+
+- **Tried:** `5118627` raised the open-nose reverse penalty to 1.5 only when neither side is inside `TOO_CLOSE_M` (0.10 m). A pressed side stayed 0.50.
+- **Result:** Door G got worse. Stop 8 was a straight creep on the north jamb. Truth stayed at (3.89, 5.37). The estimate walked to (3.42, 5.43), error 0.47 m. This commit reverts `5118627`, so the penalty is 0.50 again.
+- **Open:** Rechecking a straight command with the turn rectangle. Not applied.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-side-clear-penalty-is-reverted) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-side-clear-penalty-is-reverted)

@@ -335,46 +335,6 @@ def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
     assert close is not None and close[2] == "back" and close[0] < 0.0 and close[1] == 0.0
 
 
-def test_door_g_open_nose_does_not_reverse_into_the_south_jamb():
-    """Right arcs clip the jamb. An open nose with clear sides goes forward.
-
-    The pose and the two cells are the door G stop. A side inside
-    ``TOO_CLOSE_M`` still takes the old 0.50 reverse.
-    """
-    from src.mapping.bubble import TOO_CLOSE_M, BubbleView
-    from src.mapping.tick import choose_motion
-
-    grid = OccupancyGrid()
-    for x, y in ((-0.02, 2.43), (0.03, 2.43)):
-        row, col = grid.cell_of(x, y)
-        grid.log[row, col] = grid.l_max
-    view = BubbleView(1.37, 0.55, 1.37, 1.5, 0.55)
-    choice = choose_motion(
-        view=view,
-        pursuit_v=0.10,
-        pursuit_w=-1.10,
-        heading_err=-0.90,
-        grid=grid,
-        pose=(0.19, 2.19, 1.59),
-        left_clear=0.55,
-        right_clear=1.37,
-    )
-    assert any(item["sensor"] == "map:corner" for item in choice.vetoes)
-    assert choice.v > 0.02
-    pressed = BubbleView(1.37, TOO_CLOSE_M - 0.02, 1.37, 1.5, TOO_CLOSE_M - 0.02)
-    backing = choose_motion(
-        view=pressed,
-        pursuit_v=0.10,
-        pursuit_w=-1.10,
-        heading_err=-0.90,
-        grid=grid,
-        pose=(0.19, 2.19, 1.59),
-        left_clear=TOO_CLOSE_M - 0.02,
-        right_clear=1.37,
-    )
-    assert backing.v < -0.02
-
-
 def test_a_map_corner_vetoes_a_turn_and_not_a_straight_pass():
     """The sweep is a hard veto only while yawing. A doorway stays drivable."""
     from src.mapping.bubble import BubbleView

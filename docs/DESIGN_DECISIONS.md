@@ -1266,7 +1266,7 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Rejected.** 1.5 on every open-nose reverse. That failed the jamb back-off tests, because those poses have an open nose and a side inside 0.10 m.
 
-**Outcome.** Clear sides creep. A pressed side still backs off at 0.50. `git revert 5118627` restores 0.50 on every open-nose reverse.
+**Outcome.** Clear sides crept. A pressed side still backed off at 0.50. Reverted: the penalty is 0.50 again.
 
 ## 2026-11-19 — The door-G creep meets the north jamb
 
@@ -1281,3 +1281,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Rechecking a straight command with the turn rectangle, and retuning `imu_stuck`. Both are new rules.
 
 **Outcome.** The creep stays. The crossing is not fixed. Left open.
+
+## 2026-11-19 — The side-clear penalty is reverted
+
+**Mission parameter.** Revert `5118627`. No new distance.
+
+**Change.** The open-nose reverse penalty is 0.50 again, including when both sides are clear.
+
+**Why.** Door G got worse. Stop 8 was a straight creep on the north jamb. Truth stayed at (3.89, 5.37). The estimate walked to (3.42, 5.43), error 0.47 m.
+
+**Evidence.** Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Leaving 1.5 in place. Rechecking a straight command with the turn rectangle is the open candidate, and it is not applied.
+
+**Outcome.** `5118627` is reverted.

@@ -1182,4 +1182,18 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Rejected.** Calling the snap the cause of `imu_stuck`. The stuck check fired later, on the yaw command, with the shell still moving.
 
-**Outcome.** The 0.13 m is the snap. The controller change for this stop is the net yaw test, not a floor-hold change.
+**Outcome.** The 0.13 m is the snap. The controller change for this stop is the net yaw test, not a floor-hold change. The snap is left open.
+
+## 2026-11-19 — A goal inside the lookahead is the target
+
+**Mission parameter.** No new threshold. `LOOKAHEAD_M` stays 0.25 m. The in-front test stays.
+
+**Change.** Once the goal is inside that lookahead, pure pursuit steers at the goal instead of at the next polyline point.
+
+**Why.** In the kitchen the goal was free, beside the shell, and the command stayed straight. The shell drove past it. The 2 s stall then said 0.30 m short. No contact.
+
+**Evidence.** `test_a_goal_beside_the_shell_is_not_driven_past`. `test_pure_pursuit_turns_left_for_a_left_goal` still turns for a far goal. The lap after the change reached truth (5.915, 4.511), pose error 0.223 m.
+
+**Rejected.** Calling the kitchen stop a bad waypoint only. The same miss happened on later goals that sat on the free path.
+
+**Outcome.** A free goal inside the lookahead is turned to. The walkway snap is still open.

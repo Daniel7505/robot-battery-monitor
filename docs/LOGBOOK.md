@@ -802,5 +802,22 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Commit:** log only. No controller change.
 - **Tried:** Whether the creep-and-snap at t=54.8–55.5 s is the 0.13 m pose error.
 - **Result:** At t=53.4 s the error was 0.027 m. At t=54.8 s it was 0.045 m and the pose was still tracking. Over the next 0.7 s the truth moved 0.091 m in odometry x and the pose went backward 0.013 m. The error went to 0.137 m and stayed there. The bathroom reading of 0.13 m is that gap. No new freeze line for the snap.
+- **Open:** Left open. Not fixed.
 - **Lesson:** The snap is the error. It is not what fired `imu_stuck`.
+
+### 2026-11-19 — A goal inside the lookahead is the target
+
+- **Commit:** `a5bc64a`. No new threshold. The existing 0.25 m lookahead is the cut.
+- **Symptom:** `stopped_short`, 0.30 m, on a goal the map calls free. No contact. The shell is still moving.
+- **Found:** Kitchen, hand drive. The goal sat beside the shell. In the body frame its forward offset was 0. Pose error on that stop was 0.132 m. The same miss repeated on the way home, 0.30 m then 0.14 m, with the command still straight while the goal was abeam.
+- **Cause:** Pure pursuit steers at a point 0.25 m along the polyline. That point can stay ahead after the goal itself is beside the shell, so the shell drives past a free goal and the 2 s stall ends the command.
+- **Fix:** Once the goal is inside that lookahead, the goal is the target. The existing in-front test then turns to it.
+- **Test:** `test_a_goal_beside_the_shell_is_not_driven_past`. A far goal stays `test_pure_pursuit_turns_left_for_a_left_goal`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-goal-inside-the-lookahead-is-the-target) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-goal-inside-the-lookahead-is-the-target)
+
+### 2026-11-19 — Home
+
+- **Commit:** log only. The lookahead change is `a5bc64a`. The walkway snap stays open.
+- **Result:** Living start pose error 0.005 m. Bedroom 0.062 m. Bathroom 0.106 m. Hall 0.123 m. Kitchen 0.117 m. Home, truth (5.915, 4.511), pose error 0.223 m. `up_z` 1.000. No contact on the return. Movie `docs/drives/2026-11-19-hand/lap.mp4`, `RBM_MOVIE=1`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m)
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-snap-made-the-013-m)

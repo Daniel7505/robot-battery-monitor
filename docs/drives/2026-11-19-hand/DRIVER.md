@@ -147,3 +147,20 @@ The t=54.8–55.5 s snap is the 0.13 m. Error 0.027 m at t=53.4 s, 0.045 m at t=
 | kitchen | (4.096, 1.809) | 0.132 |
 
 The kitchen goal was still free. A* was 0.32 m. The shell slid east of it, closest 0.285 m, then `0.30 m short`. No contact. `up_z` 1.000. The living-room start was not reached. No lap movie.
+
+## Home
+
+The 0.30 m short was the driver. The goal was beside the shell and inside the 0.25 m lookahead, and pursuit kept a point that was still ahead. `a5bc64a` steers at the goal. The walkway snap at t=54.8–55.5 s is left open.
+
+`f187036` is in the logbook. `RBM_MOVIE=1`. `docs/drives/2026-11-19-hand/lap.mp4`.
+
+| room | truth (x, y) | pos err |
+|---|---|---|
+| living, start | (6.096, 4.688) | 0.005 |
+| bedroom | (3.338, 5.146) | 0.062 |
+| bathroom | (1.360, 1.900) | 0.106 |
+| hall | (2.164, 1.734) | 0.123 |
+| kitchen | (3.792, 1.743) | 0.117 |
+| living, home | (5.915, 4.511) | 0.223 |
+
+`up_z` 1.000. No contact on the return.

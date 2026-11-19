@@ -1454,4 +1454,12 @@ The stuck check averaged the absolute wheel yaw, so the cancel counted as a spin
 
 ## The walkway snap made the 0.13 m
 
-From t=53.4 s to t=54.8 s the error went 0.027 m to 0.045 m while the pose tracked. From t=54.8 s to t=55.5 s the truth moved 0.091 m along the crossing and the pose stepped backward 0.013 m. The error became 0.137 m and did not come back. That is the 0.13 m in the bathroom. The snap did not set `imu_stuck`. There is no new freeze line on it.
+From t=53.4 s to t=54.8 s the error went 0.027 m to 0.045 m while the pose tracked. From t=54.8 s to t=55.5 s the truth moved 0.091 m along the crossing and the pose stepped backward 0.013 m. The error became 0.137 m and did not come back. That is the 0.13 m in the bathroom. The snap did not set `imu_stuck`. There is no new freeze line on it. Left open. Not fixed.
+
+## A goal inside the lookahead is the target
+
+The kitchen goal was free and nothing was in contact. The shell drove past it and the 2 s stall said 0.30 m short. The goal was beside the shell: its forward offset in the body frame was 0. Pursuit was still steering at a polyline point ahead of that.
+
+Commit `a5bc64a`. When the goal is inside the existing 0.25 m lookahead, that goal is the target. The in-front test already turns when the target is not ahead. No new threshold.
+
+The same route then reached the living-room start. Truth (5.915, 4.511), pose error 0.223 m.

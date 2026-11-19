@@ -3917,6 +3917,41 @@ class Explorer:
                 f"{item.get('reason')} clear={item.get('clear_m')}m"
             )
 
+    def frontier_proposal(self) -> dict | None:
+        """The frontier ``_plan`` would select. The goal is not taken.
+
+        Same ``select_goal`` arguments. A waypoint stop asks for this and
+        keeps driving the outside command.
+        """
+        x, y, yaw = self.plan_pose()
+        rooms = segment_map(self.grid.labels(), self.grid.res)
+        report: dict = {}
+        banned = set(self._ban_set()) | self._held_cells()
+        aim = None
+        if not self._simple_recovery() and self._narrow_gap((x, y, yaw)):
+            aim = CREEP_CLEAR_M
+        chosen = select_goal(
+            self.grid,
+            (x, y),
+            radius_m=ROBOT_RADIUS_M,
+            banned=banned,
+            avoid=self._avoid_now(),
+            rooms=rooms,
+            heading_xy=(math.cos(yaw), math.sin(yaw)),
+            report=report,
+            prefer_near=self._prefer_near,
+            visited=self.visited,
+            turn_aim_m=aim,
+            zones=self._failure_zone_args(),
+        )
+        if chosen is None:
+            return None
+        goal, path = chosen
+        return {
+            "goal_xy_m": [round(float(goal[0]), 4), round(float(goal[1]), 4)],
+            "path_xy_m": [[round(float(px), 4), round(float(py), 4)] for px, py in path],
+        }
+
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 4.0
         prefer_near = self._prefer_near

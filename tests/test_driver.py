@@ -10,11 +10,23 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.mapping.brain_port import latest_stop, publish_command, read_status, wait_for_command, write_png, write_stop
+from src.mapping.brain_port import (
+    _color_map,
+    format_frontier,
+    latest_stop,
+    publish_command,
+    read_status,
+    wait_for_command,
+    write_png,
+    write_stop,
+)
+from src.mapping.body import ROBOT_RADIUS_M
 from src.mapping.bubble import BubbleView
 from src.mapping.driver import STALL_WINDOW_S, WaypointDriver, parse_command
 from src.mapping.explore import Explorer
+from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
+from src.mapping.rooms import segment_map
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -437,9 +449,74 @@ def test_cli_reads_a_snapshot_and_writes_a_command(tmp_path, capsys):
     assert "odometry" in capsys.readouterr().out
 
 
+def test_a_stop_proposal_is_the_existing_frontier_and_does_not_drive():
+    """The waypoint stop asks ``select_goal``. It does not take that goal."""
+    grid = OccupancyGrid(size_m=8.0)
+    grid.stamp_footprint(0.0, 0.0, radius_m=1.2)
+    bot = Explorer(grid=grid, fusion=False, floor=False, loop=False)
+    phase = bot.phase
+    proposal = bot.frontier_proposal()
+    rooms = segment_map(grid.labels(), grid.res)
+    chosen = select_goal(
+        grid,
+        (0.0, 0.0),
+        radius_m=ROBOT_RADIUS_M,
+        banned=set(),
+        avoid=[],
+        rooms=rooms,
+        heading_xy=(1.0, 0.0),
+        visited=bot.visited,
+    )
+    assert chosen is not None and proposal is not None
+    assert proposal["goal_xy_m"][0] == pytest.approx(chosen[0][0], abs=1e-4)
+    assert proposal["goal_xy_m"][1] == pytest.approx(chosen[0][1], abs=1e-4)
+    assert len(proposal["path_xy_m"]) == len(chosen[1])
+    assert bot.goal_xy is None
+    assert bot.path_xy == []
+    assert bot.phase == phase
+    assert format_frontier(proposal).startswith("(")
+    assert "path=" in format_frontier(proposal)
+    assert format_frontier(None) == "none"
+
+
+def test_the_snapshot_map_draws_the_frontier_path(tmp_path, capsys):
+    labels = np.zeros((12, 12), dtype=np.int8)
+    labels[0, :] = -1
+    labels[2, 5] = 1
+    meta = {"resolution_m": 0.05, "origin_xy_m": [0.0, 0.0], "width": 12, "height": 12}
+    path = [[0.10, 0.10], [0.40, 0.10]]
+    rgb = _color_map(labels, meta, (0.10, 0.30), path, [0.40, 0.10])
+    # Path cells are free and green. The occupied cell the segment crosses is magenta.
+    assert tuple(rgb[2, 4]) == (40, 170, 60)
+    assert tuple(rgb[2, 5]) == (230, 40, 180)
+    # The goal is blue, and the pose is painted last so it stays red.
+    assert tuple(rgb[2, 8]) == (40, 90, 220)
+    assert tuple(rgb[6, 2]) == (220, 40, 40)
+    report = {
+        "status": "ready",
+        "detail": "",
+        "tilt_warning": False,
+        "pose": {"x_m": 0.10, "y_m": 0.30, "yaw_rad": 0.0, "frame": "odometry"},
+        "travel": {"commanded_m": 0.0, "wheel_m": 0.0, "floor_m": 0.0},
+        "battery": {"pct": 100.0, "wh_used": 0.0, "pack_wh": 480.0},
+        "command": None,
+        "frontier": {"goal_xy_m": [0.40, 0.10], "path_xy_m": path},
+    }
+    write_stop(tmp_path, 0, report, 1.0, {}, labels, meta)
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("driver_command", ROOT / "scripts" / "driver_command.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.main(["--run", str(tmp_path)]) == 0
+    assert "frontier (0.40,0.10) path=2" in capsys.readouterr().out
+
+
 def test_driver_flag_defaults_off_and_a_bound_explorer_still_steps():
     mapper = (ROOT / "webots" / "controllers" / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
     assert '_flag("RBM_DRIVER", False)' in mapper
+    assert "frontier_proposal" in mapper
+    assert "MAPPING frontier proposal" in mapper
     plain = Explorer(fusion=False, floor=False, loop=False)
     assert plain._waypoint is None
     driven = Explorer(fusion=False, floor=False, loop=False)

@@ -1737,17 +1737,20 @@ class Explorer:
             return False
         return True
 
-    def _visual_saw_translation(self) -> bool:
-        """This frame's depth corners moved. A still picture did not.
+    def _forward_view_moved(self) -> bool:
+        """The forward picture changed. A still picture, or no picture, did not.
 
-        ``scene_visual_still`` is the existing 4 mm gate. No sample is
-        not a confirmation: the island climb and a stuck reverse often
-        have nothing to track, and the blank floor still holds those.
+        A tracked translation is the move. So is a picture that changed
+        and could not be fit: a blank floor is not a vote, and that
+        frame does not say the body stayed. A still sample is the
+        island face and the stuck reverse. Fusion off leaves this
+        camera out, and the flat floor still holds those tests.
         """
-        moved = self._fusion.scene_visual_m
-        if moved is None or self._fusion.scene_visual_still:
+        if not self.fusion_enabled or self._fusion.scene_visual_still:
             return False
-        return True
+        if self._fusion.scene_visual_m is not None:
+            return True
+        return self._fusion.scene_visual_reason in ("moved", "few_tracks", "no_fit", "too_large")
 
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
         held_depth = None
@@ -1868,8 +1871,8 @@ class Explorer:
             dr_b = float(right_rad) - float(anchor["right"])
             claimed_b = abs(0.5 * (dl_b + dr_b)) * self.odometry.radius_m
             # A blank floor has nothing to track. It is not evidence the
-            # wheels lied. Depth corners already measured this step: a
-            # translation they saw is the move, and the flat picture is
+            # wheels lied. A forward picture that changed is the move,
+            # whether or not the corners fitted, and the flat picture is
             # dropped. No reading, or a still picture, is the island face
             # and the stuck reverse. Those keep the hold. The short-shift
             # case is a picture that did move, and it still rewinds.
@@ -1877,7 +1880,7 @@ class Explorer:
                 claimed_b >= 0.02
                 and status == "blank"
                 and flat
-                and self._visual_saw_translation()
+                and self._forward_view_moved()
             ):
                 self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
                 self._floor_track.reset()

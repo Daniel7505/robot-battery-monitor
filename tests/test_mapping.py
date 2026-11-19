@@ -1850,6 +1850,59 @@ def test_a_blank_floor_yields_when_the_depth_corners_moved(capsys):
     assert "floor blank, wheel translation held" not in capsys.readouterr().out
 
 
+def test_a_blank_floor_yields_when_the_picture_moves_without_a_fit(capsys):
+    """Today's doorway. The floor is flat. The forward picture changes.
+
+    A straight edge has no corners to fit, so visual odometry returns
+    no translation. That is not a still reading. The blank floor is
+    dropped and the wheels keep the step. The same flat floor in front
+    of a picture that does not change still rewinds.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    for i in range(14):
+        left += step
+        right += step
+        depth = np.full((cam.height, cam.width), 1.4)
+        if i % 2 == 0:
+            depth += 0.6 * np.linspace(0.0, 1.0, cam.width)
+        else:
+            depth += 0.6 * np.linspace(0.0, 1.0, cam.height)[:, None]
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) > 0.05
+    assert "floor blank, wheel translation held" not in capsys.readouterr().out
+
+    held = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    wall = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(1.5, -1.2, 0.0, 1.6, 1.2, 2.0)])
+    left = right = 0.0
+    for _ in range(14):
+        left += step
+        right += step
+        held.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=wall,
+            floor=flat,
+        )
+    assert math.hypot(held.pose()[0], held.pose()[1]) < 0.02
+    assert "floor blank, wheel translation held" in capsys.readouterr().out
+
+
 def test_a_held_floor_cuts_the_blocked_reverse(capsys):
     """The pose pin is the progress clock the blocked reverse already uses.
 

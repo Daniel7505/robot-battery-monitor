@@ -1401,3 +1401,9 @@ On the rerun, max pose error was 0.026 m and max yaw error 0.006 rad. Final pose
 Commit `6562ac6`. The first reverse is kept until `STALL_WINDOW_S`, which is already 2 s. When that clock ends, the next approach faces the centre of the opening from the existing side march, or, if that centre is the heading that just failed, steps off it by `PIVOT_EXIT_RAD` (12°). No new constant. The 0.04 m left-press test still sees a reverse with the right hub faster.
 
 On the same hand drive the reverse `(-0.65, -2.35)` held from t=28.832 s to t=30.840 s and the next command was a spin. `go_to 0.4 2.7` ended 0.40 m short with pose error 0.023 m. `go_to 0.6 2.15` crossed the shared wall in the pose log (truth x 3.58) and the estimate did not. At t=37.1 s the line is `pinned, depth floor and visual still, wheel translation frozen`. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171. Yaw error stays under 0.01 rad. The pin was left as it is. The drive stopped there.
+
+## A raw floor sum of 0.045 m opens the pin
+
+Samples under 1.5 mm still add nothing to the quieted sums. A slow reverse is made of those samples, so the quieted floor stays under `max(0.012, 0.45 * wheel)` and the pin closes. The raw sum, before that zero, does not. Still windows are 0.024–0.034 m. Moving windows on the same pin are 0.056–0.064 m. `(0.034 + 0.056) / 2` is 0.045 m, and `RAW_FLOOR_M` is that midpoint. A window at or above it is not a pin. The still top, 0.034 m, still is. Commit `a23b846`.
+
+The same hand drive wrote no `pinned` line. Pose error on `go_to 0.4 2.7` was 0.009 m. On `go_to 0.6 2.15` truth x reached 3.663 and the error went from 0.007 m to 0.123 m. Explorer t=37.2 s is `floor blank, wheel translation held std=0.1`. That hold rewinds x,y when a floor image with std under 2 has already claimed 0.02 m of wheels. The drive stopped there.

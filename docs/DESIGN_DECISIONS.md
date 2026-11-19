@@ -1043,3 +1043,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Dropping the 0.10 m side tax. A new hold time. Releasing the pin on this drive.
 
 **Outcome.** A back-off runs for the 2 s clock, and the re-approach is not the heading that failed. The pose jump past the doorway is the existing pin.
+
+## 2026-11-19 — A raw floor sum of 0.045 m opens the pin
+
+**Mission parameter.** One new threshold, on the raw floor sum of a pin window. The 1.5 mm quiet floor stays. The 0.45 ratio stays. No geometry change.
+
+**Change.** `PinWatch.RAW_FLOOR_M` is 0.045 m. A window whose raw floor sum, before the quiet floor, is at or above that is not a pin. Commit `a23b846`.
+
+**Why.** Still scenes sum 0.024–0.034 m of raw floor over 0.05 m of wheels. A real slow reverse sums 0.056–0.064 m. The 0.45 ratio of those wheels is 0.023 m, which the still cloud already exceeds, so the ratio cannot be the cut. The midpoint of the gap is 0.045 m. Each logged cloud keeps 0.011 m.
+
+**Evidence.** A quieted window at 0.034 m still pins. Seed 74's 0.8 mm steps with a raw sum of 0.056 m do not. A 0.060 m sum does not. `test_a_still_scene_with_turning_wheels_freezes_translation`, `test_a_reverse_with_a_flat_nose_still_pins`, and `test_a_tipped_reverse_still_pins_when_the_nose_opens` still pass. The same hand drive had no `pinned` line. The crossing then hit `floor blank, wheel translation held` and the error went 0.007 → 0.123 m. The drive stopped. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Lowering `QUIET_M`. Putting the 1.5 mm floor on the window sum: a still scene would then read about 0.03 m and the stuck pin would not close. Using the 0.45 ratio on the raw sum: the still cloud is already above 0.023 m.
+
+**Outcome.** A slow move whose raw floor sum is in the logged moving band is not pinned. A still scene in the logged still band still is. The blank-floor hold is a separate rewind.

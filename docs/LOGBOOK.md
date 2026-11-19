@@ -706,3 +706,11 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** The reverse `(-0.65, -2.35)` held from t=28.832 s to t=30.840 s, then a spin. No 16 ms creep/reverse swap. That aim stopped 0.40 m short, pose error 0.023 m. The slide stopped 0.31 m short. At t=37.1 s one pin rewound x,y. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171. Yaw error stays under 0.01 rad. Truth x 3.58 is through the shared wall. `up_z` 1.000. No loop closure. The drive stopped on that jump. Pytest: the new chatter test, the 0.04 m jamb-press test, and the driver file passed.
 - **Lesson:** The frame-by-frame swap was the missing clock. The pose jump after the crossing is the existing pin, and it was left in place.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#a-back-off-is-kept-for-the-2-s-clock) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-back-off-is-kept-for-the-2-s-clock)
+
+### 2026-11-19 — A raw floor sum of 0.045 m opens the pin
+
+- **Commit:** `a23b846`. One new threshold, `RAW_FLOOR_M`.
+- **Tried:** Per-frame samples under 1.5 mm are still zeroed. The raw floor sum over the 0.05 m wheel window is kept. Still scenes sum 0.024–0.034 m (north 85, truth 0). A real slow reverse sums 0.056–0.064 m (north 85, truth 0.05 m per window). The 0.45 ratio of that wheel window is 0.023 m, and the still cloud is already above it. The cut is the midpoint, (0.034 + 0.056) / 2 = 0.045, with 0.011 m of margin on each cloud. A sum at or above 0.045 m is not a pin. The stuck-pin tests stay on a still floor.
+- **Result:** The still top, 0.034 m, still pins. Seed 74's 0.8 mm steps with a raw sum of 0.056 m do not. A 0.060 m sum, the doorway crossing's moving band, does not. The same hand drive had no `pinned` line. `go_to 0.4 2.7` pose error 0.009 m. `go_to 0.6 2.15` reached truth x 3.663. Error 0.007 → 0.123. At explorer t=37.2 s the line is `floor blank, wheel translation held std=0.1`. The drive stopped there. `up_z` 1.000. No loop closure.
+- **Lesson:** The quiet floor was hiding a slow move whose raw sum is already above a still scene. The blank-floor hold is a separate rewind, and it fired on the crossing.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-raw-floor-sum-of-0045-m-opens-the-pin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-raw-floor-sum-of-0045-m-opens-the-pin)

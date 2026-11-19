@@ -40,3 +40,14 @@ Same three commands, then a stop. The creep/reverse swap is gone. On `go_to 0.4 
 | 3 | go_to 0.6 2.15 | stopped_short, 0.31 m | (0.41, 2.40, −0.54) | (3.58, 4.99, 1.02) | 0.169 |
 
 Stop 3 is the new issue. At t=37.1 s the log is `pinned, depth floor and visual still, wheel translation frozen`. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error goes 0.021 → 0.171. Yaw error stays under 0.01 rad. `up_z` 1.000. No loop closure. Truth x 3.58 is through the shared wall (west face 3.759), so the shell entered the bedroom while the estimate did not follow. The drive stopped there. The pin is the existing still-scene gate in `pin.py`. It was not changed.
+
+## After the raw-floor cut, `a23b846`
+
+`RAW_FLOOR_M` is 0.045 m. Still windows sum 0.024–0.034 m of raw floor. A real slow reverse sums 0.056–0.064 m. The cut is the midpoint, so each cloud keeps 0.011 m. Same three commands.
+
+| stop | command | status | estimate (x, y, yaw) | truth (x, y, yaw) | pos err |
+|---|---|---|---|---|---|
+| 2 | go_to 0.4 2.7 | stopped_short, 0.41 m | (0.35, 2.30, 1.05) | (3.93, 4.95) at t=32 | 0.009 |
+| 3 | go_to 0.6 2.15 | stopped_short, 0.29 m | (0.42, 2.38, −0.36) | (3.67, 5.02, 1.26) | 0.117 |
+
+No `pinned` line. Max pose error 0.123 m at t=43.2 s. Truth x reached 3.663, through the shared wall. At explorer t=37.2 s the log is `floor blank, wheel translation held std=0.1`. That hold rewound x,y to its anchor once the wheels had claimed 0.02 m on a floor image with std under 2. The drive stopped on that jump. The blank-floor hold was not changed.

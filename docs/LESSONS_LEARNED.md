@@ -1385,3 +1385,113 @@ The headless smoke on the stock spawn, commit after `ae27189`, sent `go_to 0.6 0
 `PIVOT_EXIT_RAD` is 12°. The waypoint turn used it, so `turn_to 0.40` stopped at estimated yaw 0.194 and still said arrived. A named heading now arrives at 0.05 rad. Inside that existing 12° the spin rate is the existing `SPIN_RAD_S` scaled by the remaining error. A turn that cannot close the gap is `stopped_short` with `remaining_rad`.
 
 The look reported 0.902 m of floor travel. The downward camera correlates a patch. A spin in place moves that patch sideways, and the driver was summing the shift as metres. The pose update does not. `MotionFusion._apply_shift` returns without applying a floor correction when the yaw in the window is more than 0.08 rad, because that peak is the rotation. The snapshot now leaves those samples out of `floor_m` and sets `floor_reliable` false. The controller's use of the floor picture is unchanged. The rerun: turn yaw 0.351, remaining 0.049 rad; look floor 0.001 m, unreliable. No live ten.
+
+## A straight doorway command was zeroed
+
+`choose_motion` already runs `map_veto`. On a straight command that test is `_ahead_blocked`: the centre and both sides at 0.12 m have to be occupied, so a centred doorway stays open. The waypoint driver then called `motion_blocked`, which is the turn rectangle. On the hand drive that rectangle clipped the bedroom-door jamb. `choose_motion` had returned cruise, the driver replaced it with (0, 0), and the 2 s stall said stuck at estimate (0.25, 1.77) with the nose still at 1.37 m. Pose error against the pose log was 0.01 m. Commit `7c24c91` stops that second check. No new constant.
+
+The same aim after the fix passed (0.25, 1.77) and reached estimate (0.24, 2.23), 0.49 m short of (0.4, 2.7). Truth x reached 3.787, on the living side of the shared wall. Pose error there was 0.017 m. The next aim, a short slide off the left jamb, stuck because the wheel command swapped every 16 ms between creep `(1.5, 1.5)` and straight reverse `(-1.25, -1.25)`. A side reading under 0.10 m taxes the forward command. The yaw-away reverse is what a real press is supposed to do, and the rectangle vetoes that turn, so the straight reverse wins on the close samples and the creep wins when the reading opens. The shell does not move. Taking the tax off while the nose had air failed `test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it`. The tax stays.
+
+On the rerun, max pose error was 0.026 m and max yaw error 0.006 rad. Final pose error 0.015 m. No loop closure. No wall contact. Lowest `up_z` is 1.000. One `floor still, translation frozen` at t=28.3 s, and the error did not jump there. The shell stayed in the living room. The driver's log and the overlays are in `docs/drives/2026-11-19-hand/`.
+
+## A back-off is kept for the 2 s clock
+
+`choose_motion` has no memory. At the door mouth a side gap under 0.10 m scored a reverse, the rectangle vetoed the yaw-away reverse, and the next 16 ms frame scored creep again. The wheels rocked and the shell stayed.
+
+Commit `6562ac6`. The first reverse is kept until `STALL_WINDOW_S`, which is already 2 s. When that clock ends, the next approach faces the centre of the opening from the existing side march, or, if that centre is the heading that just failed, steps off it by `PIVOT_EXIT_RAD` (12°). No new constant. The 0.04 m left-press test still sees a reverse with the right hub faster.
+
+On the same hand drive the reverse `(-0.65, -2.35)` held from t=28.832 s to t=30.840 s and the next command was a spin. `go_to 0.4 2.7` ended 0.40 m short with pose error 0.023 m. `go_to 0.6 2.15` crossed the shared wall in the pose log (truth x 3.58) and the estimate did not. At t=37.1 s the line is `pinned, depth floor and visual still, wheel translation frozen`. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171. Yaw error stays under 0.01 rad. The pin was left as it is. The drive stopped there.
+
+## A raw floor sum of 0.045 m opens the pin
+
+Samples under 1.5 mm still add nothing to the quieted sums. A slow reverse is made of those samples, so the quieted floor stays under `max(0.012, 0.45 * wheel)` and the pin closes. The raw sum, before that zero, does not. Still windows are 0.024–0.034 m. Moving windows on the same pin are 0.056–0.064 m. `(0.034 + 0.056) / 2` is 0.045 m, and `RAW_FLOOR_M` is that midpoint. A window at or above it is not a pin. The still top, 0.034 m, still is. Commit `a23b846`.
+
+The same hand drive wrote no `pinned` line. Pose error on `go_to 0.4 2.7` was 0.009 m. On `go_to 0.6 2.15` truth x reached 3.663 and the error went from 0.007 m to 0.123 m. Explorer t=37.2 s is `floor blank, wheel translation held std=0.1`. That hold rewinds x,y when a floor image with std under 2 has already claimed 0.02 m of wheels. The drive stopped there.
+
+## A blank floor yields when the picture moved
+
+A floor image with std under 2 has nothing to track. It was rewinding x,y once the wheels had claimed 0.02 m, including when the forward picture had already changed. A tracked translation was not enough for the doorway: the picture moved and the corners did not fit, so visual odometry returned no translation, and the hold still fired.
+
+Commit `73b14c6`. The step stays when this frame's forward picture changed: a non-still tracked translation, or reason `moved`, `few_tracks`, `no_fit`, or `too_large`. Those reasons already exist. A still sample, or no sample, still rewinds. Fusion off still rewinds, so the flat-floor test and the climb stay. No new threshold.
+
+## A new waypoint starts its own stuck window
+
+`imu_stuck` ended the doorway slide. The next `go_to` stopped one tick later, with the same IMU samples. Commit `97229ea` clears the camera clock and the IMU samples when a command is armed. The 2.5 s checks are the same ones. A window that is left in place still says stuck.
+
+## The bedroom lap stopped at the door
+
+Living-room start, pose error 0.005 m. Two short steps, 0.018 m and 0.028 m, still in the living room. At the bedroom door, truth x 3.745, the shared-wall face is 3.759. `imu_stuck` fired, pose error 0.019 m, and the next aim fired it again, pose error 0.033 m. The shell did not go in. The bathroom, the hallway, and the return were not driven.
+
+An earlier crossing did enter, truth (3.12, 5.18), pose error 0.091 m. The nose was blind and the wheels' 0.14 m became 0.03 m of pose. Putting that step back when the floor said it matched walked a later still shell to 0.171 m. That change was reverted (`4cb96aa`). A blind forward command stays a wedge.
+
+## A straight slide whose floor followed is not frozen
+
+`floor still, translation frozen` is not the pin and not the blank-floor hold. The short floor steps said still. From t=49.3 s to t=50.3 s on the bath-walkway step the wheels and the truth both moved about 0.07 m and the pose did not. Yaw over that second passed 0.12 rad, and the release still waited to be asked whether the floor scene had followed the wheels. It only asked after that yaw. A scene that already matches the wheels is the drive on a straight line too. A still step under 2 px is now added into `moved_px`, so a one-pixel creep is not an endless still. The existing 2 px sum is the gate. A picture that does not slide still rewinds.
+
+## The south jamb was the waypoint
+
+Truth (3.745, 4.943) sits on the south jamb of door G. The opening is world y 4.72–5.54, center (3.71, 5.13). In odometry that center is (0.43, 2.39) and the opening is x 0.02–0.84. The goals were x 0.25–0.28, about 0.15 m south of center, and the shell's side meets the jamb. A* on that stop's map followed the line it was given. The same map already had a free path at x 0.45–0.55. No controller change.
+
+A center-line run crossed. Bedroom truth (3.39, 5.18), pose error 0.061 m, then (2.88, 5.21), 0.063 m. The next step stopped 0.30 m short at truth (2.46, 4.96), pose error 0.248 m. From t=50 s to t=55 s the truth path was 0.49 m and the estimate 0.32 m. `floor still, translation frozen` at t=50.8 s. The drive stopped.
+
+## A doorway retry starts from the backed-up pose
+
+The bathroom door was free on the map and the path was A* down the center. At t=93.5 s the driver chose `reverse_left` and held it for the existing 2 s. The shell came back toward the opening. At t=97.5 s the stall said `stopped_short`, 0.56 m, because closer still meant beating the point from before the reverse.
+
+Commit `0b55545`. When that reverse ends, the bar is the backed-up pose. The same 4 cm. No new threshold. The 2 s hold is unchanged.
+
+## The walkway was the center line
+
+The stall at truth (1.009, 4.858) was a straight aim into a cell the map had not seen. That is the existing path, not a driver bug. A turn at the mouth mapped the south side. A* on odometry y 4.88 crossed the wall at world y 4.57.
+
+On that crossing the pose crept forward and snapped back to the same x from t=54.8 s to t=55.5 s. Error went from 0.027 m to 0.131 m. There is no new `floor still` or `floor blank` line for that snap. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m. The shell was still moving. No wall contact. The hallway and the return were not driven.
+
+## A cancelling yaw command is not a stuck spin
+
+In the bathroom the wheels were told left, then right, every step. Ninety-three flips in 2.1 s. The net yaw was −0.011 rad/s. The pose yaw and the truth yaw each moved less than 0.001 rad. The shell translated. Nothing was in contact.
+
+The stuck check averaged the absolute wheel yaw, so the cancel counted as a spin the gyro had ignored. Commit `f187036` uses the net rate. A wedge that turns one way still stops. The earlier `imu_stuck` notes are a different case: the check itself, and a window the next waypoint inherited after the shell was on the bedroom door.
+
+## The walkway snap made the 0.13 m
+
+From t=53.4 s to t=54.8 s the error went 0.027 m to 0.045 m while the pose tracked. From t=54.8 s to t=55.5 s the truth moved 0.091 m along the crossing and the pose stepped backward 0.013 m. The error became 0.137 m and did not come back. That is the 0.13 m in the bathroom. The snap did not set `imu_stuck`. There is no new freeze line on it. Left open. Not fixed.
+
+## A goal inside the lookahead is the target
+
+The kitchen goal was free and nothing was in contact. The shell drove past it and the 2 s stall said 0.30 m short. The goal was beside the shell: its forward offset in the body frame was 0. Pursuit was still steering at a polyline point ahead of that.
+
+Commit `a5bc64a`. When the goal is inside the existing 0.25 m lookahead, that goal is the target. The in-front test already turns when the target is not ahead. No new threshold.
+
+The same route then reached the living-room start. Truth (5.915, 4.511), pose error 0.223 m.
+
+## The stop prints the frontier it would pick
+
+A waypoint stop now asks `select_goal` and does not take the goal. The path is on that stop's map. The morning lap has no `map.npy` in the repo, and the movie is the viewpoint, so that lap's seen % is not recoverable.
+
+The frontier-assist session ended at seen 76.93 and pose error 0.185 m. The bedroom proposal was taken. A later proposal back into the living room was the way out of a corner. The hall goal's last cell is unknown, so the command used the last free cell on that path. It then stopped 4.48 m short. The blank-floor hold at the bedroom door is the still-picture hold. The walkway snap was not reached. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+## A corner back-off reversed its own turn
+
+From t=67 s to t=69.7 s the yaw command flipped 139 times. One command was a full spin, the next a short spin the other way. The wheels never got going, and the 2 s clock said no motion. The heading after a back-off was being measured again every frame, so a gap that flickered reversed it. Commit `194b88f` keeps the heading chosen when the reverse ends. Yaw toward that heading is progress on the same 2 s clock. A cell the map calls occupied is no longer a straight aim through the wall.
+
+The same three commands, after that change: the bedroom goal stopped 1.08 m short on the last free cell instead of rocking until t=57 s, and `go_to -0.33 -0.47` arrived back in the living room.
+
+## The bedroom-door hold froze a moving shell
+
+From t=33.0 s to t=33.4 s the estimate sat at (0.368, 2.353) while the truth moved 0.066 m. The error went from 0.030 m to 0.095 m and stayed near 0.105 m. The log is `floor blank, wheel translation held`, three lines, std 0.2 to 0.6. The yield for a picture that moved did not run. Releasing a picture the hold already calls still would be a new rule. It was not added. Left open.
+
+## The door-G right turn hits the south jamb
+
+The rectangle's right turns enter world (3.67, 4.68) and (3.67, 4.73). The opening starts at y 4.72. Those cells are the south jamb, and the color frame shows that wall on the left. No occupied cell sits on the living side of the opening. `reverse_right` is chosen because the open-nose reverse penalty is 0.50 and the desired yaw is about −1.1. Raising 0.50 to 1.5 would be a new weight. Not applied.
+
+## An open nose reverses only when a side is pressed
+
+The old penalty was 0.50 on every open-nose reverse. Door G's yaw term, about 1.2, beat that, so the shell reversed into the south jamb instead of creeping straight. The penalty was 1.5 when neither side was inside `TOO_CLOSE_M` (0.10 m) and stayed 0.50 when a side was. That distance was already the side-press check. An unconditional 1.5 also stopped the jamb back-off, so it was not kept. `git revert 5118627` puts 0.50 back on every open-nose reverse.
+
+## The door-G creep meets the north jamb
+
+With the side-clear penalty the opening picked a straight creep, nose 1.8 m, wheels `(1.50, 1.50)`. Truth stayed at (3.89, 5.37), on the living side near the north end of the opening. The estimate walked to (3.42, 5.43). Caster and front-right were in contact at t=93.7 s. The log is `floor slip, wheel motion rejected`, then the existing `imu_stuck`. Bedroom visited 0.2. A straight command is still not rechecked with the turn rectangle. That stays.
+
+## The side-clear penalty is reverted
+
+`5118627` used 1.5 only when neither side was inside 0.10 m. Door G got worse: stop 8 was a straight creep, truth stayed at (3.89, 5.37), and the estimate walked 0.47 m. The penalty is 0.50 again. Rechecking a straight command with the turn rectangle is the open candidate. Not applied.

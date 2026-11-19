@@ -157,28 +157,35 @@ def _track(prev: np.ndarray, curr: np.ndarray, row: int, col: int, window: int) 
     return best
 
 
-def _images_still(prev: np.ndarray, curr: np.ndarray) -> bool:
-    """True when the forward view did not shift by more than a couple of pixels.
+def _view_change(prev: np.ndarray, curr: np.ndarray) -> str:
+    """``still``, ``blank``, or ``moved``.
 
     A blank frame is not stillness. There is nothing in it to say the
-    body stayed put.
+    body stayed put. The pixel cuts are the ones the still check uses.
     """
     if prev.shape != curr.shape or prev.size < 30:
-        return False
+        return "blank"
     height, width = prev.shape
     r0, r1 = int(0.25 * height), int(0.75 * height)
     c0, c1 = int(0.20 * width), int(0.80 * width)
     before = prev[r0:r1, c0:c1]
     after = curr[r0:r1, c0:c1]
     if before.size < 30:
-        return False
+        return "blank"
     if float(before.std()) < 0.02 and float(after.std()) < 0.02:
-        return False
+        return "blank"
     best = float(np.mean(np.abs(before - after)))
     for shift in (1, 2):
         best = min(best, float(np.mean(np.abs(before[:, :-shift] - after[:, shift:]))))
         best = min(best, float(np.mean(np.abs(before[:, shift:] - after[:, :-shift]))))
-    return best < 0.035
+    if best < 0.035:
+        return "still"
+    return "moved"
+
+
+def _images_still(prev: np.ndarray, curr: np.ndarray) -> bool:
+    """True when the forward view did not shift by more than a couple of pixels."""
+    return _view_change(prev, curr) == "still"
 
 
 def _still_sample(depth: np.ndarray, camera: DepthCamera) -> VisualSample:
@@ -237,10 +244,14 @@ class VisualOdometry:
             return None
         # A flat wall has no corners to track. An unchanged picture is
         # still a reading: the body did not translate. A picture that
-        # moved, with nothing to fit, stays "no sample".
+        # moved, with nothing to fit, is not that reading and it is not
+        # a blank frame.
         if len(prev_px) < 4:
-            if _images_still(prev_gray, gray):
+            kind = _view_change(prev_gray, gray)
+            if kind == "still":
                 return _still_sample(image, camera)
+            if kind == "moved":
+                return VisualSample(0.0, 0.0, 0.0, False, 0.0, np.zeros((0, 2)), "moved")
             return None
         src: list[np.ndarray] = []
         dst: list[np.ndarray] = []

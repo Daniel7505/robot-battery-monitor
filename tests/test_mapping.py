@@ -1528,6 +1528,167 @@ def test_a_pure_pivot_with_a_still_floor_freezes_translation_only():
     assert abs(bot.pose()[2]) > 0.20
 
 
+def _turning_drive(floor_moves: bool):
+    """Forward speed plus a yaw, at the simulator's 8 ms step.
+
+    The short floor steps close on the yaw arc and call the picture
+    still. A moving floor is the pursuit arc. A fixed floor is the lip.
+    """
+    from src.mapping.explore import Explorer
+    from src.mapping.floor_flow import metres_per_px
+
+    cam = _small_oak(64, 40)
+    rng = np.random.default_rng(4)
+    floor0 = rng.normal(40.0, 12.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    rgb = np.zeros((40, 64), dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    v = 0.10
+    yaw_rate = 0.47
+    half = yaw_rate * WHEEL_TRACK_M / 2.0
+    wheel_l = (v - half) / WHEEL_RADIUS_M
+    wheel_r = (v + half) / WHEEL_RADIUS_M
+    dt = 0.008
+    left = right = 0.0
+    travel = 0.0
+    pixels = 0.0
+    mpp = metres_per_px()
+    for _ in range(int(2.0 / dt)):
+        bot._commanded = (wheel_l, wheel_r)
+        travel += v * dt
+        pixels += (v * dt) / mpp
+        floor = np.roll(floor0, int(round(pixels)), axis=0) if floor_moves else floor0
+        wall = max(0.6, 2.2 - travel) if floor_moves else 2.2
+        depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(wall, -1.2, 0.0, wall + 0.1, 1.2, 2.0)])
+        left += wheel_l * dt
+        right += wheel_r * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=yaw_rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    return bot, travel
+
+
+def test_a_turning_drive_whose_floor_slides_is_not_rewound():
+    """The home leg. Short steps said still. The floor windows matched the wheels.
+
+    Those windows were over 0.08 rad, so they were not a correction.
+    They are enough to keep the rewind from deleting the arc.
+    """
+    bot, travel = _turning_drive(floor_moves=True)
+    moved = math.hypot(bot.pose()[0], bot.pose()[1])
+    assert bot.zupt_events == 0
+    assert moved > 0.15
+    assert abs(moved - travel) < 0.05
+    assert abs(bot.pose()[2]) > 0.5
+
+
+def test_a_straight_slide_whose_floor_followed_is_not_frozen():
+    """The bath walkway. The short steps said still. The floor scene did not.
+
+    Yaw had not reached 0.12 rad, so the sliding-turn release did not
+    run, and the translation rewind fired. A floor scene that already
+    matches the wheels is the drive on a straight line too. A scene
+    that did not follow still rewinds.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    depth = np.full((cam.height, cam.width), 1.5)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+
+    def arm(scene_m: float) -> Explorer:
+        bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False)
+        bot.t_s = 1.0
+        bot._step_dt = 0.05
+        bot.odometry.x_m = 0.05
+        bot.odometry.y_m = 0.0
+        bot._floor_track._base = np.array(floor, copy=True)
+        bot._floor_track._wheel = 0.02
+        bot._floor_track._age = 0.2
+        bot._arm_zupt_anchor(depth, floor, None, 0.0, 0.0)
+        bot._zupt_anchor["t"] = 0.4
+        bot._zupt_anchor["x"] = 0.0
+        bot._zupt_anchor["y"] = 0.0
+        bot._zupt_anchor["scene_m"] = 0.0
+        bot._zupt_anchor["scene_raw_m"] = 0.0
+        bot._fusion.floor_scene_m = scene_m
+        bot._fusion.floor_scene_raw_m = 0.03
+        step = 0.03 / WHEEL_RADIUS_M
+        bot._watch_zupt(depth, floor, None, 0.0, 0.0, step, step)
+        return bot
+
+    kept = arm(0.02)
+    assert abs(kept.pose()[0] - 0.05) < 1e-9
+    rewound = arm(0.0)
+    assert abs(rewound.pose()[0]) < 1e-9
+
+
+def test_a_turning_lip_with_a_still_floor_still_freezes():
+    """Same arc, picture fixed. That is the lip. The 2 cm claim still rewinds."""
+    bot, _travel = _turning_drive(floor_moves=False)
+    assert bot.zupt_events >= 1
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.05
+    assert abs(bot.pose()[2]) > 0.5
+
+
+def test_a_held_step_is_not_booked_as_applied_travel():
+    """The pose did not take the step. The floor interval must not be told it did."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(2.2, -1.2, 0.0, 2.3, 1.2, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False)
+    bot._fusion.floor.noise_px = 0.0
+    bot._zupt_trans_until = 1.0e9
+    bot._commanded = (2.0, 2.0)
+    step = 0.01 / WHEEL_RADIUS_M
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=step,
+        right_wheel_rad=step,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    assert bot._fusion._floor.applied_m == pytest_approx(0.0, abs=1e-9)
+    assert bot._path_m == pytest_approx(0.0, abs=1e-9)
+    bot._zupt_trans_until = -1.0
+    bot._commanded = (2.0, 2.0)
+    bot.step(
+        dt_s=0.05,
+        left_wheel_rad=step * 2.0,
+        right_wheel_rad=step * 2.0,
+        yaw_rate_rad_s=0.0,
+        depth=depth,
+        floor=floor,
+    )
+    assert bot._path_m > 0.005
+
+
 def test_a_real_spin_is_not_stuck_when_the_floor_picture_stays():
     """The survey rotates about the downward camera, so that picture barely translates.
 
@@ -1689,6 +1850,99 @@ def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):
     bot._view_still_from = bot.t_s
     left_c, right_c = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
     assert left_c * right_c < 0
+
+
+def test_a_blank_floor_yields_when_the_depth_corners_moved(capsys):
+    """The doorway crossing. The floor image is flat. The shell is not.
+
+    std under 2 used to rewind x,y once the wheels claimed 0.02 m.
+    The depth corners of that crossing moved with the wheels, so the
+    floor is dropped and the pose keeps the step. A flat floor with a
+    still forward picture is still the island, and that hold stays.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    flat = np.full((32, 32), 18.0)
+    rgb = np.zeros((cam.height, cam.width), dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    travel = 0.0
+    for i in range(14):
+        left += step
+        right += step
+        travel += step * WHEEL_RADIUS_M
+        wall = max(0.6, 2.2 - travel)
+        depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(wall, -1.2, 0.0, wall + 0.1, 1.2, 2.0)])
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+            rgb=rgb,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) > 0.05
+    assert "floor blank, wheel translation held" not in capsys.readouterr().out
+
+
+def test_a_blank_floor_yields_when_the_picture_moves_without_a_fit(capsys):
+    """Today's doorway. The floor is flat. The forward picture changes.
+
+    A straight edge has no corners to fit, so visual odometry returns
+    no translation. That is not a still reading. The blank floor is
+    dropped and the wheels keep the step. The same flat floor in front
+    of a picture that does not change still rewinds.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    for i in range(14):
+        left += step
+        right += step
+        depth = np.full((cam.height, cam.width), 1.4)
+        if i % 2 == 0:
+            depth += 0.6 * np.linspace(0.0, 1.0, cam.width)
+        else:
+            depth += 0.6 * np.linspace(0.0, 1.0, cam.height)[:, None]
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) > 0.05
+    assert "floor blank, wheel translation held" not in capsys.readouterr().out
+
+    held = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False, drive="plunge")
+    wall = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(1.5, -1.2, 0.0, 1.6, 1.2, 2.0)])
+    left = right = 0.0
+    for _ in range(14):
+        left += step
+        right += step
+        held.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=wall,
+            floor=flat,
+        )
+    assert math.hypot(held.pose()[0], held.pose()[1]) < 0.02
+    assert "floor blank, wheel translation held" in capsys.readouterr().out
 
 
 def test_a_held_floor_cuts_the_blocked_reverse(capsys):
@@ -2448,6 +2702,21 @@ def test_the_decision_log_is_off_unless_asked(tmp_path, monkeypatch):
     )
     assert choice.name != "cruise"
     assert abs(choice.v) + abs(choice.w) > 0.04
+
+
+def test_a_goal_beside_the_shell_is_not_driven_past():
+    """The kitchen. The free goal is inside the look-ahead, off to the side.
+
+    The polyline still has a point ahead. Steering at that point drives
+    past the goal. The goal is the target, and the existing in-front
+    test turns to it.
+    """
+    pose = (0.0, 0.0, 0.0)
+    path = [(0.40, 0.0), (0.40, -0.20), (0.0, -0.20)]
+    v, w, arrived = pure_pursuit(pose, path, arrive_m=0.05)
+    assert not arrived
+    assert v == 0.0
+    assert w < 0.0
 
 
 def test_pure_pursuit_turns_left_for_a_left_goal():
@@ -3509,6 +3778,51 @@ def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
     assert bot._stuck_reason() == "imu_stuck"
 
 
+def test_a_new_waypoint_does_not_inherit_the_stuck_window():
+    """The doorway. imu_stuck ended the slide. The next aim died in one tick.
+
+    The IMU samples and the camera clock are the previous command's.
+    Arming a waypoint clears them. The same samples, left in place,
+    still say stuck.
+    """
+    from src.mapping.bubble import BubbleView
+    from src.mapping.driver import WaypointDriver
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    assert bot._stuck_reason() == "imu_stuck"
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.0, "y": 0.0}, bot)
+    assert bot._stuck_reason() is None
+    left, right = driver.wheels(bot, 5.0, 5.0, BubbleView(5.0, 5.0, 5.0, 5.0, 5.0), 0.05)
+    assert driver.outcome is None
+    assert left > 0.0 and right > 0.0
+
+
+def test_a_yaw_command_that_cancels_is_not_imu_stuck():
+    """The bathroom. The shell was driving. The yaw command flipped every step.
+
+    The net wheel yaw is about zero and the gyro stays still. That is
+    not a spin the body failed to make. A wedge that turns one way
+    still is.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    for i in range(6):
+        sign = 1.0 if i % 2 == 0 else -1.0
+        bot._imu_samples.append((i * 0.5, sign * 0.40, 0.001, 0.12, 0.05))
+    assert bot._imu_stuck() is False
+    bot._imu_samples.clear()
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.12, 0.05))
+    assert bot._imu_stuck() is True
+
+
 def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
     from src.mapping.explore import Explorer
 
@@ -4041,6 +4355,51 @@ def test_the_drop_rung_moves_within_two_ticks(capsys):
     assert any(abs(a) > 1e-3 or abs(b) > 1e-3 for a, b in speeds)
     assert bot.mode in ("explore", "leave_area")
     assert bot.done is False
+
+
+def test_a_dead_reverse_on_drop_starts_the_spin(capsys):
+    """The straight leave was the reverse the block had already killed, so drop never spun."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._last_clear = (0.2, 1.2, 1.2)
+    bot._bubble_view = BubbleView(0.10, 1.0, 1.0, 1.0, 0.10)
+    bot._block_reverse_dead = True
+    bot._block_dead_pose = (0.0, 0.0, 0.0)
+    bot._block_turns_tried = 2
+    bot._block_turn_sign = 0.0
+    bot._leave_xy = (0.0, 0.0)
+    straight = bot._straight_leave(bot.plan_pose())
+    assert straight is not None and straight[0] < -0.5 and straight[1] < -0.5
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.phase == "spin"
+    assert bot.mode == "explore"
+    assert bot._spin_start is not None
+    assert not bot._watch_straight
+    assert left * right < 0
+
+
+def test_an_allowed_straight_on_drop_still_leaves(capsys):
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._bubble_view = BubbleView(1.2, 1.0, 1.0, 1.0, 1.0)
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.phase == "go"
+    assert bot._watch_straight
+    assert bot._spin_start is None
+    assert left > 0.5 and right > 0.5
+    left, right = bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.phase == "go"
 
 
 def test_a_stable_map_with_no_frontier_logs_done_without_stopping(capsys):

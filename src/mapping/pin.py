@@ -28,6 +28,14 @@ class PinWatch:
     # into metres of "motion" and the pin never closed. Samples under
     # this floor add nothing. The window still needs each sensor.
     QUIET_M = 0.0015
+    # Raw floor sum over one wheel window, before ``QUIET_M`` zeros it.
+    # Still scenes (north 85, t=413–424 s, truth 0): 0.024–0.034 m.
+    # A real slow reverse (north 85, t=192–196 s, truth 0.05 m per
+    # window): 0.056–0.064 m. The 0.45 ratio of a 0.05 m wheel window
+    # is 0.023 m, and the still cloud is already above it, so that
+    # ratio cannot separate them. The cut is the midpoint of the gap,
+    # (0.034 + 0.056) / 2. Each logged cloud keeps 0.011 m of margin.
+    RAW_FLOOR_M = 0.045
 
     def __init__(self) -> None:
         self.x0 = 0.0
@@ -39,6 +47,7 @@ class PinWatch:
         self.depth_n = 0
         self.floor_n = 0
         self.visual_n = 0
+        self.floor_raw_m = 0.0
 
     def anchor(self, x_m: float, y_m: float) -> None:
         self.x0 = float(x_m)
@@ -52,6 +61,7 @@ class PinWatch:
         self.depth_n = 0
         self.floor_n = 0
         self.visual_n = 0
+        self.floor_raw_m = 0.0
 
     def add(
         self,
@@ -69,6 +79,8 @@ class PinWatch:
         if sample_m is None:
             return
         moved = abs(float(sample_m))
+        if kind == "floor":
+            self.floor_raw_m += moved
         if moved < self.QUIET_M:
             moved = 0.0
         if kind == "depth":
@@ -89,6 +101,10 @@ class PinWatch:
         if not self.ready():
             return False
         if self.depth_n < 1 or self.floor_n < 1 or self.visual_n < 1:
+            return False
+        # Quiet per-frame samples hide a slow move. The raw floor sum
+        # is what still separates that move from a stuck scene.
+        if self.floor_raw_m >= self.RAW_FLOOR_M:
             return False
         limit = max(self.FLOOR_M, self.RATIO * self.wheel_m)
         return self.depth_m < limit and self.floor_m < limit and self.visual_m < limit

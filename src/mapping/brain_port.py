@@ -94,9 +94,12 @@ def write_stop(
         files.append(filename)
     pose = (report.get("pose") or {})
     pose_xy = (float(pose.get("x_m", 0.0)), float(pose.get("y_m", 0.0)))
+    frontier = report.get("frontier") if isinstance(report.get("frontier"), dict) else None
+    path = list((frontier or {}).get("path_xy_m") or [])
+    goal = (frontier or {}).get("goal_xy_m")
     grid = _grid_payload(labels, meta, pose_xy)
     (stop / "map.json").write_text(json.dumps(grid) + "\n", encoding="utf-8")
-    write_png(stop / "map.png", _color_map(labels, meta, pose_xy))
+    write_png(stop / "map.png", _color_map(labels, meta, pose_xy, path, goal))
     files.extend(["map.json", "map.png"])
     body = dict(report)
     body["t_s"] = round(float(t_s), 4)
@@ -166,18 +169,65 @@ def _grid_payload(labels, meta: dict, pose_xy: tuple[float, float]) -> dict:
     return payload
 
 
-def _color_map(labels, meta: dict, pose_xy: tuple[float, float]):
+def format_frontier(proposal) -> str:
+    """One line for the mapper's frontier proposal. ``none`` when it has no goal."""
+    if not isinstance(proposal, dict):
+        return "none"
+    goal = proposal.get("goal_xy_m")
+    if not goal or len(goal) < 2:
+        return "none"
+    path = proposal.get("path_xy_m") or []
+    return f"({float(goal[0]):.2f},{float(goal[1]):.2f}) path={len(path)}"
+
+
+def _cell_of(origin, res, shape, x: float, y: float) -> tuple[int, int] | None:
+    col = int(math.floor((float(x) - float(origin[0])) / float(res)))
+    row = int(math.floor((float(y) - float(origin[1])) / float(res)))
+    if row < 0 or col < 0 or row >= shape[0] or col >= shape[1]:
+        return None
+    return row, col
+
+
+def _segment_cells(origin, res, shape, a, b) -> list[tuple[int, int]]:
+    start = _cell_of(origin, res, shape, a[0], a[1])
+    end = _cell_of(origin, res, shape, b[0], b[1])
+    if start is None or end is None:
+        return []
+    r0, c0 = start
+    r1, c1 = end
+    steps = max(abs(r1 - r0), abs(c1 - c0), 1)
+    cells = []
+    for i in range(steps + 1):
+        t = i / steps
+        cells.append((int(round(r0 + (r1 - r0) * t)), int(round(c0 + (c1 - c0) * t))))
+    return cells
+
+
+def _color_map(labels, meta: dict, pose_xy: tuple[float, float], path=None, goal_xy=None):
     grid = np.asarray(labels)
     rgb = np.full((grid.shape[0], grid.shape[1], 3), 40, dtype=np.uint8)
     rgb[grid == 0] = (230, 230, 230)
     rgb[grid == 1] = (20, 20, 20)
     origin = (meta or {}).get("origin_xy_m")
     res = (meta or {}).get("resolution_m")
+    # Green is the frontier path ``select_goal`` already returned. A cell
+    # of that path that is occupied is magenta, same as the harness overlay.
+    if origin and res and path:
+        points = [(float(p[0]), float(p[1])) for p in path if p and len(p) >= 2]
+        for a, b in zip(points, points[1:]):
+            for row, col in _segment_cells(origin, res, rgb.shape, a, b):
+                if 0 <= row < rgb.shape[0] and 0 <= col < rgb.shape[1]:
+                    rgb[row, col] = (230, 40, 180) if int(grid[row, col]) == 1 else (40, 170, 60)
+    if origin and res and goal_xy and len(goal_xy) >= 2:
+        cell = _cell_of(origin, res, rgb.shape, goal_xy[0], goal_xy[1])
+        if cell is not None:
+            row, col = cell
+            r0, c0 = max(0, row - 1), max(0, col - 1)
+            rgb[r0 : row + 2, c0 : col + 2] = (40, 90, 220)
     if origin and res:
-        col = int(math.floor((pose_xy[0] - float(origin[0])) / float(res)))
-        row = int(math.floor((pose_xy[1] - float(origin[1])) / float(res)))
-        if 0 <= row < rgb.shape[0] and 0 <= col < rgb.shape[1]:
-            r0 = max(0, row - 1)
-            c0 = max(0, col - 1)
+        cell = _cell_of(origin, res, rgb.shape, pose_xy[0], pose_xy[1])
+        if cell is not None:
+            row, col = cell
+            r0, c0 = max(0, row - 1), max(0, col - 1)
             rgb[r0 : row + 2, c0 : col + 2] = (220, 40, 40)
     return rgb

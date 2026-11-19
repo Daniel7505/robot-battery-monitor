@@ -311,11 +311,11 @@ def map_veto(grid, pose: tuple[float, float, float], v: float, w: float) -> str 
     return None
 
 
-def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
-    """Width of a mapped doorway the shell can still pass, or None.
+def _gap_sides(grid, pose: tuple[float, float, float]) -> tuple[float, float] | None:
+    """Distance to a mapped wall on the left and the right.
 
-    Both sides have to be occupied, and the gap has to be wider than the
-    body. A smear that only vetoes turns is not a wall across the opening.
+    None when either side is open inside the march already used for a
+    doorway width. The left value is first.
     """
     if grid is None:
         return None
@@ -338,7 +338,19 @@ def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
     west = march((-left[0], -left[1]))
     if east is None or west is None:
         return None
-    gap = east + west
+    return east, west
+
+
+def _fittable_gap(grid, pose: tuple[float, float, float]) -> float | None:
+    """Width of a mapped doorway the shell can still pass, or None.
+
+    Both sides have to be occupied, and the gap has to be wider than the
+    body. A smear that only vetoes turns is not a wall across the opening.
+    """
+    sides = _gap_sides(grid, pose)
+    if sides is None:
+        return None
+    gap = sides[0] + sides[1]
     if 0.48 <= gap <= 1.35:
         return gap
     return None

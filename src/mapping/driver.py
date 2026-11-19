@@ -144,6 +144,9 @@ class WaypointDriver:
         self._reset_window(explorer)
         self._lifted0 = int(getattr(explorer, "wheels_lifted", 0))
         self._timeout_s = float(timeout_s) if timeout_s is not None else _timeout_s(cmd, (x, y))
+        fresh = getattr(explorer, "_fresh_stuck_window", None)
+        if fresh is not None:
+            fresh()
         if cmd["cmd"] == "stop":
             self.outcome = "stopped"
             self.detail = "stop command"

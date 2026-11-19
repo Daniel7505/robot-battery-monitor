@@ -2462,6 +2462,16 @@ class Explorer:
             return False
         return self.t_s - self._view_still_from >= _VIEW_STUCK_S
 
+    def _fresh_stuck_window(self) -> None:
+        """A new waypoint starts its own stuck window.
+
+        The camera clock and the IMU samples belong to the command
+        that filled them. Keeping them made the next aim stop in the
+        same tick, before the wheels turned.
+        """
+        self._view_still_from = self.t_s
+        self._imu_samples.clear()
+
     def _camera_stuck(self) -> bool:
         """Motion is commanded and this robot's depth picture is not changing.
 

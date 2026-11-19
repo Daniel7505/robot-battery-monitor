@@ -3721,6 +3721,30 @@ def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
     assert bot._stuck_reason() == "imu_stuck"
 
 
+def test_a_new_waypoint_does_not_inherit_the_stuck_window():
+    """The doorway. imu_stuck ended the slide. The next aim died in one tick.
+
+    The IMU samples and the camera clock are the previous command's.
+    Arming a waypoint clears them. The same samples, left in place,
+    still say stuck.
+    """
+    from src.mapping.bubble import BubbleView
+    from src.mapping.driver import WaypointDriver
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    assert bot._stuck_reason() == "imu_stuck"
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.0, "y": 0.0}, bot)
+    assert bot._stuck_reason() is None
+    left, right = driver.wheels(bot, 5.0, 5.0, BubbleView(5.0, 5.0, 5.0, 5.0, 5.0), 0.05)
+    assert driver.outcome is None
+    assert left > 0.0 and right > 0.0
+
+
 def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
     from src.mapping.explore import Explorer
 

@@ -1015,3 +1015,17 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** A new ease angle or a new creep rate. Changing the 0.08 rad floor gate in the fusion.
 
 **Outcome.** Arrived on a heading means about 0.05 rad. A spin's floor shift is not reported as travel.
+
+## 2026-11-19 — A straight doorway command stays
+
+**Mission parameter.** A `go_to` uses the motion `choose_motion` already accepted. The turn rectangle stays the check for a turn. `_ahead_blocked` stays the check for a straight command. No new constant. No geometry or world change. The 0.10 m side tax stays. No live ten.
+
+**Change.** `WaypointDriver._go` no longer replaces that motion with (0, 0) when `motion_blocked` disagrees. Commit `7c24c91`.
+
+**Why.** On a hand drive through the opening north of the stock spawn, `choose_motion` returned cruise and the rectangle clipped the jamb. The driver sent (0, 0) for 2 s and reported stuck at (0.25, 1.77) with nose 1.37 m and pose error 0.01 m. The nose test had not called the doorway a wall.
+
+**Evidence.** `tests/test_driver.py` includes a centred gap the rectangle clips and the nose test leaves open. The driver still commands forward wheels. 18 driver tests, 2 overlay tests, and `test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it` passed. The same `go_to 0.4 2.7` after the fix passed (0.25, 1.77) and stopped at (0.24, 2.23), truth x 3.787, pose error 0.017 m. Max pose error on that rerun was 0.026 m. The following slide stuck on a creep/reverse swap. Counts are in `docs/LESSONS_LEARNED.md` and `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** A new doorway width. Dropping the 0.10 m side tax while the forward view is open. That failed the existing test that a 0.04 m left press must reverse off the jamb.
+
+**Outcome.** A straight command the nose test accepted is the command that is sent. The shell still sits when the side tax and the rectangle take turns.

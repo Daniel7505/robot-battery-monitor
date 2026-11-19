@@ -22,7 +22,7 @@ from src.mapping.brain_port import (
 )
 from src.mapping.body import ROBOT_RADIUS_M
 from src.mapping.bubble import BubbleView
-from src.mapping.driver import STALL_WINDOW_S, WaypointDriver, parse_command
+from src.mapping.driver import STALL_WINDOW_S, WAYPOINT_ARRIVE_M, WaypointDriver, parse_command
 from src.mapping.explore import Explorer
 from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
@@ -189,6 +189,53 @@ def test_a_door_back_off_is_not_redecided_every_frame():
     assert saw_turn
     assert driver._t >= STALL_WINDOW_S - 1e-6
     assert driver.outcome is None
+
+
+def test_a_reaim_heading_does_not_flip_when_the_gap_flickers(monkeypatch):
+    """The opening is measured once. A gap that comes and goes used to reverse the spin."""
+    bot = _Bot()
+    calls = {"n": 0}
+
+    def heading(grid, pose, failed):
+        calls["n"] += 1
+        return 1.2 if calls["n"] == 1 else -1.2
+
+    monkeypatch.setattr("src.mapping.driver._approach_heading", heading)
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    signs = []
+    for _ in range(80):
+        left, right = driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        v, w = _vw(left, right)
+        if driver._backoff_vw is None and abs(w) > 0.05 and abs(v) < 0.02:
+            signs.append(1 if w > 0 else -1)
+            bot.odometry.yaw_rad += 0.02
+            bot.odometry.yaw_unwrapped_rad += 0.02
+        if len(signs) >= 8:
+            break
+    assert len(signs) >= 8
+    assert set(signs) == {1}
+    assert driver.outcome is None
+    # The turn is still going after the 2 s clock. The old stall ended it here.
+    assert driver._t >= STALL_WINDOW_S - 1e-6
+
+
+def test_a_goal_on_a_mapped_wall_stops_short_instead_of_driving_into_it():
+    """A cell the map calls occupied is not a straight aim through that wall."""
+    bot = _Bot()
+    row, col = bot.grid.cell_of(0.0, 0.0)
+    bot.grid.log[row, col + 1] = bot.grid.l_max
+    goal = bot.grid.cell_center(row, col + 1)
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": goal[0], "y": goal[1]}, bot)
+    view = BubbleView(1.5, 1.5, 1.5, 1.5, 1.5)
+    left, right = driver.wheels(bot, 1.5, 1.5, view, 0.05)
+    assert (left, right) == (0.0, 0.0)
+    assert driver.outcome == "stopped_short"
+    assert driver.remaining_m > WAYPOINT_ARRIVE_M
 
 
 def test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose():

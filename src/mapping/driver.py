@@ -112,6 +112,8 @@ class WaypointDriver:
         self._backoff_until = 0.0
         self._failed_yaw: float | None = None
         self._reaim = False
+        self._reaim_target: float | None = None
+        self._best_aim = math.pi
 
     def arm(self, command: dict, explorer, *, timeout_s: float | None = None) -> None:
         """Start one command. Travel for the previous command is cleared."""
@@ -135,6 +137,8 @@ class WaypointDriver:
         self._backoff_until = 0.0
         self._failed_yaw = None
         self._reaim = False
+        self._reaim_target = None
+        self._best_aim = math.pi
         x, y, yaw = _pose(explorer)
         self._best_dist = math.hypot(float(cmd.get("x", x)) - x, float(cmd.get("y", y)) - y)
         self._best_err = abs(wrap_rad(float(cmd.get("yaw", yaw)) - yaw))
@@ -222,6 +226,11 @@ class WaypointDriver:
         if self._backoff_vw is not None:
             self._backoff_vw = None
             self._reaim = True
+            # One heading for this turn. Reading the gap again let a
+            # flickering side reverse the spin, and the two commands
+            # cancelled until the 2 s clock said the shell had not moved.
+            self._reaim_target = _approach_heading(explorer.grid, (x, y, yaw), float(self._failed_yaw))
+            self._best_aim = abs(wrap_rad(self._reaim_target - yaw))
             # The reverse was commanded, so the shell is farther from the
             # goal on purpose. The point it just left is not the bar for
             # the try that follows. Progress is from here, by the same 4 cm.
@@ -229,10 +238,20 @@ class WaypointDriver:
             self._best_head = _head_err(x, y, yaw, self.command)
             self._reset_window(explorer)
         head = _head_err(x, y, yaw, self.command)
+        aim_err = None
+        if self._reaim and self._reaim_target is not None:
+            aim_err = abs(wrap_rad(self._reaim_target - yaw))
         closer = dist <= self._best_dist - STILL_M or head <= self._best_head - _YAW_STEP_RAD
+        if aim_err is not None and aim_err <= self._best_aim - _YAW_STEP_RAD:
+            # The turn after a back-off is progress. The 2 s clock is for
+            # a spin that does not happen, not for the heading change
+            # this command just asked for.
+            closer = True
         if closer:
             self._best_dist = min(self._best_dist, dist)
             self._best_head = min(self._best_head, head)
+            if aim_err is not None:
+                self._best_aim = min(self._best_aim, aim_err)
             self._reset_window(explorer)
         elif self._stall(short_m=dist):
             return 0.0, 0.0
@@ -244,6 +263,10 @@ class WaypointDriver:
         path = self._path_to(explorer, goal)
         pursuit_v, pursuit_w, arrived = pure_pursuit((x, y, yaw), path, arrive_m=WAYPOINT_ARRIVE_M)
         if arrived:
+            # The path can end on the last free cell when the named point
+            # is a mapped wall. That is not arrival at the command.
+            if dist > WAYPOINT_ARRIVE_M:
+                return self._stop("stopped_short", f"{dist:.2f} m short", remaining_m=dist)
             return self._stop("arrived", f"within {WAYPOINT_ARRIVE_M:.2f} m", remaining_m=dist)
         choice = choose_motion(
             view=view,
@@ -275,21 +298,29 @@ class WaypointDriver:
         return left, right
 
     def _reaim_turn(self, explorer, pose, dt: float):
-        """Face the opening's centre, or a heading off the one that backed up.
+        """Face the heading chosen when the back-off ended.
 
         None when this approach is already lined up, or neither turn fits.
-        The caller then plans forward again.
+        The caller then plans forward again. The heading is not read
+        again: a gap that appears and disappears was reversing the spin.
         """
-        target = _approach_heading(explorer.grid, pose, float(self._failed_yaw))
+        target = self._reaim_target
+        if target is None:
+            target = _approach_heading(explorer.grid, pose, float(self._failed_yaw))
+            self._reaim_target = target
         err = wrap_rad(target - pose[2])
         if abs(err) <= WAYPOINT_YAW_RAD:
             self._reaim = False
+            self._reaim_target = None
+            self._reset_window(explorer)
             return None
         w = math.copysign(_turn_rate(err), err)
         if footprint_clips(explorer.grid, pose, 0.0, w):
             w = -w
             if footprint_clips(explorer.grid, pose, 0.0, w):
                 self._reaim = False
+                self._reaim_target = None
+                self._reset_window(explorer)
                 return None
         self._note_window_motion(explorer)
         self._remember(0.0, w)
@@ -530,12 +561,42 @@ def _path_on_own_map(explorer, goal: tuple[float, float]) -> list[tuple[float, f
     end = grid.cell_of(goal[0], goal[1])
     if start is None or end is None:
         return [goal]
-    free = traversable(grid.labels(), grid.res)
+    labels = grid.labels()
+    # Unknown space stays a straight aim. A cell this robot has marked
+    # occupied is a wall, and aiming through it is how a corner rocked.
+    occupied = int(labels[end]) == 1
+    free = traversable(labels, grid.res)
     if not bool(free[end]):
-        return [goal]
+        if not occupied:
+            return [goal]
+        end = _free_before(free, start, end)
+        if end is None:
+            return [(pose[0], pose[1])]
     cells = astar(free, start, end, step_cost=float(grid.res))
     if not cells:
+        if occupied:
+            return [(pose[0], pose[1])]
         return [goal]
     points = [grid.cell_center(r, c) for r, c in cells]
-    points[-1] = (float(goal[0]), float(goal[1]))
+    if not occupied:
+        points[-1] = (float(goal[0]), float(goal[1]))
     return points
+
+
+def _free_before(free, start: tuple[int, int], end: tuple[int, int]) -> tuple[int, int] | None:
+    """Last free cell on the line from the robot to a mapped wall."""
+    r0, c0 = start
+    r1, c1 = end
+    steps = max(abs(r1 - r0), abs(c1 - c0), 1)
+    last = None
+    height, width = free.shape
+    for i in range(steps + 1):
+        t = i / steps
+        cell = (int(round(r0 + (r1 - r0) * t)), int(round(c0 + (c1 - c0) * t)))
+        row, col = cell
+        if row < 0 or col < 0 or row >= height or col >= width or not bool(free[cell]):
+            if last is not None:
+                return last
+            continue
+        last = cell
+    return last

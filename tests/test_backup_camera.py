@@ -33,6 +33,18 @@ def test_free_goal_uses_the_driver_path():
     assert crosses_occupied(labels, origin, res, path) == 0
 
 
+def test_a_mapped_wall_is_not_a_straight_aim():
+    labels, origin, res = _corridor()
+    pose = (origin[0] + 15.5 * res, origin[1] + 40.5 * res, 0.0)
+    goal_col = 40
+    labels[40, goal_col] = 1
+    goal = (origin[0] + (goal_col + 0.5) * res, origin[1] + 40.5 * res)
+    path = planned_path(labels, origin, res, pose, goal)
+    assert path != [goal]
+    assert crosses_occupied(labels, origin, res, path) == 0
+    assert path_kind(labels, origin, res, pose, goal, path) == "astar"
+
+
 def test_unknown_goal_is_a_straight_aim():
     labels, origin, res = _corridor()
     pose = (origin[0] + 15.5 * res, origin[1] + 40.5 * res, 0.0)

@@ -44,7 +44,7 @@
     "fridge_depth_in": 30.0,
     "island_width_in": 132.0,
     "island_depth_in": 36.0,
-    "carpet_step_in": 0.5,
+    "carpet_step_in": 0.0,
     "bedroom_bath_walkway_in": 32.0,
     "walk_in_door_in": 32.0,
     "laundry_door_in": 36.0,
@@ -152,12 +152,12 @@
       "min_m": [
         0.0,
         4.6228,
-        -0.0073
+        -0.02
       ],
       "max_m": [
         3.6576,
         8.3312,
-        0.0127
+        0.0
       ]
     }
   },
@@ -178,15 +178,19 @@
       "bedroom"
     ],
     "documented_crr": {
-      "laminate": 0.012,
-      "carpet": 0.05
+      "laminate": 0.0061,
+      "carpet": 0.0153
     },
     "contact_force_dependent_slip": {
       "drive_wheel_laminate": 0.01,
-      "drive_wheel_carpet": 0.04
+      "drive_wheel_carpet": 0.01
+    },
+    "rolling_friction": {
+      "drive_wheel_laminate": [0.0, 0.0061, 0.0061],
+      "drive_wheel_carpet": [0.0, 0.0153, 0.0153]
     },
     "energy_model_wired": false,
-    "crr_note": "Webots R2025a ContactProperties has no Crr field. forceDependentSlip is the stand-in (ODE v = k*F). These Crr values are not read by the energy model."
+    "crr_note": "Grip (coulombFriction 8, forceDependentSlip 0.01) is the same on laminate and carpet. rollingFriction uses linoleum Crr 0.0061 and 2.5x that on carpet (0.0153). Coast-down: carpet 0.0143 vs linoleum 0.0061 (doi:10.1016/j.proeng.2010.04.113). Review: carpet about 3x linoleum (PMC7863146). Not read by the energy model. The measured ~10 mm lip is not a collider."
   },
   "spawn": {
     "room": "living",

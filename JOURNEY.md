@@ -110,3 +110,4 @@ Copy this block, newest entry at the bottom of the current stage (or start a new
 **Dan's design notes for later.**
 - The bot nearly stops for 90° turns and takes them fine, but struggles to re-enter the lane afterward.
 - Build choices need common-sense rules written as formulas, such as wheel and motor load ratings checked against total mass, so "a LEGO wheel can't support a forklift."
+- Apartment doorways are a stop, a pivot in place, then a straight crossing. Smooth-arc turning, forklift-style rear steer, is a later option for payloads and warehouse routes. No code for that yet.

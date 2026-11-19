@@ -64,6 +64,42 @@ def _brace_body(text: str, open_idx: int) -> str:
     raise AssertionError("unbalanced brace in apartment world")
 
 
+def _solid_bounds(body: str, cx: float, cy: float, cz: float):
+    box = re.search(
+        r"boundingObject\s+Box\s*\{\s*size\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        body,
+    )
+    if box:
+        sx, sy, sz = (float(v) for v in box.groups())
+        return (
+            cx - sx / 2.0,
+            cx + sx / 2.0,
+            cy - sy / 2.0,
+            cy + sy / 2.0,
+            cz - sz / 2.0,
+            cz + sz / 2.0,
+        )
+    mesh = re.search(
+        r"boundingObject\s+IndexedFaceSet\s*\{.*?point\s*\[([^\]]*)\]",
+        body,
+        re.S,
+    )
+    if not mesh:
+        return None
+    nums = [float(v) for v in mesh.group(1).split()]
+    if len(nums) < 12 or len(nums) % 3:
+        return None
+    xs, ys, zs = nums[0::3], nums[1::3], nums[2::3]
+    return (
+        cx + min(xs),
+        cx + max(xs),
+        cy + min(ys),
+        cy + max(ys),
+        cz + min(zs),
+        cz + max(zs),
+    )
+
+
 def _parse_solids(text: str) -> dict[str, dict]:
     raw = _strip_comments(text)
     solids: dict[str, dict] = {}
@@ -73,21 +109,17 @@ def _parse_solids(text: str) -> dict[str, dict]:
             r"translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
             body,
         )
-        box = re.search(
-            r"boundingObject\s+Box\s*\{\s*size\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
-            body,
-        )
-        assert trans and box, match.group(1)
-        cx, cy, cz = (float(v) for v in trans.groups())
-        sx, sy, sz = (float(v) for v in box.groups())
+        cx, cy, cz = (float(v) for v in trans.groups()) if trans else (None, None, None)
+        bounds = _solid_bounds(body, cx, cy, cz) if trans else None
+        assert bounds is not None, match.group(1)
         material = re.search(r'contactMaterial\s+"([^"]+)"', body)
         solids[match.group(1)] = {
-            "xmin": cx - sx / 2.0,
-            "xmax": cx + sx / 2.0,
-            "ymin": cy - sy / 2.0,
-            "ymax": cy + sy / 2.0,
-            "zmin": cz - sz / 2.0,
-            "zmax": cz + sz / 2.0,
+            "xmin": bounds[0],
+            "xmax": bounds[1],
+            "ymin": bounds[2],
+            "ymax": bounds[3],
+            "zmin": bounds[4],
+            "zmax": bounds[5],
             "material": material.group(1) if material else None,
         }
     return solids
@@ -301,9 +333,8 @@ def _path_connects(solids: dict, points: dict[str, tuple[float, float]], radius:
     assert not missing, f"no {radius * 2:.3f} m path from the main room to {missing}"
 
 
-def _loaded_by_controller() -> list[Path]:
-    """Controller package plus every module those files import or load by path."""
-    seeds = [path for path in CONTROLLER_ROOT.rglob("*.py") if path.is_file()]
+def _loaded_from(seeds: list[Path]) -> list[Path]:
+    """Python files reachable from ``seeds`` by import or a path join into ``src``."""
     seen: set[Path] = set()
     queue = list(seeds)
     while queue:
@@ -342,6 +373,28 @@ def _loaded_by_controller() -> list[Path]:
     return sorted(seen)
 
 
+def _loaded_by_controller() -> list[Path]:
+    """Controller package plus every module those files import or load by path."""
+    seeds = [path for path in CONTROLLER_ROOT.rglob("*.py") if path.is_file()]
+    return _loaded_from(seeds)
+
+
+# Tokens that would hand the mapper the apartment or the simulator pose.
+_MAPPER_BANNED = (
+    "apartment_ground_truth",
+    "apartment.wbt",
+    "worlds/apartment",
+    "getPosition",
+    "getFromDef",
+    "getSelf",
+    "getRoot",
+    "getOrientation",
+    "Supervisor",
+    "supervisor",
+    "gps",
+)
+
+
 @pytest.fixture(scope="module")
 def world_text() -> str:
     return WORLD.read_text(encoding="utf-8")
@@ -354,7 +407,7 @@ def solids(world_text: str) -> dict:
 
 def test_world_is_r2025a_and_does_not_steer_a_track(world_text: str):
     assert world_text.startswith("#VRML_SIM R2025a utf8\n")
-    assert 'EXTERNPROTO "../protos/ButlerBot.proto"' in world_text
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in world_text
     assert "\n# STEER_TRACK off\n" in world_text
     assert "\n# TRACK_FILE " not in world_text
     from src.track_geometry import steer_track_enabled, track_file_from_world
@@ -383,7 +436,7 @@ def test_doorways_are_at_least_the_measured_widths(solids: dict):
     assert got["bedroom_bath_walkway"] + 1e-4 >= walk
 
 
-def test_floor_zones_and_carpet_step(solids: dict):
+def test_floor_zones_and_carpet_step(solids: dict, world_text: str):
     gt = _ground_truth()
     tol = float(gt["tolerance_m"])
     step = float(gt["estimates"]["carpet_step_in"]) * float(gt["inch_to_metre"])
@@ -410,8 +463,26 @@ def test_floor_zones_and_carpet_step(solids: dict):
     lip = solids["APT_FLOOR_BEDROOM"]["zmax"] - solids["APT_FLOOR_HALL"]["zmax"]
     assert abs(lip - step) <= tol
     assert solids["APT_FLOOR_BEDROOM"]["material"] == "carpet"
+    # The measured lip is about 10 mm and is not a collider. No ramp solids.
+    assert "APT_FLOOR_CARPET_EDGE" not in world_text
+    assert 'material1 "caster"' not in world_text
     for name in ("APT_FLOOR_LIVING", "APT_FLOOR_KITCHEN", "APT_FLOOR_HALL", "APT_FLOOR_BATH"):
         assert solids[name]["material"] == "laminate"
+
+
+def _contact_rolling(text: str) -> dict[tuple[str, str], tuple[float, float, float]]:
+    raw = _strip_comments(text)
+    pairs: dict[tuple[str, str], tuple[float, float, float]] = {}
+    for match in re.finditer(r"\bContactProperties\s*\{", raw):
+        body = _brace_body(raw, match.end() - 1)
+        mats = re.findall(r'material[12]\s+"([^"]+)"', body)
+        roll = re.search(
+            r"rollingFriction\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+            body,
+        )
+        if len(mats) == 2 and roll:
+            pairs[(mats[0], mats[1])] = tuple(float(v) for v in roll.groups())  # type: ignore[assignment]
+    return pairs
 
 
 def test_carpet_slip_is_higher_and_energy_is_not_wired(world_text: str):
@@ -419,9 +490,14 @@ def test_carpet_slip_is_higher_and_energy_is_not_wired(world_text: str):
     pairs = _contact_fds(world_text)
     laminate = pairs[("drive_wheel", "laminate")]
     carpet = pairs[("drive_wheel", "carpet")]
-    assert carpet > laminate
+    assert carpet == laminate
     assert laminate == pytest.approx(gt["floors"]["contact_force_dependent_slip"]["drive_wheel_laminate"])
     assert carpet == pytest.approx(gt["floors"]["contact_force_dependent_slip"]["drive_wheel_carpet"])
+    rolling = _contact_rolling(world_text)
+    lam_r = rolling[("drive_wheel", "laminate")]
+    car_r = rolling[("drive_wheel", "carpet")]
+    assert lam_r[1] == pytest.approx(0.0061)
+    assert car_r[1] == pytest.approx(lam_r[1] * 2.5, abs=0.0002)
     assert gt["floors"]["energy_model_wired"] is False
     energy = (ROOT / "src" / "twin_energy_cruise.py").read_text(encoding="utf-8")
     assert GT_NAME not in energy
@@ -465,7 +541,7 @@ def world_text_pendants() -> int:
 def test_spawn_is_in_the_main_room_on_a_24_inch_path(world_text: str, solids: dict):
     gt = _ground_truth()
     match = re.search(
-        r"ButlerBot\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
+        r"ButlerBot(?:Skid)?\s*\{.*?translation\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)",
         _strip_comments(world_text),
         re.S,
     )
@@ -498,3 +574,64 @@ def test_controller_does_not_import_or_open_apartment_ground_truth():
     assert hits == []
     # The controller entry is in that set, so an import of the eval file would have shown up.
     assert any(path.name == "butlerbot_controller.py" for path in loaded)
+    assert any(path.name == "apartment_mapper.py" for path in loaded)
+
+
+def test_mapper_has_no_pose_or_map_foresight():
+    """The explorer and everything it imports stay off the scoring files and the true pose.
+
+    The pose logger is a different controller. It may call getPosition. The
+    mapper's import closure must not include it. The waypoint driver, the
+    snapshot port, and the command script are on that same rule. The smoke
+    script is the harness and is not imported here.
+    """
+    mapper = CONTROLLER_ROOT / "apartment_mapper"
+    seeds = [path for path in mapper.rglob("*.py") if path.is_file()]
+    assert seeds, "apartment_mapper controller is missing"
+    loaded = _loaded_from(seeds)
+    names = {path.name for path in loaded}
+    assert "apartment_mapper.py" in names
+    assert "apartment_pose_logger.py" not in names
+    # The waypoint driver and the snapshot port are on this same closure.
+    assert "driver.py" in names
+    assert "brain_port.py" in names
+    assert "driver_smoke.py" not in names
+    hits = []
+    for path in loaded:
+        text = path.read_text(encoding="utf-8")
+        for token in _MAPPER_BANNED:
+            if token in text or token in text.lower():
+                hits.append(f"{path.relative_to(ROOT)}: {token}")
+    assert hits == []
+    cli = (ROOT / "scripts" / "driver_command.py").read_text(encoding="utf-8")
+    for token in _MAPPER_BANNED:
+        assert token not in cli and token not in cli.lower()
+
+
+def test_recovery_mode_flag_is_opt_in():
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    assert "RBM_RECOVERY_MODE" in mapper
+    assert 'print(f"MAPPING recovery {explorer.recovery_mode}")' in mapper
+
+
+def test_oracle_pose_is_opt_in_and_is_not_the_floor_plan():
+    """The planner may be handed its own pose. The scoring file stays out."""
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    logger = (CONTROLLER_ROOT / "apartment_pose_logger" / "apartment_pose_logger.py").read_text(encoding="utf-8")
+    assert '_flag("RBM_ORACLE_POSE", False)' in mapper
+    assert "oracle_pose.txt" in mapper
+    assert "oracle_pose.txt" in logger
+    assert GT_NAME not in mapper
+    assert GT_NAME not in logger
+    assert "apartment_pose_logger" not in mapper
+
+
+def test_pose_logger_is_separate_and_reads_the_simulator_pose():
+    logger = CONTROLLER_ROOT / "apartment_pose_logger" / "apartment_pose_logger.py"
+    text = logger.read_text(encoding="utf-8")
+    assert "getPosition" in text
+    assert "getFromDef" in text
+    assert GT_NAME not in text
+    assert "apartment.wbt" not in text
+    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
+    assert "apartment_pose_logger" not in mapper

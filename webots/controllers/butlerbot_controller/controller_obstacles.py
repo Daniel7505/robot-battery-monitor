@@ -279,8 +279,3 @@ class ObstacleRuntime:
 
     def hud_line(self) -> str:
         return self.gate.hud_line()
-
-
-def no_obstacle_fields() -> dict:
-    return {"obstacle_state": "", "obstacle_m": None, "obstacle_band": "", "obstacle_conf": None,
-            "obstacle_moving": False}

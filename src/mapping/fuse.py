@@ -1,0 +1,346 @@
+"""Fuse wheel travel, gyro yaw, visual odometry, and the floor sensor.
+
+The pose still lives in the wheel-and-gyro odometry. This is the update
+that used to be a capped scan-match step. Each measurement is a body
+displacement over the same interval as the wheels. The gain is a scalar
+Kalman weight from a 3-state covariance (x, y, yaw). When the floor or
+the camera says the scene did not move while the wheels turned, the
+wheel translation is undone and counted as slip.
+"""
+
+from __future__ import annotations
+
+import math
+
+from src.mapping.floor_flow import FloorFlow, ShortFloorTrack
+from src.mapping.odometry import WheelGyroOdometry
+from src.mapping.visual_odometry import VisualOdometry
+
+
+class _Interval:
+    def __init__(self) -> None:
+        self.raw_m = 0.0
+        self.applied_m = 0.0
+        self.yaw_rad = 0.0
+        self.armed = False
+
+    def add(self, raw_m: float, applied_m: float, yaw_rad: float) -> None:
+        self.raw_m += float(raw_m)
+        self.applied_m += float(applied_m)
+        self.yaw_rad += float(yaw_rad)
+
+    def clear(self) -> None:
+        self.raw_m = 0.0
+        self.applied_m = 0.0
+        self.yaw_rad = 0.0
+        self.armed = True
+
+
+class MotionFusion:
+    def __init__(self, *, floor: bool = True, visual: bool = True, rng=None) -> None:
+        self.enabled = bool(visual or floor)
+        self.use_floor = bool(floor)
+        self.use_visual = bool(visual)
+        self.floor = FloorFlow(rng=rng)
+        self.visual = VisualOdometry()
+        # Separate tracker. Mixing a rear frame into the forward tracker
+        # looks like a jump across the robot.
+        self.rear_visual = VisualOdometry()
+        self.p_xy = 0.01
+        self.p_yaw = 0.002
+        self.slip_events = 0
+        self.floor_updates = 0
+        self.visual_updates = 0
+        # Yaw the fusion actually wrote, and the yaw the camera measured.
+        # The floor camera is a translation sensor. Its applied yaw stays 0.
+        self.visual_applied_yaw = 0.0
+        self.visual_meas_yaw = 0.0
+        self.floor_applied_yaw = 0.0
+        self.landmarks = None
+        self.last_slip = ""
+        # Latest scene translation, even when a fast yaw keeps it out of the pose.
+        # None means this step had no reading. A pin needs all three.
+        self.scene_floor_m: float | None = None
+        self.scene_visual_m: float | None = None
+        # True when this step's picture did not move. None is "no sample".
+        self.scene_visual_still = False
+        self._floor = _Interval()
+        self._visual = _Interval()
+        self._visual_still = 0
+        self._floor_dx = 0.0
+        self._floor_dy = 0.0
+        self._floor_q = 0.0
+        # Short steps. A single correlation across 2 cm wraps on this camera.
+        self._floor_track = ShortFloorTrack()
+
+    def observe(
+        self,
+        odom: WheelGyroOdometry,
+        *,
+        ds_raw_m: float,
+        ds_applied_m: float,
+        dyaw_rad: float,
+        floor=None,
+        depth=None,
+        camera=None,
+        rgb=None,
+        rear_depth=None,
+        rear_camera=None,
+        rear_rgb=None,
+        dt_s: float = 0.0,
+    ) -> str:
+        """Fold this step into the pose. Returns ``slip``, ``floor``, ``visual``, or ``''``."""
+        self.landmarks = None
+        self.last_slip = ""
+        self.scene_floor_m = None
+        self.scene_visual_m = None
+        self.scene_visual_still = False
+        if not self.enabled:
+            return ""
+        self._floor.add(ds_raw_m, ds_applied_m, dyaw_rad)
+        self._visual.add(ds_raw_m, ds_applied_m, dyaw_rad)
+        self.p_xy += 0.002 * abs(float(ds_raw_m)) + 1e-6
+        self.p_yaw += 5e-4 * abs(float(dyaw_rad)) + 1e-7
+        note = ""
+        if self.use_floor and floor is not None:
+            noted = self._observe_floor(odom, floor, dt_s=dt_s, wheel_m=ds_raw_m)
+            if noted:
+                note = noted
+        if self.use_visual and depth is not None and camera is not None:
+            sample_v = self.visual.measure(depth, camera, rgb)
+            # A flat forward wall has no corners. The rear camera is the
+            # other view, used when this one cannot track.
+            forward_blind = sample_v is None or (not sample_v.ok and sample_v.reason != "still")
+            if forward_blind and rear_depth is not None and rear_camera is not None:
+                alt = self.rear_visual.measure(rear_depth, rear_camera, rear_rgb)
+                if alt is not None and (alt.ok or alt.reason == "still"):
+                    sample_v = alt
+            if sample_v is None:
+                self._visual.clear()
+            elif sample_v.reason == "still":
+                # An unchanged picture with no corners is a pin vote.
+                # It is not a pose update: writing dyaw 0 here pulled the
+                # heading by several degrees on a flat wall.
+                self.landmarks = sample_v.landmarks
+                self.scene_visual_m = 0.0
+                self.scene_visual_still = True
+                self._visual.clear()
+                sample_v = None
+            else:
+                self.landmarks = sample_v.landmarks
+                if sample_v.ok:
+                    self.visual_meas_yaw += float(sample_v.dyaw_rad)
+                    # The pose update below ignores a fast yaw. The pin
+                    # still needs the translation the corners measured.
+                    self.scene_visual_m = math.hypot(float(sample_v.dx_m), float(sample_v.dy_m))
+                    self.scene_visual_still = (
+                        self.scene_visual_m < 0.004 and abs(float(sample_v.dyaw_rad)) < 0.01
+                    )
+                expect_px = 0.0
+                if camera is not None and sample_v.range_m > 0.2:
+                    expect_px = abs(self._visual.raw_m) / sample_v.range_m * float(camera.focal_px)
+                noted = self._apply_shift(
+                    odom,
+                    self._visual,
+                    sample_v.dx_m,
+                    sample_v.dy_m,
+                    sample_v.dyaw_rad,
+                    ok=sample_v.ok,
+                    quality=sample_v.quality,
+                    kind="visual",
+                    var_xy=0.008,
+                    var_yaw=0.01,
+                    pixel_shift=sample_v.pixel_shift,
+                    expect_px=expect_px,
+                )
+                if noted:
+                    note = noted
+                self._visual.clear()
+                if note == "slip":
+                    self._floor.applied_m = 0.0
+                    self._floor_dx = 0.0
+                    self._floor_dy = 0.0
+        return note
+
+    def _reset_floor(self) -> None:
+        self._floor.clear()
+        self._floor_dx = 0.0
+        self._floor_dy = 0.0
+        self._floor_q = 0.0
+        self._floor_track.reset()
+
+    def _observe_floor(self, odom: WheelGyroOdometry, floor, dt_s: float = 0.0, wheel_m: float = 0.0) -> str:
+        """Integrate the downward camera until the wheels have moved enough to judge.
+
+        The apartment world steps at 8 ms. One frame at cruise is a couple
+        of millimetres, and a correlation across the whole 2 cm window
+        wraps: this camera's 32 px is about 3.9 cm of floor, so one period
+        comes back as a still picture. The stall is the sum of shorter
+        steps, each about 1.2 cm. Yaw does not throw that comparison away.
+        On the lip the shell was turning while the wheels spun, and dropping
+        the window left that travel in the pose. A fast yaw still does not
+        accept a floor correction, only a stall.
+        """
+        self._floor_track.push(floor, dt_s, wheel_m)
+        sample = self.floor.measure(floor)
+        if sample is None:
+            if not self._floor.armed:
+                # First frame only arms the previous image. Keep the tracker's
+                # baseline; it armed on this same frame.
+                self._floor.clear()
+                self._floor_dx = 0.0
+                self._floor_dy = 0.0
+                self._floor_q = 0.0
+            return ""
+        if not sample.ok:
+            # The lip face is a flat frame. It is not "the floor moved".
+            # If the pile was already tracking, judge that stretch before
+            # the blank frame throws it away. A climb that is blank the
+            # whole way never tracked, so it is not a stall.
+            if self._floor_q > 0.0 and abs(self._floor.raw_m) >= 0.02:
+                return self._judge_floor(odom)
+            if abs(self._floor.raw_m) > 0.05 or abs(self._floor.yaw_rad) > 0.08:
+                self._reset_floor()
+            return ""
+        self.scene_floor_m = math.hypot(float(sample.dx_m), float(sample.dy_m))
+        self._floor_dx += float(sample.dx_m)
+        self._floor_dy += float(sample.dy_m)
+        self._floor_q = float(sample.quality)
+        if abs(self._floor.raw_m) < 0.02:
+            return ""
+        if self._floor_track.confident_still() or self._floor_track.motion_samples > 0:
+            return self._judge_floor(odom)
+        # Wheels have claimed 2 cm and the picture has not said either way
+        # (a blank lip, or a peak too weak to be a match). Give it a little
+        # more, then drop the window. That is not a stall.
+        if abs(self._floor.raw_m) > 0.06:
+            self._reset_floor()
+        return ""
+
+    def _judge_floor(self, odom: WheelGyroOdometry) -> str:
+        """Stall only when short floor steps themselves did not move.
+
+        The summed metres under-read a moving pile (the scale is nominal,
+        and a rejected frame adds nothing). Comparing that sum with 30% of
+        the wheel claim called a real 0.12 m/s drive a stall and the
+        bedroom run never left the hall. A long correlation does the same
+        thing for a different reason: 32 px is one period, and a shift of
+        one period is a zero. The short-step sum is the measurement.
+        """
+        stalled = self._floor_track.confident_still()
+        raw_m = self._floor.raw_m
+        measured = self._floor_dx
+        note = self._apply_shift(
+            odom,
+            self._floor,
+            0.0 if stalled else self._floor_dx,
+            0.0 if stalled else self._floor_dy,
+            0.0,
+            ok=True,
+            quality=0.8 if stalled else self._floor_q,
+            kind="floor",
+            var_xy=0.004 if self._floor_q > 0.4 else 0.05,
+            var_yaw=10.0,
+            skip_stall=not stalled,
+        )
+        if note != "slip":
+            self.floor.learn_scale(raw_m, measured)
+        self._reset_floor()
+        if note == "slip":
+            self._visual.applied_m = 0.0
+        return note
+
+    def _apply_shift(
+        self,
+        odom: WheelGyroOdometry,
+        interval: _Interval,
+        dx_m: float,
+        dy_m: float,
+        dyaw_rad: float,
+        *,
+        ok: bool,
+        quality: float,
+        kind: str,
+        var_xy: float,
+        var_yaw: float,
+        pixel_shift: float = 0.0,
+        expect_px: float = 0.0,
+        skip_stall: bool = False,
+    ) -> str:
+        if not ok or quality < 0.12:
+            return ""
+        raw = interval.raw_m
+        applied = interval.applied_m
+        # A fast yaw between two frames breaks a short patch search. The
+        # fit looks like a sideways shove and walks the pose in the middle
+        # of a scan. The floor sensor still gets to call a stall: the
+        # comparison below is translation, and a yaw used to skip it.
+        if kind != "floor" and abs(interval.yaw_rad) > 0.08:
+            return ""
+        scene = math.hypot(float(dx_m), float(dy_m))
+        # Wheels turned, the sensor says the body did not. Drop the travel.
+        # A forward camera only counts when that travel should have moved
+        # the tracked pixels by several pixels and they stayed put.
+        visible_stall = kind != "visual" or (expect_px >= 3.0 and pixel_shift < 0.75)
+        if (
+            not skip_stall
+            and visible_stall
+            and abs(raw) > 0.012
+            and scene < 0.30 * abs(raw)
+            and abs(float(dyaw_rad)) < 0.05
+        ):
+            # One missed track looks like a still scene. The floor sensor is
+            # a direct ground measurement, so it counts immediately. The
+            # forward camera has to say so twice.
+            if kind == "visual":
+                self._visual_still += 1
+                if self._visual_still < 2 or quality < 0.45:
+                    return ""
+            self._visual_still = 0
+            self._add_body(odom, -applied, 0.0, 0.0)
+            self.slip_events += 1
+            self.last_slip = kind
+            return "slip"
+        self._visual_still = 0
+        # The stall above is the stuck signal. A floor shift during a
+        # fast yaw is not a correction: the peak picks up the rotation.
+        if kind == "floor" and abs(interval.yaw_rad) > 0.08:
+            return ""
+        var = float(var_xy)
+        if kind == "floor" and abs(interval.yaw_rad) > 0.04:
+            var += 0.05
+        innov_x = float(dx_m) - applied
+        innov_y = float(dy_m)
+        innov_w = float(dyaw_rad) - interval.yaw_rad
+        if kind == "floor":
+            innov_w = 0.0
+        # A stall was handled above. Anything else that disagrees is not
+        # applied: a wrong visual step walks the pose, and that is worse
+        # than keeping the wheels.
+        if abs(innov_x) > max(0.015, 0.20 * abs(raw)) or abs(innov_y) > 0.02:
+            return ""
+        if kind == "visual" and abs(innov_w) > 0.04:
+            return ""
+        gain_x = min(0.55, self.p_xy / (self.p_xy + var))
+        gain_y = min(0.45, self.p_xy / (self.p_xy + var))
+        # Heading stays on the gyro. A visual yaw gain of 0.4 added about
+        # 0.005 rad on a 30 s square, which is several degrees over a
+        # 600 s run, and an unchanged wall used to pull the same way.
+        # Translation still comes from the camera and the floor.
+        applied_w = 0.0
+        self._add_body(odom, gain_x * innov_x, gain_y * innov_y, applied_w)
+        self.p_xy *= max(0.05, 1.0 - gain_x)
+        if kind == "floor":
+            self.floor_updates += 1
+        else:
+            self.visual_updates += 1
+        return kind
+
+    def _add_body(self, odom: WheelGyroOdometry, forward_m: float, lateral_m: float, dyaw_rad: float) -> None:
+        yaw = odom.yaw_rad - float(dyaw_rad)
+        c, s = math.cos(yaw), math.sin(yaw)
+        odom.apply_correction(
+            c * float(forward_m) - s * float(lateral_m),
+            s * float(forward_m) + c * float(lateral_m),
+            float(dyaw_rad),
+        )

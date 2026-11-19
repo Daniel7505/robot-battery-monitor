@@ -1,0 +1,4810 @@
+"""Occupancy mapping, frontier exploration, and the apartment scorer.
+
+Synthetic depth frames stand in for Webots. The kinematic room is a box
+the test builds itself. Scoring tests are the ones that open the
+apartment world and the ground-truth JSON.
+"""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+
+import numpy as np
+
+from eval.apartment_gt_grid import load_solids, rasterize, spawn_pose
+from eval.depth_scene import Box, render_xdepth
+from eval.kinematic_runner import run_scene
+from eval.score_apartment_map import score_labels, warp_to_ground_truth
+from src.mapping.body import (
+    ENCODER_RESOLUTION_RAD,
+    OAK_DEPTH,
+    ROBOT_RADIUS_M,
+    WHEEL_RADIUS_M,
+    WHEEL_TRACK_M,
+    DepthCamera,
+)
+from src.mapping.depth_cloud import body_points, forward_clearance
+from src.mapping.drive import pure_pursuit, wheel_speeds
+from src.mapping.frontiers import (
+    astar,
+    dilate_disk,
+    frontier_mask,
+    line_up_with_openings,
+    select_goal,
+    traversable,
+    viewpoint,
+)
+from src.mapping.scan_match import pose_correction, scan_fit
+from src.mapping.grid import OccupancyGrid
+from src.mapping.noise import depth_sigma_m, noisy_depth, noisy_yaw_rate
+from src.mapping.odometry import WheelGyroOdometry
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _small_oak(width: int = 64, height: int = 40) -> DepthCamera:
+    return DepthCamera(
+        OAK_DEPTH.name,
+        OAK_DEPTH.translation,
+        OAK_DEPTH.rotation,
+        width,
+        height,
+        OAK_DEPTH.fov_rad,
+        OAK_DEPTH.min_range_m,
+        OAK_DEPTH.max_range_m,
+    )
+
+
+def test_a_rest_calibration_holds_the_heading_for_ten_minutes():
+    """The lookup bias is learned with the hubs still, then left alone.
+
+    Learning it from moving hubs pulled a good rest estimate off, and
+    the heading walked. After a few seconds stopped, 600 s of driving
+    at +0.001 rad/s stays inside 5 degrees. A gyro spike while the hubs
+    turn is not a new bias.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(80):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=2e-4)
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(0.5)
+    left = 0.0
+    step = 0.22 / WHEEL_RADIUS_M * 0.05
+    held = odom.bias_rad_s
+    for _ in range(40):
+        left += step
+        odom.update(left, left, 0.02, 0.05)
+    assert abs(odom.bias_rad_s - held) < 1e-6
+    for _ in range(12000):
+        left += step
+        odom.update(left, left, 0.001, 0.05)
+    assert abs(math.degrees(odom.yaw_unwrapped_rad)) < 5.0
+
+
+def test_wall_line_yaw_follows_the_mapped_wall_not_a_compass():
+    """A depth line that is rotated relative to cells the robot already
+    occupied is a heading error. The wall itself can sit at any angle.
+    """
+    from src.mapping.wall_line import wall_yaw_delta
+
+    grid = OccupancyGrid()
+    # A diagonal wall the robot mapped while its heading was still good.
+    for i in range(40):
+        cell = grid.cell_of(1.2 + i * 0.05, 0.4 + i * 0.05)
+        assert cell is not None
+        grid.log[cell] = grid.l_max
+    hits = np.array([[1.2 + i * 0.05, 0.4 + i * 0.05, 0.5] for i in range(40)])
+    aligned = wall_yaw_delta(grid, (0.0, 0.0, 0.0), hits[:, :2])
+    assert abs(aligned) < 0.004
+    # Same points in the body, but the pose yaw is 0.15 rad too far.
+    # The mapped line is still the diagonal, so the correction is negative.
+    wrong = wall_yaw_delta(grid, (0.0, 0.0, 0.15), hits[:, :2])
+    assert wrong < -0.005
+    # A short run of cells is a lattice, not a wall. The opening spin
+    # used to nudge off that.
+    short = OccupancyGrid()
+    for i in range(12):
+        cell = short.cell_of(1.2 + i * 0.04, 0.4)
+        assert cell is not None
+        short.log[cell] = short.l_max
+    short_hits = np.array([[1.2 + i * 0.04, 0.4, 0.5] for i in range(12)])
+    assert wall_yaw_delta(short, (0.0, 0.0, 0.15), short_hits[:, :2]) == 0.0
+
+
+def test_rest_gyro_bias_does_not_walk_the_heading():
+    """oak_gyro reads +0.001 rad/s while the hubs are still.
+
+    Integrating that for the four minutes the robot sat in the doorway
+    was about 14 degrees of false yaw. The bias is learned and not integrated.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(400):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    assert abs(odom.pose()[2]) < math.radians(0.5)
+    assert odom.bias_rad_s == pytest_approx(0.001, abs=3e-4)
+
+
+def test_a_shove_while_the_hubs_are_still_does_not_poison_the_bias():
+    """A press holds the hubs still and the gyro reads the shove.
+
+    That reading is not a new rest bias. Folding it in used to leave
+    the heading running away after the robot started moving again.
+    """
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    for _ in range(120):
+        odom.update(0.0, 0.0, 0.001, 0.05)
+    held = odom.bias_rad_s
+    assert held == pytest_approx(0.001, abs=3e-4)
+    for _ in range(40):
+        odom.update(0.0, 0.0, 0.01, 0.05)
+    assert abs(odom.bias_rad_s - held) < 1e-4
+    assert abs(odom.yaw_unwrapped_rad) < math.radians(0.5)
+
+
+def test_static_depth_with_spinning_wheels_is_slip_not_motion():
+    """Encoders advance, the gyro stays at its rest bias, the wall does not get closer.
+
+    That is the wheel-slip half of the Webots run: about a metre of false
+    travel and a map warped enough to look finished. The pose must stay put,
+    the failed frontier must be dropped, and the run must not end.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    wall = Box(0.95, -1.2, 0.0, 1.08, 1.2, 2.2)
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [wall])
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    saw_reverse = False
+    dt = 0.05
+    # Wedged: hubs do not turn, gyro sits on its rest bias. Heading must not walk.
+    for _ in range(300):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+    assert abs(bot.pose()[2]) < math.radians(1.0)
+    # Slip: hubs follow the command, the camera does not move.
+    for _ in range(120):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        left += cmd_l * dt
+        right += cmd_r * dt
+    x, y, yaw = bot.pose()
+    assert math.hypot(x, y) < 0.25
+    assert abs(yaw) < math.radians(2.0)
+    assert saw_reverse
+    assert bot._attempts
+    assert not bot.done
+
+
+def test_wall_inside_min_range_with_spinning_wheels_is_not_motion():
+    """Pressed against a surface the depth camera cannot see.
+
+    Run 2 sat on the bath wall, inside the 0.35 m minimum, so the range
+    image was empty. The encoders still counted metres. That travel must
+    not move the pose, the drive must stop going forward, and the run
+    must not finish.
+    """
+    from src.mapping.body import CRUISE_M_S
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = CRUISE_M_S / WHEEL_RADIUS_M
+    dt = 0.05
+    late_forward = 0
+    saw_reverse = False
+    for i in range(140):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if i > 10 and (cmd_l + cmd_r) > 1.0:
+            late_forward += 1
+        # Hubs keep turning forward, which is the slip, whatever was asked.
+        left += wheel * dt
+        right += wheel * dt
+    x, y, yaw = bot.pose()
+    assert math.hypot(x, y) < 0.20
+    assert abs(yaw) < math.radians(2.0)
+    assert not bot.done
+    assert bot.slip_events >= 1
+    assert bot._slip_debt_m >= 0.35
+    assert saw_reverse
+    assert late_forward == 0
+
+
+def test_done_rejects_a_scan_that_fits_somewhere_else():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    _fill(bot.grid, 0.85, -0.6, 1.15, 0.6, bot.grid.l_max)
+    ys = np.linspace(-0.45, 0.45, 24)
+    on_wall = np.column_stack((np.full(len(ys), 1.0), ys))
+    bot._scan_xy = on_wall + np.array([0.80, 0.0])
+    bot._scan_at = bot.t_s
+    assert scan_fit(bot.grid, bot._scan_xy) == "disagree"
+    bot._no_frontier()
+    assert not bot.done
+    assert bot.phase == "go"
+    bot._scan_xy = on_wall
+    bot._confident_after = 0.0
+    bot._scan_at = bot.t_s
+    assert scan_fit(bot.grid, bot._scan_xy) == "support"
+    bot._no_frontier()
+    assert not bot.done
+    assert bot.phase == "spin"
+
+
+def test_path_aims_through_the_middle_of_a_doorway():
+    grid = OccupancyGrid()
+    free = grid.l_min
+    wall = grid.l_max
+    # A closed room with one opening. Unknown space is only beyond that gap,
+    # so the frontier is the doorway rather than the whole boundary.
+    _fill(grid, 0.0, -0.85, 1.35, 0.85, free)
+    _fill(grid, -0.25, -1.10, 1.50, -0.85, wall)
+    _fill(grid, -0.25, 0.85, 1.50, 1.10, wall)
+    _fill(grid, -0.25, -1.10, 0.0, 1.10, wall)
+    _fill(grid, 1.05, -0.85, 1.30, -0.42, wall)
+    _fill(grid, 1.05, 0.42, 1.30, 0.85, wall)
+    hugging = [(0.3, 0.32), (0.8, 0.32), (1.15, 0.30), (1.32, 0.28)]
+    lined = line_up_with_openings(grid, hugging)
+    door = [p for p in lined if p[0] > 0.95]
+    assert door
+    assert max(abs(p[1]) for p in door) < 0.15
+    chosen = select_goal(grid, (0.4, 0.30))
+    assert chosen is not None
+    _goal, path = chosen
+    through = [p for p in path if p[0] > 0.9]
+    # A path that enters the opening stays on the centre line. The
+    # viewpoint itself stands 1–3 m back when that cell can see the
+    # frontier, so the goal is not required to be past the jamb.
+    if through:
+        assert max(abs(p[1]) for p in through) < 0.20
+    frontier = [
+        grid.cell_center(int(y), int(x))
+        for y, x in zip(*np.nonzero(frontier_mask(grid.labels())))
+    ]
+    gap = min(math.hypot(_goal[0] - fx, _goal[1] - fy) for fx, fy in frontier)
+    assert gap <= 3.2 or _goal[0] > 1.6
+
+
+def test_a_path_keeps_turning_clearance_and_a_door_is_a_pivot():
+    """Turns sit 0.30 m out. A doorway is a pivot, then a straight crossing."""
+    from src.mapping.body import TURN_AIM_M, TURN_CLEAR_M
+    from src.mapping.frontiers import approach_command, hold_turning_clearance
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.4, -0.8, 2.2, 0.0, grid.l_max)
+    _fill(grid, -0.4, 0.05, 2.2, 1.5, grid.l_min)
+    hugging = [(0.2, 0.12), (0.8, 0.12), (1.4, 0.14)]
+    held = hold_turning_clearance(grid, hugging)
+    assert min(p[1] for p in held[1:]) >= TURN_CLEAR_M - 0.02
+    assert min(p[1] for p in held[1:]) >= TURN_AIM_M - 0.06
+
+    door = OccupancyGrid()
+    _fill(door, -0.5, -1.2, 2.4, 1.2, door.l_min)
+    _fill(door, 0.9, -1.2, 1.2, -0.40, door.l_max)
+    _fill(door, 0.9, 0.40, 1.2, 1.2, door.l_max)
+    path = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
+    yawed = approach_command(door, (0.3, 0.0, 1.2), path)
+    assert yawed is not None and yawed[2] == "pivot" and abs(yawed[1]) > 0.4 and yawed[0] == 0.0
+    from src.mapping.drive import wheel_speeds
+
+    left_w, right_w = wheel_speeds(yawed[0], yawed[1])
+    assert abs(left_w + right_w) < 1e-9
+    lined = approach_command(door, (0.3, 0.0, 0.0), path)
+    assert lined is not None and lined[2] == "straight" and lined[1] == 0.0 and lined[0] > 0.0
+    # Centre already inside 0.30 m of the jamb. Do not start the pivot.
+    close = approach_command(door, (1.00, 0.22, 1.2), path)
+    assert close is not None and close[2] == "back" and close[0] < 0.0 and close[1] == 0.0
+
+
+def test_a_map_corner_vetoes_a_turn_and_not_a_straight_pass():
+    """The sweep is a hard veto only while yawing. A doorway stays drivable."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, 0.28, 0.70, 0.55, grid.l_max)
+    view = BubbleView(1.5, 0.40, 0.40, 0.50, 0.40)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=-0.6,
+        heading_err=-0.6,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert choice.w == 0.0 or abs(choice.w) < 0.12
+    assert any(item["sensor"] == "map:corner" for item in choice.vetoes)
+    straight = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert straight.v > 0.02 and abs(straight.w) < 0.12
+
+
+def test_a_vetoed_tick_backs_straight_out():
+    """No candidate left, and the rear is open: reverse, and say so."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    # Walls close on both sides and ahead, wide enough that the body fits.
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    # Rear is inside the stop gap for 0.10 m/s, so the reverse candidate
+    # is vetoed, and still open enough for a straight backup.
+    view = BubbleView(0.05, 0.08, 0.08, 0.07, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v < 0.0 and choice.w == 0.0
+    assert choice.name in ("back_out", "doorway_rescan")
+
+
+def test_a_mapped_wall_behind_is_not_a_backup():
+    """Rear sonar can be open and the map still forbids the backup."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.20, -1.0, 0.35, -0.22, grid.l_max)
+    _fill(grid, 0.20, 0.22, 0.35, 1.0, grid.l_max)
+    _fill(grid, 0.25, -0.22, 0.40, 0.22, grid.l_max)
+    _fill(grid, -0.55, -0.40, -0.24, 0.40, grid.l_max)
+    view = BubbleView(0.05, 0.08, 0.08, 0.50, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.4,
+        heading_err=0.4,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.v >= 0.0
+    assert any(item["sensor"] == "map:rear" for item in choice.vetoes)
+
+
+def test_a_rear_corner_graze_still_backs_out():
+    """One cell on the tail corner is not a wall behind the robot."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.22, -0.28, -0.16, -0.20, grid.l_max)
+    view = BubbleView(0.05, 0.40, 0.40, 0.40, 0.05)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.4,
+        right_clear=0.4,
+    )
+    assert choice.v < 0.0 and abs(choice.w) < 0.12
+    assert not any(item["sensor"] == "map:rear" and item["motion"] == "reverse" for item in choice.vetoes)
+
+
+def test_a_forward_goal_is_not_driven_in_reverse():
+    """Recovery may reverse. A goal still in front does not."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._backing = True
+    bot._back_from = (0.0, 0.0)
+    bot.odometry.x_m = 0.2
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._backing
+
+
+def test_a_corner_contact_reverses_until_the_camera_can_see():
+    from src.mapping.bubble import SIGHT_M, TOO_CLOSE_M
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"tof_front_left": 0.02}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    assert bot._recover_need >= SIGHT_M - 0.02 - 1e-6
+    assert bot._recover_need > TOO_CLOSE_M
+    bot.odometry.x_m = -bot._recover_need
+    bot._proximity = {"tof_front_left": 0.29}
+    bot.t_s = 6.0
+    bot._go(False, 0.2)
+    assert bot._body_v == 0.0 and bot._body_w == 0.0
+    assert bot._recover_phase == "look"
+
+
+def test_a_recover_that_does_not_move_lets_go():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._proximity = {"tof_front_left": 0.02}
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0
+    bot.t_s = 5.7
+    bot._go(False, 0.2)
+    assert bot._body_v >= 0.0
+    assert not bot._recover
+
+
+def test_a_corner_you_cannot_back_away_from_does_not_freeze():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    _fill(bot.grid, -0.55, -0.40, -0.22, 0.40, bot.grid.l_max)
+    bot._proximity = {"tof_front_left": 0.02, "us_rear": 0.04}
+    bot._go(False, 0.2)
+    assert bot._body_v > 0.02 or abs(bot._body_w) > 0.05
+    assert not bot._recover
+
+
+def test_a_half_turn_needs_open_floor_and_a_weak_goal_does_not_win(monkeypatch):
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import free_behind_m, spin_fits
+
+    open_grid = OccupancyGrid()
+    _fill(open_grid, -1.5, -1.5, 1.5, 1.5, open_grid.l_min)
+    assert spin_fits(open_grid, (0.0, 0.0, 0.0))
+    alley = OccupancyGrid()
+    _fill(alley, -1.0, -1.0, 1.2, 1.0, alley.l_min)
+    _fill(alley, -1.0, 0.16, 1.2, 0.40, alley.l_max)
+    _fill(alley, -1.0, -0.40, 1.2, -0.16, alley.l_max)
+    assert not spin_fits(alley, (0.0, 0.0, 0.0))
+    assert free_behind_m(alley, (0.0, 0.0, 0.0)) > 0.4
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    planned = [
+        (3.0, ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)])),
+        (3.2, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+        (5.0, ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)])),
+    ]
+
+    def _fake(*_args, **kwargs):
+        score, chosen = planned.pop(0)
+        report = kwargs.get("report")
+        if report is not None:
+            report["score"] = score
+        return chosen
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.t_s = 10.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 30.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
+
+
+def test_a_tight_speck_is_refused_once(monkeypatch, tmp_path):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._note_refusals(
+        {
+            "refused": [
+                {"xy": (1.2, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+                {"xy": (1.22, 0.41), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40},
+            ]
+        }
+    )
+    bot._note_refusals(
+        {"refused": [{"xy": (1.21, 0.4), "reason": "no room to turn", "clear_m": 0.18, "size_m": 0.40}]}
+    )
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "reason=no_room_to_turn" in lines[0]
+    assert "clearance_m=0.18" in lines[0]
+    summary = (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    assert "no_room_to_turn 1" in summary
+
+
+def test_a_stuck_sonar_on_known_free_floor_still_creeps():
+    """A 6 cm reading on floor the map already calls free is not a place to sit."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.0, -1.0, 1.2, 1.0, grid.l_min)
+    _fill(grid, -0.6, -0.5, -0.2, 0.5, grid.l_max)
+    view = BubbleView(0.04, 0.05, 0.05, 0.04, 0.04)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=0.2,
+        right_clear=0.2,
+    )
+    assert choice.name == "creep" and choice.v > 0.02 and choice.w == 0.0
+
+
+def test_a_mapped_wall_ahead_is_not_driven_straight():
+    """The centreline veto stops a beeline. It does not close a side gap."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.22, -0.25, 0.50, 0.25, grid.l_max)
+    view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.20,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(item["sensor"] == "map:ahead" for item in choice.vetoes)
+    assert not (choice.v > 0.02 and abs(choice.w) <= 0.12)
+
+
+def test_a_tight_speck_is_skipped_and_a_long_pocket_is_kept():
+    """A short frontier with no room to turn is not a goal. A long one is."""
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 2.2, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 2.45, -0.26, grid.l_max)
+    _fill(grid, 1.0, 0.26, 2.45, 0.90, grid.l_max)
+    assert select_goal(grid, (0.0, 0.0)) is None
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.5, 1.6, grid.l_max)
+    _fill(grid, -1.3, -1.3, 1.0, 1.3, grid.l_min)
+    _fill(grid, 1.0, -0.26, 3.4, 0.26, grid.l_min)
+    _fill(grid, 1.0, -0.90, 3.6, -0.26, grid.l_max)
+    x = 1.0
+    while x < 3.3:
+        _fill(grid, x, 0.26, x + 0.08, 0.55, grid.l_max)
+        x += 0.20
+    report: dict = {}
+    chosen = select_goal(grid, (0.0, 0.0), report=report)
+    assert chosen is not None
+    assert report.get("tight") is True
+
+
+def test_a_tight_corner_backs_toward_the_open_room():
+    """No pivot in the corridor. The open floor behind is the way around."""
+    from src.mapping.frontiers import approach_command
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.15, -0.20, 1.4, -0.12, grid.l_max)
+    _fill(grid, 0.15, 0.12, 1.4, 0.20, grid.l_max)
+    _fill(grid, -1.5, -1.2, 0.15, 1.2, grid.l_min)
+    path = [(0.40, 0.0), (0.55, 0.0), (0.55, 0.6)]
+    command = approach_command(grid, (0.40, 0.0, 0.0), path)
+    assert command is not None and command[2] == "wide" and command[0] < 0.0
+
+
+def test_a_backup_continues_until_the_centre_can_turn():
+    from src.mapping.body import TURN_AIM_M
+    from src.mapping.explore import Explorer
+    from src.mapping.frontiers import _pose_clearance
+
+    door = OccupancyGrid()
+    _fill(door, -0.5, -1.2, 2.4, 1.2, door.l_min)
+    _fill(door, 0.9, -1.2, 1.2, -0.40, door.l_max)
+    _fill(door, 0.9, 0.40, 1.2, 1.2, door.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid = door
+    bot.phase = "go"
+    bot.path_xy = [(0.2, 0.0), (0.7, 0.0), (1.05, 0.0), (1.7, 0.0)]
+    bot.goal_xy = (1.7, 0.0)
+    bot._replan_at = 1.0e9
+    bot.t_s = 5.0
+    bot.odometry.x_m = 1.00
+    bot.odometry.y_m = 0.22
+    bot.odometry.yaw_rad = 1.2
+    bot._go(False, 0.2)
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.90
+    bot.path_xy = [(0.90, 0.22), (0.2, 0.22)]
+    bot.goal_xy = (0.2, 0.22)
+    bot.t_s = 5.2
+    assert _pose_clearance(door, 0.90, 0.22) < TURN_AIM_M
+    bot._go(False, 0.2)
+    assert bot._backing
+    assert bot._body_v < 0.0 and bot._body_w == 0.0
+    bot.odometry.x_m = 0.30
+    bot.odometry.y_m = 0.0
+    bot.odometry.yaw_rad = 0.0
+    bot.path_xy = [(0.30, 0.0), (1.6, 0.0)]
+    bot.goal_xy = (1.6, 0.0)
+    bot.t_s = 6.4
+    bot._go(False, 0.2)
+    assert not bot._backing
+    assert bot._body_v >= 0.0
+
+
+def test_a_goal_and_a_motion_stay_put_until_the_hold_ends(monkeypatch):
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._goal_since = 5.0
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.0, 0.0), (2.0, 0.0)]
+    bot._bubble_view = BubbleView(1.5, 1.0, 1.0, 1.0, 1.0)
+    bot._go(False, 0.28, 2.0, 2.0)
+    held = (bot._body_v, bot._body_w)
+    assert abs(held[0]) + abs(held[1]) > 0.04
+    bot.t_s = 5.3
+    bot._go(False, 0.28, 0.25, 1.5)
+    assert (bot._body_v, bot._body_w) == held
+    _fill(bot.grid, 0.20, -0.30, 0.45, 0.30, bot.grid.l_max)
+    bot.t_s = 5.4
+    bot._go(False, 0.28, 2.0, 2.0)
+    assert (bot._body_v, bot._body_w) != held
+
+    goals = [
+        ((3.0, 0.0), [(0.0, 0.0), (3.0, 0.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+        ((0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    ]
+
+    def _fake(*_args, **_kwargs):
+        return goals.pop(0)
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _fake)
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot.t_s = 20.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 22.0
+    bot._plan()
+    assert bot.goal_xy == (3.0, 0.0)
+    bot.t_s = 29.0
+    bot._plan()
+    assert bot.goal_xy == (0.0, 3.0)
+
+
+def test_narrow_opening_stays_passable_after_a_thick_jamb():
+    """0.81 m between jambs, each smeared 0.15 m into the opening.
+
+    That is a few contact marks on the frame. 0.26 m of inflation leaves
+    no path. The tire is 0.195 m from the centre, and 0.20 m still has one.
+    """
+
+    def _path(radius: float):
+        grid = OccupancyGrid()
+        _fill(grid, -1.5, -0.2, 1.5, 1.1, grid.l_min)
+        _fill(grid, -0.2, -0.5, 0.3, 0.15, grid.l_max)
+        _fill(grid, -0.2, 0.66, 0.3, 1.4, grid.l_max)
+        free = traversable(grid.labels(), grid.res, radius)
+        start = grid.cell_of(-0.8, 0.40)
+        goal = grid.cell_of(0.8, 0.40)
+        assert start is not None and goal is not None
+        return astar(free, start, goal, step_cost=grid.res)
+
+    assert _path(0.26) is None
+    assert _path(ROBOT_RADIUS_M) is not None
+
+
+def test_an_attempted_region_decays_and_does_not_finish_the_run():
+    """A failed goal is a fading penalty, not a disk that deletes the frontier."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.2)
+    bot.t_s = 5.0
+    bot._remember_attempt(1.1, 0.0, weight=4.0)
+    heavy = bot._avoid_now()
+    assert heavy and heavy[0][2] > 2.0
+    bot.t_s = 50.0
+    assert bot._avoid_now() == []
+    bot.phase = "go"
+    bot._confident_after = 0.0
+    bot._plan()
+    assert not bot.done
+    assert bot.goal_xy is not None
+
+
+def test_done_requires_a_stopped_hold_after_the_frontiers_are_gone():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.log[:] = bot.grid.l_min
+    bot.phase = "go"
+    bot._confident_after = 0.0
+    bot._plan()
+    assert not bot.done
+    assert bot.phase == "spin"
+    left = right = 0.0
+    dt = 0.05
+    for _ in range(500):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.70,
+            depth=None,
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        if bot.done:
+            break
+    assert bot.done
+    assert bot.phase == "done"
+
+
+def _fill(grid: OccupancyGrid, x0: float, y0: float, x1: float, y1: float, log: float) -> None:
+    corner = grid.cell_of(min(x0, x1), min(y0, y1))
+    far = grid.cell_of(max(x0, x1), max(y0, y1))
+    assert corner is not None and far is not None
+    r0, r1 = sorted((corner[0], far[0]))
+    c0, c1 = sorted((corner[1], far[1]))
+    grid.log[r0 : r1 + 1, c0 : c1 + 1] = log
+
+
+def test_straight_odometry_and_gyro_heading():
+    odom = WheelGyroOdometry()
+    ticks = 100  # exact multiple of the 0.0015 rad encoder
+    step = ENCODER_RESOLUTION_RAD * ticks
+    odom.update(0.0, 0.0, 0.0, 0.1)
+    odom.update(step, step, 0.0, 0.1)
+    x, y, yaw = odom.pose()
+    assert x == pytest_approx(step * WHEEL_RADIUS_M, abs=1e-9)
+    assert y == pytest_approx(0.0, abs=1e-9)
+    assert yaw == pytest_approx(0.0, abs=1e-9)
+    # A raw 1 rad reading is snapped to the nearest tick before it is integrated.
+    snapped = WheelGyroOdometry()
+    snapped.update(0.0, 0.0, 0.0, 0.1)
+    snapped.update(1.0, 1.0, 0.0, 0.1)
+    assert snapped.pose()[0] == pytest_approx(snapped.quantize(1.0) * WHEEL_RADIUS_M, abs=1e-9)
+    turned = WheelGyroOdometry()
+    turned.update(0.0, 0.0, 0.0, 0.1)
+    turned.update(0.0, 0.0, 0.5, 2.0)
+    assert turned.pose()[2] == pytest_approx(1.0, abs=1e-6)
+
+
+def test_encoder_quantization_drops_sub_tick_motion():
+    odom = WheelGyroOdometry()
+    odom.update(0.0, 0.0, 0.0, 0.05)
+    # Smaller than one tick on both hubs: the quantized angle stays 0.
+    assert ENCODER_RESOLUTION_RAD == pytest_approx(0.0015)
+    odom.update(0.0004, 0.0004, 0.0, 0.05)
+    assert odom.pose()[0] == pytest_approx(0.0, abs=1e-9)
+    odom.update(ENCODER_RESOLUTION_RAD, ENCODER_RESOLUTION_RAD, 0.0, 0.05)
+    assert odom.pose()[0] == pytest_approx(ENCODER_RESOLUTION_RAD * WHEEL_RADIUS_M, abs=1e-9)
+
+
+def test_center_pixel_lands_on_the_optical_axis():
+    cam = DepthCamera("test", (0.0, 0.0, 0.5), (0.0, 1.0, 0.0, 0.0), 11, 11, 1.0, 0.2, 8.0)
+    depth = np.full((11, 11), np.inf)
+    depth[5, 5] = 2.0
+    hits, floors, origin = body_points(cam, depth, stride=1)
+    assert floors.shape[0] == 0
+    assert hits.shape == (1, 3)
+    assert hits[0, 0] == pytest_approx(2.0, abs=1e-6)
+    assert abs(hits[0, 1]) < 1e-6
+    assert hits[0, 2] == pytest_approx(0.5, abs=1e-6)
+    assert origin[2] == pytest_approx(0.5, abs=1e-6)
+
+
+def test_ray_marks_free_space_and_the_hit():
+    grid = OccupancyGrid()
+    origin = (0.0, 0.0)
+    # Two views: one return is not enough to cross the log-odds threshold.
+    for _ in range(2):
+        grid.integrate(origin, np.array([[1.0, 0.0]]), np.zeros((0, 2)))
+    labels = grid.labels()
+    hit = grid.cell_of(1.0, 0.0)
+    mid = grid.cell_of(0.4, 0.0)
+    assert hit is not None and labels[hit] == 1
+    assert mid is not None and labels[mid] == 0
+
+
+def test_pitch_down_still_sees_a_wall():
+    cam = _small_oak(32, 20)
+    wall = Box(1.55, -1.0, 0.0, 1.7, 1.0, 2.4)
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [wall])
+    hits, floors, _origin = body_points(cam, depth, stride=1)
+    assert hits.shape[0] > 10
+    assert floors.shape[0] > 10
+    assert float(np.median(hits[:, 0])) == pytest_approx(1.6, abs=0.15)
+
+
+def test_goal_selection_runs_with_no_plates():
+    """Goal selection takes no floor plates. The outside ring still wins.
+
+    The plates used to shorten that ring. They are prior map knowledge,
+    so they are not an argument. The ring winning is the old problem,
+    left open.
+    """
+    grid = OccupancyGrid(size_m=16.0)
+    rows, cols = np.indices(grid.log.shape)
+    x = grid.origin[0] + (cols + 0.5) * grid.res
+    y = grid.origin[1] + (rows + 0.5) * grid.res
+    disk = np.hypot(x, y) <= 3.2
+    grid.log[disk] = grid.l_min
+    pocket = (x > 0.35) & (x < 0.95) & (np.abs(y) < 0.45)
+    grid.log[pocket] = 0.0
+    chosen = select_goal(grid, (-1.0, 0.0))
+    assert chosen is not None
+    assert abs(chosen[0][1]) > 1.2
+
+
+def test_frontier_rejects_a_speck_and_scores_a_real_edge():
+    grid = OccupancyGrid()
+    # A free disk with unknown outside produces a frontier ring.
+    grid.stamp_footprint(0.0, 0.0, radius_m=1.2)
+    chosen = select_goal(grid, (0.0, 0.0))
+    assert chosen is not None
+    labels = grid.labels()
+    assert int(np.count_nonzero(frontier_mask(labels))) > 6
+    # Seal the ring with an occupied annulus and the long frontiers go away.
+    rows, cols = np.indices(labels.shape)
+    x = grid.origin[0] + (cols + 0.5) * grid.res
+    y = grid.origin[1] + (rows + 0.5) * grid.res
+    ring = (np.hypot(x, y) > 1.15) & (np.hypot(x, y) < 1.45)
+    grid.log[ring] = grid.l_max
+    assert select_goal(grid, (0.0, 0.0)) is None
+
+
+def test_dilation_blocks_a_neighbour_cell():
+    mask = np.zeros((21, 21), dtype=bool)
+    mask[10, 10] = True
+    fat = dilate_disk(mask, 0.22, 0.05)
+    assert fat[10, 10]
+    assert fat[10, 14]  # 4 cells * 0.05 = 0.20 m, inside 0.22
+    assert not fat[10, 16]  # 0.30 m
+
+
+def test_a_door_jamb_is_not_the_nose_clearance():
+    # Centred in an 0.81 m opening, 0.6 m before the jambs. The far wall
+    # shows through the gap. The jambs are shoulders, not a wall ahead.
+    hits = np.array(
+        [
+            [0.60, 0.40, 0.5],
+            [0.60, -0.40, 0.5],
+            [2.40, 0.00, 0.5],
+        ]
+    )
+    nose, left, right = forward_clearance(hits)
+    assert nose == pytest_approx(2.40)
+    assert left == pytest_approx(0.60)
+    assert right == pytest_approx(0.60)
+    wall = np.array([[0.65, 0.0, 0.5]])
+    nose, left, right = forward_clearance(wall)
+    assert nose == pytest_approx(0.65)
+    assert left == pytest_approx(99.0)
+    assert right == pytest_approx(99.0)
+
+
+def test_depth_scene_motion_ignores_a_pure_yaw():
+    """A turn slides the image. The residual after that shift is translation."""
+    from src.mapping.depth_cloud import depth_scene_motion_m
+
+    cam = _small_oak(80, 50)
+    boxes = [Box(1.8, -2.0, 0.0, 1.9, 2.0, 2.2), Box(0.4, 0.35, 0.0, 1.9, 0.55, 2.2)]
+    still = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    yawed = render_xdepth(cam, (0.0, 0.0, 0.10), boxes)
+    forward = render_xdepth(cam, (0.08, 0.0, 0.0), boxes)
+    yaw_motion = depth_scene_motion_m(still, yawed, cam, 0.10)
+    drive_motion = depth_scene_motion_m(still, forward, cam, 0.0)
+    assert yaw_motion is not None and drive_motion is not None
+    assert yaw_motion < 0.03
+    assert drive_motion > 0.05
+
+
+def test_a_still_scene_with_turning_wheels_freezes_translation():
+    """Depth, floor, and visual odometry all still while the hubs are commanded.
+
+    That is the door-G wedge: the tires scrubbed, the forward view still
+    showed the room, and the odometry walked off. The pose goes back to
+    where the stretch started.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._confident_after = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for _ in range(16):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        # Hubs follow a forward command whether or not the planner asked.
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+    assert bot._pin_until > 0.0
+
+
+def _feed_reverse_pin(bot, rear, noses, pitch_rad: float) -> None:
+    """One pin window of a straight reverse. The rear scene does not move."""
+    from src.mapping.drive import wheel_speeds
+
+    bot._commanded = wheel_speeds(-0.10, 0.0)
+    bot._fusion.scene_floor_m = 0.0
+    bot._fusion.scene_visual_m = 0.0
+    bot.odometry.x_m = 0.0
+    for nose in noses:
+        bot._watch_pin(None, -0.01, rear, nose, pitch_rad)
+        if bot._pin_until <= 0.0:
+            bot.odometry.x_m -= 0.01
+
+
+def test_a_reverse_whose_nose_opens_is_not_pinned():
+    """The forward range rose by more than the noise margin. Keep the wheel step."""
+    from src.mapping.explore import PIN_NOSE_RELEASE_M, Explorer
+
+    cam = _small_oak(64, 40)
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    noses = [1.00 + 0.01 * i for i in range(8)]
+    assert noses[-1] - noses[0] > PIN_NOSE_RELEASE_M
+    _feed_reverse_pin(bot, rear, noses, 0.0)
+    assert bot.odometry.x_m < -0.04
+    assert bot._pin_until <= 0.0
+
+
+def test_a_reverse_with_a_flat_nose_still_pins():
+    """The same forward range is not the shell backing up."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot._replan_at = 1.0e9
+    bot._confident_after = 0.0
+    left = right = 0.0
+    step_rad = 0.10 / WHEEL_RADIUS_M * 0.05
+    dt = 0.05
+    for _ in range(16):
+        bot._commanded = wheel_speeds(-0.10, 0.0)
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            rear_depth=rear,
+            proximity={"us_left": 0.80, "us_right": 0.80},
+        )
+        left -= step_rad
+        right -= step_rad
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+    assert bot._pin_until > 0.0
+
+
+def test_a_tipped_reverse_still_pins_when_the_nose_opens():
+    """Pitch past the existing rest gate is a climb. The pin stays."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    rear = render_xdepth(cam, (0.0, 0.0, math.pi), [Box(-1.2, -1.0, 0.0, -1.1, 1.0, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    bot._pitch_rest = 0.0
+    noses = [1.00 + 0.01 * i for i in range(8)]
+    _feed_reverse_pin(bot, rear, noses, 0.20)
+    assert abs(bot.odometry.x_m) < 0.02
+    assert bot._pin_until > 0.0
+
+
+def test_an_opening_nose_still_drops_the_frozen_view_step():
+    """A frozen picture drops the wheel step. An opening nose does not keep it."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), [Box(1.4, -1.2, 0.0, 1.5, 1.2, 2.0)])
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot._replan_at = 1.0e9
+    bot._confident_after = 0.0
+    command = wheel_speeds(-0.10, 0.0)
+    bot._commanded = command
+    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, depth=depth)
+    bot._view_still_from = bot.t_s - 3.0
+    x0 = bot.odometry.x_m
+    step = -0.10 / WHEEL_RADIUS_M * 0.05
+    left = right = 0.0
+    for _ in range(12):
+        bot._commanded = command
+        left += step
+        right += step
+        bot.step(dt_s=0.05, left_wheel_rad=left, right_wheel_rad=right, yaw_rate_rad_s=0.0, depth=depth)
+    assert abs(bot.odometry.x_m - x0) < 0.02
+
+
+def test_a_still_scene_freezes_yaw_while_the_wheels_spin():
+    """Depth, floor, and vision unchanged. The gyro still reads its rest offset.
+
+    The hubs are turning, so the old still-hubs rule does not apply, and
+    integrating that offset is the heading walk while the body sits.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(7)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for _ in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.008,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events >= 1
+    assert abs(bot.pose()[2]) < math.radians(0.5)
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+
+
+def test_a_soft_floor_creep_is_not_a_zero_velocity_update():
+    """A low-frequency grain still looks similar after a few pixels of MAD.
+
+    Floor flow against the anchor is the translation check. Depth and the
+    forward picture stay fixed, which is a flat wall ahead while the shell
+    creeps. That must not freeze the pose.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[22:34, 24:36] = 40.0
+    yy, xx = np.mgrid[0:32, 0:32]
+    base = 80.0 + 28.0 * np.sin(xx / 4.0) + 12.0 * np.cos(yy / 5.0)
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.12 / WHEEL_RADIUS_M
+    dt = 0.05
+    for i in range(24):
+        floor = np.roll(base, i * 4, axis=1)
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events == 0
+    assert bot.pose()[0] > 0.05
+
+
+def test_a_stuck_press_with_an_open_nose_backs_off():
+    """The nose looks through the opening. The tires are still scrubbing.
+
+    Side sonar never sees a jamb here. The still pictures are the press,
+    and the reverse has to start before the contact has lasted two seconds.
+    A carpet-ramp pitch is not a lifted wheel.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    saw_reverse = False
+    # A small pitch is not a tip. The skid-steer has no casters to unload.
+    # Stuck is a few seconds of command without odometry displacement.
+    for _ in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            pitch_rad=0.05,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events >= 1
+    assert bot.wheels_lifted == 0
+    assert saw_reverse
+    assert abs(bot.pose()[2]) < math.radians(1.0)
+    assert math.hypot(*bot.pose()[:2]) < 0.08
+
+
+def test_a_stuck_reverse_yields_after_the_hinges_spin_against_a_frozen_picture():
+    """The reverse starts. Once the hubs have turned the backup cap and the picture is still frozen, it yields."""
+    from src.mapping.explore import BLIND_BACK_CAP_M, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    saw_reverse = False
+    # Longer than the 1 m backup cap at the stuck reverse of 0.10 m/s.
+    steps = int((BLIND_BACK_CAP_M / 0.10 + 4.0) / dt)
+    last = (0.0, 0.0)
+    for _ in range(steps):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        last = (cmd_l, cmd_r)
+        if cmd_l < -0.5 and cmd_r < -0.5:
+            saw_reverse = True
+            left += cmd_l * dt
+            right += cmd_r * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert saw_reverse
+    assert bot._stuck_yield
+    assert not (last[0] < -0.5 and last[1] < -0.5)
+
+
+def test_pile_leave_logs_why_the_rear_gap_won(capsys):
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot._pile_forced = True
+    bot._view_blind = False
+    bot._last_clear = (1.20, 1.0, 1.0)
+    bot._bubble_view = BubbleView(0.40, 1.0, 1.0, 2.00, 0.40)
+    bot._view_sig = (1.0, 1.0, ())
+    bot._view_still_from = 0.0
+    bot.t_s = 10.0
+    bot._stuck_yield = True
+    bot._stuck_reverse_m = 1.0
+    bot._go(False, 0.0)
+    out = capsys.readouterr().out
+    assert "pile_leave branch=straight_back:rear_clearer" in out
+    assert "fwd=0.40" in out
+    assert "rear=2.00" in out
+    assert "clip_fwd=0" in out
+    assert "yield=1" in out
+
+
+def test_a_pile_leave_branch_change_is_not_hidden_by_the_one_second_line(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._bubble_view = None
+    bot._last_clear = (1.0, 1.0, 1.0)
+    bot.t_s = 10.0
+    bot._leave_why = "nose_forward"
+    bot._log_pile_leave()
+    bot.t_s = 10.1
+    bot._leave_why = "fallback_reverse"
+    bot._log_pile_leave()
+    out = capsys.readouterr().out
+    assert "branch=nose_forward" in out
+    assert "branch=fallback_reverse" in out
+
+
+def test_a_still_floor_freezes_translation_while_the_view_turns():
+    """The pile is still and the forward picture is not. That is a scrub.
+
+    Depth and vision used to veto the floor, so the wheels kept writing
+    travel while the shell sat on the lip. Translation freezes and the
+    drive backs off. Yaw does not: the gyro is actually turning.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    floor = 40.0 + noise * (3.2 / float(np.std(noise)))
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[22:34, 24:36] = 40.0
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    saw_reverse = False
+    for i in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.04,
+            depth=depth + 0.2 * (i % 2),
+            floor=floor,
+            rgb=np.roll(rgb, i, axis=1),
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events >= 1
+    assert saw_reverse
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.08
+    assert abs(bot.pose()[2]) > 0.015
+
+
+def test_a_pivot_about_the_floor_camera_does_not_rewind_yaw():
+    """A turn in place is not a stuck floor. The camera is on the axis.
+
+    The door run rewound 0.50 rad in one sample while the shell was
+    pivoting, and the heading stayed 44° off after that. The gyro had
+    the turn. The still picture must not put the old heading back.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    floor = 40.0 + noise * (3.2 / float(np.std(noise)))
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    yaw = 0.0
+    dt = 0.05
+    rate = 0.80
+    for _ in range(24):
+        yaw += rate * dt
+        left -= rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        right += rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    assert bot.phase == "go"
+    assert bot.zupt_events == 0
+    assert abs(bot.pose()[2]) > 0.5
+
+
+def test_a_pure_pivot_with_a_still_floor_freezes_translation_only():
+    """The floor image does not move about the spin axis. The gyro does.
+
+    Depth and the forward view stay still too, which used to rewind yaw
+    on every sample. The turn never reached the old 0.12 rad release, so
+    the heading stayed put. Translation is the part that freezes.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(11)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    dt = 0.05
+    # Above the 0.02 rad/s rest gate, and slow enough that 0.4 s of yaw
+    # stays under the old 0.12 rad rewind release.
+    rate = 0.15
+    for _ in range(50):
+        left -= rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        right += rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    assert bot.zupt_events >= 1
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.05
+    assert abs(bot.pose()[2]) > 0.20
+
+
+def test_a_real_spin_is_not_stuck_when_the_floor_picture_stays():
+    """The survey rotates about the downward camera, so that picture barely translates.
+
+    Treating the match as a stall aborted the spin at 0.8 s on every seed.
+    The gyro is turning, so the shell is not stuck.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(2.4, -1.2, 0.0, 2.6, 1.2, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    noise = np.random.default_rng(5).normal(0.0, 1.0, size=(32, 32))
+    floor = 40.0 + noise * (3.2 / float(np.std(noise)))
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "spin"
+    bot._spin_start = 0.0
+    bot._fusion.floor.noise_px = 0.0
+    left = right = 0.0
+    yaw = 0.0
+    dt = 0.05
+    rate = 0.70
+    for _ in range(24):
+        yaw += rate * dt
+        left -= rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        right += rate * (WHEEL_TRACK_M / 2.0) / WHEEL_RADIUS_M * dt
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=rate,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 1.5, "us_right": 1.5},
+        )
+    assert bot.phase == "spin"
+    assert abs(bot.pose()[2]) > 0.4
+
+
+def test_a_moving_floor_is_not_a_zero_velocity_update():
+    """The floor picture shifting is the body moving. Yaw and travel stay."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[22:34, 24:36] = 40.0
+    rng = np.random.default_rng(3)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    wheel = 0.22 / WHEEL_RADIUS_M
+    dt = 0.05
+    for i in range(30):
+        shifted = np.roll(floor, i * 8, axis=1)
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=shifted,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.zupt_events == 0
+    assert math.hypot(*bot.pose()[:2]) > 0.08
+
+
+def test_a_short_floor_shift_does_not_confirm_the_wheel_step(capsys):
+    """A couple of pixels is not the centimetre the hubs just claimed.
+
+    That is the start of the island climb: the picture is not flat, and
+    it is not still, and it did not move with the wheels.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.05
+    step = 0.15
+    for i in range(16):
+        left += step
+        right += step
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth + 0.02 * (i % 4),
+            floor=np.roll(floor, i * 2, axis=1),
+        )
+    assert math.hypot(*bot.pose()[:2]) < 0.03
+    assert "floor shift short of the wheels" in capsys.readouterr().out
+
+
+def test_a_flat_floor_image_does_not_confirm_wheel_travel(capsys):
+    """The island face is a flat picture. Wheels turning are not travel.
+
+    A textured floor that shifts still counts. That is ordinary driving.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.05
+    step = 0.08
+    for _ in range(12):
+        left += step
+        right += step
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+            floor=flat,
+        )
+    assert math.hypot(bot.pose()[0], bot.pose()[1]) < 0.02
+    assert "floor blank, wheel translation held" in capsys.readouterr().out
+    bot._escape_block = (bot.t_s + 40.0, bot.pose()[0], bot.pose()[1], bot.pose()[2])
+    bot._view_still_from = bot.t_s
+    left_c, right_c = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left_c < -0.5 and right_c < -0.5
+    bot.t_s += STALL_WINDOW_S + 0.1
+    bot._view_still_from = bot.t_s
+    left_c, right_c = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left_c * right_c < 0
+
+
+def test_a_held_floor_cuts_the_blocked_reverse(capsys):
+    """The pose pin is the progress clock the blocked reverse already uses.
+
+    A flat floor holds translation. Two seconds under 0.04 m, and that
+    reverse is not sent again. The forward picture keeps changing, which
+    is the climb: the nose range moves while the downward camera is blank.
+    """
+    from src.mapping.explore import STILL_M, Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0)]
+    base = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    flat = np.full((32, 32), 18.0)
+    bot = Explorer(camera=cam, stride=2, fusion=False, floor=True, loop=False)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    bot._commanded = (1.5, 1.5)
+    left = right = 0.0
+    dt = 0.032
+    for i in range(6):
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=base + 0.04 * (i % 4),
+            floor=flat,
+        )
+    bot._arm_escape_block()
+    held_at = None
+    reverse_at = None
+    stopped_at = None
+    for i in range(160):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=base + 0.05 * ((i // 3) % 6),
+            floor=flat,
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        straight_back = cmd_l < -0.5 and cmd_r < -0.5 and abs(cmd_l - cmd_r) < 0.4
+        if held_at is None and math.hypot(*bot.pose()[:2]) < 0.02 and bot.t_s > 0.3:
+            held_at = bot.t_s
+        if straight_back and reverse_at is None:
+            reverse_at = bot.t_s
+        if reverse_at is not None and not straight_back and bot._block_reverse_dead:
+            stopped_at = bot.t_s
+            break
+    out = capsys.readouterr().out
+    assert held_at is not None
+    assert reverse_at is not None
+    assert stopped_at is not None
+    assert stopped_at - reverse_at >= 1.5
+    assert stopped_at - reverse_at < 2.6
+    assert math.hypot(*bot.pose()[:2]) < STILL_M
+    assert "blocked reverse did not move the shell" in out
+    assert not bot._view_frozen()
+
+
+def test_lifted_wheels_are_a_zero_velocity_update():
+    """Casters take the load, the drive wheels spin, the pictures do not move."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    boxes = [Box(1.5, -1.5, 0.0, 1.6, 1.5, 2.0), Box(0.5, 0.30, 0.0, 1.6, 0.48, 2.0)]
+    depth = render_xdepth(cam, (0.0, 0.0, 0.0), boxes)
+    rgb = np.zeros(depth.shape, dtype=np.float64)
+    rgb[8:18, 8:18] = 220.0
+    rgb[8:18, 40:52] = 30.0
+    rgb[22:34, 24:36] = 180.0
+    rng = np.random.default_rng(9)
+    floor = rng.normal(40.0, 25.0, size=(32, 32))
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.8, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    for _ in range(30):
+        bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            pitch_rad=0.0,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+        )
+    assert bot._pitch_rest == pytest_approx(0.0, abs=1e-6)
+    wheel = 0.22 / WHEEL_RADIUS_M
+    saw_reverse = False
+    for _ in range(40):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.001,
+            pitch_rad=0.16,
+            depth=depth,
+            floor=floor,
+            rgb=rgb,
+            proximity={"us_left": 0.40, "us_right": 0.40},
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            saw_reverse = True
+        if cmd_l + cmd_r > 0.4:
+            left += wheel * dt
+            right += wheel * dt
+        else:
+            left += cmd_l * dt
+            right += cmd_r * dt
+    assert bot.wheels_lifted >= 1
+    assert saw_reverse
+    assert abs(bot.pose()[2]) < math.radians(1.0)
+
+
+def test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it():
+    """The left sonar stays on the frame. Reverse has to yaw away from it.
+
+    A straight backup counted wheel radians and the tire never left the
+    jamb. The command here is a reverse with the right hub faster, which
+    is a yaw to the right, off the left wall.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 0.0
+    left = right = 0.0
+    dt = 0.05
+    saw_escape = False
+    for _ in range(20):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            proximity={"us_left": 0.04, "us_right": 0.40},
+        )
+        left += cmd_l * dt
+        right += cmd_r * dt
+        if cmd_l < -0.05 and cmd_r < cmd_l - 0.3:
+            saw_escape = True
+    assert saw_escape
+
+
+def test_a_door_is_approached_slowly_on_the_centre_line():
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.5, 0.0)
+    bot.path_xy = [(0.6, 0.0), (2.5, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.70, 1.00)
+    # Left sonar closer: the centre line is to the right, so yaw is negative.
+    bot._bubble_view = BubbleView(1.6, 0.22, 0.40, None, 0.22)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.22
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.70, 1.00)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert 0.02 < v <= DOOR_SPEED_M_S + 1e-6
+    assert w < -0.05
+
+
+def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():
+    """A straight pass misses a wall that sits only on the inside of a turn."""
+    from src.mapping.footprint import fit_motion, footprint_clips
+
+    grid = OccupancyGrid()
+    pose = (0.0, 0.0, 0.0)
+    assert not footprint_clips(grid, pose, 0.22, 0.0)
+    assert not footprint_clips(grid, pose, 0.22, 0.35)
+    # Left turn swings the nose to +y. The wall is outside the straight shell.
+    _fill(grid, 0.05, 0.34, 0.70, 0.70, grid.l_max)
+    assert not footprint_clips(grid, pose, 0.18, 0.0)
+    assert footprint_clips(grid, pose, 0.18, 0.9)
+    v, w, kind = fit_motion(grid, pose, 0.18, 0.9, 0.0)
+    assert kind in {"wider", "straight", "align"}
+    assert not footprint_clips(grid, pose, v, w)
+
+
+def test_a_pivot_whose_corner_sweeps_into_the_map_backs_up():
+    """Centre clearance can be 0.30 m while the tire corner still swings into a wall.
+
+    The 0.20 m planning disk is not this check. The rectangle is.
+    """
+    from src.mapping.footprint import footprint_clips
+    from src.mapping.frontiers import approach_command
+
+    grid = OccupancyGrid()
+    cell = grid.cell_of(0.125, 0.275)
+    assert cell is not None
+    grid.log[cell] = grid.l_max
+    pose = (0.0, 0.0, 0.0)
+    path = [(-0.20, 0.0), (0.10, 0.0), (0.10, 0.90)]
+    assert footprint_clips(grid, pose, 0.0, 0.70)
+    command = approach_command(grid, pose, path)
+    assert command is not None and command[2] == "back" and command[0] < 0.0 and command[1] == 0.0
+
+
+def test_a_finished_pivot_drives_and_a_small_error_does_not_restart_it(monkeypatch):
+    """12° is close enough to drive. The pivot stays off until 25°."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import PIVOT_ENTER_RAD, PIVOT_EXIT_RAD, Explorer
+
+    assert math.radians(10) < PIVOT_EXIT_RAD < math.radians(15)
+    assert PIVOT_ENTER_RAD > PIVOT_EXIT_RAD + math.radians(8)
+
+    def _pivot(*_args, **_kwargs):
+        return (0.0, 0.70, "pivot")
+
+    monkeypatch.setattr("src.mapping.explore.approach_command", _pivot)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot._bubble_view = BubbleView(2.0, 1.0, 1.0, 1.0, 1.0)
+    bot._bubble_gap = 2.0
+
+    def go(path):
+        bot.path_xy = path
+        left, right = bot._go(False, 0.28, 1.0, 1.0)
+        v = 0.5 * (left + right) * WHEEL_RADIUS_M
+        return v
+
+    # About 40° off the nose: a real corner, so the pivot starts.
+    assert go([(0.2, 0.0), (1.2, 1.0)]) == 0.0
+    assert bot._pivot_hold
+    # Still turning, 18° left: do not drop it yet.
+    bot.path_xy = [(0.2, 0.0), (1.6, 0.52)]
+    assert go(bot.path_xy) == 0.0
+    # Inside 12°: hand back to driving.
+    assert go([(0.2, 0.0), (2.0, 0.25)]) > 0.02
+    assert not bot._pivot_hold
+    # 18° again is the wobble of one cell. It must not restart the pivot.
+    assert go([(0.2, 0.0), (1.6, 0.52)]) > 0.02
+    assert not bot._pivot_hold
+
+
+def test_a_yawed_door_approach_lines_up_then_drives_straight():
+    """A heading error is a cost. Live air still produces a forward command.
+
+    The opening is the robot's own occupied cells. An arc swings the nose
+    into a jamb; the straight centred pass does not. Neither case is a veto.
+    """
+    from src.mapping.explore import DOOR_SPEED_M_S, Explorer
+    from src.mapping.footprint import footprint_clips
+
+    grid = OccupancyGrid()
+    # 0.81 m opening along +x. Jambs start 0.405 m off the centre line.
+    _fill(grid, 1.05, 0.405, 1.25, 1.10, grid.l_max)
+    _fill(grid, 1.05, -1.10, 1.25, -0.405, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.odometry.y_m = 0.0
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert v > 0.04
+    assert w < 0.0
+    assert bot.goal_xy == (2.4, 0.0)
+
+    bot.odometry.yaw_rad = 0.0
+    bot.odometry.yaw_unwrapped_rad = 0.0
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert 0.05 < v <= DOOR_SPEED_M_S + 1e-6
+    assert abs(w) < 0.20
+    near = (0.90, 0.0, 0.0)
+    assert not footprint_clips(grid, near, DOOR_SPEED_M_S, 0.0)
+    assert footprint_clips(grid, near, DOOR_SPEED_M_S, 0.40)
+
+
+def test_a_flicker_off_the_doorway_band_does_not_restart_the_align():
+    """One depth frame with a shoulder past 1.20 m does not zero the command."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v_band = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    bot.t_s += 0.2
+    bot._last_clear = (1.6, 0.62, 1.40)
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 1.40)
+    v_flicker = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v_band > 0.04
+    assert v_flicker > 0.04
+    assert bot.goal_xy == (2.4, 0.0)
+
+
+def test_an_align_spin_that_loses_the_shoulders_keeps_the_clock():
+    """Losing one shoulder does not turn an open bubble into a zero command."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.odometry.x_m = 0.55
+    bot.odometry.yaw_rad = 0.55
+    bot.odometry.yaw_unwrapped_rad = 0.55
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.55, 0.0), (1.40, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.62, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.62
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    bot.t_s += 0.8
+    bot._last_clear = (1.6, 0.62, 1.40)
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.62, 1.40)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert bot.goal_xy == (2.4, 0.0)
+
+
+def test_a_smeared_door_still_creeps_after_the_align_window():
+    """Occupied cells in the opening do not zero the command.
+
+    Both shoulders still show the gap and the nose is open, so the
+    motion goes forward and toward the open shoulder.
+    """
+    from src.mapping.explore import Explorer
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.85, -0.08, 1.05, 0.08, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 8.0
+    bot.odometry.x_m = 0.40
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (1.6, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 8.0
+    bot._approach_since = 6.0
+    bot._last_clear = (0.90, 0.50, 1.05)
+    bot._bubble_gap = 0.90
+    bot._min_gap = 0.50
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.50, 1.05)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert v > 0.04
+    assert w < 0.0
+
+
+def test_a_rear_press_drives_forward_off_the_wall():
+    """The tail is on the wall and the nose sees the room. Reverse digs in."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._bubble_view = BubbleView(1.4, 0.40, 0.40, 0.02, 0.02)
+    bot._bubble_gap = 1.4
+    bot._min_gap = 0.02
+    cmd_l, cmd_r = bot._go(True, 0.0)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+
+
+def test_an_unchanged_view_with_no_corners_is_still():
+    """A flat wall has nothing to track. The picture not moving is the reading."""
+    from src.mapping.visual_odometry import VisualOdometry
+
+    cam = _small_oak(48, 32)
+    depth = np.full((cam.height, cam.width), 1.6)
+    # A smooth gradient has no corner to track. The unchanged frame is the vote.
+    rgb = np.tile(np.linspace(20.0, 220.0, cam.width), (cam.height, 1))
+    vo = VisualOdometry()
+    assert vo.measure(depth, cam, rgb) is None
+    still = vo.measure(depth, cam, rgb)
+    assert still is not None and still.ok and still.reason == "still"
+    assert abs(still.dx_m) < 1e-6 and abs(still.dy_m) < 1e-6
+    shifted = np.roll(rgb, 8, axis=1)
+    moved = vo.measure(depth, cam, shifted)
+    assert moved is None or moved.reason != "still"
+
+
+def test_an_uncommitted_goal_is_not_held():
+    """A recent attempt lowers that frontier. The frontier is still reachable."""
+    from src.mapping.frontiers import select_goal
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.15, -2.0, 3.2, 2.0, grid.l_min)
+    _fill(grid, -0.45, -2.0, -0.15, 2.0, grid.l_max)
+    _fill(grid, -0.45, -0.40, -0.15, 0.40, grid.l_min)
+    _fill(grid, -2.4, -0.45, -0.45, 0.45, grid.l_min)
+    from src.mapping.rooms import segment_map
+
+    rooms = segment_map(grid.labels(), grid.res)
+    plain = select_goal(grid, (0.6, 0.0), heading_xy=(-1.0, 0.0), rooms=rooms)
+    assert plain is not None and abs(plain[0][1]) < 0.7 and plain[0][0] < 1.5
+    report: dict = {}
+    shifted = select_goal(
+        grid,
+        (0.6, 0.0),
+        heading_xy=(-1.0, 0.0),
+        rooms=rooms,
+        avoid=[(plain[0][0], plain[0][1], 6.0)],
+        report=report,
+    )
+    assert shifted is not None
+    assert math.hypot(shifted[0][0] - plain[0][0], shifted[0][1] - plain[0][1]) > 0.6
+    runner = report["runner_up"]
+    assert runner is not None
+    assert math.hypot(runner[0] - plain[0][0], runner[1] - plain[0][1]) < 0.3
+
+
+def test_a_spin_command_does_not_integrate_translation():
+    """Encoder travel during a commanded spin is scrub, not axle motion."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    bot._commanded = (-1.49, 1.49)
+    bot.step(dt_s=0.008, left_wheel_rad=0.25, right_wheel_rad=0.25, yaw_rate_rad_s=0.0)
+    assert abs(bot.odometry.x_m) < 1e-4
+    assert abs(bot.odometry.y_m) < 1e-4
+
+
+def test_radar_furniture_does_not_spin_an_open_shell():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0, radar_blocked=True)
+    cmd_l, cmd_r = bot.step(
+        dt_s=0.008,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.0,
+        radar_blocked=True,
+    )
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.05
+
+
+def test_visual_translation_does_not_write_yaw():
+    """Corner tracks may move x and y. Heading stays on the gyro."""
+    from src.mapping.fuse import MotionFusion
+
+    fuse = MotionFusion(floor=False, visual=True)
+    odom = WheelGyroOdometry()
+    interval = fuse._visual
+    interval.add(0.02, 0.02, 0.0)
+    note = fuse._apply_shift(
+        odom,
+        interval,
+        0.02,
+        0.004,
+        0.03,
+        ok=True,
+        quality=0.8,
+        kind="visual",
+        var_xy=0.008,
+        var_yaw=0.01,
+        pixel_shift=5.0,
+        expect_px=5.0,
+    )
+    assert note == "visual"
+    assert fuse.visual_applied_yaw == 0.0
+    assert abs(odom.yaw_unwrapped_rad) < 1e-9
+    assert abs(odom.x_m) > 0.0 or abs(odom.y_m) > 0.0
+
+
+def test_a_still_sample_does_not_pull_yaw():
+    from src.mapping.fuse import MotionFusion
+    from src.mapping.odometry import WheelGyroOdometry
+
+    cam = _small_oak(48, 32)
+    depth = np.full((cam.height, cam.width), 1.6)
+    rgb = np.tile(np.linspace(20.0, 220.0, cam.width), (cam.height, 1))
+    fuse = MotionFusion(floor=False, visual=True)
+    odom = WheelGyroOdometry()
+    fuse.observe(odom, ds_raw_m=0.02, ds_applied_m=0.02, dyaw_rad=0.0, depth=depth, camera=cam, rgb=rgb)
+    yaw_before = odom.yaw_unwrapped_rad
+    fuse.observe(odom, ds_raw_m=0.02, ds_applied_m=0.02, dyaw_rad=0.01, depth=depth, camera=cam, rgb=rgb)
+    assert fuse.scene_visual_m == 0.0
+    assert abs(odom.yaw_unwrapped_rad - yaw_before) < 1e-9
+    assert fuse.visual_applied_yaw == 0.0
+
+
+def test_a_clear_door_crossing_is_committed():
+    """An open crossing drives, and one tick does not throw the goal away."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.4, 0.0)
+    bot.path_xy = [(0.4, 0.0), (1.4, 0.0), (2.4, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._last_clear = (1.6, 0.70, 0.70)
+    bot._bubble_gap = 1.6
+    bot._min_gap = 0.40
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.70, 0.70)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert bot.goal_xy == (2.4, 0.0)
+
+
+def test_a_smeared_opening_is_crept_not_banned():
+    """Occupancy may clip. Live air still commands a motion, and the goal stays.
+
+    A flat wall at the same nose range is a cost, not a ban.
+    """
+    from src.mapping.explore import Explorer
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.28, -0.08, 0.48, 0.08, grid.l_max)
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot.goal_xy = (2.2, 0.0)
+    bot.path_xy = [(0.5, 0.0), (2.2, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 20.0
+    bot._last_clear = (0.97, 0.58, 1.23)
+    bot._bubble_gap = 0.70
+    bot._min_gap = 0.70
+    cmd_l, cmd_r = bot._go(False, 0.28, 0.58, 1.23)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert bot.goal_xy == (2.2, 0.0)
+    assert not bot._attempts
+
+    bot._last_clear = (0.55, 1.95, 0.50)
+    bot._bubble_gap = 0.23
+    bot._min_gap = 0.23
+    cmd_l, cmd_r = bot._go(False, 0.28, 1.95, 0.50)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    w = (cmd_r - cmd_l) * WHEEL_RADIUS_M / WHEEL_TRACK_M
+    assert v > 0.02 or abs(w) > 0.15
+    assert bot.goal_xy == (2.2, 0.0)
+
+    wall = Explorer(camera=_small_oak(), fusion=False, floor=False, grid=grid)
+    wall.phase = "go"
+    wall.t_s = 20.0
+    wall.goal_xy = (2.2, 0.0)
+    wall.path_xy = [(0.5, 0.0), (2.2, 0.0)]
+    wall._replan_at = 1.0e9
+    wall._goal_since = 20.0
+    wall._last_clear = (0.95, 0.94, 0.96)
+    wall._bubble_gap = 0.70
+    wall._min_gap = 0.70
+    cmd_l, cmd_r = wall._go(False, 0.28, 0.94, 0.96)
+    v = 0.5 * (cmd_l + cmd_r) * WHEEL_RADIUS_M
+    assert v > 0.04
+    assert wall.goal_xy == (2.2, 0.0)
+    assert not wall._attempts
+
+
+def test_jamb_steer_only_centres_a_two_sided_gap():
+    from src.mapping.tick import centre_yaw
+
+    # A wall on the left and open space on the right is not a doorway.
+    assert centre_yaw(0.40, 99.0) == 0.0
+    # Both jambs close, left one nearer: turn right, away from it.
+    assert centre_yaw(0.40, 0.80) < 0.0
+    assert centre_yaw(0.80, 0.40) > 0.0
+    # Centred in the opening: no extra yaw.
+    assert centre_yaw(0.55, 0.58) == 0.0
+
+
+def test_reverse_out_of_a_blind_wall_moves_the_pose():
+    """The backup itself is motion. Only the forward skid is frozen."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(48, 30)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot = Explorer(camera=cam, stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    left = right = 0.0
+    dt = 0.05
+    backed = False
+    for _ in range(80):
+        cmd_l, cmd_r = bot.step(
+            dt_s=dt,
+            left_wheel_rad=left,
+            right_wheel_rad=right,
+            yaw_rate_rad_s=0.0,
+            depth=depth,
+        )
+        if cmd_l < -0.05 and cmd_r < -0.05:
+            backed = True
+            left += cmd_l * dt
+            right += cmd_r * dt
+        else:
+            # Forward commands stay a skid: the hubs do not follow them.
+            pass
+    assert backed
+    assert bot.pose()[0] < -0.08
+
+
+def test_contact_mark_survives_a_later_free_ray():
+    grid = OccupancyGrid()
+    cell = grid.cell_of(0.40, 0.0)
+    assert cell is not None
+    # Only a cell the camera already called a wall can be reinforced.
+    # One free ray does not wipe it. A run of free rays does, so a mark
+    # that landed in an opening cannot stay shut.
+    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
+    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
+    grid.mark_contact(0.40, 0.0)
+    assert grid.labels()[cell] == 1
+    grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
+    assert grid.labels()[cell] == 1
+    for _ in range(8):
+        grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
+    assert grid.labels()[cell] != 1
+    assert not grid.latch[cell]
+
+
+def test_contact_does_not_invent_a_wall_in_open_space():
+    grid = OccupancyGrid()
+    grid.mark_contact(0.28, 0.0)
+    cell = grid.cell_of(0.28, 0.0)
+    assert cell is not None and grid.labels()[cell] == -1
+    grid.log[cell] = grid.l_min
+    grid.mark_contact(0.28, 0.0)
+    assert grid.labels()[cell] == 0
+    assert not grid.latch[cell]
+
+
+def test_stalled_hubs_turn_away_and_mark_the_contact():
+    """No odometry displacement for a few seconds: one wait, then a reverse.
+
+    The response does not paint a wall down the centre of a doorway.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(16, 8), stride=2)
+    bot.phase = "go"
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    saw_forward = False
+    saw_reverse = False
+    for _ in range(20):
+        left, right = bot.step(
+            dt_s=0.2,
+            left_wheel_rad=0.0,
+            right_wheel_rad=0.0,
+            yaw_rate_rad_s=0.0,
+            depth=None,
+        )
+        if left > 0.0 and right > 0.0:
+            saw_forward = True
+        if left < -0.05 and right < -0.05:
+            saw_reverse = True
+    assert saw_forward
+    assert saw_reverse
+    ahead = bot.grid.cell_of(0.28, 0.0)
+    assert ahead is not None and bot.grid.labels()[ahead] != 1
+
+
+def test_the_decision_log_is_off_unless_asked(tmp_path, monkeypatch):
+    import json
+
+    from src.mapping.bubble import BubbleView
+    from src.mapping.explore import Explorer
+    from src.mapping.tick import choose_motion, live_veto
+
+    monkeypatch.delenv("RBM_DECISION_LOG", raising=False)
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._goal_since = 5.0
+    bot._bubble_view = BubbleView(0.70, 0.40, 0.40, 0.40, 0.40)
+    bot._bubble_gap = 0.70
+    bot._go(False, 0.28, 1.0, 1.0)
+    assert not (tmp_path / "decisions.txt").exists()
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    bot._major("pivot", "heading_off", heading_err_deg=20.0, clearance_m=0.28)
+    bot._major("pivot", "heading_off", heading_err_deg=21.0, clearance_m=0.28)
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "place=" in lines[0]
+    assert "action=pivot" in lines[0]
+    assert "reason=heading_off" in lines[0]
+    assert "heading_err_deg=20.00" in lines[0]
+    tight = BubbleView(0.09, 0.40, 0.40, 0.40, 0.09)
+    assert live_veto(0.28, 0.0, tight) is not None
+    choice = choose_motion(
+        view=tight,
+        pursuit_v=0.28,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=bot.grid,
+        pose=(0.0, 0.0, 0.0),
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert choice.name != "cruise"
+    assert abs(choice.v) + abs(choice.w) > 0.04
+
+
+def test_pure_pursuit_turns_left_for_a_left_goal():
+    v, w, arrived = pure_pursuit((0.0, 0.0, 0.0), [(1.2, 0.4)], arrive_m=0.2)
+    assert not arrived and w > 0.0 and v > 0.0
+    left, right = wheel_speeds(v, w)
+    assert right > left
+    # Track and radius stay the proto numbers.
+    assert WHEEL_TRACK_M == pytest_approx(0.34)
+    assert WHEEL_RADIUS_M == pytest_approx(0.08)
+
+
+def test_proto_depth_camera_matches_the_body_constants():
+    text = (ROOT / "webots" / "protos" / "ButlerBot.proto").read_text(encoding="utf-8")
+    assert 'name "oak_depth"' in text
+    assert "fieldOfView 1.396" in text
+    assert "noise 0.002" in text
+    assert "0.0873" in text
+    assert OAK_DEPTH.fov_rad == pytest_approx(1.396)
+    assert OAK_DEPTH.rotation[3] == pytest_approx(0.0873)
+
+
+def test_gyro_noise_is_not_zero():
+    rng = np.random.default_rng(0)
+    samples = [noisy_yaw_rate(0.0, rng) for _ in range(40)]
+    assert abs(float(np.mean(samples))) > 1e-4
+    assert float(np.std(samples)) > 1e-3
+
+
+def _room() -> list[Box]:
+    t = 0.12
+    z1 = 2.4
+    x0, x1, y0, y1 = -1.6, 1.6, -1.2, 1.2
+    return [
+        Box(x0 - t, y0 - t, 0.0, x1 + t, y0, z1),
+        Box(x0 - t, y1, 0.0, x1 + t, y1 + t, z1),
+        Box(x0 - t, y0, 0.0, x0, y1, z1),
+        Box(x1, y0, 0.0, x1 + t, y1, z1),
+    ]
+
+
+def test_boxed_room_explores_until_the_frontiers_are_gone():
+    result = run_scene(
+        _room(),
+        start=(0.0, 0.0, 0.0),
+        steps=280,
+        dt_s=0.2,
+        noise=True,
+        seed=2,
+        camera=_small_oak(48, 30),
+        stride=2,
+    )
+    assert result.explorer.done, f"still exploring after {result.steps} steps"
+    labels = result.explorer.grid.labels()
+    grid = result.explorer.grid
+    centre = grid.cell_of(0.0, 0.0)
+    wall = grid.cell_of(1.62, 0.0)
+    assert centre is not None and labels[centre] == 0
+    assert wall is not None and labels[wall] == 1
+    # Outside the shell stays unseen: the wall closes the map.
+    outside = grid.cell_of(2.4, 0.0)
+    assert outside is not None and labels[outside] < 0
+
+
+def test_visited_is_the_shell_sweep_and_seen_is_the_labelled_floor():
+    from eval.apartment_gt_grid import GtGrid, Solid
+    from eval.score_apartment_map import floor_coverage, shell_visited
+
+    labels = np.zeros((30, 40), dtype=np.int8)
+    gt = GtGrid(labels=labels, origin_xy=(0.0, 0.0), resolution_m=0.05)
+    mask = shell_visited(gt, np.array([[0.4, 0.5, 0.0], [0.8, 0.5, 0.0]]))
+
+    def marked(x: float, y: float) -> bool:
+        col = int(math.floor(x / 0.05))
+        row = int(math.floor(y / 0.05))
+        return bool(mask[row, col])
+
+    assert marked(0.6, 0.5)
+    assert not marked(0.6, 1.2)
+    pred = np.full(labels.shape, -1, dtype=np.int8)
+    pred[:, :20] = 0
+    rows = floor_coverage(
+        gt,
+        pred,
+        mask,
+        [
+            Solid("APT_FLOOR_LIVING", 0.0, 1.0, 0.0, 1.5, 0.0, 0.01),
+            Solid("APT_FLOOR_BATH", 1.2, 2.0, 0.0, 1.5, 0.0, 0.01),
+        ],
+    )
+    by_room = {row["room"]: row for row in rows}
+    assert by_room["living"]["seen_pct"] == pytest_approx(100.0)
+    assert by_room["living"]["visited_pct"] > 0.0
+    assert by_room["bath"]["visited_pct"] == pytest_approx(0.0)
+    assert by_room["bath"]["seen_pct"] == pytest_approx(0.0)
+
+
+def test_scorer_matches_a_perfect_copy_and_a_blank_map():
+    gt = rasterize()
+    perfect = score_labels(gt, gt.labels.copy())
+    assert perfect["occupancy_iou"] == pytest_approx(1.0)
+    assert perfect["free_iou"] == pytest_approx(1.0)
+    assert perfect["coverage_pct"] == pytest_approx(100.0)
+    assert perfect["wall_error_cm"] < 1.0
+    blank = np.full(gt.labels.shape, -1, dtype=np.int8)
+    empty = score_labels(gt, blank)
+    assert empty["coverage_pct"] == pytest_approx(0.0)
+    assert empty["free_iou"] == pytest_approx(0.0)
+    assert empty["occupancy_iou"] == pytest_approx(0.0)
+    assert math.isnan(empty["wall_error_cm"])
+
+
+def test_spawn_alignment_round_trip_stays_close():
+    gt = rasterize()
+    sx, sy, yaw = spawn_pose()
+    # The spawn cell is open floor.
+    col = int(math.floor((sx - gt.origin_xy[0]) / gt.resolution_m))
+    row = int(math.floor((sy - gt.origin_xy[1]) / gt.resolution_m))
+    assert gt.labels[row, col] == 0
+    grid = OccupancyGrid(resolution_m=gt.resolution_m)
+    painted = np.full((grid.n, grid.n), -1, dtype=np.int8)
+    c, s = math.cos(yaw), math.sin(yaw)
+    height, width = gt.labels.shape
+    for r in range(height):
+        for col_i in range(width):
+            if gt.labels[r, col_i] < 0:
+                continue
+            xw = gt.origin_xy[0] + (col_i + 0.5) * gt.resolution_m
+            yw = gt.origin_xy[1] + (r + 0.5) * gt.resolution_m
+            dx, dy = xw - sx, yw - sy
+            xo = c * dx + s * dy
+            yo = -s * dx + c * dy
+            cell = grid.cell_of(xo, yo)
+            if cell is not None:
+                painted[cell] = gt.labels[r, col_i]
+    pred = warp_to_ground_truth(painted, grid.meta(), gt, (sx, sy), yaw)
+    scores = score_labels(gt, pred)
+    assert scores["coverage_pct"] > 98.0
+    assert scores["free_iou"] > 0.9
+    assert scores["occupancy_iou"] > 0.85
+    assert scores["wall_error_cm"] < 12.0
+
+
+def _wall_grid(hits: np.ndarray) -> OccupancyGrid:
+    grid = OccupancyGrid()
+    for _ in range(3):
+        grid.integrate((0.0, 0.0), hits, np.zeros((0, 2)))
+    return grid
+
+
+def _corner_hits() -> np.ndarray:
+    """An L of returns, so a yaw error moves the side wall off the map."""
+    front = np.stack((np.full(24, 1.60), np.linspace(-0.55, 0.55, 24)), axis=1)
+    side = np.stack((np.linspace(0.85, 1.55, 16), np.full(16, 0.70)), axis=1)
+    return np.vstack((front, side))
+
+
+def test_pose_correction_recovers_translation_and_yaw():
+    hits = _corner_hits()
+    grid = _wall_grid(hits)
+    wrong = (0.06, -0.04, 0.02)
+    dx, dy, dyaw = pose_correction(grid, wrong, hits)
+    before = math.hypot(wrong[0], wrong[1])
+    after = math.hypot(wrong[0] + dx, wrong[1] + dy)
+    assert after < before * 0.75
+    assert after < 0.05
+    assert abs(wrong[2] + dyaw) < 0.02
+    # A shift onto a different wall is outside the search and is refused.
+    far = pose_correction(grid, (0.35, 0.20, 0.0), hits)
+    assert far == (0.0, 0.0, 0.0)
+
+
+def test_pose_correction_rejects_a_weak_or_empty_match():
+    hits = _corner_hits()
+    empty = OccupancyGrid()
+    assert pose_correction(empty, (0.0, 0.0, 0.0), hits[:8]) == (0.0, 0.0, 0.0)
+    assert pose_correction(empty, (0.0, 0.0, 0.0), hits) == (0.0, 0.0, 0.0)
+    # Occupied cells the 0.40 m window cannot reach.
+    far = np.stack((np.full(40, 4.0), np.linspace(-1.0, 1.0, 40)), axis=1)
+    grid = _wall_grid(far)
+    dx, dy, dyaw = pose_correction(grid, (0.0, 0.0, 0.0), hits)
+    assert (dx, dy, dyaw) == (0.0, 0.0, 0.0)
+
+
+def test_pose_correction_leaves_a_pose_that_already_explains_the_scan():
+    hits = _corner_hits()
+    grid = _wall_grid(hits)
+    dx, dy, dyaw = pose_correction(grid, (0.0, 0.0, 0.0), hits)
+    assert math.hypot(dx, dy) < 0.05
+    assert abs(dyaw) < 0.02
+
+
+def test_scan_correction_moves_the_odometry_pose():
+    odom = WheelGyroOdometry()
+    odom.apply_correction(0.10, -0.20, math.pi)
+    x, y, yaw = odom.pose()
+    assert x == pytest_approx(0.10)
+    assert y == pytest_approx(-0.20)
+    assert yaw == pytest_approx(math.pi) or yaw == pytest_approx(-math.pi)
+
+
+def test_a_square_script_closes_after_four_legs():
+    from src.mapping.scripted import BodyScript
+
+    script = BodyScript("square")
+    yaw = 0.0
+    spins = 0
+    for _leg in range(4):
+        saw_forward = False
+        for _step in range(100):
+            left, right = script.command(ds_m=0.02, yaw_unwrapped=yaw, forward_gap_m=2.0, rear_gap_m=2.0)
+            if left * right < 0.0:
+                spins += 1
+                break
+            assert left > 0.0 and right > 0.0
+            saw_forward = True
+        assert saw_forward
+        for _step in range(50):
+            yaw += 0.04
+            script.command(ds_m=0.0, yaw_unwrapped=yaw, forward_gap_m=2.0, rear_gap_m=2.0)
+            if script.done or (script.phase == "drive" and script.leg == _leg + 1):
+                break
+    assert spins == 4
+    assert script.done
+
+
+def test_a_plunge_stops_when_the_forward_gap_closes():
+    from src.mapping.scripted import BodyScript
+
+    script = BodyScript("plunge")
+    left, right = script.command(ds_m=0.01, yaw_unwrapped=0.0, forward_gap_m=2.0, rear_gap_m=None)
+    assert left > 2.0 and right > 2.0
+    assert not script.done
+    left, right = script.command(ds_m=0.01, yaw_unwrapped=0.0, forward_gap_m=0.03, rear_gap_m=None)
+    assert left == 0.0 and right == 0.0
+    assert not script.done
+    for _ in range(200):
+        left, right = script.command(
+            ds_m=0.0, yaw_unwrapped=0.0, forward_gap_m=0.03, rear_gap_m=None, dt_s=0.008
+        )
+    assert left == 0.0 and right == 0.0
+    assert script.done
+
+
+def test_scripted_drive_starts_the_pattern_instead_of_a_survey_spin():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False, drive="square")
+    left, right = bot.step(dt_s=0.008, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    assert left > 1.0 and right > 1.0
+    assert abs(left - right) < 0.2
+
+
+def test_scenario_world_changes_only_the_butlerbot_pose():
+    from eval.run_mapping_scenarios import WORLD, _patch_world
+
+    text = WORLD.read_text(encoding="utf-8")
+    patched = _patch_world(text, 4.4, 1.778, math.pi)
+    assert "translation 4.4000 1.7780 0" in patched
+    assert "rotation 0 0 1 3.141593" in patched
+    assert "translation 6.1 4.7 0" not in patched
+    assert 'EXTERNPROTO "../protos/ButlerBotSkid.proto"' in patched
+    assert "apartment_pose_logger" in patched
+
+
+def test_a_short_gap_splits_two_rooms_and_a_long_strip_is_a_hall():
+    from src.mapping.rooms import crossing_bonus, segment_map
+
+    labels = np.full((40, 80), -1, dtype=np.int8)
+    labels[8:32, 4:28] = 0
+    labels[8:32, 36:70] = 0
+    labels[8:32, 28:36] = 1
+    labels[12:26, 28:36] = 0
+    info = segment_map(labels, 0.05)
+    assert info["doors"].any()
+    assert set(info["names"].values()) == {"room_1", "room_2"}
+    # A wide room opening into a walled corridor. The corridor is a metre
+    # wide and three metres long, so it is a hall, and the mouth is a door.
+    hall = np.full((60, 120), -1, dtype=np.int8)
+    hall[4:48, 4:44] = 0
+    hall[14:34, 44:104] = 0
+    hall[10:14, 44:104] = 1
+    hall[34:38, 44:104] = 1
+    named = segment_map(hall, 0.05)
+    assert "hall" in named["names"].values()
+    assert any(name.startswith("room_") for name in named["names"].values())
+    assert named["doors"].any()
+    # The apartment hall is only 1.02 m by 1.73 m. Length alone must still
+    # name it, after the mouth cells are cut out of the region.
+    apt = np.full((80, 90), -1, dtype=np.int8)
+    apt[10:70, 40:85] = 0
+    apt[30:50, 5:40] = 0
+    apt[26:30, 5:40] = 1
+    apt[50:54, 5:40] = 1
+    apt_named = segment_map(apt, 0.05)
+    assert "hall" in apt_named["names"].values()
+    assert any(name.startswith("room_") for name in apt_named["names"].values())
+    doors = np.zeros((4, 4), dtype=bool)
+    doors[1, 2] = True
+    regions = np.zeros((4, 4), dtype=np.int16)
+    regions[1, 0] = 1
+    regions[1, 3] = 2
+    bonus = crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": regions}, (1, 0))
+    assert bonus >= 3.0
+    # The same door speck inside one region is not a new place.
+    same = np.ones((4, 4), dtype=np.int16)
+    assert crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": same}, (1, 0)) == 1.0
+    # Standing on the cut-out threshold still counts as leaving that room.
+    gap = np.zeros((4, 4), dtype=np.int16)
+    gap[0, 0] = 1
+    gap[1, 3] = 2
+    assert crossing_bonus([(1, 0), (1, 2), (1, 3)], {"doors": doors, "labels": gap}, (1, 0)) >= 3.0
+    # An 0.81 m opening is a thin throat. Once the narrow cells run the
+    # full width of the gap, the old 0.80 m length cap called it a corridor.
+    wide = np.full((60, 90), -1, dtype=np.int8)
+    wide[6:54, 4:36] = 0
+    wide[6:54, 40:86] = 0
+    wide[6:54, 36:40] = 1
+    wide[16:37, 36:40] = 0
+    split = segment_map(wide, 0.05)
+    assert split["doors"].any()
+    assert sum(1 for name in split["names"].values() if name.startswith("room_")) >= 2
+
+
+def test_the_opening_ahead_beats_a_long_frontier_beside_it():
+    """A doorway into another region outscores the long unknown edge of this one."""
+    from src.mapping.rooms import segment_map
+
+    grid = OccupancyGrid()
+    _fill(grid, -0.15, -2.0, 3.2, 2.0, grid.l_min)
+    _fill(grid, -0.45, -2.0, -0.15, 2.0, grid.l_max)
+    _fill(grid, -0.45, -0.40, -0.15, 0.40, grid.l_min)
+    _fill(grid, -2.4, -0.45, -0.45, 0.45, grid.l_min)
+    rooms = segment_map(grid.labels(), grid.res)
+    assert len(set(rooms["names"])) >= 2
+    chosen = select_goal(
+        grid,
+        (0.6, 0.0),
+        heading_xy=(-1.0, 0.0),
+        rooms=rooms,
+    )
+    assert chosen is not None
+    goal, _path = chosen
+    # In front of the opening, where the depth camera can see it. Not the
+    # long wall beside the robot, and not already through the gap.
+    assert abs(goal[1]) < 0.7
+    assert goal[0] < 1.5
+
+
+def test_a_smeared_threshold_is_still_a_way_into_the_room_beyond():
+    """Free space past a thin occupied smear is a goal, not a wall to route around."""
+    grid = OccupancyGrid()
+    _fill(grid, -0.7, 0.0, 0.7, 1.75, grid.l_min)
+    # What a depth ray through the door actually paints: the opening,
+    # then the room beyond it. The threshold itself is occupied.
+    _fill(grid, -0.40, 2.25, 0.40, 2.90, grid.l_min)
+    _fill(grid, -1.8, 2.90, 1.8, 5.2, grid.l_min)
+    _fill(grid, -1.8, 1.80, -0.45, 2.90, grid.l_max)
+    _fill(grid, 0.45, 1.80, 1.8, 2.90, grid.l_max)
+    _fill(grid, -0.45, 1.85, 0.45, 2.20, grid.l_max)
+    chosen = select_goal(grid, (0.0, 1.1), heading_xy=(0.0, 1.0))
+    assert chosen is not None
+    goal, _path = chosen
+    assert goal[1] > 2.2
+
+
+def test_seen_through_a_doorway_is_not_a_visited_room():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.room_labels = np.zeros((bot.grid.n, bot.grid.n), dtype=np.int16)
+    bot.room_labels[80:140, 80:140] = 1
+    bot.visited[100, 100] = True
+    labels = bot.observed_room_labels()
+    assert labels[100, 100] == 1
+    assert labels[120, 120] == 0
+
+
+def test_the_rear_camera_looks_behind_the_tail():
+    from src.mapping.body import REAR_DEPTH
+    from src.mapping.depth_cloud import body_points, rear_clearance_m
+
+    image = np.full((REAR_DEPTH.height, REAR_DEPTH.width), np.inf)
+    image[REAR_DEPTH.height // 2, REAR_DEPTH.width // 2] = 1.0
+    hits, _floors, _origin = body_points(REAR_DEPTH, image, stride=1)
+    assert hits.shape[0] == 1
+    assert hits[0, 0] < -1.0
+    gap = rear_clearance_m(hits)
+    assert gap is not None and 0.8 < gap < 1.2
+
+
+def test_depth_error_grows_with_range_squared():
+    # Luxonis OAK-D Lite, 480P, 75 mm: below 2% under 3 m.
+    # https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
+    assert depth_sigma_m(3.0) == pytest_approx(0.06)
+    assert depth_sigma_m(3.0) / 3.0 == pytest_approx(0.02)
+    assert depth_sigma_m(1.0) == pytest_approx(0.06 / 9.0)
+    assert depth_sigma_m(2.0) == pytest_approx(4.0 * depth_sigma_m(1.0))
+    assert depth_sigma_m(5.0) / 5.0 < 0.04
+    near = np.array(
+        [noisy_depth(np.array([[1.0]]), np.random.default_rng(i), 8.0)[0, 0] for i in range(60)]
+    )
+    far = np.array(
+        [noisy_depth(np.array([[3.0]]), np.random.default_rng(1000 + i), 8.0)[0, 0] for i in range(60)]
+    )
+    assert float(np.std(far)) > float(np.std(near)) * 4.0
+
+
+def test_a_far_return_does_not_close_a_doorway():
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.6, 2.2, 0.6, grid.l_min)
+    origin = (0.2, 0.0)
+    far = np.array([[1.2, 0.0]])
+    for _ in range(4):
+        grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), probable_xy=far)
+    end = grid.cell_of(1.2, 0.0)
+    assert end is not None
+    assert grid.labels()[end] != 1
+    assert grid.probable[end]
+    free = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(1.8, 0.0)
+    assert start is not None and goal is not None
+    assert astar(free, start, goal, step_cost=grid.res) is not None
+    firm = OccupancyGrid()
+    _fill(firm, 0.0, -0.6, 2.2, 0.6, firm.l_min)
+    firm.log[end] = 0.0
+    for _ in range(2):
+        firm.integrate(origin, far, np.zeros((0, 2)))
+    assert firm.labels()[end] == 1
+
+
+def test_a_mid_range_hit_occupies_only_after_four_views():
+    """4–5 m is still a wall, at lower odds. Three frames must not close the gap."""
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.6, 2.2, 0.6, grid.l_min)
+    origin = (0.2, 0.0)
+    far = np.array([[1.2, 0.0]])
+    end = grid.cell_of(1.2, 0.0)
+    assert end is not None
+    grid.log[end] = 0.0
+    for _ in range(3):
+        grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] != 1
+    free = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(1.8, 0.0)
+    assert start is not None and goal is not None
+    assert astar(free, start, goal, step_cost=grid.res) is not None
+    grid.integrate(origin, np.zeros((0, 2)), np.zeros((0, 2)), soft_xy=far)
+    assert grid.labels()[end] == 1
+    assert ROBOT_RADIUS_M == pytest_approx(0.20)
+
+
+def test_a_viewpoint_stands_one_to_three_metres_back():
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -1.5, 6.0, 1.5, grid.l_min)
+    _fill(grid, -0.3, -1.8, 0.0, 1.8, grid.l_max)
+    _fill(grid, 0.0, -1.8, 6.2, -1.5, grid.l_max)
+    _fill(grid, 0.0, 1.5, 6.2, 1.8, grid.l_max)
+    chosen = select_goal(grid, (1.0, 0.0))
+    assert chosen is not None
+    goal, _path = chosen
+    assert 3.0 <= goal[0] <= 5.3
+    assert abs(goal[1]) < 1.3
+
+
+def test_a_tight_room_keeps_the_nearest_viewpoint():
+    grid = OccupancyGrid()
+    grid.stamp_footprint(0.0, 0.0, radius_m=0.45)
+    labels = grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    cells = [(int(y), int(x)) for y, x in zip(ys, xs)]
+    assert cells
+    free = traversable(labels, grid.res, ROBOT_RADIUS_M)
+    stood = viewpoint(free, cells, occupied=(labels == 1), res=grid.res)
+    assert stood is not None
+    nearest = min(math.hypot(stood[0] - y, stood[1] - x) for y, x in cells) * grid.res
+    assert nearest < 1.0
+
+
+def test_three_failures_ban_a_frontier_until_it_is_seen(tmp_path, monkeypatch):
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    labels = bot.grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    assert len(patch) >= 3
+    for _ in range(FRONTIER_FAILS - 1):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert not bot._held
+    bot._note_frontier_fail(1.2, 0.0, patch)
+    assert bot._held
+    bot.t_s = 80.0
+    assert patch[0] in bot._ban_set()
+    lines = (tmp_path / "decisions.txt").read_text(encoding="utf-8")
+    assert lines.count("reason=frontier_ban") == 1
+    assert "frontier_ban 1" in (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    region = bot._regions[0]
+    assert region.watch
+    for cell in region.watch:
+        bot.grid.log[cell] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+    assert "reason=frontier_clear" in (tmp_path / "decisions.txt").read_text(encoding="utf-8")
+
+
+def test_a_local_wall_change_lifts_the_frontier_ban():
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    ys, xs = np.nonzero(frontier_mask(bot.grid.labels()))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    anchor = bot.grid.cell_of(1.2, 0.0)
+    assert anchor is not None
+    for i in range(14):
+        bot.grid.log[anchor[0] + i, anchor[1]] = bot.grid.l_max
+    bot._regions.clear()
+    bot._held.clear()
+    for _ in range(FRONTIER_FAILS):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert patch[0] in bot._ban_set()
+    for i in range(14):
+        bot.grid.log[anchor[0] + i, anchor[1]] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+
+
+def test_an_open_pivot_does_not_strike_the_frontier():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.goal_xy = (1.0, 0.0)
+    bot._goal_cells = [bot.grid.cell_of(1.2, 0.0)]
+    bot._body_v = 0.0
+    bot._body_w = 0.7
+    assert not bot._frontier_fail_ok()
+    bot._body_w = 0.0
+    bot._body_v = 0.1
+    assert bot._frontier_fail_ok()
+
+
+def test_a_blind_room_with_no_translation_counts_as_a_frontier_failure():
+    """The camera is inside min range and the shell is still. That look failed."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot._view_blind = True
+    bot._slip_debt_m = 0.2
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    assert bot._place_tag() == "room"
+    assert bot._frontier_fail_ok()
+    # A moving shell keeps the blind exception. Slip and a blind view are not a bad frontier.
+    bot._still_from = (4.8, 0.0, 0.0)
+    assert not bot._frontier_fail_ok()
+
+
+def test_a_doorway_crossing_is_not_a_frontier_failure():
+    """Only the crossing is exempt. Sitting in the opening with a clear view counts."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.room_doors = np.ones(bot.grid.labels().shape, dtype=bool)
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._approach_why = "straight"
+    bot._body_v = 0.12
+    assert bot._place_tag() == "doorway"
+    assert not bot._frontier_fail_ok()
+    bot._approach_why = ""
+    bot._body_v = 0.0
+    bot._body_w = 0.0
+    bot._view_blind = False
+    assert bot._frontier_fail_ok()
+
+
+def test_a_blind_corner_backs_up_until_the_range_is_real_and_the_shell_has_moved():
+    from src.mapping.explore import BLIND_EXIT_MARGIN_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._still_from = (0.0, 0.0, 0.0)
+    bot._view_blind = True
+    bot._last_clear = (0.12, 99.0, 99.0)
+    # The goal is straight ahead. The backup still reverses.
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    assert bot.goal_xy is None
+    assert bot._goal_hold is not None
+    bot.odometry.x_m = -0.05
+    bot.t_s = 6.2
+    # A pose write is not travel. Credit the reverse the wheels actually integrated.
+    bot._escape_travel_m = 0.05
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    nose = bot.camera.translation[0] + bot.camera.min_range_m + BLIND_EXIT_MARGIN_M + 0.02
+    bot._view_blind = False
+    bot._last_clear = (nose, 1.0, 1.0)
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    bot.odometry.x_m = -0.35
+    bot._escape_travel_m = 0.35
+    bot._go(False, 0.28)
+    assert not bot._blind_back
+    assert bot._goal_hold is None
+
+
+def test_a_still_picture_with_commanded_motion_reverses_along_the_trail():
+    """The command is a turn. The depth picture has not changed for a few seconds.
+
+    The nose value is not the trigger. An empty frame and a blind frame
+    are the same kind of still picture. Ground truth is not read.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_w = 0.30
+    bot._last_clear = (99.0, 99.0, 99.0)
+    bot._view_sig = (None, 0.0, ())
+    bot._view_still_from = 0.0
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_stuck_spin_phase_reverses_and_leaves_the_spin():
+    """The survey spin is a motion phase. A still picture there is stuck."""
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak()
+    bot = Explorer(camera=cam, fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    depth = np.full((cam.height, cam.width), np.inf)
+    bot.phase = "spin"
+    bot._spin_start = 0.0
+    bot._view_sig = bot._depth_signature(depth)
+    bot._view_still_from = 0.0
+    bot.t_s = 3.0
+    bot._commanded = ( -1.49, 1.49)
+    left, right = bot.step(
+        dt_s=0.05,
+        left_wheel_rad=0.0,
+        right_wheel_rad=0.0,
+        yaw_rate_rad_s=0.001,
+        depth=depth,
+    )
+    assert left < -0.5 and right < -0.5
+    assert bot.phase == "go"
+    assert bot._escape_block is not None
+
+
+def test_a_seen_throat_is_crept_and_an_open_hall_is_not():
+    """The pivot aim stays at cruise. A throat the robot can see is a slow creep."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.4, 0.0), (2.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._last_clear = (0.8, 0.5, 0.5)
+    left, right = bot._go(False, 0.28)
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 1.2
+    assert max(left, right) < 2.2
+    bot._last_clear = (2.0, 99.0, 99.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        bot.grid.log[cell] = bot.grid.l_min
+    left, right = bot._go(False, 0.28)
+    assert left > 2.2 and right > 2.2
+
+
+def test_a_repeated_block_leaves_for_another_goal():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.t_s = 10.0
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    bot._block_refusals = 3
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy is None
+    assert bot._leave_xy == (0.0, 0.0)
+    assert bot._quarantine is not None
+
+
+def test_a_blocked_heading_does_not_drive_straight_back_in():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    left, right = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert left < -0.5 and right < -0.5
+    bot.odometry.yaw_rad = 1.2
+    bot.odometry.yaw_unwrapped_rad = 1.2
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+
+
+def test_a_blocked_reverse_that_does_not_move_the_shell_is_not_repeated():
+    """Pose still for the stall window. Wheel spin is not progress."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._wheels = (0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    bot._wheels = (-20.0, -20.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left * right < 0
+    assert abs(left + right) < 0.2
+    assert not bot._block_reverse_dead or bot._block_turns_tried >= 1
+
+
+def test_a_blocked_reverse_that_moves_the_shell_keeps_backing():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, STILL_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    bot.odometry.x_m = STILL_M + 0.01
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+    assert not bot._block_reverse_dead
+    left, right = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_failed_block_backs_up_again_after_the_shell_leaves():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (40.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 10.0 + STALL_WINDOW_S + 0.1
+    turned = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert turned[0] * turned[1] < 0
+    assert bot._block_reverse_dead
+    bot.odometry.x_m = 0.80
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+    assert not bot._block_reverse_dead
+    bot.t_s = 20.0
+    bot._escape_block = (40.0, 0.80, 0.0, 0.0)
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left < -0.5 and right < -0.5
+
+
+def test_a_quiet_blocked_turn_does_not_spin_forever():
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    first = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert first[0] * first[1] < 0
+    bot.t_s = 14.3
+    second = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert second[0] * second[1] < 0
+    assert (second[0] > 0) != (first[0] > 0)
+    bot.t_s = 16.5
+    left, right = bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
+def test_a_refused_stall_reverse_advances_to_the_turn():
+    """A stall reverse the block has refused must not stay (0, 0) until the cap.
+
+    Wheel travel already sits between the 0.02 m handoff and the 1 m cap,
+    so the back phase would ask for that reverse on every tick. The turn
+    the stall already has is the next command.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._view_blind = False
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 14.3
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot._blind_back = True
+    bot._escape_phase = "back"
+    bot._escape_phase_t = bot.t_s
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot.t_s = 16.5
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert bot._escape_phase == "turn"
+    assert bot._blind_back
+    assert bot._escape_travel_m == 0.15
+    left, right = bot._go(False, 0.0)
+    assert left * right < 0
+    assert abs(left) > 0.5 and abs(right) > 0.5
+    assert bot._motion_source == "stall"
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
+def test_a_refused_stall_holds_the_small_pivot_when_the_spin_is_unsafe(monkeypatch):
+    """Both big spins meet a corner and the reverse is already refused.
+
+    Dropping back to that reverse zeros the command every step. The
+    closed-rear pivot stays on until the turn's own limits end it.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    monkeypatch.setattr(bot, "_spin_safe", lambda _w: False)
+    expected = wheel_speeds(0.0, 0.30)
+    seen = []
+    for _ in range(6):
+        speeds = bot._go(False, 0.0)
+        seen.append(speeds)
+        assert speeds == expected
+        assert speeds != (0.0, 0.0)
+        assert bot._motion_source == "stall"
+        assert bot._escape_phase == "turn"
+    assert len(set(seen)) == 1
+
+
+def test_a_quiet_small_pivot_hands_off_to_the_drive():
+    """Four seconds of the small pivot with flat yaw takes the drive.
+
+    Flipping the unused ±0.70 spin and restarting the clock would send
+    the same pivot again. The drive branch is the existing handoff.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s - 4.1
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    bot._spin_safe = lambda _w: False
+    drive = wheel_speeds(0.12, 0.0)
+    first = bot._go(False, 0.0)
+    assert first == drive
+    assert bot._escape_phase == "drive"
+    second = bot._go(False, 0.0)
+    assert second == drive
+    assert bot._escape_phase == "drive"
+    assert second != wheel_speeds(0.0, 0.30)
+    assert second != wheel_speeds(0.0, -0.30)
+
+
+def test_a_quiet_big_spin_still_flips():
+    """The ±0.70 spin is the command, so a quiet 4 s still flips it.
+
+    The same tick falls through to the drive because the clock was just
+    reset. The next turn command is the flipped spin, not a held pivot.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 0.4)
+    bot._blind_back = True
+    bot._escape_phase = "turn"
+    bot._escape_phase_t = bot.t_s - 4.1
+    bot._escape_yaw = bot.plan_pose()[2]
+    bot._escape_spin = 0.70
+    bot._escape_travel_m = 0.15
+    bot._escape_phase_travel = 0.0
+    bot._block_reverse_dead = True
+    bot._spin_safe = lambda _w: True
+    first = bot._go(False, 0.0)
+    assert first == wheel_speeds(0.12, 0.0)
+    assert bot._escape_spin == -0.70
+    assert bot._escape_phase == "turn"
+    second = bot._go(False, 0.0)
+    assert second == wheel_speeds(0.0, -0.70)
+    assert bot._escape_phase == "turn"
+
+
+def test_a_dead_reverse_lets_the_planned_path_run():
+    """After both turns fail, the leave latch must not keep the command at zero."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import STALL_WINDOW_S, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._escape_block = (80.0, 0.0, 0.0, 0.0)
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 12.1
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.t_s = 14.3
+    bot._respect_escape_block(wheel_speeds(0.12, 0.0))
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.3, 0.0), (1.5, 0.0)]
+    bot._leave_xy = (0.0, 0.0)
+    bot._pile_forced = True
+    bot._replan_at = 1.0e9
+    bot.t_s = 16.5
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert bot._leave_xy is None
+    assert bot._pile_forced is False
+    assert bot.path_xy
+    left, right = bot._go(False, 0.0)
+    assert left > 0.5 and right > 0.5
+    assert bot.t_s - 10.0 > 2 * STALL_WINDOW_S
+
+
+def test_a_dead_reverse_does_not_keep_the_path_backing_latch():
+    """A path reverse on a dead heading must not stay (0, 0) as src=back.
+
+    The goal is behind the nose, so the backing latch would otherwise
+    keep requesting the reverse. After the release, the planned path runs.
+    """
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 20.0
+    bot._view_blind = False
+    bot._last_clear = (1.5, 1.0, 1.0)
+    bot._replan_at = 1.0e9
+    bot.goal_xy = (-1.5, 0.0)
+    bot.path_xy = [(0.4, 0.0), (1.5, 0.0)]
+    bot._backing = True
+    bot._back_from = (0.0, 0.0)
+    bot._block_reverse_dead = True
+    bot._block_dead_pose = (0.0, 0.0, 0.0)
+    bot._block_turns_tried = 2
+    bot._block_turn_sign = 0.0
+    stopped = bot._respect_escape_block(wheel_speeds(-0.10, 0.0))
+    assert stopped == (0.0, 0.0)
+    assert not bot._backing
+    for _ in range(4):
+        speeds = bot._go(False, 0.0)
+        assert speeds != (0.0, 0.0) or bot._motion_source != "back"
+        assert bot._motion_source != "back"
+        assert speeds != (0.0, 0.0)
+
+
+def test_a_changing_depth_picture_is_not_camera_stuck():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._view_sig = (1.2, 0.4, ())
+    bot._view_still_from = 4.8
+    assert bot._stuck_reason() is None
+
+
+def test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses():
+    """Encoder yaw without a matching gyro rate is slip or a wedge."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 2.5
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot._stuck_reason() == "imu_stuck"
+
+
+def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    bot._imu_samples.append((0.0, 0.0, 0.0, 0.0, 0.01))
+    bot._imu_samples.append((2.2, 0.0, 0.0, 0.0, 0.01))
+    bot._imu_samples.append((2.5, 0.0, 0.0, 0.12, 0.02))
+    assert bot._imu_stuck()
+    bot._imu_samples[-1] = (2.5, 0.0, 0.0, 0.12, 0.80)
+    assert not bot._imu_stuck()
+
+
+def test_a_closed_sweep_reverses_along_the_driven_trail(monkeypatch):
+    """Both map straights are closed. The rear is open. Do not stop."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (0.2, 0.2, 0.2)
+    monkeypatch.setattr(bot, "_straight_leave", lambda _pose: None)
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+
+
+def test_only_issue_writes_the_wheel_command():
+    """One function owns the command that leaves the controller."""
+    from pathlib import Path
+
+    source = Path("src/mapping/explore.py").read_text(encoding="utf-8")
+    writers = [
+        line.strip()
+        for line in source.splitlines()
+        if "self._commanded =" in line and "0.0, 0.0" not in line
+    ]
+    assert writers == ["self._commanded = (float(speeds[0]), float(speeds[1]))"]
+
+
+def test_modes_move_from_explore_to_approach_to_recover_to_leave():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.phase = "spin"
+    assert bot._select_mode() == "explore"
+    bot.phase = "go"
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0)]
+    assert bot._select_mode() == "approach"
+    bot._blind_back = True
+    assert bot._select_mode() == "recover"
+    bot._blind_back = False
+    bot._leave_xy = (0.0, 0.0)
+    assert bot._select_mode() == "leave_area"
+
+
+def test_a_doorway_lineup_is_not_a_stall():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._body_v = 0.12
+    bot._approach_why = "straight"
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    assert not bot._translation_stalled()
+
+
+def _zero_go_bot():
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    bot._approach_why = "straight"
+    bot._commanded = (0.0, 0.0)
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    bot._replan_at = 1.0e9
+    bot._watch_zero = (4.0, 9.9, 0.0, 0.0)
+    return bot
+
+
+def _issued_zero(bot):
+    """The final command. The branch above produced (0, 0)."""
+    return bot._issue((0.0, 0.0))
+
+
+def test_a_zero_straight_command_past_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    left, right = _issued_zero(bot)
+    assert "watchdog fire=1 rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot._blind_back
+    assert bot._contact_until > bot.t_s
+
+
+def test_a_zero_pivot_command_past_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._approach_why = "pivot"
+    left, right = _issued_zero(bot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+
+
+def test_contact_recovery_past_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._approach_why = "recover"
+    bot._recover = True
+    bot._recover_phase = "look"
+    left, right = _issued_zero(bot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert not bot._recover
+    assert bot._contact_until > bot.t_s
+
+
+def test_an_empty_path_after_back_past_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._approach_why = "back"
+    bot.goal_xy = None
+    bot.path_xy = []
+    left, right = _issued_zero(bot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert not bot._backing
+
+
+def test_a_back_that_still_holds_a_goal_past_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._approach_why = "back"
+    bot._backing = True
+    left, right = _issued_zero(bot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy == (3.0, 0.0) or bot._blind_back
+
+
+def test_a_zero_command_under_five_seconds_is_not_a_stall():
+    bot = _zero_go_bot()
+    bot._watch_zero = (7.5, 9.9, 0.0, 0.0)
+    left, right = _issued_zero(bot)
+    assert left == 0.0 and right == 0.0
+    assert bot.watch_fires == 0
+    assert not bot._blind_back
+
+
+def test_a_pivot_in_place_for_five_seconds_takes_the_stall(capsys):
+    """n2 spun on heading_off with the pose frozen. That is a sit."""
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+    bot.t_s = 14.9
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+    bot.t_s = 15.1
+    left, right = bot._issue(pivot)
+    assert "watchdog fire=1 rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+    assert bot._blind_back
+
+
+def test_a_reverse_in_place_for_five_seconds_takes_the_stall(capsys):
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    reverse = wheel_speeds(-0.10, 0.0)
+    left, right = bot._issue(reverse)
+    assert left == pytest_approx(reverse[0]) and right == pytest_approx(reverse[1])
+    bot.t_s = 15.1
+    left, right = bot._issue(reverse)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left < -0.5 and right < -0.5
+
+
+def test_the_survey_spin_is_not_a_no_progress_sit():
+    bot = _zero_go_bot()
+    bot.phase = "spin"
+    bot._watch_zero = (4.0, 9.9, 0.0, 0.0)
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+
+
+def test_a_frozen_pose_with_the_rear_blocked_drives_forward(capsys):
+    """A pivot on a blocked reverse does not get another pivot."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._bubble_view = BubbleView(1.5, 1.0, 1.0, 0.04, 0.04)
+    bot._last_clear = (1.2, 1.2, 1.2)
+    pivot = wheel_speeds(0.0, 0.70)
+    left, right = bot._issue(pivot)
+    assert "rung=stall" in capsys.readouterr().out
+    assert left > 0.5 and right > 0.5
+    assert bot._watch_straight
+    assert not bot._blind_back
+    left, right = bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+
+
+def _stamp_throat(bot) -> None:
+    """The same seen throat the creep test uses. Clearance is the existing band."""
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(0.35, side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot._last_clear = (0.8, 0.5, 0.5)
+
+
+def test_a_doorway_sit_creeps_and_keeps_the_goal(capsys):
+    """A frozen pose in a throat creeps through. The goal is not quarantined."""
+    bot = _zero_go_bot()
+    _stamp_throat(bot)
+    bot.goal_xy = (2.0, 0.0)
+    bot.path_xy = [(0.4, 0.0), (2.0, 0.0)]
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    assert bot._narrow_gap(bot.plan_pose())
+    left, right = bot._issue(wheel_speeds(0.0, 0.70))
+    out = capsys.readouterr().out
+    assert "watchdog doorway creep" in out
+    assert "rung=drop" not in out
+    assert "rung=stall" not in out
+    assert bot.goal_xy == (2.0, 0.0)
+    assert bot._quarantine is None
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 1.2
+    left, right = bot._mode_command(0.5, 0.5, None, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.goal_xy == (2.0, 0.0)
+    assert bot._quarantine is None
+
+
+def test_an_open_floor_sit_still_drops_the_goal(capsys):
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    assert not bot._narrow_gap(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
+def _mark_door(bot, x, y):
+    """One cell of the plan's existing door mask. Not a new doorway test."""
+    cell = bot.grid.cell_of(x, y)
+    assert cell is not None
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    doors[cell] = True
+    bot.room_doors = doors
+    return cell
+
+
+def test_a_door_on_the_path_creeps_and_keeps_the_far_goal(capsys):
+    """The shell is within 0.8 m of a door the goal path crosses. Shoulders are not in the throat."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.0, 0.0), (3.0, 0.0)]
+    _mark_door(bot, 0.40, 0.0)
+    assert not bot._narrow_gap(bot.plan_pose())
+    assert bot._path_door_in_reach(bot.plan_pose())
+    left, right = bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "watchdog doorway creep" in out
+    assert "rung=drop" not in out
+    assert "rung=stall" not in out
+    assert bot.watch_fires == 0
+    assert bot._watch_step == 2
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot._quarantine is None
+    assert left > 0.5 and right > 0.5
+    left, right = bot._mode_command(99.0, 99.0, None, 0.0, 0.05)
+    assert left > 0.5 and right > 0.5
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot._quarantine is None
+
+
+def test_a_reached_goal_still_drops_at_the_door(capsys):
+    """The shell is already inside 0.8 m of the goal. The door does not keep it."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (0.50, 0.0)
+    bot.path_xy = [(0.40, 0.0), (0.50, 0.0)]
+    _mark_door(bot, 0.40, 0.0)
+    assert bot._goal_already_reached(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
+def test_a_door_beyond_0_8_m_still_drops(capsys):
+    """The path crosses a door the shell has not reached. That sit still drops."""
+    bot = _zero_go_bot()
+    bot._last_clear = (2.0, 99.0, 99.0)
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.6, 0.0), (3.0, 0.0)]
+    _mark_door(bot, 1.60, 0.0)
+    assert not bot._path_door_in_reach(bot.plan_pose())
+    bot._issue((0.0, 0.0))
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert "doorway creep" not in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
+def _patched_door(bot, x, y):
+    """segment_map stand-in with one door cell. _plan replaces the mask itself."""
+    cell = bot.grid.cell_of(x, y)
+    assert cell is not None
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    doors[cell] = True
+    labels = np.zeros(bot.grid.labels().shape, dtype=np.int32)
+
+    def _rooms(*_args, **_kwargs):
+        return {"labels": labels, "names": {}, "doors": doors}
+
+    return _rooms
+
+
+def _offer(score, goal, path):
+    def _select(*_args, **kwargs):
+        report = kwargs.get("report")
+        if report is not None:
+            report["score"] = score
+        return goal, path
+
+    return _select
+
+
+def test_a_replan_at_a_door_keeps_a_goal_the_new_path_leaves(monkeypatch, capsys):
+    """8 s have passed and the new score wins. The path does not cross a door, so the goal stays."""
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold=1" in out
+    assert bot.replan_holds == 1
+    assert bot.goal_xy == (3.0, 0.0)
+    assert bot.path_xy[0] == (0.40, 0.0)
+
+
+def test_a_replan_at_a_door_may_take_another_door_path(monkeypatch, capsys):
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.40, 3.0), [(0.40, 0.0), (0.40, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (0.40, 3.0)
+
+
+def test_a_replan_far_from_the_door_still_swaps(monkeypatch, capsys):
+    """The door is on the path and more than 0.8 m away. The 1.25x swap stands."""
+    bot = _zero_go_bot()
+    bot.t_s = 30.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(1.60, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 1.60, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (0.0, 3.0)
+
+
+def test_seed78_throat_keeps_the_bedroom_goal(monkeypatch, capsys):
+    """58157dd seed 78 at t=274 s. Creeping, planner pose 0.86 m from the true door.
+
+    Twelve seconds later the bedroom goal (-0.80, 2.73) was replaced by the
+    outside goal (2.12, 3.28). No door cell was under the shell (place=room).
+    The throat test was already true.
+    """
+    bot = _zero_go_bot()
+    bot.odometry.x_m = -3.97
+    bot.odometry.y_m = 0.21
+    bot.grid.stamp_footprint(-3.97, 0.21, radius_m=2.0)
+    for side in (0.26, -0.26):
+        cell = bot.grid.cell_of(-3.97 + 0.35, 0.21 + side)
+        assert cell is not None
+        bot.grid.log[cell] = bot.grid.l_max
+    bot._last_clear = (0.8, 0.5, 0.5)
+    assert bot._narrow_gap(bot.plan_pose())
+    bot.t_s = 286.4
+    bot._goal_since = 274.3
+    bot._goal_score = 1.0
+    bot.goal_xy = (-0.80, 2.73)
+    bot.path_xy = [(-3.97, 0.21), (-0.80, 2.73)]
+    doors = np.zeros(bot.grid.labels().shape, dtype=bool)
+    labels = np.zeros(bot.grid.labels().shape, dtype=np.int32)
+    monkeypatch.setattr(
+        "src.mapping.explore.segment_map",
+        lambda *_a, **_k: {"labels": labels, "names": {}, "doors": doors},
+    )
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (2.12, 3.28), [(-3.97, 0.21), (2.12, 3.28)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold=1" in out
+    assert bot.goal_xy == (-0.80, 2.73)
+    # Stuck, next goal clears the goal. The throat still has it.
+    bot.goal_xy = None
+    bot.path_xy = []
+    bot._plan()
+    assert bot.replan_holds == 2
+    assert bot.goal_xy == (-0.80, 2.73)
+
+
+def test_the_eight_second_wait_is_not_a_replan_hold(monkeypatch, capsys):
+    bot = _zero_go_bot()
+    bot.t_s = 12.0
+    bot._goal_since = 10.0
+    bot._goal_score = 1.0
+    bot.goal_xy = (3.0, 0.0)
+    bot.path_xy = [(0.40, 0.0), (3.0, 0.0)]
+    monkeypatch.setattr("src.mapping.explore.segment_map", _patched_door(bot, 0.40, 0.0))
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        _offer(10.0, (0.0, 3.0), [(0.0, 0.0), (0.0, 3.0)]),
+    )
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "replan hold" not in out
+    assert bot.replan_holds == 0
+    assert bot.goal_xy == (3.0, 0.0)
+
+
+def test_a_pivot_that_moves_the_pose_is_not_a_sit():
+    bot = _zero_go_bot()
+    bot._watch_zero = None
+    bot.t_s = 10.0
+    pivot = wheel_speeds(0.0, 0.70)
+    bot._issue(pivot)
+    bot.t_s = 16.0
+    bot.odometry.x_m = 0.10
+    left, right = bot._issue(pivot)
+    assert bot.watch_fires == 0
+    assert left == pytest_approx(pivot[0]) and right == pytest_approx(pivot[1])
+
+
+def test_a_moving_shell_does_not_take_the_watchdog():
+    bot = _zero_go_bot()
+    bot.odometry.x_m = 0.10
+    left, right = _issued_zero(bot)
+    assert left == 0.0 and right == 0.0
+    assert bot.watch_fires == 0
+
+
+def test_the_watchdog_does_not_fire_during_start_up():
+    bot = _zero_go_bot()
+    bot.t_s = 2.0
+    bot.phase = "spin"
+    bot._watch_zero = (-10.0, 1.9, 0.0, 0.0)
+    left, right = _issued_zero(bot)
+    assert left == 0.0 and right == 0.0
+    assert bot.watch_fires == 0
+
+
+def test_the_drop_rung_moves_within_two_ticks(capsys):
+    """A blocked leave used to return (0, 0) and sit. n5 did that for 26 s."""
+    from src.mapping.bubble import BubbleView
+
+    bot = _zero_go_bot()
+    bot._watch_step = 2
+    bot._watch_fired_at = bot.t_s
+    bot._leave_xy = (0.0, 0.0)
+    bot._bubble_view = BubbleView(1.0, 1.0, 1.0, 0.05, 0.05)
+    left, right = _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=drop" in out
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+    speeds = [(left, right)]
+    if abs(left) < 1e-3 and abs(right) < 1e-3:
+        speeds.append(bot._mode_command(1.2, 1.2, bot._bubble_view, 0.0, 0.05))
+    assert any(abs(a) > 1e-3 or abs(b) > 1e-3 for a, b in speeds)
+    assert bot.mode in ("explore", "leave_area")
+    assert bot.done is False
+
+
+def test_a_stable_map_with_no_frontier_logs_done_without_stopping(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 20.0
+    bot._frontier_open = False
+    bot._note_done_would_fire()
+    bot.t_s = 23.9
+    bot._note_done_would_fire()
+    assert "done would fire" not in capsys.readouterr().out
+    bot.t_s = 24.5
+    bot._note_done_would_fire()
+    assert "done would fire: no reachable frontier, map stable" in capsys.readouterr().out
+    assert bot.done is False
+    assert bot.phase != "done"
+    bot.grid.log[0, :20] = bot.grid.occ_thresh
+    bot.t_s = 30.0
+    bot._note_done_would_fire()
+    assert "done would fire" not in capsys.readouterr().out
+
+
+def test_a_repeated_watchdog_fire_takes_the_next_rung(capsys):
+    bot = _zero_go_bot()
+    _issued_zero(bot)
+    bot.t_s = 16.0
+    bot._watch_zero = (10.0, 15.9, 0.0, 0.0)
+    _issued_zero(bot)
+    bot.t_s = 22.0
+    bot._watch_zero = (16.0, 21.9, 0.0, 0.0)
+    _issued_zero(bot)
+    out = capsys.readouterr().out
+    assert "rung=stall" in out
+    assert "rung=pile_leave" in out
+    assert "rung=drop" in out
+    assert bot.watch_fires == 3
+    assert bot.goal_xy is None
+    assert bot._quarantine is not None
+
+
+def test_a_sixty_second_pile_drives_straight_out():
+    """The guard trips at 60 s and does not spin the corner into the wall."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert bot._pile_forced
+    assert left > 0.5 and right > 0.5
+    assert abs(left - right) < 0.3
+
+
+def test_a_visible_stall_turns_away_and_holds_the_goal():
+    """Nose still sees the hall. No translation for the window is a failure.
+
+    The escape turns. A reverse that the wheels follow on a frozen picture
+    is the slip the pose must not integrate.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._view_blind = False
+    bot._last_clear = (1.0, 1.0, 1.0)
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -1.0 and right < -1.0
+    assert bot.goal_xy is None
+    assert bot._goal_hold is not None
+    assert bot._regions and bot._regions[0].fails >= 1
+    bot.t_s = 6.1
+    left, right = bot._go(False, 0.28)
+    assert left * right < 0.0
+
+
+def test_a_held_goal_is_not_rescored_until_the_shell_moves(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 10.0
+    cell = bot.grid.cell_of(1.2, 0.0)
+    assert cell is not None
+    bot._goal_hold = (1.2, 0.0, 0.0, 0.0, [cell])
+    monkeypatch.setattr(
+        "src.mapping.explore.select_goal",
+        lambda *_args, **_kwargs: ((1.2, 0.0), [(0.0, 0.0), (1.2, 0.0)]),
+    )
+    bot._plan()
+    assert bot.goal_xy is None
+    bot.odometry.x_m = 0.35
+    bot._plan()
+    assert bot.goal_xy == (1.2, 0.0)
+
+
+def test_oracle_pose_is_for_the_planner_and_the_map_stays_on_the_estimate():
+    """Ground-truth pose, in the odometry frame, drives planning only."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.odometry.x_m = 1.0
+    bot.odometry.y_m = -0.5
+    bot.odometry.yaw_rad = 0.4
+    assert bot.plan_pose() == pytest_approx(bot.odometry.pose())
+    assert bot.plan_yaw_unwrapped() == pytest_approx(bot.odometry.yaw_unwrapped_rad)
+    yaw0 = math.pi / 2.0
+    assert bot.note_oracle_world(6.1, 4.7, yaw0) is True
+    assert bot.plan_pose() == pytest_approx((0.0, 0.0, 0.0))
+    # Spawn faces +Y. One metre along that heading is +1 x in the odometry frame.
+    assert bot.note_oracle_world(6.1, 5.7, yaw0) is False
+    assert bot.plan_pose() == pytest_approx((1.0, 0.0, 0.0))
+    assert bot.odometry.pose()[:2] == pytest_approx((1.0, -0.5))
+    bot.note_oracle_world(6.1, 5.7, yaw0 + 3.0)
+    bot.note_oracle_world(6.1, 5.7, yaw0 - 3.0)
+    assert bot.plan_yaw_unwrapped() == pytest_approx(3.0 + math.atan2(math.sin(-6.0), math.cos(-6.0)))
+    bot.t_s = 1.0
+    bot._note_pile()
+    assert bot._pile_anchor[1] == pytest_approx(1.0)
+    assert bot._pile_anchor[2] == pytest_approx(0.0)
+    bot._mark_visited()
+    est = bot.grid.cell_of(1.0, -0.5)
+    ora = bot.grid.cell_of(1.0, 0.0)
+    assert est is not None and ora is not None and est != ora
+    assert bot.visited[est]
+    assert not bot.visited[ora]
+    bot.step(dt_s=0.05, left_wheel_rad=0.0, right_wheel_rad=0.0, yaw_rate_rad_s=0.0)
+    stamped = bot.grid.cell_of(1.0, -0.5)
+    other = bot.grid.cell_of(1.0, 0.0)
+    assert stamped is not None and other is not None
+    assert float(bot.grid.log[stamped]) < 0.0
+    assert float(bot.grid.log[other]) == pytest_approx(0.0)
+
+
+def test_recovery_mode_defaults_to_the_stack(monkeypatch):
+    monkeypatch.delenv("RBM_RECOVERY_MODE", raising=False)
+    from src.mapping.explore import Explorer, recovery_mode
+
+    assert recovery_mode() == "stack"
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    assert bot.recovery_mode == "stack"
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "sideways")
+    assert recovery_mode() == "stack"
+
+
+def test_one_rule_reverses_along_the_trail_and_quarantines(monkeypatch):
+    """A pile reverses on the driven trail and remembers the spot. It does not drive forward."""
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy is None
+    assert bot._failure_zones == [(0.0, 0.0, 70.0)]
+    assert bot._escape_block is None
+    assert bot._failure_zone_args() == [(0.0, 0.0, 0.45)]
+
+
+def test_trail_only_reverses_without_a_quarantine(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "trail_only")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 70.0
+    bot._pile_anchor = (0.0, 0.0, 0.0)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.2, 1.2)
+    bot.goal_xy = (1.5, 0.0)
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    assert bot.goal_xy == (1.5, 0.0)
+    assert bot._failure_zones == []
+    assert bot._failure_zone_args() is None
+
+
+def test_one_rule_ignores_an_imu_stuck_and_a_blocked_heading(monkeypatch):
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 2.5
+    bot._replan_at = 100.0
+    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
+    bot.goal_xy = (1.5, 0.0)
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
+    bot._go(False, 0.28)
+    assert bot._escape_block is None
+    assert bot._stuck_reason() == "imu_stuck"
+    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
+    left, right = bot._issue(wheel_speeds(0.12, 0.0))
+    assert left > 0.5 and right > 0.5
+
+
+def test_one_rule_does_not_treat_the_survey_spin_as_a_stall(monkeypatch):
+    """A finished survey is a sit, not a stall. The clock starts with the drive."""
+    from src.mapping.drive import wheel_speeds
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.t_s = 10.0
+    bot._commanded = wheel_speeds(0.0, 0.70)
+    bot._body_w = 0.70
+    bot.odometry.yaw_unwrapped_rad = 3.0
+    assert bot._one_rule_command(bot.plan_pose()) is None
+    bot._commanded = wheel_speeds(0.12, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    assert bot._one_rule_command(bot.plan_pose()) is None
+    bot.t_s = 12.1
+    left, right = bot._one_rule_command(bot.plan_pose())
+    assert left is not None and left < -0.5 and right < -0.5
+
+
+def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    from src.mapping.drive import wheel_speeds
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
+    bot.phase = "go"
+    bot.t_s = 5.0
+    bot._body_v = 0.12
+    bot._commanded = wheel_speeds(0.12, 0.0)
+    bot._trans_still_from = (0.0, 0.0, 0.0)
+    bot._progress_from = (0.0, 0.0, 0.0, True)
+    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
+    bot._view_blind = False
+    bot._last_clear = (1.0, 1.0, 1.0)
+
+    def _stall(_pose):
+        raise AssertionError("stall escape")
+
+    def _creep(*_args):
+        raise AssertionError("creep")
+
+    monkeypatch.setattr(bot, "_stall_escape", _stall)
+    monkeypatch.setattr(bot, "_creep_through_gap", _creep)
+    left, right = bot._go(False, 0.28)
+    assert left < -0.5 and right < -0.5
+    bot._relief = None
+    bot._motion_anchor = (0.0, 0.0, 0.0, 0.0)
+    bot._body_v = 0.12
+    bot._body_w = 0.0
+    bot._watch_motion()
+    assert bot._relief is None
+
+
+def test_a_quarantine_disk_is_expensive_and_not_a_goal():
+    from src.mapping.frontiers import apply_zone_cost, point_in_zones
+    from src.mapping.grid import OccupancyGrid
+
+    grid = OccupancyGrid()
+    costs = apply_zone_cost(None, grid, [(0.0, 0.0, 0.45)])
+    assert costs is not None
+    here = grid.cell_of(0.0, 0.0)
+    far = grid.cell_of(2.0, 0.0)
+    assert here is not None and far is not None
+    assert float(costs[here]) >= 40.0
+    assert float(costs[far]) == 1.0
+    assert point_in_zones((0.2, 0.0), [(0.0, 0.0, 0.45)])
+    assert not point_in_zones((1.0, 0.0), [(0.0, 0.0, 0.45)])
+    # The occupancy log was not painted.
+    assert float(grid.log[here]) == 0.0
+
+
+def test_one_rule_plan_hands_the_disk_to_the_goal_picker(monkeypatch):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 10.0
+    bot._failure_zones = [(1.0, 2.0, 9.0)]
+    seen = {}
+
+    def _select(*_args, **kwargs):
+        seen["zones"] = kwargs.get("zones")
+        return None
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _select)
+    bot._plan()
+    assert seen["zones"] == [(1.0, 2.0, 0.45)]
+
+
+def test_shared_rectangle_blocks_a_corner_the_disk_misses():
+    """A cell 0.25 m off the tire disk still sits inside the rectangle corner."""
+    from src.mapping.frontiers import _NEIGHBOR_INDEX, neighbor_blocks, rectangle_masks
+
+    occupied = np.zeros((20, 20), dtype=bool)
+    occupied[10, 10] = True
+    # Obstacle is 0.15 m ahead and 0.20 m to the side of the robot cell.
+    # hypot(0.15, 0.20) = 0.25 m, outside the 0.20 m disk. Facing +x, the
+    # body-frame point is inside the 0.21 m nose and the 0.247 m half-width.
+    robot = (6, 7)
+    disk = dilate_disk(occupied, 0.20, 0.05)
+    assert not disk[robot]
+    labels = np.zeros((20, 20), dtype=np.int8)
+    labels[10, 10] = 1
+    assert traversable(labels, 0.05)[robot]
+    blocks = neighbor_blocks(rectangle_masks(occupied, 0.05))
+    assert blocks[_NEIGHBOR_INDEX[(0, 1)], robot[0], robot[1]]
+    assert blocks.shape[0] == 8
+
+
+def test_aligned_planner_still_crosses_a_centred_door(monkeypatch):
+    """The shared rectangle is not a bigger disk. A 0.81 m opening stays open."""
+    from src.mapping.frontiers import approach_costs, neighbor_blocks, rectangle_masks
+
+    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
+    grid = OccupancyGrid()
+    _fill(grid, 0.0, -0.9, 3.2, 0.9, grid.l_min)
+    _fill(grid, 0.0, 0.405, 3.2, 0.9, grid.l_max)
+    _fill(grid, 0.0, -0.9, 3.2, -0.405, grid.l_max)
+    labels = grid.labels()
+    free = traversable(labels, grid.res)
+    start = grid.cell_of(0.4, 0.0)
+    goal = grid.cell_of(2.6, 0.0)
+    assert start is not None and goal is not None
+    assert free[start] and free[goal]
+    masks = rectangle_masks(labels == 1, grid.res)
+    blocks = neighbor_blocks(masks)
+    path = astar(
+        free,
+        start,
+        goal,
+        step_cost=grid.res,
+        heading_block=blocks,
+        yaw_masks=masks,
+        start_yaw=0.0,
+    )
+    assert path is not None and path[-1] == goal
+    # Clearance weights are the same numbers. A 0.25 m cell is 2.5, a 0.10 m cell is 6.
+    clear = np.full((5, 5), 1.0, dtype=np.float32)
+    clear[2, 2] = 0.25
+    assert float(approach_costs(clear)[2, 2]) == pytest_approx(2.5)
+    clear[2, 2] = 0.10
+    assert float(approach_costs(clear)[2, 2]) == pytest_approx(6.0)
+
+
+def test_aligned_veto_uses_the_rectangle_on_a_straight_command(monkeypatch):
+    """Flag off: a smear ahead is not a straight veto. Flag on: the rectangle is."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.tick import choose_motion
+
+    grid = OccupancyGrid()
+    _fill(grid, 0.25, -0.05, 0.40, 0.05, grid.l_max)
+    view = BubbleView(1.5, 1.5, 1.5, 1.5, 1.5)
+    pose = (0.0, 0.0, 0.0)
+    monkeypatch.delenv("RBM_FOOTPRINT_ALIGN", raising=False)
+    plain = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert plain.v > 0.02 and abs(plain.w) < 0.12
+    assert not any(item["sensor"] == "map:footprint" for item in plain.vetoes)
+    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
+    aligned = choose_motion(
+        view=view,
+        pursuit_v=0.12,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(item["motion"] == "cruise" and item["sensor"] == "map:footprint" for item in aligned.vetoes)
+    assert not (aligned.v > 0.2 and abs(aligned.w) < 0.12)
+
+
+def test_a_sharp_turn_the_rectangle_rejects_is_not_planned():
+    """An L corridor has one 90° corner. A blocked spin leaves no path."""
+    free = np.zeros((12, 12), dtype=bool)
+    free[5, 2:7] = True
+    free[5:10, 6] = True
+    start = (5, 2)
+    goal = (9, 6)
+    assert astar(free, start, goal, step_cost=0.05) is not None
+    # Every yaw sample hits, so the 90° corner is refused and the L has no other route.
+    masks = np.ones((63, 12, 12), dtype=bool)
+    assert astar(free, start, goal, step_cost=0.05, yaw_masks=masks) is None
+
+
+def test_quit_dump_marks_a_start_component_the_frontier_cannot_reach():
+    """The snapped start can sit in a free room that does not touch the frontier."""
+    from src.mapping.frontiers import format_quit
+
+    grid = OccupancyGrid()
+    _fill(grid, -1.5, -1.5, 1.5, 1.5, grid.l_max)
+    _fill(grid, -1.1, -1.1, 1.1, 1.1, grid.l_min)
+    _fill(grid, 2.0, -1.0, 3.6, 1.0, grid.l_min)
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["start_none"] == 0
+    assert quit_info["jump_cells"] == 0.0
+    assert quit_info["same_component"] == 0
+    assert quit_info["raw_cells"] > 0
+    assert quit_info["clusters_ge6"] >= 1
+    assert quit_info["return"] == "no_candidate"
+    assert quit_info["reason"] == "start_component"
+    line = format_quit(quit_info)
+    assert "reason=start_component" in line
+    assert "same_component=0" in line
+    assert "astar_attempts=" in line
+
+
+def test_quit_dump_marks_frontiers_that_are_all_banned():
+    grid = OccupancyGrid()
+    _fill(grid, -1.6, -1.6, 1.6, 1.6, grid.l_min)
+    labels = grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    banned = {(int(y), int(x)) for y, x in zip(ys, xs)}
+    assert len(banned) >= 6
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), banned=banned, report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["banned_drop"] == quit_info["clusters_kept"]
+    assert quit_info["banned_cells"] == len(banned)
+    assert quit_info["astar_attempts"] == 0
+    assert quit_info["reason"] == "all_banned"
+    assert quit_info["return"] == "no_candidate"
+
+
+def test_quit_class_names_the_top8_cut_before_the_search():
+    from src.mapping.frontiers import _classify_quit
+
+    assert _classify_quit(
+        {
+            "return": "no_candidate",
+            "same_component": 1,
+            "clusters_kept": 8,
+            "clusters_ge6": 12,
+            "banned_drop": 0,
+            "astar_attempts": 8,
+            "astar_cap": 0,
+        }
+    ) == "cut"
+    assert _classify_quit(
+        {
+            "return": "start_none",
+            "same_component": None,
+            "clusters_kept": 3,
+            "clusters_ge6": 3,
+            "banned_drop": 3,
+            "astar_attempts": 0,
+            "astar_cap": 0,
+        }
+    ) == "other"
+
+
+def test_no_frontier_logs_the_quit_line(monkeypatch, capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 30.0
+
+    def _none(*_args, **kwargs):
+        report = kwargs.get("report")
+        if report is not None:
+            report["quit"] = {
+                "reason": "all_banned",
+                "return": "no_candidate",
+                "start_none": 0,
+                "same_component": 1,
+                "jump_cells": 0.0,
+                "jump_m": 0.0,
+                "raw_cells": 12,
+                "clusters_ge6": 1,
+                "clusters_kept": 1,
+                "banned_drop": 1,
+                "banned_cells": 8,
+                "viewpoint": 0,
+                "astar_attempts": 0,
+                "astar_fail": 0,
+                "astar_cap": 0,
+            }
+        return None
+
+    monkeypatch.setattr("src.mapping.explore.select_goal", _none)
+    bot._plan()
+    out = capsys.readouterr().out
+    assert "where=select_goal" in out
+    assert "where=no_frontier" in out
+    assert "reason=all_banned" in out
+    assert "banned_regions=" in out
+
+
+def test_quit_dump_counts_an_astar_expansion_cap(monkeypatch):
+    from src.mapping import frontiers as frontiers_mod
+
+    monkeypatch.setattr(frontiers_mod, "_ASTAR_CAP", 2)
+    grid = OccupancyGrid()
+    _fill(grid, -0.4, -0.4, 4.0, 0.4, grid.l_min)
+    report: dict = {}
+    assert select_goal(grid, (0.0, 0.0), report=report) is None
+    quit_info = report["quit"]
+    assert quit_info["astar_cap"] >= 1
+    assert quit_info["astar_fail"] >= 1
+    assert quit_info["reason"] == "astar_cap"
+
+
+def test_shared_footprint_uses_the_planner_mask_and_keeps_live_range(monkeypatch):
+    """A spin the rectangle refuses stays legal when the centre is still free."""
+    from src.mapping.bubble import BubbleView
+    from src.mapping.footprint import footprint_clips, shared_footprint_enabled
+    from src.mapping.frontiers import swept_leaves_free
+    from src.mapping.tick import choose_motion, map_veto
+
+    monkeypatch.delenv("RBM_SHARED_FOOTPRINT", raising=False)
+    assert not shared_footprint_enabled()
+    grid = OccupancyGrid()
+    _fill(grid, -1.5, -1.5, 1.5, 1.5, grid.l_min)
+    cell = grid.cell_of(0.125, 0.275)
+    assert cell is not None
+    grid.log[cell] = grid.l_max
+    pose = (0.0, 0.0, 0.0)
+    assert footprint_clips(grid, pose, 0.0, 0.70)
+    assert not swept_leaves_free(grid, pose, 0.0, 0.70)
+    assert map_veto(grid, pose, 0.0, 0.70) == "map:corner"
+    monkeypatch.setenv("RBM_SHARED_FOOTPRINT", "1")
+    assert shared_footprint_enabled()
+    assert map_veto(grid, pose, 0.0, 0.70) is None
+    _fill(grid, 0.20, -0.20, 0.55, 0.20, grid.l_max)
+    assert map_veto(grid, pose, 0.28, 0.0) == "map:mask"
+    view = BubbleView(0.04, 0.40, 0.40, 0.40, 0.04)
+    choice = choose_motion(
+        view=view,
+        pursuit_v=0.28,
+        pursuit_w=0.0,
+        heading_err=0.0,
+        grid=grid,
+        pose=pose,
+        left_clear=2.0,
+        right_clear=2.0,
+    )
+    assert any(str(item["sensor"]).startswith("forward:") for item in choice.vetoes)
+    assert choice.v <= 0.02
+
+
+def test_frontier_ban_and_clear_counts_reach_the_run_summary(tmp_path, monkeypatch):
+    from src.mapping.explore import FRONTIER_FAILS, Explorer
+
+    monkeypatch.setenv("RBM_DECISION_LOG", "1")
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak())
+    bot.grid.stamp_footprint(0.0, 0.0, radius_m=2.0)
+    east = bot.grid.cell_of(2.0, 0.0)
+    assert east is not None
+    labels = bot.grid.labels()
+    ys, xs = np.nonzero(frontier_mask(labels))
+    limit = (1.0 / bot.grid.res) ** 2
+    patch = [
+        (int(y), int(x))
+        for y, x in zip(ys, xs)
+        if (int(y) - east[0]) ** 2 + (int(x) - east[1]) ** 2 <= limit
+    ]
+    for _ in range(FRONTIER_FAILS):
+        bot._note_frontier_fail(1.2, 0.0, patch)
+    assert bot.frontier_ban_n == 1
+    for cell in bot._regions[0].watch:
+        bot.grid.log[cell] = bot.grid.l_min
+    assert patch[0] not in bot._ban_set()
+    assert bot.frontier_clear_n == 1
+    summary = (tmp_path / "summary.txt").read_text(encoding="utf-8")
+    assert "frontier_ban_events 1" in summary
+    assert "frontier_clear_events 1" in summary
+    counts = (tmp_path / "plan_veto.txt").read_text(encoding="utf-8")
+    assert "frontier_ban 1" in counts
+    assert "frontier_clear 1" in counts
+
+
+def test_true_start_stays_on_the_robot_side_of_a_wall(monkeypatch):
+    """The straight-line snap can sit in the other room. The escape walk cannot."""
+    from src.mapping.frontiers import _nearest_free, _true_start, true_start_enabled
+
+    monkeypatch.delenv("RBM_TRUE_START", raising=False)
+    assert not true_start_enabled()
+    labels = np.full((40, 50), 1, dtype=np.int8)
+    labels[10:30, 0:12] = 0
+    labels[20, 12:22] = 0
+    labels[10:30, 23:45] = 0
+    free = traversable(labels, 0.05, 0.20)
+    here = (20, 21)
+    assert int(labels[here]) == 0
+    assert not bool(free[here])
+    nearest = _nearest_free(free, here[0], here[1])
+    walked = _true_start(free, labels, here)
+    assert nearest is not None and walked is not None
+    assert nearest[1] > 22
+    assert walked[1] < 12
+    monkeypatch.setenv("RBM_TRUE_START", "1")
+    assert true_start_enabled()
+
+
+def test_a_pile_logs_the_command_and_a_plain_summary(capsys):
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._mark("follow")
+    bot._commanded = (1.0, 1.0)
+    for step in range(250):
+        bot.t_s = step * 0.25
+        bot._issue((1.0, 1.0))
+    assert bot._est_age >= 60.0
+    bot.t_s += 0.25
+    bot.odometry.x_m = 2.0
+    bot._issue((1.0, 1.0))
+    out = capsys.readouterr().out
+    assert "pile phase=" in out
+    assert "src=follow" in out
+    assert "cands=" in out
+    assert "cmd_m=" in out
+    assert "wheel_m=" in out
+    assert "pose_m=" in out
+    assert "pile_end" in out
+    assert "pile_why" in out
+    assert "Goal at the end" in out
+
+
+def test_a_pile_that_lasts_until_the_cap_still_writes_its_summary(capsys):
+    """Leaving the ball is not the only way a summary is written."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._mark("stuck")
+    bot._commanded = (-1.25, -1.25)
+    angle = 0.0
+    for step in range(250):
+        bot.t_s = step * 0.25
+        angle -= 1.25 * 0.25
+        bot._wheels = (angle, angle)
+        bot._issue((-1.25, -1.25))
+    assert bot._est_age >= 60.0
+    for step in range(50):
+        bot.t_s += 0.25
+        angle -= 1.25 * 0.25
+        bot._wheels = (angle, angle)
+        bot._issue((-1.25, -1.25))
+    bot.done = True
+    bot.flush_pile_log()
+    out = capsys.readouterr().out
+    assert "pile_end" in out
+    assert "pile_why" in out
+    assert "wheel_m=" in out
+    line = next(ln for ln in out.splitlines() if "pile_end" in ln)
+    wheel_m = float(line.split("wheel_m=")[1].split()[0])
+    # Joint travel during the open summary, not the pose path.
+    assert wheel_m > 1.0
+
+
+def test_a_wander_inside_one_ball_still_counts_as_a_pile():
+    """An entry anchor resets on a long chord. A shared center does not."""
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    for step in range(320):
+        bot.t_s = step * 0.25
+        if step == 0:
+            bot.odometry.x_m = 0.30
+        else:
+            bot.odometry.x_m = 0.0 if step % 2 == 0 else -0.20
+        bot._note_estimate_pile()
+    assert bot._est_age >= 60.0
+
+
+def test_stall_escape_ignores_a_pose_jump_without_trusted_travel():
+    from src.mapping.explore import GOAL_HOLD_M, Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._blind_back = True
+    bot._blind_back_from = (0.0, 0.0)
+    bot._escape_phase = "drive"
+    bot._escape_phase_t = 0.0
+    bot._escape_yaw = 0.0
+    bot._escape_spin = 0.5
+    bot._view_blind = False
+    bot._last_clear = (1.2, 1.0, 1.0)
+    bot.t_s = 3.0
+    bot.odometry.x_m = 0.40
+    bot._escape_travel_m = 0.0
+    bot._stall_escape(bot.plan_pose())
+    assert bot._blind_back
+    bot._escape_travel_m = GOAL_HOLD_M
+    bot._stall_escape(bot.plan_pose())
+    assert not bot._blind_back
+
+
+def test_plan_veto_disagreement_counts_once_per_issued_path(monkeypatch, tmp_path):
+    from src.mapping.explore import Explorer
+
+    monkeypatch.setenv("RBM_MAP_DIR", str(tmp_path))
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot._issue_path([(0.0, 0.0), (1.0, 0.0)])
+    bot._count_path_veto()
+    bot._count_path_veto()
+    assert bot.plans_issued == 1
+    assert bot.plan_veto_disagree == 1
+    text = (tmp_path / "plan_veto.txt").read_text(encoding="utf-8")
+    assert "plans_issued 1" in text
+    assert "plan_veto_disagree 1" in text
+    bot._issue_path([(0.0, 0.0), (2.0, 0.0)])
+    bot._count_path_veto()
+    assert bot.plans_issued == 2
+    assert bot.plan_veto_disagree == 2
+
+
+def test_the_end_reason_is_on_disk_before_the_world_quits(tmp_path):
+    """Stdout from the cap step can vanish when the pose logger stops the world."""
+    from src.mapping.run_log import record_end_run
+
+    path = record_end_run(tmp_path, "time_cap")
+    assert path.read_text(encoding="utf-8") == "MAPPING end_run reason=time_cap\n"
+
+
+def test_solids_include_the_closed_doors():
+    names = {solid.name for solid in load_solids()}
+    assert "APT_DOOR_FRONT" in names
+    assert "APT_DOOR_PATIO" in names
+    assert "APT_FURN_ISLAND" in names
+
+
+def pytest_approx(value, abs=1e-6):
+    import pytest
+
+    return pytest.approx(value, abs=abs)

@@ -496,6 +496,7 @@ class Explorer:
         # Pose and pictures at the start of a stretch the cameras have not
         # moved. A zero-velocity update puts the pose back there.
         self._zupt_anchor: dict | None = None
+        self._floor_step_agreed = False
         self._zupt_until = -1.0
         # Translation hold from the floor sensor alone. Yaw stays on the
         # gyro until depth and vision agree as well.
@@ -660,6 +661,7 @@ class Explorer:
         forward_cmd = (self._commanded[0] + self._commanded[1]) > 0.3
         in_contact = stalled or (self._view_blind and forward_cmd) or self.t_s < self._pin_until
         drop = False
+        slip_drop = False
         if depth is not None or self._view_blind or in_contact:
             before = self._motion.events
             slip_drop = self._motion.observe(dt, ds, clearance, blind=self._view_blind)
@@ -741,6 +743,26 @@ class Explorer:
             left_wheel_rad,
             right_wheel_rad,
         )
+        # A blind nose on a forward command drops the step: that is a
+        # wedge. The doorway is the same picture for a fraction of a
+        # second while the carpet is sliding. A floor step that already
+        # matches the wheels, or a forward picture that moved, puts the
+        # step back. A still floor does not.
+        if (
+            drop
+            and self._view_blind
+            and forward_cmd
+            and not stalled
+            and self.t_s >= self._pin_until
+            and not spin_cmd
+            and not held_trans
+            and abs(ds) > 1e-4
+            and (self._floor_step_agreed or self._forward_view_moved())
+        ):
+            yaw_now = self.odometry.yaw_rad
+            self.odometry.x_m += float(ds) * math.cos(yaw_now)
+            self.odometry.y_m += float(ds) * math.sin(yaw_now)
+            self._path_m += abs(float(ds))
         corrected = False
         x, y, yaw = self.odometry.pose()
         if (
@@ -1844,6 +1866,7 @@ class Explorer:
             dr = float(right_rad) - prev_wheels[1]
             trans = abs(0.5 * (dl + dr)) * self.odometry.radius_m
         if floor is None:
+            self._floor_step_agreed = False
             return
         if self._zupt_anchor is None:
             # Wait for a depth frame so a later yaw freeze has a picture
@@ -1857,6 +1880,10 @@ class Explorer:
         anchor = self._zupt_anchor
         age = self.t_s - float(anchor["t"])
         status = self._floor_track.push(floor, self._step_dt, travel, trans)
+        if status == "moving" and self._floor_track.confirms_translation():
+            self._floor_step_agreed = True
+        elif status in ("still", "blank"):
+            self._floor_step_agreed = False
         # A real slide restarts the anchor. A flat frame does not: the
         # wheels can be turning while the downward camera has nothing to
         # track, which is the island face. A peak that only just clears

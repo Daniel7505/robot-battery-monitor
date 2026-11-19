@@ -140,6 +140,7 @@ class ShortFloorTrack:
         self.blank_s = 0.0
         self.last_mag = 0.0
         self.last_trans = 0.0
+        self.last_status = ""
 
     @property
     def moved_px(self) -> float:
@@ -178,23 +179,27 @@ class ShortFloorTrack:
         simulator steps at 8 ms and passes ``dt``, so a step waits until
         about 1.2 cm of wheel travel or 0.12 s, whichever comes first.
         """
+        def finish(status: str) -> str:
+            self.last_status = status
+            return status
+
         gray = _as_gray(image)
         if gray is None:
-            return "blank"
+            return finish("blank")
         if float(gray.std()) < 2.0:
             self.blank_s += max(0.0, float(dt))
             self._base = None
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "blank"
+            return finish("blank")
         self.blank_s = 0.0
         if self._base is None:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "pending"
+            return finish("pending")
         step_wheel = abs(float(wheel_m))
         step_dt = max(0.0, float(dt))
         self._wheel += step_wheel
@@ -205,7 +210,7 @@ class ShortFloorTrack:
         if step_dt <= 0.0 and step_wheel > 0.0:
             close = True
         if not close:
-            return "pending"
+            return finish("pending")
         shift = _shift_peak(self._base, gray)
         closed_wheel = self._wheel
         closed_age = self._age
@@ -215,7 +220,7 @@ class ShortFloorTrack:
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "blank"
+            return finish("blank")
         row, col, quality = shift
         mag = math.hypot(float(row), float(col))
         if mag > _AMBIGUOUS_PX:
@@ -224,7 +229,7 @@ class ShortFloorTrack:
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "blank"
+            return finish("blank")
         if mag > _STILL_PX:
             self.sum_row += float(row)
             self.sum_col += float(col)
@@ -235,7 +240,7 @@ class ShortFloorTrack:
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "moving"
+            return finish("moving")
         # Closed because the clock ran out, not because the hubs claimed
         # enough ground for a real slide. A few millimetres is under two
         # pixels, so a match is not evidence the shell is stuck.
@@ -244,20 +249,20 @@ class ShortFloorTrack:
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "pending"
+            return finish("pending")
         if quality < _STILL_QUALITY:
             self._base = np.array(gray, copy=True)
             self._wheel = 0.0
             self._age = 0.0
             self._trans = 0.0
-            return "blank"
+            return finish("blank")
         self.still_samples += 1
         self.sum_wheel_m += closed_wheel
         self._base = np.array(gray, copy=True)
         self._wheel = 0.0
         self._age = 0.0
         self._trans = 0.0
-        return "still"
+        return finish("still")
 
 
 def metres_per_px(camera=FLOOR_CAM, height_m: float | None = None) -> float:

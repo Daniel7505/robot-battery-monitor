@@ -109,3 +109,22 @@ Door G on the center line, odometry x 0.43.
 | walkway mouth | (1.009, 4.858) | 0.078 |
 
 The walkway wall is world y 4.57. The shell stayed on the bedroom side. The south aim was unknown on the map, a straight line, and it stalled: `no motion for 2 s`. The bathroom, the hallway, and the return were not driven. No lap movie. `up_z` 1.000.
+
+## Walkway center, then the bathroom
+
+The straight aim is the existing rule. A turn at the mouth mapped the south cells. A* on odometry y 4.88 crossed.
+
+| place | truth (x, y) | pos err |
+|---|---|---|
+| start, living | (6.096, 4.688) | 0.005 |
+| door G, living side | (5.050, 5.079) | 0.022 |
+| door G, at the face | (4.183, 5.134) | 0.042 |
+| bedroom | (3.341, 5.137) | 0.061 |
+| walkway mouth | (1.214, 4.941) | 0.020 |
+| bathroom, just through | (1.181, 4.373) | 0.131 |
+| bathroom | (1.176, 4.063) | 0.140 |
+| bathroom, `imu_stuck` | (1.311, 3.430) | 0.116 |
+
+From t=54.8 s to t=55.5 s the pose crept and snapped back to the same x. No new freeze line. Error 0.027 → 0.131 m. The next leg was still moving, no wall contact, `up_z` 1.000, and stopped `imu_stuck`. The hallway and the return were not driven. No lap movie.
+
+Before that rerun, door H on the previous process stopped `0.56 m short` at the plane. The path was A*. `reverse_left` at t=93.5 s, then the stall at t=97.5 s while the shell was closing again. `0b55545` measures that retry from the backed-up pose. The rerun did not reach the door.

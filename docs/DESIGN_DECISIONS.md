@@ -1127,3 +1127,31 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Treating the wall contact as a planner bug. The path was the waypoint.
 
 **Outcome.** The doorway is the center of the opening. The lap stopped in the bedroom when a still-floor freeze held the estimate while the shell moved.
+
+## 2026-11-19 — A doorway retry starts from the backed-up pose
+
+**Mission parameter.** No new threshold. The 2 s back-off and the 4 cm closer test stay.
+
+**Change.** When the held reverse ends, the next try is closer from the backed-up pose, not from the closest point before the reverse.
+
+**Why.** Door H was mapped and the path was A*. The reverse left the plane on purpose. The return was still short of the old point when the 2 s clock ended, so the stall fired while the shell was closing.
+
+**Evidence.** `test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose`. `test_a_door_back_off_is_not_redecided_every_frame` still holds the reverse for 2 s and then turns.
+
+**Rejected.** Treating a straight aim into an unknown cell as the same bug. That aim is `test_unknown_goal_is_a_straight_aim`.
+
+**Outcome.** A retry after a commanded reverse can count a return that has not yet passed the old closest point. The lap then stopped in the bathroom.
+
+## 2026-11-19 — The walkway was the center line
+
+**Mission parameter.** No controller change for the aim. No new threshold. No geometry change.
+
+**Change.** None. The mouth is turned until the south cells are free, then the goals stay on the opening's center.
+
+**Why.** The previous stall aimed at an unknown cell, so the path was one point. The opening's center, odometry y 4.88, was free after the turn.
+
+**Evidence.** The shell crossed into the bathroom. Pose error 0.027 m at the mouth, 0.131 m after the crossing. From t=54.8 s to t=55.5 s the pose snapped back to the same x. The next command stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Changing the straight aim. The map had not seen the goal, and that path is already the rule.
+
+**Outcome.** The walkway is the center line after a look. The lap stopped in the bathroom on the pose snap and `imu_stuck`. The hallway and the return were not driven.

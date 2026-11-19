@@ -768,3 +768,21 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** A* followed that line. The same map had a free path at x 0.45–0.55. A center-line run entered the bedroom, pose error 0.061 m then 0.063 m. The next step, toward the bath walkway, ended at 0.248 m after `floor still, translation frozen` at t=50.8 s. The drive stopped. No bathroom, hallway, or return.
 - **Lesson:** The wall hit was the waypoint, on the south jamb. The map and the planner were not the cause.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-south-jamb-was-the-waypoint) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-south-jamb-was-the-waypoint)
+
+### 2026-11-19 — A doorway retry starts from the backed-up pose
+
+- **Commit:** `0b55545`. No new threshold.
+- **Symptom:** `stopped_short`, 0.56 m, on a mapped bathroom door. The path was A* through the center. The shell had backed out and was closing again.
+- **Found:** Door H, hand drive. At t=93.5 s the command was `reverse_left` on the door plane. The 2 s reverse carried the shell back. By t=97.5 s it was moving toward the opening again and the stall fired. The bar was still the closest point from before the reverse.
+- **Cause:** When the reverse ends, closer means beating that old point by 4 cm. The return had not passed it when the 2 s clock ended.
+- **Fix:** The reverse was commanded, so the next try is measured from the backed-up pose. The same 4 cm.
+- **Test:** `test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose`. The 2 s hold stays `test_a_door_back_off_is_not_redecided_every_frame`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-doorway-retry-starts-from-the-backed-up-pose) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-doorway-retry-starts-from-the-backed-up-pose)
+
+### 2026-11-19 — The walkway was the center line
+
+- **Commit:** log only. No controller change for the aim.
+- **Tried:** The stall at truth (1.009, 4.858). The goal was an unknown cell, so the path was a straight aim. That aim is the existing rule, `test_unknown_goal_is_a_straight_aim`.
+- **Result:** A turn at the mouth mapped the south cells. A* then followed odometry y 4.88 through the opening. The shell entered the bathroom. On that crossing the pose crept and snapped back to the same x from t=54.8 s to t=55.5 s. Pose error went from 0.027 m to 0.131 m. No new freeze line. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m, while the shell was still moving. No wall contact. `up_z` 1.000. The hallway and the return were not driven.
+- **Lesson:** Look before a goal in unknown space. The straight aim is not the bug. The pose snap on the crossing is the next stop.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-was-the-center-line) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-was-the-center-line)

@@ -1433,3 +1433,15 @@ An earlier crossing did enter, truth (3.12, 5.18), pose error 0.091 m. The nose 
 Truth (3.745, 4.943) sits on the south jamb of door G. The opening is world y 4.72–5.54, center (3.71, 5.13). In odometry that center is (0.43, 2.39) and the opening is x 0.02–0.84. The goals were x 0.25–0.28, about 0.15 m south of center, and the shell's side meets the jamb. A* on that stop's map followed the line it was given. The same map already had a free path at x 0.45–0.55. No controller change.
 
 A center-line run crossed. Bedroom truth (3.39, 5.18), pose error 0.061 m, then (2.88, 5.21), 0.063 m. The next step stopped 0.30 m short at truth (2.46, 4.96), pose error 0.248 m. From t=50 s to t=55 s the truth path was 0.49 m and the estimate 0.32 m. `floor still, translation frozen` at t=50.8 s. The drive stopped.
+
+## A doorway retry starts from the backed-up pose
+
+The bathroom door was free on the map and the path was A* down the center. At t=93.5 s the driver chose `reverse_left` and held it for the existing 2 s. The shell came back toward the opening. At t=97.5 s the stall said `stopped_short`, 0.56 m, because closer still meant beating the point from before the reverse.
+
+Commit `0b55545`. When that reverse ends, the bar is the backed-up pose. The same 4 cm. No new threshold. The 2 s hold is unchanged.
+
+## The walkway was the center line
+
+The stall at truth (1.009, 4.858) was a straight aim into a cell the map had not seen. That is the existing path, not a driver bug. A turn at the mouth mapped the south side. A* on odometry y 4.88 crossed the wall at world y 4.57.
+
+On that crossing the pose crept forward and snapped back to the same x from t=54.8 s to t=55.5 s. Error went from 0.027 m to 0.131 m. There is no new `floor still` or `floor blank` line for that snap. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m. The shell was still moving. No wall contact. The hallway and the return were not driven.

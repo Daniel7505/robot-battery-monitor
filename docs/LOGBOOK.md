@@ -844,5 +844,14 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Commit:** log only. No controller change.
 - **Tried:** The pose error 0.030 m at t=33.0 s and 0.105 m at t=34.0 s, on the frontier-assist bedroom crossing.
 - **Result:** From t=33.0 s to t=33.4 s the estimate stayed at (0.368, 2.353) and the truth moved 0.066 m. Error 0.030 → 0.095, then both moved and the error stayed 0.105. The lines are `floor blank, wheel translation held` at explorer t=29.4, 29.6, and 29.8 s, std 0.2–0.6. The yield did not run, so the forward picture did not count as moved.
-- **Open:** A release of that still picture would be a new rule. Not applied.
+- **Open:** A release of that still picture would be a new rule. Not applied. Left open.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-door-hold-froze-a-moving-shell) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-bedroom-door-hold-froze-a-moving-shell)
+
+### 2026-11-19 — The door-G right turn hits the south jamb
+
+- **Commit:** log only. No controller change.
+- **Tried:** The `map:corner` veto on every forward right turn at door G, the command that then chose `reverse_right`.
+- **Found:** Stop map and the color frame. The cells the rectangle enters are world (3.67, 4.68) and (3.67, 4.73). The opening is y 4.72–5.54, face x 3.76. That is the south jamb, one cell on the opening's south edge. Occupied cells on the living side of the opening: 0. The frame shows that wall on the left and floor in the middle. `spin_left` does not clip.
+- **Cause:** The veto matches the jamb. `reverse_right` wins because the desired yaw is about −1.1 and the open-nose reverse penalty is 0.50, which is less than the yaw term of a straight command.
+- **Not applied:** Raise that 0.50. A value of 1.5 would have picked the legal straight creep at this pose. That is a new weight.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-door-g-right-turn-hits-the-south-jamb) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-door-g-right-turn-hits-the-south-jamb)

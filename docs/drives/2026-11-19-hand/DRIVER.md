@@ -222,3 +222,22 @@ Stop 3 is the existing imu check. In the 2.5 s before t=35 s the net wheel yaw w
 Stop 4's first command was `reverse_right`. Pursuit wanted a hard right. Every forward right turn and the right spin were `map:corner`. The reverse is the turn that still fits, and the 2 s clock then carried the shell from world (3.91, 4.89) to (4.10, 4.69). Changing that score would be a new weight. The drive stopped there. Hall and the bath door were not reached. Bedroom visited 0.
 
 Room seen % at stop 4: living 98.4, bedroom 85.3, kitchen 99.3, bath 1.8, laundry 46.8, closet 4.6, hall 20.5, storage 0.0, pantry 0.0. Bridge bedroom 100.0, bridge bed-bath 97.8, bridge entry 94.7, bridge laundry 58.3, bridge bath 0.0, bridge closet 0.0. Visited overall is the shell on the pose log; bedroom visited 0.0. Pantry and storage were not opened.
+
+## Door G, the jamb is real
+
+The right-turn cells are world (3.67, 4.68) and (3.67, 4.73). Opening y 4.72–5.54, face x 3.76. South jamb, one cell on the opening's south edge. Living side of the opening: no occupied cell. The color frame shows that wall on the left and floor in the middle. `spin_left` does not clip. `reverse_right` total was pursuit 0.68 plus the open-nose penalty 0.50. A straight creep loses on the yaw term, about 1.2, because the desired yaw is −1.1. Raising 0.50 to 1.5 would pick the creep. Not applied.
+
+Stock spawn, depth seed 1, no movie. Through the door, then toward the hall. Stopped when the same reverse came back.
+
+| stop | t | result | proposal (odom) | decision | pos err | seen % |
+|---|---|---|---|---|---|---|
+| 0 | 3.5 | ready | (0.03, −0.12) | override, `look` | 0.000 | 0.15 |
+| 1 | 17.3 | look arrived | (−0.07, 3.17), bedroom | taken | 0.005 | 67.53 |
+| 2 | 28.0 | 1.08 m short | (1.11, 6.69), off the floor | override, `go_to 0.0 1.5` | 0.019 | 70.77 |
+| 3 | 42.7 | arrived | (−2.98, −1.33), east living | override, door center `go_to 0.43 2.39` | 0.016 | 71.64 |
+| 4 | 56.6 | arrived, world (3.73, 5.17) | (0.43, 3.98), bedroom | override, `go_to 0.0 1.2` toward the hall | 0.081 | 72.03 |
+| 5 | 72.4 | 1.32 m short | (−3.18, 1.70) | stopped | 0.156 | 72.29 |
+
+Stop 5 is the same reverse at the jamb, plus the still-picture hold (`floor blank, wheel translation held` from explorer t=63.9 s). That hold stays open. Hall and the bath door were not reached.
+
+Room seen % at stop 5: living 98.3, bedroom 72.6, kitchen 99.4, bath 1.9, laundry 47.5, closet 30.0, hall 21.1, storage 5.6, pantry 0.0. Bridge bedroom 100.0 visited 93.3, bridge bed-bath 95.6, bridge entry 94.7, bridge laundry 58.3, bridge bath 0.0, bridge closet 0.0. Bedroom visited 1.8. Hall visited 0. Pantry visited 0. Storage visited 0.

@@ -1478,4 +1478,8 @@ The same three commands, after that change: the bedroom goal stopped 1.08 m shor
 
 ## The bedroom-door hold froze a moving shell
 
-From t=33.0 s to t=33.4 s the estimate sat at (0.368, 2.353) while the truth moved 0.066 m. The error went from 0.030 m to 0.095 m and stayed near 0.105 m. The log is `floor blank, wheel translation held`, three lines, std 0.2 to 0.6. The yield for a picture that moved did not run. Releasing a picture the hold already calls still would be a new rule. It was not added.
+From t=33.0 s to t=33.4 s the estimate sat at (0.368, 2.353) while the truth moved 0.066 m. The error went from 0.030 m to 0.095 m and stayed near 0.105 m. The log is `floor blank, wheel translation held`, three lines, std 0.2 to 0.6. The yield for a picture that moved did not run. Releasing a picture the hold already calls still would be a new rule. It was not added. Left open.
+
+## The door-G right turn hits the south jamb
+
+The rectangle's right turns enter world (3.67, 4.68) and (3.67, 4.73). The opening starts at y 4.72. Those cells are the south jamb, and the color frame shows that wall on the left. No occupied cell sits on the living side of the opening. `reverse_right` is chosen because the open-nose reverse penalty is 0.50 and the desired yaw is about −1.1. Raising 0.50 to 1.5 would be a new weight. Not applied.

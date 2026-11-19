@@ -1238,4 +1238,18 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Rejected.** Releasing a picture the hold already calls still. That is a new rule.
 
-**Outcome.** The 0.030 m to 0.105 m step is that hold. It is not fixed.
+**Outcome.** The 0.030 m to 0.105 m step is that hold. It is not fixed. Left open.
+
+## 2026-11-19 — The door-G right turn hits the south jamb
+
+**Mission parameter.** No controller change. No new weight.
+
+**Change.** None. The veto was checked against the stop's map and the color frame.
+
+**Why.** The cells are the south jamb, not a smear across the opening. The reverse is the scorer: pursuit yaw about −1.1, open-nose reverse penalty 0.50, straight creep's yaw term about 1.2.
+
+**Evidence.** Occupied cells on the living side of door G's opening: 0. `spin_left` does not clip. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Raising 0.50 to 1.5 without an audit. That value would pick the legal straight creep at this pose. It is a new weight.
+
+**Outcome.** The veto stays. The weight is not changed.

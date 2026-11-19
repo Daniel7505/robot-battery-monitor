@@ -117,6 +117,29 @@ def test_an_open_command_the_pose_does_not_follow_is_stuck():
     assert driver._t >= STALL_WINDOW_S - 1e-6
 
 
+def test_a_straight_door_the_rectangle_clips_still_drives():
+    """The nose test leaves a centred doorway open. The rectangle does not.
+
+    Zeroing that straight command sits the shell in the opening.
+    """
+    from src.mapping.footprint import footprint_clips
+    from src.mapping.tick import _ahead_blocked
+
+    bot = _Bot()
+    for x in (0.10, 0.15, 0.20, 0.25, 0.30, 0.35):
+        for y in (0.20, -0.20):
+            cell = bot.grid.cell_of(x, y)
+            bot.grid.log[cell] = bot.grid.l_max
+    pose = bot.pose()
+    assert footprint_clips(bot.grid, pose, 0.28, 0.0)
+    assert _ahead_blocked(bot.grid, pose) is False
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    left, right = driver.wheels(bot, 0.6, 0.6, _open(), 0.05)
+    assert driver.outcome is None
+    assert left > 0.0 and right > 0.0
+
+
 def test_a_vetoed_go_to_stops_short_with_the_gap():
     bot = _Bot()
     bot.grid.log[:] = bot.grid.l_max

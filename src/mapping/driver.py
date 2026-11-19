@@ -224,9 +224,9 @@ class WaypointDriver:
         )
         v = float(choice.v)
         w = float(choice.w)
-        if motion_blocked(explorer.grid, (x, y, yaw), v, w):
-            v, w = 0.0, 0.0
-        # The veto picked a legal motion. Near the point, do not keep cruise:
+        # map_veto already accepted this command. Re-checking it with the
+        # turn rectangle clips a straight doorway that test leaves open
+        # and sits the shell there. Near the point, do not keep cruise:
         # the 5 cm gate would be crossed in one fast step.
         if v > 0.0:
             v = min(v, _approach_speed(dist))

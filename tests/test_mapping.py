@@ -2704,6 +2704,21 @@ def test_the_decision_log_is_off_unless_asked(tmp_path, monkeypatch):
     assert abs(choice.v) + abs(choice.w) > 0.04
 
 
+def test_a_goal_beside_the_shell_is_not_driven_past():
+    """The kitchen. The free goal is inside the look-ahead, off to the side.
+
+    The polyline still has a point ahead. Steering at that point drives
+    past the goal. The goal is the target, and the existing in-front
+    test turns to it.
+    """
+    pose = (0.0, 0.0, 0.0)
+    path = [(0.40, 0.0), (0.40, -0.20), (0.0, -0.20)]
+    v, w, arrived = pure_pursuit(pose, path, arrive_m=0.05)
+    assert not arrived
+    assert v == 0.0
+    assert w < 0.0
+
+
 def test_pure_pursuit_turns_left_for_a_left_goal():
     v, w, arrived = pure_pursuit((0.0, 0.0, 0.0), [(1.2, 0.4)], arrive_m=0.2)
     assert not arrived and w > 0.0 and v > 0.0

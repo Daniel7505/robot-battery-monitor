@@ -1595,6 +1595,48 @@ def test_a_turning_drive_whose_floor_slides_is_not_rewound():
     assert abs(bot.pose()[2]) > 0.5
 
 
+def test_a_straight_slide_whose_floor_followed_is_not_frozen():
+    """The bath walkway. The short steps said still. The floor scene did not.
+
+    Yaw had not reached 0.12 rad, so the sliding-turn release did not
+    run, and the translation rewind fired. A floor scene that already
+    matches the wheels is the drive on a straight line too. A scene
+    that did not follow still rewinds.
+    """
+    from src.mapping.explore import Explorer
+
+    cam = _small_oak(64, 40)
+    depth = np.full((cam.height, cam.width), 1.5)
+    rng = np.random.default_rng(4)
+    floor = rng.normal(40.0, 12.0, size=(32, 32))
+
+    def arm(scene_m: float) -> Explorer:
+        bot = Explorer(camera=cam, stride=2, fusion=True, floor=True, loop=False)
+        bot.t_s = 1.0
+        bot._step_dt = 0.05
+        bot.odometry.x_m = 0.05
+        bot.odometry.y_m = 0.0
+        bot._floor_track._base = np.array(floor, copy=True)
+        bot._floor_track._wheel = 0.02
+        bot._floor_track._age = 0.2
+        bot._arm_zupt_anchor(depth, floor, None, 0.0, 0.0)
+        bot._zupt_anchor["t"] = 0.4
+        bot._zupt_anchor["x"] = 0.0
+        bot._zupt_anchor["y"] = 0.0
+        bot._zupt_anchor["scene_m"] = 0.0
+        bot._zupt_anchor["scene_raw_m"] = 0.0
+        bot._fusion.floor_scene_m = scene_m
+        bot._fusion.floor_scene_raw_m = 0.03
+        step = 0.03 / WHEEL_RADIUS_M
+        bot._watch_zupt(depth, floor, None, 0.0, 0.0, step, step)
+        return bot
+
+    kept = arm(0.02)
+    assert abs(kept.pose()[0] - 0.05) < 1e-9
+    rewound = arm(0.0)
+    assert abs(rewound.pose()[0]) < 1e-9
+
+
 def test_a_turning_lip_with_a_still_floor_still_freezes():
     """Same arc, picture fixed. That is the lip. The 2 cm claim still rewinds."""
     bot, _travel = _turning_drive(floor_moves=False)

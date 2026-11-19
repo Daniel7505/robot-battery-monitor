@@ -1924,8 +1924,12 @@ class Explorer:
         dl_now = float(left_rad) - float(anchor["left"])
         dr_now = float(right_rad) - float(anchor["right"])
         claimed_now = abs(0.5 * (dl_now + dr_now)) * self.odometry.radius_m
-        if yaw_moved >= 0.12 and (
-            claimed_now < 0.02 or self._floor_followed_the_wheels(anchor)
+        # A floor scene that slid with the wheels is the drive, on a
+        # straight line as well as a turn. The 0.12 rad gate stays for a
+        # pure pivot, whose picture is still because the camera is on
+        # the axis. A lip's picture does not slide, so it still rewinds.
+        if self._floor_followed_the_wheels(anchor) or (
+            yaw_moved >= 0.12 and claimed_now < 0.02
         ):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()

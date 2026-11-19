@@ -1100,6 +1100,20 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Outcome.** A forward command with a blind nose still drops the step. The lap did not reach the bathroom, the hallway, or the start again.
 
+## 2026-11-19 — A straight slide whose floor followed is not frozen
+
+**Mission parameter.** No new threshold. The 2 px still band, the 1.2 cm floor window, and the 30% match stay. The 0.12 rad gate stays for a pure pivot.
+
+**Change.** `floor still, translation frozen` does not rewind when the floor scene since the anchor already matches the wheels. A still step's pixel shift is added into `moved_px`.
+
+**Why.** The bath-walkway step was straighter than 0.12 rad when the pose stopped. The sliding-turn release never asked the floor-scene question. The shell and the wheels had both moved about 0.07 m.
+
+**Evidence.** `test_a_straight_slide_whose_floor_followed_is_not_frozen` keeps the pose when the scene matches and rewinds it when the scene is 0. `test_a_turning_lip_with_a_still_floor_still_freezes` and `test_a_still_floor_freezes_translation_while_the_view_turns` still freeze.
+
+**Rejected.** Letting the forward camera veto a still floor. That is the scrub the view-turns test keeps frozen.
+
+**Outcome.** A straight drive whose floor scene followed the wheels is not rewound. A still picture that did not follow still is.
+
 ## 2026-11-19 — The south jamb was the waypoint
 
 **Mission parameter.** No controller change. No new threshold. No geometry change.

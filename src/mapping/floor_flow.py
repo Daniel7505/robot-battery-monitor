@@ -253,6 +253,11 @@ class ShortFloorTrack:
             return "blank"
         self.still_samples += 1
         self.sum_wheel_m += closed_wheel
+        # A step under 2 px is still one step. Leaving it out of the sum
+        # made a creep of 1 px per window look like a frozen picture:
+        # moved_px stayed 0 and the translation rewind fired.
+        self.sum_row += float(row)
+        self.sum_col += float(col)
         self._base = np.array(gray, copy=True)
         self._wheel = 0.0
         self._age = 0.0

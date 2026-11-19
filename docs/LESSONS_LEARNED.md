@@ -1424,6 +1424,10 @@ Living-room start, pose error 0.005 m. Two short steps, 0.018 m and 0.028 m, sti
 
 An earlier crossing did enter, truth (3.12, 5.18), pose error 0.091 m. The nose was blind and the wheels' 0.14 m became 0.03 m of pose. Putting that step back when the floor said it matched walked a later still shell to 0.171 m. That change was reverted (`4cb96aa`). A blind forward command stays a wedge.
 
+## A straight slide whose floor followed is not frozen
+
+`floor still, translation frozen` is not the pin and not the blank-floor hold. The short floor steps said still. From t=49.3 s to t=50.3 s on the bath-walkway step the wheels and the truth both moved about 0.07 m and the pose did not. Yaw over that second passed 0.12 rad, and the release still waited to be asked whether the floor scene had followed the wheels. It only asked after that yaw. A scene that already matches the wheels is the drive on a straight line too. A still step under 2 px is now added into `moved_px`, so a one-pixel creep is not an endless still. The existing 2 px sum is the gate. A picture that does not slide still rewinds.
+
 ## The south jamb was the waypoint
 
 Truth (3.745, 4.943) sits on the south jamb of door G. The opening is world y 4.72–5.54, center (3.71, 5.13). In odometry that center is (0.43, 2.39) and the opening is x 0.02–0.84. The goals were x 0.25–0.28, about 0.15 m south of center, and the shell's side meets the jamb. A* on that stop's map followed the line it was given. The same map already had a free path at x 0.45–0.55. No controller change.

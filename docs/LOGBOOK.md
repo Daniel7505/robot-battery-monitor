@@ -751,6 +751,16 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Test:** `test_reverse_out_of_a_blind_wall_moves_the_pose`. The added test that required the restore was removed with it.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-lap-stopped-at-the-door) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blind-forward-step-stays-dropped)
 
+### 2026-11-19 — A straight slide whose floor followed is not frozen
+
+- **Commit:** this change. No new threshold.
+- **Symptom:** `floor still, translation frozen`. The wheels and the shell move together. The estimate does not. Pose error grows. Not `pinned`. Not `floor blank`.
+- **Found:** Lap toward the bath walkway. Explorer t=50.8 s. From t=49.3 s to t=50.3 s the wheels and the truth both moved about 0.07 m and the pose stayed. Error on that step ended at 0.248 m.
+- **Cause:** The short floor steps were called still. The sliding-turn release only runs after 0.12 rad of yaw, and only then asks whether the floor scene followed the wheels. This stretch was straighter than that, so a scene that had already matched the wheels still rewound. Steps under 2 px were also left out of `moved_px`, so a creep of one pixel a window never left the still band.
+- **Fix:** A floor scene that matches the wheels is not rewound, on a straight line as well as a turn. The 0.12 rad gate stays for a pure pivot. A still step's pixels are added into `moved_px`, and the existing 2 px sum still means still. A scene that did not follow still rewinds.
+- **Test:** `test_a_straight_slide_whose_floor_followed_is_not_frozen`. The lip stays `test_a_turning_lip_with_a_still_floor_still_freezes`. The sweeping view stays `test_a_still_floor_freezes_translation_while_the_view_turns`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-straight-slide-whose-floor-followed-is-not-frozen) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-straight-slide-whose-floor-followed-is-not-frozen)
+
 ### 2026-11-19 — The south jamb was the waypoint
 
 - **Commit:** log only. No controller change.

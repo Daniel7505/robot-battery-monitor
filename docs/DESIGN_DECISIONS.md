@@ -1266,4 +1266,18 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 
 **Rejected.** 1.5 on every open-nose reverse. That failed the jamb back-off tests, because those poses have an open nose and a side inside 0.10 m.
 
-**Outcome.** Clear sides creep. A pressed side still backs off at 0.50. Revert this commit to restore 0.50 on every open-nose reverse.
+**Outcome.** Clear sides creep. A pressed side still backs off at 0.50. `git revert 5118627` restores 0.50 on every open-nose reverse.
+
+## 2026-11-19 — The door-G creep meets the north jamb
+
+**Mission parameter.** No controller change after `5118627`.
+
+**Change.** None. The drive is recorded.
+
+**Why.** The new penalty did pick the creep. The shell's corner was on the north jamb. Truth (3.89, 5.37), estimate (3.42, 5.43). `floor slip, wheel motion rejected`, then `imu_stuck`.
+
+**Evidence.** Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`. Bedroom visited 0.2. Hall and bath visited 0.
+
+**Rejected.** Rechecking a straight command with the turn rectangle, and retuning `imu_stuck`. Both are new rules.
+
+**Outcome.** The creep stays. The crossing is not fixed. Left open.

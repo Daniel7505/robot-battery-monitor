@@ -241,3 +241,23 @@ Stock spawn, depth seed 1, no movie. Through the door, then toward the hall. Sto
 Stop 5 is the same reverse at the jamb, plus the still-picture hold (`floor blank, wheel translation held` from explorer t=63.9 s). That hold stays open. Hall and the bath door were not reached.
 
 Room seen % at stop 5: living 98.3, bedroom 72.6, kitchen 99.4, bath 1.9, laundry 47.5, closet 30.0, hall 21.1, storage 5.6, pantry 0.0. Bridge bedroom 100.0 visited 93.3, bridge bed-bath 95.6, bridge entry 94.7, bridge laundry 58.3, bridge bath 0.0, bridge closet 0.0. Bedroom visited 1.8. Hall visited 0. Pantry visited 0. Storage visited 0.
+
+## Side-clear penalty, door G again
+
+`5118627`. Open-nose reverse is 1.5 when neither side is inside `TOO_CLOSE_M`, and 0.50 when one is. Stock spawn, depth seed 1, no movie. Hall, bath, and the closet were not reached.
+
+| stop | t | result | proposal (odom) | decision | pos err | seen % |
+|---|---|---|---|---|---|---|
+| 0 | 1.5 | ready | (0.03, −0.12), 4 points | override, `look` | 0.000 | 0.15 |
+| 1 | 15.3 | look arrived | (−0.12, 3.17), path through the opening | taken | 0.020 | 67.64 |
+| 2 | 28.0 | 0.91 m short | (0.62, 4.62), bedroom | taken | 0.071 | 71.48 |
+| 3 | 57.2 | 2.60 m short | (−3.38, −0.72), kitchen | override, `go_to 0.0 1.5` | 0.136 | 73.48 |
+| 4 | 63.1 | arrived | (−5.20, 1.31), off the floor | override, door center `go_to 0.43 2.39` | 0.126 | 73.35 |
+| 5 | 74.2 | 0.64 m short, north of the opening | (0.17, 3.42), bedroom | taken | 0.083 | 73.70 |
+| 6 | 92.3 | `imu_stuck` | (1.55, 6.47), off the floor | override, `go_to 0.43 2.05` | 0.145 | 74.49 |
+| 7 | 94.5 | `imu_stuck` | (0.72, 4.03), bedroom | taken | 0.210 | 75.39 |
+| 8 | 99.4 | `imu_stuck` | (3.26, 5.52), deep bedroom | stopped | 0.474 | 76.00 |
+
+Stop 8 is a straight creep. Nose 1.8 m, command `(1.50, 1.50)`. Truth stayed at (3.89, 5.37), living side of the face, near the north end of the opening. The estimate walked to (3.42, 5.43). Caster and front-right contact at t=93.7 s. `floor slip, wheel motion rejected` and `floor still, translation frozen`, then the existing `imu_stuck`. Bedroom visited 0.2. Hall visited 0. Bath visited 0. Closet not entered. Laundry, pantry, and storage were not opened. Not a new weight. Left open.
+
+Room seen % at stop 8: living 99.1, bedroom 78.6, kitchen 99.2, bath 8.7, laundry 59.6, closet 45.7, hall 22.6, storage 29.6, pantry 0.4. Bridge bedroom 100.0 visited 86.7, bridge bed-bath 91.1, bridge entry 94.7, bridge laundry 52.8, bridge bath 0.0, bridge closet 6.7. Bedroom visited 0.2. Hall visited 0. Bath visited 0. Pantry visited 0. Storage visited 0.

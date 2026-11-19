@@ -1486,4 +1486,8 @@ The rectangle's right turns enter world (3.67, 4.68) and (3.67, 4.73). The openi
 
 ## An open nose reverses only when a side is pressed
 
-The old penalty was 0.50 on every open-nose reverse. Door G's yaw term, about 1.2, beat that, so the shell reversed into the south jamb instead of creeping straight. The penalty is now 1.5 when neither side is inside `TOO_CLOSE_M` (0.10 m) and stays 0.50 when a side is. That distance was already the side-press check. An unconditional 1.5 also stopped the jamb back-off, so it was not kept. Revert this commit to put 0.50 back on every open-nose reverse.
+The old penalty was 0.50 on every open-nose reverse. Door G's yaw term, about 1.2, beat that, so the shell reversed into the south jamb instead of creeping straight. The penalty is now 1.5 when neither side is inside `TOO_CLOSE_M` (0.10 m) and stays 0.50 when a side is. That distance was already the side-press check. An unconditional 1.5 also stopped the jamb back-off, so it was not kept. `git revert 5118627` puts 0.50 back on every open-nose reverse.
+
+## The door-G creep meets the north jamb
+
+With the side-clear penalty the opening picked a straight creep, nose 1.8 m, wheels `(1.50, 1.50)`. Truth stayed at (3.89, 5.37), on the living side near the north end of the opening. The estimate walked to (3.42, 5.43). Caster and front-right were in contact at t=93.7 s. The log is `floor slip, wheel motion rejected`, then the existing `imu_stuck`. Bedroom visited 0.2. A straight command is still not rechecked with the turn rectangle. That stays.

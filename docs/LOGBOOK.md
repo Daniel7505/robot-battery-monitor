@@ -786,3 +786,21 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** A turn at the mouth mapped the south cells. A* then followed odometry y 4.88 through the opening. The shell entered the bathroom. On that crossing the pose crept and snapped back to the same x from t=54.8 s to t=55.5 s. Pose error went from 0.027 m to 0.131 m. No new freeze line. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m, while the shell was still moving. No wall contact. `up_z` 1.000. The hallway and the return were not driven.
 - **Lesson:** Look before a goal in unknown space. The straight aim is not the bug. The pose snap on the crossing is the next stop.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-was-the-center-line) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-was-the-center-line)
+
+### 2026-11-19 — A cancelling yaw command is not a stuck spin
+
+- **Commit:** `f187036`. No new threshold.
+- **Symptom:** `imu_stuck` while the shell is driving and nothing is touching it.
+- **Found:** Bathroom, hand drive, t=64.2 s. Truth moved 0.67 m from t=59 s to t=64.5 s. No wall contact. `up_z` 1.000. Pose error 0.116 m. The command was 6 cm from the goal.
+- **Cause:** The yaw command flipped sign every step, 93 flips in 2.1 s. The net wheel yaw was −0.011 rad/s and the gyro yaw did not move. The check averaged the absolute rate, so the cancel looked like a spin. Earlier `imu_stuck` lines are not this. Rounds 6–8 define the check. `97229ea` is the next command inheriting a window after the shell was against the bedroom door.
+- **Fix:** The yaw test uses the net rate. A wedge that turns one way still counts. A left step and a right step that cancel do not.
+- **Test:** `test_a_yaw_command_that_cancels_is_not_imu_stuck`. The one-way wedge stays `test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-cancelling-yaw-command-is-not-a-stuck-spin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-cancelling-yaw-command-is-not-a-stuck-spin)
+
+### 2026-11-19 — The walkway snap made the 0.13 m
+
+- **Commit:** log only. No controller change.
+- **Tried:** Whether the creep-and-snap at t=54.8–55.5 s is the 0.13 m pose error.
+- **Result:** At t=53.4 s the error was 0.027 m. At t=54.8 s it was 0.045 m and the pose was still tracking. Over the next 0.7 s the truth moved 0.091 m in odometry x and the pose went backward 0.013 m. The error went to 0.137 m and stayed there. The bathroom reading of 0.13 m is that gap. No new freeze line for the snap.
+- **Lesson:** The snap is the error. It is not what fired `imu_stuck`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-snap-made-the-013-m)

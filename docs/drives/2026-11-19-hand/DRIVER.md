@@ -128,3 +128,22 @@ The straight aim is the existing rule. A turn at the mouth mapped the south cell
 From t=54.8 s to t=55.5 s the pose crept and snapped back to the same x. No new freeze line. Error 0.027 → 0.131 m. The next leg was still moving, no wall contact, `up_z` 1.000, and stopped `imu_stuck`. The hallway and the return were not driven. No lap movie.
 
 Before that rerun, door H on the previous process stopped `0.56 m short` at the plane. The path was A*. `reverse_left` at t=93.5 s, then the stall at t=97.5 s while the shell was closing again. `0b55545` measures that retry from the backed-up pose. The rerun did not reach the door.
+
+## Net yaw, then out of the bathroom
+
+`0b55545` is in the logbook. The bathroom `imu_stuck` was a yaw command that flipped every step. Net wheel yaw −0.011 rad/s, gyro still, shell moving, no contact. `f187036` uses the net rate. The same point then arrived.
+
+The t=54.8–55.5 s snap is the 0.13 m. Error 0.027 m at t=53.4 s, 0.045 m at t=54.8 s, 0.137 m at t=55.5 s. Truth moved 0.091 m and the pose stepped back 0.013 m. It is not what fired `imu_stuck`.
+
+| place | truth (x, y) | pos err |
+|---|---|---|
+| start, living | (6.096, 4.688) | 0.005 |
+| bedroom | (3.338, 5.106) | 0.059 |
+| walkway mouth | (1.218, 4.918) | 0.024 |
+| bathroom, just through | (1.178, 4.383) | 0.123 |
+| bathroom, old stuck point | (1.317, 3.417) | 0.116 |
+| hall | (2.377, 1.759) | 0.113 |
+| hall, east | (3.409, 1.746) | 0.115 |
+| kitchen | (4.096, 1.809) | 0.132 |
+
+The kitchen goal was still free. A* was 0.32 m. The shell slid east of it, closest 0.285 m, then `0.30 m short`. No contact. `up_z` 1.000. The living-room start was not reached. No lap movie.

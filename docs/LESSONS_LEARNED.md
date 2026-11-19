@@ -1445,3 +1445,13 @@ Commit `0b55545`. When that reverse ends, the bar is the backed-up pose. The sam
 The stall at truth (1.009, 4.858) was a straight aim into a cell the map had not seen. That is the existing path, not a driver bug. A turn at the mouth mapped the south side. A* on odometry y 4.88 crossed the wall at world y 4.57.
 
 On that crossing the pose crept forward and snapped back to the same x from t=54.8 s to t=55.5 s. Error went from 0.027 m to 0.131 m. There is no new `floor still` or `floor blank` line for that snap. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m. The shell was still moving. No wall contact. The hallway and the return were not driven.
+
+## A cancelling yaw command is not a stuck spin
+
+In the bathroom the wheels were told left, then right, every step. Ninety-three flips in 2.1 s. The net yaw was −0.011 rad/s. The pose yaw and the truth yaw each moved less than 0.001 rad. The shell translated. Nothing was in contact.
+
+The stuck check averaged the absolute wheel yaw, so the cancel counted as a spin the gyro had ignored. Commit `f187036` uses the net rate. A wedge that turns one way still stops. The earlier `imu_stuck` notes are a different case: the check itself, and a window the next waypoint inherited after the shell was on the bedroom door.
+
+## The walkway snap made the 0.13 m
+
+From t=53.4 s to t=54.8 s the error went 0.027 m to 0.045 m while the pose tracked. From t=54.8 s to t=55.5 s the truth moved 0.091 m along the crossing and the pose stepped backward 0.013 m. The error became 0.137 m and did not come back. That is the 0.13 m in the bathroom. The snap did not set `imu_stuck`. There is no new freeze line on it.

@@ -1155,3 +1155,31 @@ North visited 18.48, 10.73, 12.55, 9.14, 20.69 (mean 14.32, sd 5.02) against 13.
 **Rejected.** Changing the straight aim. The map had not seen the goal, and that path is already the rule.
 
 **Outcome.** The walkway is the center line after a look. The lap stopped in the bathroom on the pose snap and `imu_stuck`. The hallway and the return were not driven.
+
+## 2026-11-19 — A cancelling yaw command is not a stuck spin
+
+**Mission parameter.** No new threshold. The 0.18 rad/s wheel gate and the 0.08 rad/s gyro gate stay. The 2.5 s window stays.
+
+**Change.** The yaw half of `imu_stuck` uses the net wheel rate and the net gyro rate. It no longer averages the absolute value of each step.
+
+**Why.** A left command and a right command on successive steps cancel. The gyro stays still because the shell is not turning. The absolute average called that a stuck spin while the shell drove 0.67 m with no contact.
+
+**Evidence.** `test_a_yaw_command_that_cancels_is_not_imu_stuck`. `test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses` still stops a one-way wedge. The bathroom point that had stopped `imu_stuck` then arrived, pose error 0.116 m.
+
+**Rejected.** Treating the earlier door `imu_stuck` as the same fault. That shell was on the shared wall, and the bug fixed then was the next command inheriting the window.
+
+**Outcome.** A cancelling yaw command does not end a drive. A spin of one sign that the gyro does not follow still does.
+
+## 2026-11-19 — The walkway snap made the 0.13 m
+
+**Mission parameter.** No controller change. No new threshold. No geometry change.
+
+**Change.** None. The snap is recorded so it is not folded into the `imu_stuck` fix.
+
+**Why.** The error was 0.027 m before the crossing and 0.137 m after the 0.7 s in which the pose stepped backward while the shell moved 0.091 m.
+
+**Evidence.** Pose and truth from the hand drive, t=53.4 s to t=55.5 s. No new `floor still` or `floor blank` line. Counts are in `docs/drives/2026-11-19-hand/DRIVER.md`.
+
+**Rejected.** Calling the snap the cause of `imu_stuck`. The stuck check fired later, on the yaw command, with the shell still moving.
+
+**Outcome.** The 0.13 m is the snap. The controller change for this stop is the net yaw test, not a floor-hold change.

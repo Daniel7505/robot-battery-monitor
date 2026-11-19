@@ -2520,8 +2520,12 @@ class Explorer:
         span = samples[-1][0] - samples[0][0]
         if span < _IMU_STUCK_S - 0.3:
             return False
-        wheel_w = sum(abs(row[1]) for row in samples) / len(samples)
-        gyro_w = sum(abs(row[2]) for row in samples) / len(samples)
+        # Net yaw, not the average of the absolute value. A left and a
+        # right command on successive steps cancel, and the gyro is
+        # right to stay still. Averaging the magnitudes called that
+        # cancel a spin. A wedge that turns one way still counts.
+        wheel_w = abs(sum(row[1] for row in samples) / len(samples))
+        gyro_w = abs(sum(row[2] for row in samples) / len(samples))
         if wheel_w >= _IMU_WHEEL_W_MIN and gyro_w < _IMU_GYRO_W_MAX:
             return True
         if any(row[4] is None for row in samples):

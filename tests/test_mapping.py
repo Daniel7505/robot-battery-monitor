@@ -3787,6 +3787,27 @@ def test_a_new_waypoint_does_not_inherit_the_stuck_window():
     assert left > 0.0 and right > 0.0
 
 
+def test_a_yaw_command_that_cancels_is_not_imu_stuck():
+    """The bathroom. The shell was driving. The yaw command flipped every step.
+
+    The net wheel yaw is about zero and the gyro stays still. That is
+    not a spin the body failed to make. A wedge that turns one way
+    still is.
+    """
+    from src.mapping.explore import Explorer
+
+    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
+    bot.t_s = 2.5
+    for i in range(6):
+        sign = 1.0 if i % 2 == 0 else -1.0
+        bot._imu_samples.append((i * 0.5, sign * 0.40, 0.001, 0.12, 0.05))
+    assert bot._imu_stuck() is False
+    bot._imu_samples.clear()
+    for i in range(6):
+        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.12, 0.05))
+    assert bot._imu_stuck() is True
+
+
 def test_a_wheel_speed_change_without_acceleration_is_imu_stuck():
     from src.mapping.explore import Explorer
 

@@ -9,9 +9,7 @@ centimetres. At creep the bubble is smaller than the air beside a
 centred tire. At cruise it grows, and the robot slows before a clip.
 
 A spin sweeps the corners, which stick out past the tires. The extra
-gap is the pivot clearance. Reverse only until that gap is open, and
-never more than a short cap. A fixed two-second reverse pulled the
-robot off doorways it had already lined up with.
+gap is the pivot clearance.
 """
 
 from __future__ import annotations
@@ -29,7 +27,6 @@ SHELL_HALF_M = 0.227
 _CORNER_M = math.hypot(max(SHELL_NOSE_M, SHELL_TAIL_M), SHELL_HALF_M)
 # Air past the tire that a spin in place needs.
 PIVOT_CLEARANCE_M = _CORNER_M - SHELL_HALF_M
-PIVOT_REVERSE_MAX_M = 0.25
 
 # A few centimetres of air, not the warehouse lane standoff.
 BUBBLE_STANDOFF_M = 0.04
@@ -96,22 +93,6 @@ def pivot_ready(gap_m: float | None) -> bool:
     if gap_m is None:
         return True
     return float(gap_m) >= PIVOT_CLEARANCE_M
-
-
-def reverse_budget_m(gap_m: float | None, *, blind: bool = False, force_min_m: float = 0.0) -> float:
-    """How far to back up so the pivot disk is clear. Capped, and zero if it already is."""
-    if gap_m is None:
-        gap = 0.0 if blind else PIVOT_CLEARANCE_M
-    else:
-        gap = float(gap_m)
-    need = PIVOT_CLEARANCE_M - gap
-    if need <= 0.02 and not blind and force_min_m <= 0.0:
-        return 0.0
-    budget = max(0.0, need + 0.03)
-    if blind:
-        budget = max(budget, 0.12)
-    budget = max(budget, float(force_min_m))
-    return min(PIVOT_REVERSE_MAX_M, budget)
 
 
 def corner_gap(proximity: dict | None) -> float | None:

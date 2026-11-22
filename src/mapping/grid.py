@@ -105,22 +105,6 @@ class OccupancyGrid:
                     continue
                 self.log[r, c] = min(float(self.log[r, c]), self.free_thresh - 0.1)
 
-    def mark_contact(self, x: float, y: float) -> None:
-        """Reinforce a cell the depth camera has already called a wall.
-
-        Unknown and free cells are left alone. The tire hits the jamb
-        while the point straight ahead is the opening, and latching that
-        point shut the bedroom door on the real runs.
-        """
-        cell = self.cell_of(x, y)
-        if cell is None:
-            return
-        r, c = cell
-        if float(self.log[r, c]) < self.occ_thresh:
-            return
-        self.log[r, c] = max(float(self.log[r, c]), 3.2)
-        self.latch[r, c] = True
-
     def integrate(
         self,
         origin_xy: tuple[float, float],

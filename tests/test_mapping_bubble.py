@@ -10,7 +10,6 @@ import pytest
 from src.mapping.bubble import (
     assess_bubble,
     max_speed_for_gap,
-    reverse_budget_m,
     stop_gap,
 )
 from src.mapping.floor_flow import FloorFlow, ShortFloorTrack, metres_per_px
@@ -125,14 +124,6 @@ def test_blind_depth_does_not_hide_a_sonar_return():
     assert blind.forward == 0.0
     seen = assess_bubble(99.0, blind=True, proximity={"us_front": 0.25})
     assert seen.forward == pytest.approx(0.25)
-
-
-def test_reverse_is_only_as_far_as_the_pivot_needs():
-    assert reverse_budget_m(0.21) == 0.0
-    tight = reverse_budget_m(0.0)
-    assert 0.03 < tight <= 0.25
-    assert reverse_budget_m(0.0, blind=True) >= 0.12
-    assert reverse_budget_m(0.0, blind=True) <= 0.25
 
 
 def test_floor_shift_sign_and_low_texture():

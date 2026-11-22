@@ -608,12 +608,6 @@ def test_mapper_has_no_pose_or_map_foresight():
         assert token not in cli and token not in cli.lower()
 
 
-def test_recovery_mode_flag_is_opt_in():
-    mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
-    assert "RBM_RECOVERY_MODE" in mapper
-    assert 'print(f"MAPPING recovery {explorer.recovery_mode}")' in mapper
-
-
 def test_oracle_pose_is_opt_in_and_is_not_the_floor_plan():
     """The planner may be handed its own pose. The scoring file stays out."""
     mapper = (CONTROLLER_ROOT / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")

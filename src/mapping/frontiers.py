@@ -5,9 +5,8 @@ Clusters smaller than ``MIN_FRONTIER_M`` are ignored. The rest are
 scored by size divided by the A* path length. Size is the cell
 length. The path is planned on the free grid with occupied cells
 inflated by the robot radius, so the
-robot does not try to squeeze through a door it cannot fit. With
-``RBM_FOOTPRINT_ALIGN`` the inflation is the same rectangle the map
-veto sweeps, not that disk. The score weights do not change. Turns are
+robot does not try to squeeze through a door it cannot fit. The
+inflation is that disk. The score weights do not change. Turns are
 placed where the centre is at least ``TURN_CLEAR_M`` from a mapped
 obstacle, and the path prefers ``TURN_AIM_M``. A doorway is a straight
 crossing, not a turn. A frontier the robot cannot turn around in, and
@@ -25,15 +24,7 @@ import os
 import numpy as np
 
 from src.mapping.body import GRID_RESOLUTION_M, MIN_FRONTIER_M, ROBOT_RADIUS_M, TURN_AIM_M, TURN_CLEAR_M
-from src.mapping.footprint import (
-    HALF_M,
-    NOSE_M,
-    TAIL_M,
-    _trajectory,
-    footprint_align_enabled,
-    footprint_clips,
-    shared_footprint_enabled,
-)
+from src.mapping.footprint import HALF_M, NOSE_M, TAIL_M, footprint_clips
 from src.mapping.grid import OccupancyGrid
 from src.mapping.rooms import _nearby_region, crossing_bonus
 
@@ -66,7 +57,6 @@ _YAW_STEP = 0.10
 _YAW_COUNT = int(round(2.0 * math.pi / _YAW_STEP))
 _OFFSETS: dict[tuple[float, float], tuple[tuple[int, int], ...]] = {}
 _MASK_CACHE: dict[str, object] = {"key": None, "masks": None}
-_FREE_CACHE: dict[str, object] = {"key": None, "mask": None}
 # Set when a planned pivot is replaced because the rectangle clips.
 _approach_reject = False
 
@@ -540,9 +530,6 @@ def _turn_blocked(masks: np.ndarray, row: int, col: int, yaw_in: float, yaw_out:
 
 
 def traversable(labels: np.ndarray, res: float, radius_m: float = ROBOT_RADIUS_M) -> np.ndarray:
-    if footprint_align_enabled():
-        blocks = neighbor_blocks(rectangle_masks(labels == 1, res))
-        return (labels == 0) & ~np.all(blocks, axis=0)
     blocked = dilate_disk(labels == 1, radius_m, res)
     return (labels == 0) & ~blocked
 
@@ -561,9 +548,8 @@ def astar(
 ) -> list[tuple[int, int]] | None:
     """8-connected A* on a boolean free grid. ``start`` may sit just off the grid.
 
-    ``heading_block`` and ``yaw_masks`` are the shared rectangle. They are
-    absent unless ``RBM_FOOTPRINT_ALIGN`` is on, and they do not change the
-    step weights.
+    ``heading_block`` and ``yaw_masks`` are an optional rectangle. The
+    planner does not pass them, and they do not change the step weights.
     """
     h, w = free.shape
     sy, sx = start
@@ -1283,70 +1269,13 @@ def _unvisited_stand(
     return other, area
 
 
-def planner_free_mask(grid: OccupancyGrid) -> np.ndarray:
-    """The free mask ``select_goal`` plans on, cached while the grid is unchanged."""
-    log = grid.log
-    key = (
-        id(log),
-        int(log.shape[0]),
-        round(float(log.sum()), 3),
-        int(np.count_nonzero(log >= grid.occ_thresh)),
-    )
-    if _FREE_CACHE["key"] == key:
-        return _FREE_CACHE["mask"]  # type: ignore[return-value]
-    mask = traversable(grid.labels(), grid.res, ROBOT_RADIUS_M)
-    _FREE_CACHE["key"] = key
-    _FREE_CACHE["mask"] = mask
-    return mask
-
-
-def swept_leaves_free(
-    grid: OccupancyGrid,
-    pose: tuple[float, float, float],
-    v_m_s: float,
-    w_rad_s: float,
-) -> bool:
-    """True when the existing sweep carries the centre off the planner mask.
-
-    The sweep distances are the ones ``footprint_clips`` already uses
-    (0.35 m of travel, or the spin arc). The mask is the inflated free
-    grid the planner searched. A cell the grid has not seen is not a hit.
-    Live range remains the check for that space. The rectangle is not
-    applied again: it is a second shape, and it is why a path the disk
-    accepted was then refused.
-    """
-    v = float(v_m_s)
-    w = float(w_rad_s)
-    if abs(v) < 1e-4 and abs(w) < 1e-4:
-        return False
-    labels = grid.labels()
-    free = planner_free_mask(grid)
-    x, y, yaw = (float(pose[0]), float(pose[1]), float(pose[2]))
-    for px, py, _pyaw in _trajectory(x, y, yaw, v, w):
-        cell = grid.cell_of(px, py)
-        if cell is None:
-            return True
-        if bool(free[cell]):
-            continue
-        if int(labels[cell]) < 0:
-            continue
-        return True
-    return False
-
-
 def motion_blocked(
     grid: OccupancyGrid,
     pose: tuple[float, float, float],
     v_m_s: float,
     w_rad_s: float,
 ) -> bool:
-    """Map rejection of one commanded arc.
-
-    The rectangle sweep, unless ``RBM_SHARED_FOOTPRINT`` is on. Then the
-    planner free mask is the only map test.
-    """
-    if shared_footprint_enabled():
-        return swept_leaves_free(grid, pose, v_m_s, w_rad_s)
+    """Map rejection of one commanded arc. The rectangle sweep."""
     return footprint_clips(grid, pose, v_m_s, w_rad_s)
 
 
@@ -1536,16 +1465,7 @@ def select_goal(
     yaw_masks = None
     heading_block = None
     start_yaw = None
-    if footprint_align_enabled():
-        # Same rectangle as the map veto. The 2.5 / 6.0 clearance weights
-        # below are unchanged. The disk radius is not used.
-        yaw_masks = rectangle_masks(labels == 1, grid.res)
-        heading_block = neighbor_blocks(yaw_masks)
-        free = (labels == 0) & ~np.all(heading_block, axis=0)
-        if heading_xy is not None:
-            start_yaw = math.atan2(float(heading_xy[1]), float(heading_xy[0]))
-    else:
-        free = traversable(labels, grid.res, radius_m)
+    free = traversable(labels, grid.res, radius_m)
     here = grid.cell_of(pose_xy[0], pose_xy[1])
     start = None if here is None else _planner_start(free, labels, here)
     if start is not None and here is not None:

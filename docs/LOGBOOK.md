@@ -571,7 +571,7 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 
 ### 2026-11-22 — The off flags and the test-only helpers are deleted
 
-- **Commit:** this change
+- **Commit:** `4b6f61e`
 - **Tried:** Delete `RBM_RECOVERY_MODE` (`one_rule` and `trail_only`), `RBM_FOOTPRINT_ALIGN`, and `RBM_SHARED_FOOTPRINT`. Delete `fit_motion`, `mark_contact`, `reverse_budget_m`, and `depth_sigma_m`. The stack, the 0.20 m planner disk, and the rectangle veto on a turn stay.
 - **Result:** No driving change. The flags were already off. Pytest here: 1109 passed, 28 skipped, against 1120 passed, 28 skipped before the cut. Eleven tests left with the deleted code. A logged lap is still required before merge.
 - **Lesson:** Code that never runs on a lap is not a recovery. Dan decides the merge.

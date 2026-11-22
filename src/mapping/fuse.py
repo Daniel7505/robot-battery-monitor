@@ -16,6 +16,10 @@ from src.mapping.floor_flow import FloorFlow, ShortFloorTrack
 from src.mapping.odometry import WheelGyroOdometry
 from src.mapping.visual_odometry import VisualOdometry
 
+# A forward picture changed and the fit was not a pose update.
+# These are the reasons visual odometry already returns.
+_MOVED = ("moved", "few_tracks", "no_fit", "too_large")
+
 
 class _Interval:
     def __init__(self) -> None:
@@ -64,12 +68,20 @@ class MotionFusion:
         self.scene_visual_m: float | None = None
         # True when this step's picture did not move. None is "no sample".
         self.scene_visual_still = False
+        # ``still`` contradicts the wheels. ``moved``, ``few_tracks``,
+        # ``no_fit``, and ``too_large`` are a picture that changed and
+        # could not be fit. Empty means this step had no reading.
+        self.scene_visual_reason = ""
         self._floor = _Interval()
         self._visual = _Interval()
         self._visual_still = 0
         self._floor_dx = 0.0
         self._floor_dy = 0.0
         self._floor_q = 0.0
+        # Judged floor windows, including ones a fast yaw refuses to write
+        # into the pose. The rewind reads this. It is not a correction.
+        self.floor_scene_m = 0.0
+        self.floor_scene_raw_m = 0.0
         # Short steps. A single correlation across 2 cm wraps on this camera.
         self._floor_track = ShortFloorTrack()
 
@@ -95,6 +107,7 @@ class MotionFusion:
         self.scene_floor_m = None
         self.scene_visual_m = None
         self.scene_visual_still = False
+        self.scene_visual_reason = ""
         if not self.enabled:
             return ""
         self._floor.add(ds_raw_m, ds_applied_m, dyaw_rad)
@@ -110,7 +123,12 @@ class MotionFusion:
             sample_v = self.visual.measure(depth, camera, rgb)
             # A flat forward wall has no corners. The rear camera is the
             # other view, used when this one cannot track.
-            forward_blind = sample_v is None or (not sample_v.ok and sample_v.reason != "still")
+            # A picture that already changed is a reading. The rear
+            # camera fills in a blank wall. It must not cover that
+            # change with a still frame of its own.
+            forward_blind = sample_v is None or (
+                not sample_v.ok and sample_v.reason != "still" and sample_v.reason not in _MOVED
+            )
             if forward_blind and rear_depth is not None and rear_camera is not None:
                 alt = self.rear_visual.measure(rear_depth, rear_camera, rear_rgb)
                 if alt is not None and (alt.ok or alt.reason == "still"):
@@ -124,10 +142,12 @@ class MotionFusion:
                 self.landmarks = sample_v.landmarks
                 self.scene_visual_m = 0.0
                 self.scene_visual_still = True
+                self.scene_visual_reason = "still"
                 self._visual.clear()
                 sample_v = None
             else:
                 self.landmarks = sample_v.landmarks
+                self.scene_visual_reason = sample_v.reason or "tracked"
                 if sample_v.ok:
                     self.visual_meas_yaw += float(sample_v.dyaw_rad)
                     # The pose update below ignores a fast yaw. The pin
@@ -278,6 +298,11 @@ class MotionFusion:
         if kind != "floor" and abs(interval.yaw_rad) > 0.08:
             return ""
         scene = math.hypot(float(dx_m), float(dy_m))
+        if kind == "floor":
+            # The yaw gate below can refuse this as a correction. The
+            # metres stay here so a rewind can tell a slide from a lip.
+            self.floor_scene_m += scene
+            self.floor_scene_raw_m += abs(float(raw))
         # Wheels turned, the sensor says the body did not. Drop the travel.
         # A forward camera only counts when that travel should have moved
         # the tracked pixels by several pixels and they stayed put.

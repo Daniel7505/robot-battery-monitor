@@ -610,3 +610,271 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Result:** From sim t=88.64 s to t=90.60 s the pose sat at (0.428, 0.043) while the wheels claimed 0.208 m, the shell moved 0.168 m, and yaw changed −0.92 rad. The log line is `floor still, translation frozen` at explorer t=85.1 s. Nine floor windows in that hold measured 0.20 m and were dropped because the yaw window was 0.10 rad. After the hold, wheels 0.387 m, estimate path 0.386 m, floor 0.386 m, truth 0.395 m.
 - **Lesson:** The missing 0.17 m is the still-floor rewind during a turn that was also driving. The wheels' extra over the truth is the forward part of that same turn, about 0.04 m, not a pure spin.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — A sliding turn is not the lip
+
+- **Commit:** `3546a1a`. No new constant.
+- **Tried:** The home-leg trace had floor scene within a few percent of the wheel claim on every window, including the nine the 0.08 rad gate refused to write. A lip's picture does not slide. The rewind now skips when the yaw has moved 0.12 rad and either the wheels claimed under 2 cm or the floor scene is at least 30% of that wheel window. A step the pose did not trust is booked as 0 applied metres. Same sixteen-command route, rendering on, depth seed 1.
+- **Result:** `go_to 0 0` pose error 0.083 m, was 0.237 m. The leg moved the error from 0.072 m to 0.083 m. Final stop 0.091 m, was 0.241 m. No wall-contact row. Lowest `up_z` 1.000. Heading error at the stop is 0.025 rad, was 0.014. Pytest 1124 passed, 28 skipped.
+- **Lesson:** A floor scene that matches the wheels is the drive. A still picture with the same wheel claim is still the lip.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — The sliding-turn ten
+
+- **Commit:** logbook only. No controller change. The ten is `3546a1a`.
+- **Tried:** The `edfd172` ten. Explorer, driver off, flags off, rendering off, 600 s. North spawn (5.80, 5.60), yaw 2.2, depth seeds 71–75. −0.35 spawn (6.10, 4.70), yaw 1.2208, depth seeds 76–80. A harness print counted the new skip. It did not change the decision.
+- **Result:** Cap pose, north 0.28, 0.63, 0.27, 0.94, 0.12 (mean 0.45) against 0.71. −0.35 0.15, 0.82, 0.25, 0.13, 0.34 (mean 0.34) against 0.76. Time-average pose 0.24, 0.37, 0.27, 0.51, 0.19 (mean 0.32) and 0.14, 0.36, 0.30, 0.18, 0.15 (mean 0.23). Seen 88.72, 94.01, 93.83, 91.23, 89.40 (mean 91.44) against 84.20, and 96.33, 76.47, 87.38, 94.25, 95.85 (mean 90.06) against 83.92. Crossing 6 of 10: north Y, N, N, Y, Y and −0.35 N, N, Y, Y, Y. Longest still 59, 18, 52, 19, 31 s and 30, 18, 18, 18, 77 s. No tip. Lowest `up_z` is 0.999. Skip / lip-freeze: north 81/51, 87/12, 74/43, 75/17, 36/135 and −0.35 30/103, 83/16, 105/40, 125/19, 79/30. Totals 775 and 466.
+- **Lesson:** The long-run pose error came down. The lip freeze still runs. The new skip runs more often than that freeze.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-17-a-heading-arrives-at-005-rad)
+
+### 2026-11-18 — The two large seeds are the pin and a loop closure
+
+- **Commit:** logbook only. No controller change.
+- **Tried:** North seed 74 (cap 0.94 m) and −0.35 seed 77 (cap 0.82 m, seen 76.47). Pose error against the pose log, then the log lines in each jump. Explorer time in the log is 3.5 s behind the pose log.
+- **Result:** Seed 74 yaw stays inside 0.03 rad. Robot t=113 s a blank-floor hold: truth 0.19 m, estimate 0.04 m, error +0.12. The same hold repeats. Robot t=449–453 s the pin, four lines, straight reverse: wheels −0.47 m, truth 0.41 m, estimate 0.004 m, error 0.63→1.03. Seed 77's early pins are the same hold. At robot t=404.1 s one sample jumps the estimate 0.50 m and the yaw −0.085 rad. The gyro integral does not move. The line is `loop closure pose=(-1.64,0.48,2.28)` at explorer t=400.4 s. The 0.10 rad heading then walks the error from 0.47 m to 0.97 m over the later drive. Of 775 skips, 762 are a translating shell. One is a spin with 1.7 cm of truth motion and 2.1 cm of wheel claim.
+- **Lesson:** These two caps are the blank-floor hold, the pin, and one bad loop closure. The new skip is not the miss.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-the-pose-miss-is-a-reverse-the-pin-froze)
+
+### 2026-11-18 — The pinned reverse did not show a floor slide
+
+- **Commit:** logbook only. The pin is unchanged.
+- **Tried:** North seed 74, robot t=449–453 s. A straight reverse, wheels −0.47 m, truth 0.41 m, estimate 0.004 m. Four `pinned` lines. Checked against the 2026-11-10 pin decision before any release.
+- **Result:** Every wheel step in that window is 0.8 mm, all under the pin's 1.5 mm quiet floor. A per-frame floor or rear reading of that step is zeroed before the 0.45 ratio, so the pin's sums stay still. No floor-slip line and no pursuit-arc skip in the window. The skip needs 0.12 rad of yaw, and this reverse does not yaw. There is no logged 2 cm floor window with scene matching the wheels, which is what the home leg had.
+- **Lesson:** The scene-follows-wheels release does not have a measurement to hang on here. The pin stays.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)
+
+### 2026-11-18 — The raw pin sums are not the shell
+
+- **Commit:** logbook only. The trace was removed. The pin is unchanged.
+- **Tried:** North seed 74 again, to robot t=460 s, with the raw floor and rear-depth shift logged before the 1.5 mm quiet floor.
+- **Result:** On the four late pin windows, each 0.05 m of wheels, the raw floor sum is 0.028–0.032 m and the rear depth is 0.014 m then 0. Truth in each window is 0.021 m. On the 18 earlier pin windows the shell's truth path is about 0 and the raw floor sum is still about 0.03 m. A later reverse that was not pinned has wheels −0.50 m, truth 0.46 m, raw floor 0.55 m, raw rear 0.40 m.
+- **Lesson:** Putting the 1.5 mm quiet floor on the window sum would make a still scene read about 0.03 m. The stuck pin would not close. The pin stays.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-a-straight-reverse-with-an-opening-nose-is-not-pinned)
+
+### 2026-11-18 — Seed 77's loop closure was the wrong room
+
+- **Commit:** logbook only. The trace was removed. Loop closure is unchanged.
+- **Tried:** The closure at explorer t=400.4 s on −0.35 seed 77, pose `(-1.64, 0.48, 2.28)`. Compared the estimate on either side with the pose log. A rerun did not repeat that match. It accepted a different one, and that trace has the votes.
+- **Result:** The ten's closure moved the error from 0.18 m to 0.49 m and the yaw error from −0.005 rad to −0.090 rad. The y coordinate landed on the truth. The x coordinate moved from 4.66 m to 5.11 m while the truth stayed at 4.62 m. The gyro integral did not move. A 0.50 m jump is inside the 0.70 m ceiling once the keyframe is more than about 4.8 m of path behind, and 0.085 rad is under the yaw cap at every eligible keyframe. On the whole ten: seed 77 away, seed 78's first away (0.09→0.34 m), seed 78's second flat, north 71 toward (0.63→0.11 m). The rerun's closure was keyframe 3, 6 of 6 landmarks, no runner-up, median residual 0.049 m, travelled 26.6 m, correction 0.43 m against a 0.70 m cap, yaw −0.013 rad, and the error fell 0.50→0.15 m.
+- **Lesson:** Seed 77's closure was a wrong place, not a good shift with a bad yaw. Rejecting a yaw correction larger than the existing 0.08 rad would drop it and keep north 71. It would not drop seed 78's first closure.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-10-the-pose-miss-is-a-reverse-the-pin-froze)
+
+### 2026-11-18 — A second ten, seeds 81–90
+
+- **Commit:** logbook only. No controller change. The ten is `3546a1a`. Loop closure is unchanged.
+- **Tried:** The same harness as the 71–80 ten, with new seeds. Explorer, driver off, flags off, rendering off, 600 s. North spawn (5.80, 5.60), yaw 2.2, depth seeds 81–85. −0.35 spawn (6.10, 4.70), yaw 1.2208, depth seeds 86–90. A harness print counted the skip and wrote each accepted closure. It did not change the decision.
+- **Result:** Nine runs reached the 600 s cap. −0.35 seed 87 stopped at robot t=274.6 s with `end_run reason=start_component` and "no reachable frontier after a final scan". Exit 0. That quit is the existing component split. No tip. Lowest `up_z` is 0.998. Cap pose, north 0.67, 0.41, 0.70, 0.29, 1.68 (mean 0.75) against the 71–80 ten's 0.45 and `edfd172`'s 0.71. −0.35 0.35, 0.22, 0.26, 1.40, 0.64 (mean 0.57) against 0.34 and 0.76. The 0.22 is the 275 s stop. The four −0.35 runs that reached 600 s average 0.66. Time-average pose 0.15, 0.21, 0.38, 0.20, 0.59 (mean 0.31) and 0.26, 0.16, 0.20, 0.71, 0.68 (mean 0.40). Seen 94.44, 95.27, 71.91, 84.17, 90.78 (mean 87.31) against 91.44, and 80.50, 78.28, 78.23, 92.41, 66.04 (mean 79.09) against 90.06. Crossing 5 of 10: north Y, Y, N, Y, N and −0.35 N, Y, N, N, Y. Longest still 37, 24, 25, 32, 22 s and 20, 20, 408, 36, 31 s. Seed 88's planner pose stayed inside 0.04 m from t=192 s to the cap. Skip / lip-freeze: north 27/20, 44/51, 31/60, 104/34, 32/66 and −0.35 60/23, 55/4, 24/22, 30/98, 36/131. Totals 443 and 509. Zero-velocity freeze 0. North 85 (cap 1.68 m) and −0.35 seed 89 (cap 1.40 m) accepted no closure. Accepted closures, four. Explorer time is 3.5 s behind the pose log. The trace kept the last keyframe that scan tried, and that candidate returned no vote, so the accepted match's landmark count and residual are absent. The jump, the yaw correction, and the keyframe path are the correction that was applied, and the pose-log step matches that jump. North 83, explorer t=457.9 s, robot t=461.4 s: jump 0.36 m, yaw −0.017 rad, keyframe path 21.23 m and 10.30 m behind, error 0.50→0.23 m toward, yaw error −0.070→−0.087 rad. −0.35 seed 86, explorer t=172.0 s, robot t=175.5 s: jump 0.54 m, yaw +0.043 rad, keyframe path 4.52 m and 4.86 m behind, error 0.35→0.21 m toward, yaw error +0.010→+0.053 rad. −0.35 seed 87, explorer t=239.5 s, robot t=243.0 s: jump 0.43 m, yaw −0.049 rad, keyframe path 18.42 m and 4.89 m behind, error 0.39→0.15 m toward, yaw error +0.055→+0.006 rad. The run then stopped as above. −0.35 seed 90, explorer t=471.8 s, robot t=475.3 s: jump 0.43 m, yaw −0.034 rad, keyframe path 16.45 m and 13.41 m behind, error 0.84→0.98 m away, yaw error +0.064→+0.031 rad. Seeds 81, 82, 84, 85, 88, and 89 accepted none.
+- **Lesson:** This seed set does not repeat the 71–80 cap. Three of the four closures moved the position error toward the truth. Seed 90 moved it away.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-turn-used-the-12-pivot-gate) · [Decision](DESIGN_DECISIONS.md#2026-11-04-start-in-the-robots-component-and-read-the-pile)
+
+### 2026-11-18 — Seeds 81–90 on the commit before the sliding turn
+
+- **Commit:** logbook only. No controller change. The control is `a555394`. The paired ten is `b48f641` (`3546a1a`).
+- **Tried:** The same harness and the same seeds. Explorer, driver off, flags off, rendering off, 600 s. North 81–85, −0.35 86–90. `a555394` has no sliding-turn skip, so that counter is 0. Difference below is the `b48f641` run minus this control.
+- **Result:** All ten control runs reached the 600 s cap. Exit 0. No tip. Lowest `up_z` is 0.997. Cap pose, control north 0.55, 1.14, 1.68, 0.47, 0.56 (mean 0.88) against the fix ten's 0.67, 0.41, 0.70, 0.29, 1.68 (mean 0.75). −0.35 control 0.27, 0.43, 0.41, 1.02, 0.83 (mean 0.59) against 0.35, 0.22, 0.26, 1.40, 0.64 (mean 0.57). Per-seed cap difference +0.12, −0.73, −0.99, −0.18, +1.12 and +0.09, −0.21, −0.15, +0.38, −0.19. The −0.21 is seed 87, which stopped at 275 s on the fix ten and ran 600 s here. Of the nine pairs that both reached 600 s, the cap is lower on the fix for 5 and higher for 4. Time-average, control 0.47, 0.58, 1.08, 0.44, 0.62 (mean 0.64) and 0.29, 0.44, 0.43, 0.69, 0.17 (mean 0.40), against 0.15, 0.21, 0.38, 0.20, 0.59 (mean 0.31) and 0.26, 0.16, 0.20, 0.71, 0.68 (mean 0.40). Time-average is lower on the fix for 8 seeds and higher for seed 89 (+0.02) and seed 90 (+0.51). Seen, control 89.33, 86.36, 93.50, 90.26, 88.73 (mean 89.64) and 90.14, 94.01, 94.54, 95.36, 72.61 (mean 89.33), against 94.44, 95.27, 71.91, 84.17, 90.78 (mean 87.31) and 80.50, 78.28, 78.23, 92.41, 66.04 (mean 79.09). Seen is higher on the fix for 3 seeds. Crossing 2 of 10 on the control (north all N, −0.35 N, Y, N, N, Y) against 5 of 10. Longest still, control 29, 64, 29, 32, 37 s and 27, 18, 25, 18, 55 s, against 37, 24, 25, 32, 22 s and 20, 20, 408, 36, 31 s. North 85 on the fix ten: the error stays under 0.2 m until robot t=390 s. From t=390 s to t=397 s the command is a straight reverse and the log has twelve `pinned` lines. The shell moves at 0.10 m/s with both drive wheels on the floor and `up_z` 1.000. The estimate does not move. Error 0.18→0.96 m. The nose in that reverse sits near 1.4 m, so the 0.04 m opening-nose release has no opening. The same pin from t=465 s to t=476 s takes the error from 1.04 m to 1.76 m. Yaw error stays near 0.06 rad. No loop closure. Cap 1.68 m. The same seed on `a555394` caps at 0.56 m. −0.35 seed 89 on the fix ten: the error is 0.29 m at t=240 s. From t=336 s to t=348 s the shell's speed averages 0.014 m/s and both drive wheels report no floor contact on 79% of the samples, while the pose keeps about 0.10 m in each of those seconds. Error 0.62→1.28 m, 1.30 m at t=360 s, 1.40 m at the cap. `up_z` stays 1.000, so the pitched wheels-lifted line does not fire. The still-floor freeze, the short floor shift, one pin, and floor slip are in that stretch, and the estimate still advances about 0.09 m in those seconds. Yaw error stays inside 0.05 rad. No closure. The metres are wheel steps the picture did not reject. The same seed on `a555394` caps at 1.02 m. Seed 88's 408 s still is robot t=192 s to the cap. The planner pose moves 0.006 m net, the truth path is 0.06 m, and the error stays 0.26 m. Every phase line is command `(0, 0)`. The pile line is `src=pile_leave` with v=0, w=0, no goal and no next, 393 times. The watchdog fires `rung=drop` every 5 s through fire 84 at t=592 s. The 0.26 m was already there at t=192 s, after a trip of about 15 m that the estimate tracked. The sit adds nothing. The same seed on `a555394` sits 25 s and caps at 0.41 m.
+- **Lesson:** On these seeds the fix ten's cap is lower for 5 of the 9 full pairs and higher for 4. North 85's cap is the existing pin on a straight reverse the body actually drove. Seed 89's cap is wheel travel the picture accepted while the shell had nearly stopped. Seed 88's long still is the existing recovery sit, and the error does not grow during it.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-13-a-still-pose-is-a-sit-wheels-turning-or-not)
+
+### 2026-11-18 — The fast pin and the zero leave
+
+- **Commit:** logbook only. The pin trace was removed. No controller change.
+- **Tried:** North 85 again, to robot t=490 s, depth seed 85, north spawn, rendering off, with the raw floor and rear sums logged beside the pin's quieted sums. Seed 88 from the ten log, no rerun.
+- **Result:** The rerun had left the original path by t=100 s (2.7 m). The reverse that matches the original's 0.10 m/s, with both drive wheels on the floor, is robot t=192–196 s. Six pin windows, each 0.050 m of wheels and 0.050–0.051 m of truth. Raw floor 0.056, 0.064, 0.060, 0.057, 0.064, 0.056 m. Raw rear 0.013, 0.013, 0.017, 0.008, 0.004, 0.018 m. Quieted floor 0.003–0.013 m, under the 0.023 m limit. Command `(-1.25,-1.25)`. Floor contact on both drive wheels, 619 of 625 samples. The nose was 99 or opened 0.009 m, so the 0.04 m release did not fire (`explore.py` 1729–1731). The pin closed because a sample under 1.5 mm adds nothing (`pin.py` 68–73) and all three quieted sums are under `max(0.012, 0.45*wheel)` (`pin.py` 87–94). The same run's still windows, robot t=413–424 s, have truth 0, raw floor 0.024–0.034 m, and raw rear 0. That is the 0.03 m still-scene sum. The moving raw floor is higher. The existing 0.45 ratio of these wheels is 0.023 m, and the still-scene raw floor is already above it, so that ratio on the raw sum would release a window whose truth path is 0. The 0.30 stall ratio is lower. The raw rear on the moving windows does not clear the 0.023 m limit. Seed 88: at explorer t=161.1 s the reverse is marked dead (`explore.py` 1303–1313), and at t=168.6 s both turns have been quiet so `_block_turn_away` returns None (1334–1335). At t=186.3 s the pile_leave rung calls `_begin_pile_leave` (1426–1441), which clears the goal and the path and sets the leave latch. That is the `goal=none`, `next=none` line. The command it keeps is `_straight_leave`'s back creep. `_watch_pick` (2088–2093) accepts that creep because it translates, and arms `_watch_straight`, before the block runs. Drop calls `_watch_pick` first (2118–2122), so `_resume_after_drop` (2125) never runs and the spin does not start. The next tick `_mode_command` (878–884) sends the same creep, and `_respect_escape_block` (1395–1398) turns the dead reverse into `(0, 0)`. `_watch_straight` stays armed, the pose stays inside 0.04 m, and the watchdog clears its clock (2181) and fires drop again every 5 s, 81 times. The shell's truth path over the sit is 0.06 m. The fix, not applied: `_watch_pick` runs that straight through `_respect_escape_block` and accepts it only when the result still translates. A dead reverse then returns None, drop reaches the spin `_resume_after_drop` already has, and a straight the block still allows keeps leaving. No new constant.
+- **Lesson:** The 0.10 m/s reverse is still under the 1.5 mm quiet floor, one frame at a time. No existing ratio separates its raw floor from the 0.03 m still scene. The 408 s sit is the drop rung accepting a reverse the block has already killed, so the spin that should follow never starts.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#where-the-pose-error-comes-from) · [Decision](DESIGN_DECISIONS.md#2026-11-13-the-drop-rung-moves-and-seen-is-the-reported-score)
+
+### 2026-11-18 — A dead reverse on drop starts the spin
+
+- **Commit:** `ad5b6f2`. No new constant. The pin is unchanged.
+- **Tried:** `_watch_pick` runs the straight leave through `_respect_escape_block` and keeps it only when that result still translates. A dead reverse returns None, and drop reaches the spin `_resume_after_drop` already had. Pytest 1126 passed, 28 skipped, including the foresight test. Then the 81–90 ten, explorer, rendering off, 600 s, on this commit. Compared with `b48f641` and with `a555394` (`edd9cf6`).
+- **Result:** Seed 88 reached 600 s. Longest still 35 s against 408 s on `b48f641` and 25 s on `a555394`. Cap pose 0.18 m against 0.26 m and 0.41 m. Time-average 0.14 m against 0.20 m and 0.43 m. Seen 92.29 against 78.23 and 94.54. Crossing Y against N and N. No tip. The whole ten, cap pose, this commit then `b48f641` then `a555394`: north 1.05/0.67/0.55, 0.17/0.41/1.14, 0.39/0.70/1.68, 0.98/0.29/0.47, 0.77/1.68/0.56 (means 0.67, 0.75, 0.88). −0.35 0.49/0.35/0.27, 0.73/0.22/0.43, 0.18/0.26/0.41, 1.10/1.40/1.02, 0.87/0.64/0.83 (means 0.68, 0.57, 0.59). The `b48f641` 0.22 is seed 87's 275 s stop. Every run here reached 600 s. Time-average north 0.40/0.15/0.47, 0.12/0.21/0.58, 0.33/0.38/1.08, 0.24/0.20/0.44, 0.20/0.59/0.62 (means 0.26, 0.31, 0.64). −0.35 0.50/0.26/0.29, 0.44/0.16/0.44, 0.14/0.20/0.43, 0.51/0.71/0.69, 0.42/0.68/0.17 (means 0.40, 0.40, 0.40). Seen north 94.90/94.44/89.33, 86.52/95.27/86.36, 85.69/71.91/93.50, 94.70/84.17/90.26, 70.14/90.78/88.73 (means 86.39, 87.31, 89.64). −0.35 90.87/80.50/90.14, 95.31/78.28/94.01, 92.29/78.23/94.54, 90.32/92.41/95.36, 97.71/66.04/72.61 (means 93.30, 79.09, 89.33). Crossing, this / `b48f641` / `a555394`: north YYN, NYN, NNN, YYN, NNN and −0.35 NNN, NYY, YNN, NNN, YYY. Totals 4, 5, and 2 of 10. Longest still 29/37/29, 19/24/64, 22/25/29, 31/31/31, 32/21/37 s and 51/20/27, 18/20/18, 35/408/25, 43/36/18, 48/31/55 s. No tip. Lowest `up_z` is 0.997.
+- **Lesson:** Drop no longer sits on the reverse the block has already killed. Seed 88's 408 s still is 35 s. The ten's cap means are 0.67 m and 0.68 m.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-still-pose-is-a-sit-even-when-the-wheels-turn) · [Decision](DESIGN_DECISIONS.md#2026-11-13-the-drop-rung-moves-and-seen-is-the-reported-score)
+
+### 2026-11-19 — A straight doorway command was zeroed
+
+- **Commit:** `7c24c91` (this branch `7a80219`). No new constant.
+- **Symptom:** `stuck, no motion for 2 s` in a doorway the nose still sees open. Command is `(0, 0)`. Pose error stays small.
+- **Found:** Hand drive, `go_to 0.4 2.7`. Estimate (0.25, 1.77), nose 1.37 m. The decision log had cruise, then zeros.
+- **Cause:** `choose_motion` returned a straight command. `motion_blocked` then applied the turn rectangle, the rectangle clipped the jamb, and the driver sent `(0, 0)`.
+- **Fix:** A straight command `map_veto` already accepted is not run through the turn rectangle again. The 0.10 m side tax stays.
+- **Test:** `test_a_straight_door_the_rectangle_clips_still_drives`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-straight-doorway-command-was-zeroed) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-straight-doorway-command-stays)
+
+### 2026-11-19 — A back-off is kept for the 2 s clock
+
+- **Commit:** `6562ac6` (this branch `e504ada`). No new constant.
+- **Symptom:** Creep `(1.5, 1.5)` and straight reverse `(-1.25, -1.25)` swap every 16 ms. The encoders rock and the shell stays.
+- **Found:** The same doorway, after the rectangle fix, on `go_to 0.6 2.15`.
+- **Cause:** No memory. A side gap under 0.10 m scores reverse, the rectangle vetoes the yaw-away reverse, and the next frame scores creep.
+- **Fix:** The first reverse is kept until `STALL_WINDOW_S` (2 s). The next approach faces the opening's centre, or steps off the failed heading by the existing 12°.
+- **Test:** `test_a_door_back_off_is_not_redecided_every_frame`. The 0.04 m press is still `test_a_side_press_backs_off_the_jamb_instead_of_driving_along_it`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-back-off-is-kept-for-the-2-s-clock) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-back-off-is-kept-for-the-2-s-clock)
+
+### 2026-11-19 — A raw floor sum of 0.045 m opens the pin
+
+- **Commit:** `a23b846` (this branch `ffc4c7e`). One threshold, `RAW_FLOOR_M` = 0.045 m.
+- **Symptom:** `pinned, depth floor and visual still`. Truth moves. The estimate does not. Pose error grows with no yaw error.
+- **Found:** After the back-off, `go_to 0.6 2.15`. Explorer t=37.1 s. From t=37 s to t=48 s the truth path is 0.74 m and the estimate stays near (0.42, 2.38). Error 0.021 → 0.171.
+- **Cause:** Samples under 1.5 mm are zeroed, so a slow real move disappears. Still windows sum 0.024–0.034 m of raw floor. A real slow reverse sums 0.056–0.064 m. The 0.45 ratio of the 0.05 m wheel window is 0.023 m, and the still cloud is already above it.
+- **Fix:** A raw floor sum at or above 0.045 m, the midpoint of those two clouds, is not a pin. Each cloud keeps 0.011 m. The 1.5 mm quiet floor stays.
+- **Test:** `test_the_doorway_crossing_raw_floor_is_not_pinned` and `test_seed_74_slow_reverse_is_not_pinned`. A still sum still pins in `test_a_still_raw_floor_sum_stays_pinned`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-raw-floor-sum-of-0045-m-opens-the-pin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-raw-floor-sum-of-0045-m-opens-the-pin)
+
+### 2026-11-19 — A blank floor yields when the picture moved
+
+- **Commit:** `73b14c6` (this branch `96bc030`). No new threshold.
+- **Symptom:** `floor blank, wheel translation held std=0.1`. x,y rewind to the anchor after the wheels claim 0.02 m. The shell is moving.
+- **Found:** The drive after the pin cut. Explorer t=37.2 s, std 0.1. Error 0.007 → 0.123. Truth x 3.663, through the shared wall.
+- **Cause:** A floor image with std under 2 was treated as proof the wheels lied. The doorway picture had moved and the corners had not fitted, so visual odometry had no translation to offer, and the hold still rewound.
+- **Fix:** The step stays when this frame's forward picture changed: a tracked translation, or reason `moved`, `few_tracks`, `no_fit`, or `too_large`. A still picture, or no picture, still rewinds. Fusion off still rewinds.
+- **Test:** `test_a_blank_floor_yields_when_the_picture_moves_without_a_fit`. A still picture still rewinds in the same test. The island hold is `test_a_flat_floor_image_does_not_confirm_wheel_travel`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-blank-floor-yields-when-the-picture-moved) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blank-floor-yields-when-the-picture-moved)
+
+### 2026-11-19 — A new waypoint starts its own stuck window
+
+- **Commit:** `97229ea` (this branch `e4d0d3e`). No new threshold.
+- **Symptom:** The next `go_to` stops in the same tick with the previous `imu_stuck` or `camera_stuck`. Travel on the new command is 0.
+- **Found:** After `imu_stuck` at the bedroom door, `go_to 0.3 3.3` died at t=34.016 s, 16 ms later, same pose.
+- **Cause:** The 2.5 s camera clock and the IMU samples belong to the command that filled them. `arm` did not clear them, so `_stuck` was already true.
+- **Fix:** `arm` clears `_view_still_from` and the IMU samples. A window that fills again still stops the command.
+- **Test:** `test_a_new_waypoint_does_not_inherit_the_stuck_window`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-new-waypoint-starts-its-own-stuck-window) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-new-waypoint-starts-its-own-stuck-window)
+
+### 2026-11-19 — A blind forward step stays dropped
+
+- **Commit:** `4cb96aa` reverts `cd59b13` (this branch `2f8489d` reverts `16fa742`). No new threshold.
+- **Symptom:** Pose error grows while the shell is sitting and the nose is blind. Wheels claim a step the body did not take.
+- **Found:** `cd59b13` put a blind forward step back when the floor peak matched the wheels. At the bedroom door the error went 0.053 → 0.171 m while truth x stayed 3.74.
+- **Cause:** A floor peak that matches the wheels is not proof the shell moved. A blind forward command is the wedge. Restoring it walked a still shell.
+- **Fix:** Reverted. A forward command with a blind nose still drops the step.
+- **Test:** `test_reverse_out_of_a_blind_wall_moves_the_pose`. The added test that required the restore was removed with it.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-lap-stopped-at-the-door) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-blind-forward-step-stays-dropped)
+
+### 2026-11-19 — A straight slide whose floor followed is not frozen
+
+- **Commit:** `e050d1d`. No new threshold.
+- **Symptom:** `floor still, translation frozen`. The wheels and the shell move together. The estimate does not. Pose error grows. Not `pinned`. Not `floor blank`.
+- **Found:** Lap toward the bath walkway. Explorer t=50.8 s. From t=49.3 s to t=50.3 s the wheels and the truth both moved about 0.07 m and the pose stayed. Error on that step ended at 0.248 m.
+- **Cause:** The short floor steps were called still. The sliding-turn release only runs after 0.12 rad of yaw, and only then asks whether the floor scene followed the wheels. This stretch was straighter than that, so a scene that had already matched the wheels still rewound. Steps under 2 px were also left out of `moved_px`, so a creep of one pixel a window never left the still band.
+- **Fix:** A floor scene that matches the wheels is not rewound, on a straight line as well as a turn. The 0.12 rad gate stays for a pure pivot. A still step's pixels are added into `moved_px`, and the existing 2 px sum still means still. A scene that did not follow still rewinds.
+- **Test:** `test_a_straight_slide_whose_floor_followed_is_not_frozen`. The lip stays `test_a_turning_lip_with_a_still_floor_still_freezes`. The sweeping view stays `test_a_still_floor_freezes_translation_while_the_view_turns`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-straight-slide-whose-floor-followed-is-not-frozen) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-straight-slide-whose-floor-followed-is-not-frozen)
+
+### 2026-11-19 — The south jamb was the waypoint
+
+- **Commit:** log only. No controller change.
+- **Tried:** The stop at truth (3.745, 4.943) against the shared wall. Door G's opening is world y 4.72–5.54, center (3.71, 5.13), odometry (0.43, 2.39). The lap goals were odometry x 0.25–0.28.
+- **Result:** A* followed that line. The same map had a free path at x 0.45–0.55. A center-line run entered the bedroom, pose error 0.061 m then 0.063 m. The next step, toward the bath walkway, ended at 0.248 m after `floor still, translation frozen` at t=50.8 s. The drive stopped. No bathroom, hallway, or return.
+- **Lesson:** The wall hit was the waypoint, on the south jamb. The map and the planner were not the cause.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-south-jamb-was-the-waypoint) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-south-jamb-was-the-waypoint)
+
+### 2026-11-19 — A doorway retry starts from the backed-up pose
+
+- **Commit:** `0b55545`. No new threshold.
+- **Symptom:** `stopped_short`, 0.56 m, on a mapped bathroom door. The path was A* through the center. The shell had backed out and was closing again.
+- **Found:** Door H, hand drive. At t=93.5 s the command was `reverse_left` on the door plane. The 2 s reverse carried the shell back. By t=97.5 s it was moving toward the opening again and the stall fired. The bar was still the closest point from before the reverse.
+- **Cause:** When the reverse ends, closer means beating that old point by 4 cm. The return had not passed it when the 2 s clock ended.
+- **Fix:** The reverse was commanded, so the next try is measured from the backed-up pose. The same 4 cm.
+- **Test:** `test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose`. The 2 s hold stays `test_a_door_back_off_is_not_redecided_every_frame`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-doorway-retry-starts-from-the-backed-up-pose) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-doorway-retry-starts-from-the-backed-up-pose)
+
+### 2026-11-19 — The walkway was the center line
+
+- **Commit:** log only. No controller change for the aim.
+- **Tried:** The stall at truth (1.009, 4.858). The goal was an unknown cell, so the path was a straight aim. That aim is the existing rule, `test_unknown_goal_is_a_straight_aim`.
+- **Result:** A turn at the mouth mapped the south cells. A* then followed odometry y 4.88 through the opening. The shell entered the bathroom. On that crossing the pose crept and snapped back to the same x from t=54.8 s to t=55.5 s. Pose error went from 0.027 m to 0.131 m. No new freeze line. The next leg stopped `imu_stuck` at truth (1.311, 3.430), pose error 0.116 m, while the shell was still moving. No wall contact. `up_z` 1.000. The hallway and the return were not driven.
+- **Lesson:** Look before a goal in unknown space. The straight aim is not the bug. The pose snap on the crossing is the next stop.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-was-the-center-line) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-was-the-center-line)
+
+### 2026-11-19 — A cancelling yaw command is not a stuck spin
+
+- **Commit:** `f187036`. No new threshold.
+- **Symptom:** `imu_stuck` while the shell is driving and nothing is touching it.
+- **Found:** Bathroom, hand drive, t=64.2 s. Truth moved 0.67 m from t=59 s to t=64.5 s. No wall contact. `up_z` 1.000. Pose error 0.116 m. The command was 6 cm from the goal.
+- **Cause:** The yaw command flipped sign every step, 93 flips in 2.1 s. The net wheel yaw was −0.011 rad/s and the gyro yaw did not move. The check averaged the absolute rate, so the cancel looked like a spin. Earlier `imu_stuck` lines are not this. Rounds 6–8 define the check. `97229ea` is the next command inheriting a window after the shell was against the bedroom door.
+- **Fix:** The yaw test uses the net rate. A wedge that turns one way still counts. A left step and a right step that cancel do not.
+- **Test:** `test_a_yaw_command_that_cancels_is_not_imu_stuck`. The one-way wedge stays `test_wheels_turn_and_the_gyro_does_not_so_the_robot_reverses`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-cancelling-yaw-command-is-not-a-stuck-spin) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-cancelling-yaw-command-is-not-a-stuck-spin)
+
+### 2026-11-19 — The walkway snap made the 0.13 m
+
+- **Commit:** log only. No controller change.
+- **Tried:** Whether the creep-and-snap at t=54.8–55.5 s is the 0.13 m pose error.
+- **Result:** At t=53.4 s the error was 0.027 m. At t=54.8 s it was 0.045 m and the pose was still tracking. Over the next 0.7 s the truth moved 0.091 m in odometry x and the pose went backward 0.013 m. The error went to 0.137 m and stayed there. The bathroom reading of 0.13 m is that gap. No new freeze line for the snap.
+- **Open:** Left open. Not fixed.
+- **Lesson:** The snap is the error. It is not what fired `imu_stuck`.
+
+### 2026-11-19 — A goal inside the lookahead is the target
+
+- **Commit:** `a5bc64a`. No new threshold. The existing 0.25 m lookahead is the cut.
+- **Symptom:** `stopped_short`, 0.30 m, on a goal the map calls free. No contact. The shell is still moving.
+- **Found:** Kitchen, hand drive. The goal sat beside the shell. In the body frame its forward offset was 0. Pose error on that stop was 0.132 m. The same miss repeated on the way home, 0.30 m then 0.14 m, with the command still straight while the goal was abeam.
+- **Cause:** Pure pursuit steers at a point 0.25 m along the polyline. That point can stay ahead after the goal itself is beside the shell, so the shell drives past a free goal and the 2 s stall ends the command.
+- **Fix:** Once the goal is inside that lookahead, the goal is the target. The existing in-front test then turns to it.
+- **Test:** `test_a_goal_beside_the_shell_is_not_driven_past`. A far goal stays `test_pure_pursuit_turns_left_for_a_left_goal`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-goal-inside-the-lookahead-is-the-target) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-goal-inside-the-lookahead-is-the-target)
+
+### 2026-11-19 — Home
+
+- **Commit:** log only. The lookahead change is `a5bc64a`. The walkway snap stays open.
+- **Result:** Living start pose error 0.005 m. Bedroom 0.062 m. Bathroom 0.106 m. Hall 0.123 m. Kitchen 0.117 m. Home, truth (5.915, 4.511), pose error 0.223 m. `up_z` 1.000. No contact on the return. Movie `docs/drives/2026-11-19-hand/lap.mp4`, `RBM_MOVIE=1`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m)
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-walkway-snap-made-the-013-m) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-walkway-snap-made-the-013-m)
+
+### 2026-11-19 — The stop prints the frontier it would pick
+
+- **Commit:** `ee93f04`. No new threshold. The walkway snap stays open.
+- **Tried:** At each waypoint stop, `select_goal` with the same arguments `_plan` uses. The goal is not taken. The path is drawn on the stop's map. `MAPPING frontier proposal` prints the point.
+- **Result:** One living-room session. Seen 0.15, 67.53, 76.48, 76.57, 76.91, 76.92, 76.93. Final pose error 0.185 m. Bath not entered. Pantry and storage not opened. The morning lap's map is not in the repo, so its seen % was not scored. No new bug. No movie.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-stop-prints-the-frontier-it-would-pick) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-stop-prints-the-frontier-it-would-pick)
+
+### 2026-11-19 — A corner back-off reversed its own turn
+
+- **Commit:** `194b88f`. No new threshold. The 2 s reverse clock stays.
+- **Symptom:** `stopped_short` 0.60 m, then 1.63 m, then `stuck, no motion for 2 s`. Pose error stayed under 0.17 m. The shell was in the bedroom corner by door G and did not leave.
+- **Found:** Same seed, the frontier-assist log. From t=67 s to t=69.7 s the yaw command flipped 139 times, full spin one way and a short spin the other. The wheels did not build speed. Earlier, the bedroom goal cell was occupied and the path was a straight aim into that wall, so creep and the 2 s reverse took turns.
+- **Cause:** The heading after a back-off is measured again every frame. A gap that appears and disappears reverses the spin, and the two commands cancel. A mapped wall was also aimed at as if it were unknown.
+- **Fix:** The heading is chosen once, when the reverse ends. Yaw toward that heading keeps the 2 s clock. A cell marked occupied is not a straight aim; the path stops on the last free cell, and that is `stopped_short` if the command is still outside 5 cm.
+- **Test:** `test_a_reaim_heading_does_not_flip_when_the_gap_flickers`. `test_a_goal_on_a_mapped_wall_stops_short_instead_of_driving_into_it`. `test_a_mapped_wall_is_not_a_straight_aim`.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#a-corner-back-off-reversed-its-own-turn) · [Decision](DESIGN_DECISIONS.md#2026-11-19-a-corner-back-off-reversed-its-own-turn)
+
+### 2026-11-19 — The bedroom-door hold froze a moving shell
+
+- **Commit:** log only. No controller change.
+- **Tried:** The pose error 0.030 m at t=33.0 s and 0.105 m at t=34.0 s, on the frontier-assist bedroom crossing.
+- **Result:** From t=33.0 s to t=33.4 s the estimate stayed at (0.368, 2.353) and the truth moved 0.066 m. Error 0.030 → 0.095, then both moved and the error stayed 0.105. The lines are `floor blank, wheel translation held` at explorer t=29.4, 29.6, and 29.8 s, std 0.2–0.6. The yield did not run, so the forward picture did not count as moved.
+- **Open:** A release of that still picture would be a new rule. Not applied. Left open.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-bedroom-door-hold-froze-a-moving-shell) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-bedroom-door-hold-froze-a-moving-shell)
+
+### 2026-11-19 — The door-G right turn hits the south jamb
+
+- **Commit:** log only. No controller change.
+- **Tried:** The `map:corner` veto on every forward right turn at door G, the command that then chose `reverse_right`.
+- **Found:** Stop map and the color frame. The cells the rectangle enters are world (3.67, 4.68) and (3.67, 4.73). The opening is y 4.72–5.54, face x 3.76. That is the south jamb, one cell on the opening's south edge. Occupied cells on the living side of the opening: 0. The frame shows that wall on the left and floor in the middle. `spin_left` does not clip.
+- **Cause:** The veto matches the jamb. `reverse_right` wins because the desired yaw is about −1.1 and the open-nose reverse penalty is 0.50, which is less than the yaw term of a straight command.
+- **Not applied:** Raise that 0.50. A value of 1.5 would have picked the legal straight creep at this pose. That is a new weight.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-door-g-right-turn-hits-the-south-jamb) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-door-g-right-turn-hits-the-south-jamb)
+
+### 2026-11-19 — An open nose reverses only when a side is pressed
+
+- **Old behavior:** Every open-nose reverse added 0.50. At door G the desired yaw was about −1.1, so that 0.50 lost to the straight command's yaw term and `reverse_right` won.
+- **Why:** Dan approved 1.5 only when neither side is inside `TOO_CLOSE_M` (0.10 m), the existing side-press distance. A side inside that distance still adds 0.50, so the jamb press still backs off. No new number. An unconditional 1.5 failed the three jamb back-off tests and was not kept.
+- **Test:** `test_door_g_open_nose_does_not_reverse_into_the_south_jamb`. The door-G pose with clear sides goes forward. The same pose with a side at 0.08 m still reverses. Full suite: 1146 passed, 28 skipped (Postgres down).
+- **Revert:** `git revert 5118627`. That puts 0.50 back on every open-nose reverse.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#an-open-nose-reverses-only-when-a-side-is-pressed) · [Decision](DESIGN_DECISIONS.md#2026-11-19-an-open-nose-reverses-only-when-a-side-is-pressed)
+
+### 2026-11-19 — The door-G creep meets the north jamb
+
+- **Commit:** log only. No controller change after `5118627`.
+- **Tried:** The same door, after the side-clear penalty. The command at the opening was a straight creep, nose 1.8 m, wheels `(1.50, 1.50)`.
+- **Result:** Truth stayed at (3.89, 5.37). The estimate walked to (3.42, 5.43), error 0.47 m. Caster and front-right contact at t=93.7 s. `floor slip, wheel motion rejected`, then `imu_stuck`. Bedroom visited 0.2. Hall, bath, and closet were not entered.
+- **Open:** A straight command is not rechecked with the turn rectangle. Changing that, or the `imu_stuck` numbers, would be a new rule. Not applied.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-door-g-creep-meets-the-north-jamb) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-door-g-creep-meets-the-north-jamb)
+
+### 2026-11-19 — The side-clear penalty is reverted
+
+- **Tried:** `5118627` raised the open-nose reverse penalty to 1.5 only when neither side is inside `TOO_CLOSE_M` (0.10 m). A pressed side stayed 0.50.
+- **Result:** Door G got worse. Stop 8 was a straight creep on the north jamb. Truth stayed at (3.89, 5.37). The estimate walked to (3.42, 5.43), error 0.47 m. This commit reverts `5118627`, so the penalty is 0.50 again.
+- **Open:** Rechecking a straight command with the turn rectangle. Not applied.
+- **Notes:** [Lessons](LESSONS_LEARNED.md#the-side-clear-penalty-is-reverted) · [Decision](DESIGN_DECISIONS.md#2026-11-19-the-side-clear-penalty-is-reverted)

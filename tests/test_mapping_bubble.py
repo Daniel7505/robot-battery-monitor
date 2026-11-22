@@ -66,6 +66,56 @@ def test_three_still_sensors_are_a_pin_and_one_missing_is_not():
     assert not short_a_sensor.pinned()
 
 
+def _quiet_window(floor_raw_m: float, *, step_m: float = 0.0008):
+    """One wheel window. Every floor sample is under the 1.5 mm quiet floor.
+
+    ``step_m`` is seed 74's wheel step (0.8 mm). Depth and visual stay
+    at 0, which is what let the quieted sums call the window still.
+    """
+    from src.mapping.pin import PinWatch
+
+    pin = PinWatch()
+    n = math.ceil(pin.WHEEL_M / step_m)
+    floor = floor_raw_m / n
+    assert floor < pin.QUIET_M
+    for _ in range(n):
+        pin.add(step_m, 0.0, floor, 0.0)
+    return pin
+
+
+def test_a_still_raw_floor_sum_stays_pinned():
+    """The top of the logged still cloud, 0.034 m, is under the 0.045 cut."""
+    from src.mapping.pin import PinWatch
+
+    pin = _quiet_window(0.034)
+    assert pin.floor_m == 0.0
+    assert pin.floor_raw_m == pytest.approx(0.034, abs=1e-9)
+    assert pin.pinned()
+    assert PinWatch.RAW_FLOOR_M == pytest.approx((0.034 + 0.056) / 2.0)
+
+
+def test_seed_74_slow_reverse_is_not_pinned():
+    """Seed 74's reverse was 0.8 mm wheel steps, all under the quiet floor.
+
+    The raw floor that marks that class of reverse, measured on the same
+    pin, is 0.056–0.064 m. The bottom of that band is not a pin.
+    """
+    pin = _quiet_window(0.056)
+    assert pin.floor_m == 0.0
+    assert pin.ready()
+    assert not pin.pinned()
+
+
+def test_the_doorway_crossing_raw_floor_is_not_pinned():
+    """t=37–48 s moved 0.74 m in truth while the quieted window stayed still.
+
+    A window in the moving band (0.060 m of raw floor) is that case.
+    """
+    pin = _quiet_window(0.060)
+    assert pin.floor_m < pin.FLOOR_M
+    assert not pin.pinned()
+
+
 def test_a_slow_command_the_hubs_ignore_is_a_stall():
     """Backup speed is about 1.5 rad/s. One 8 ms step is under the old 0.02 rad floor."""
     from src.mapping.explore import Explorer
@@ -201,6 +251,31 @@ def test_a_yaw_on_a_still_floor_is_still_a_stall():
     assert saw
     assert abs(odom.x_m) < 0.008
     assert fuse.floor_updates == 0
+
+
+def test_a_yaw_rejected_floor_window_still_keeps_its_scene():
+    """The correction is refused. The metres stay for the rewind."""
+    image = np.random.default_rng(4).normal(40.0, 8.0, size=(32, 32))
+    odom = WheelGyroOdometry()
+    fuse = MotionFusion(visual=False, floor=True, rng=np.random.default_rng(1))
+    fuse.floor.noise_px = 0.0
+    assert fuse.observe(odom, ds_raw_m=0.0, ds_applied_m=0.0, dyaw_rad=0.0, floor=image) == ""
+    note = ""
+    for i in range(1, 6):
+        odom.x_m += 0.005
+        noted = fuse.observe(
+            odom,
+            ds_raw_m=0.005,
+            ds_applied_m=0.005,
+            dyaw_rad=0.03,
+            floor=np.roll(image, i * 4, axis=0),
+        )
+        if noted:
+            note = noted
+    assert note != "slip"
+    assert fuse.floor_updates == 0
+    assert fuse.floor_scene_m > 0.01
+    assert fuse.floor_scene_raw_m > 0.012
 
 
 def test_a_moving_floor_is_not_a_stall_when_the_metres_under_read():

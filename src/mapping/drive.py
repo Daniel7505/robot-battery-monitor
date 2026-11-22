@@ -63,7 +63,13 @@ def pure_pursuit(
     x, y, yaw = pose
     # Follow the polyline. A straight look-ahead would cut the corner
     # and drive the body into a wall the grid path had already avoided.
-    target = pursuit_target(pose, path_xy, lookahead_m=lookahead_m)
+    # Once the goal itself is inside that look-ahead, the polyline's next
+    # point can still lie ahead and the shell drives past a free goal.
+    goal = path_xy[-1]
+    if math.hypot(goal[0] - x, goal[1] - y) <= lookahead_m:
+        target = goal
+    else:
+        target = pursuit_target(pose, path_xy, lookahead_m=lookahead_m)
     if target is None:
         return 0.0, 0.0, True
     dx = target[0] - x

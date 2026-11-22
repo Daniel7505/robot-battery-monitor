@@ -700,7 +700,9 @@ class Explorer:
         dyaw = self.odometry.yaw_unwrapped_rad - yaw_before
         self._note_imu(dt, yaw_rate_rad_s, accel_m_s2)
         self._mark_visited()
-        applied = 0.0 if drop or spin_cmd else ds
+        # A held step did not move the pose. Booking the raw wheel metres
+        # told the next floor window they were already in.
+        applied = 0.0 if drop or spin_cmd or held_trans else ds
         self._path_m += abs(applied)
         if self._blind_back:
             # Pose jumps from a match are not travel. Only integrated
@@ -1735,6 +1737,21 @@ class Explorer:
             return False
         return True
 
+    def _forward_view_moved(self) -> bool:
+        """The forward picture changed. A still picture, or no picture, did not.
+
+        A tracked translation is the move. So is a picture that changed
+        and could not be fit: a blank floor is not a vote, and that
+        frame does not say the body stayed. A still sample is the
+        island face and the stuck reverse. Fusion off leaves this
+        camera out, and the flat floor still holds those tests.
+        """
+        if not self.fusion_enabled or self._fusion.scene_visual_still:
+            return False
+        if self._fusion.scene_visual_m is not None:
+            return True
+        return self._fusion.scene_visual_reason in ("moved", "few_tracks", "no_fit", "too_large")
+
     def _arm_zupt_anchor(self, depth, floor, rgb, left_rad: float, right_rad: float) -> None:
         held_depth = None
         if depth is None and self._zupt_anchor is not None:
@@ -1756,7 +1773,25 @@ class Explorer:
             "left_spin": False,
             "still_hits": 0,
             "misses": 0,
+            "scene_m": float(self._fusion.floor_scene_m),
+            "scene_raw_m": float(self._fusion.floor_scene_raw_m),
         }
+
+    def _floor_followed_the_wheels(self, anchor: dict) -> bool:
+        """The floor picture slid with the hubs since this anchor.
+
+        The same 1.2 cm and 30% the stall already uses. A fast yaw does
+        not erase the window: the correction gate can refuse it and the
+        sum here still counts. An open window counts only after a short
+        step has left the still band, so a lip's noise does not.
+        """
+        fusion = self._fusion
+        scene = float(fusion.floor_scene_m) - float(anchor.get("scene_m", 0.0))
+        raw = float(fusion.floor_scene_raw_m) - float(anchor.get("scene_raw_m", 0.0))
+        if fusion._floor_track.motion_samples > 0:
+            scene += math.hypot(fusion._floor_dx, fusion._floor_dy)
+            raw += abs(fusion._floor.raw_m)
+        return raw > 0.012 and scene >= 0.30 * raw
 
     def _zupt_travel(self, left_rad: float, right_rad: float) -> float:
         """Wheel travel since the previous floor step, in metres.
@@ -1835,6 +1870,21 @@ class Explorer:
             dl_b = float(left_rad) - float(anchor["left"])
             dr_b = float(right_rad) - float(anchor["right"])
             claimed_b = abs(0.5 * (dl_b + dr_b)) * self.odometry.radius_m
+            # A blank floor has nothing to track. It is not evidence the
+            # wheels lied. A forward picture that changed is the move,
+            # whether or not the corners fitted, and the flat picture is
+            # dropped. No reading, or a still picture, is the island face
+            # and the stuck reverse. Those keep the hold. The short-shift
+            # case is a picture that did move, and it still rewinds.
+            if (
+                claimed_b >= 0.02
+                and status == "blank"
+                and flat
+                and self._forward_view_moved()
+            ):
+                self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
+                self._floor_track.reset()
+                return
             if claimed_b >= 0.02:
                 self.odometry.x_m = float(anchor["x"])
                 self.odometry.y_m = float(anchor["y"])
@@ -1864,12 +1914,23 @@ class Explorer:
         # leaves that picture still. Rewinding the gyro to the anchor
         # deleted a pivot in one sample (the door heading jumped 29°).
         # Forward wheel travel with that same still picture is the lip:
-        # the shell is yawing and not driving. A pure pivot is not.
+        # the shell is yawing and not driving. A pure pivot claims under
+        # 2 cm and is not the lip. A pursuit arc claims more, and the
+        # short steps close on the yaw, so they call the arc still. The
+        # floor windows still slid with the hubs, including the ones over
+        # 0.08 rad that are not written back as a correction. A lip's
+        # picture does not slide. The 2 cm test stays for that picture.
         yaw_moved = abs(self.odometry.yaw_unwrapped_rad - float(anchor["yaw"]))
         dl_now = float(left_rad) - float(anchor["left"])
         dr_now = float(right_rad) - float(anchor["right"])
         claimed_now = abs(0.5 * (dl_now + dr_now)) * self.odometry.radius_m
-        if yaw_moved >= 0.12 and claimed_now < 0.02:
+        # A floor scene that slid with the wheels is the drive, on a
+        # straight line as well as a turn. The 0.12 rad gate stays for a
+        # pure pivot, whose picture is still because the camera is on
+        # the axis. A lip's picture does not slide, so it still rewinds.
+        if self._floor_followed_the_wheels(anchor) or (
+            yaw_moved >= 0.12 and claimed_now < 0.02
+        ):
             self._arm_zupt_anchor(depth, floor, rgb, left_rad, right_rad)
             self._floor_track.reset()
             return
@@ -2056,11 +2117,14 @@ class Explorer:
 
         A pivot leaves the pose inside 0.04 m, so the ladder would fire
         again on the same spot. The straight leave already chooses the
-        side that is not blocked.
+        side that is not blocked. A reverse the escape block has already
+        killed is not that side, and drop then reaches the spin.
         """
         if self._command_translates(proposed):
             return proposed
         straight = self._straight_leave(pose)
+        if straight is not None and not self._simple_recovery():
+            straight = self._respect_escape_block(straight)
         if self._command_translates(straight):
             self._arm_watch_straight()
             return straight
@@ -2402,6 +2466,16 @@ class Explorer:
             return False
         return self.t_s - self._view_still_from >= _VIEW_STUCK_S
 
+    def _fresh_stuck_window(self) -> None:
+        """A new waypoint starts its own stuck window.
+
+        The camera clock and the IMU samples belong to the command
+        that filled them. Keeping them made the next aim stop in the
+        same tick, before the wheels turned.
+        """
+        self._view_still_from = self.t_s
+        self._imu_samples.clear()
+
     def _camera_stuck(self) -> bool:
         """Motion is commanded and this robot's depth picture is not changing.
 
@@ -2446,8 +2520,12 @@ class Explorer:
         span = samples[-1][0] - samples[0][0]
         if span < _IMU_STUCK_S - 0.3:
             return False
-        wheel_w = sum(abs(row[1]) for row in samples) / len(samples)
-        gyro_w = sum(abs(row[2]) for row in samples) / len(samples)
+        # Net yaw, not the average of the absolute value. A left and a
+        # right command on successive steps cancel, and the gyro is
+        # right to stay still. Averaging the magnitudes called that
+        # cancel a spin. A wedge that turns one way still counts.
+        wheel_w = abs(sum(row[1] for row in samples) / len(samples))
+        gyro_w = abs(sum(row[2] for row in samples) / len(samples))
         if wheel_w >= _IMU_WHEEL_W_MIN and gyro_w < _IMU_GYRO_W_MAX:
             return True
         if any(row[4] is None for row in samples):
@@ -3838,6 +3916,41 @@ class Explorer:
                 f"refuse ({float(xy[0]):.2f},{float(xy[1]):.2f}) "
                 f"{item.get('reason')} clear={item.get('clear_m')}m"
             )
+
+    def frontier_proposal(self) -> dict | None:
+        """The frontier ``_plan`` would select. The goal is not taken.
+
+        Same ``select_goal`` arguments. A waypoint stop asks for this and
+        keeps driving the outside command.
+        """
+        x, y, yaw = self.plan_pose()
+        rooms = segment_map(self.grid.labels(), self.grid.res)
+        report: dict = {}
+        banned = set(self._ban_set()) | self._held_cells()
+        aim = None
+        if not self._simple_recovery() and self._narrow_gap((x, y, yaw)):
+            aim = CREEP_CLEAR_M
+        chosen = select_goal(
+            self.grid,
+            (x, y),
+            radius_m=ROBOT_RADIUS_M,
+            banned=banned,
+            avoid=self._avoid_now(),
+            rooms=rooms,
+            heading_xy=(math.cos(yaw), math.sin(yaw)),
+            report=report,
+            prefer_near=self._prefer_near,
+            visited=self.visited,
+            turn_aim_m=aim,
+            zones=self._failure_zone_args(),
+        )
+        if chosen is None:
+            return None
+        goal, path = chosen
+        return {
+            "goal_xy_m": [round(float(goal[0]), 4), round(float(goal[1]), 4)],
+            "path_xy_m": [[round(float(px), 4), round(float(py), 4)] for px, py in path],
+        }
 
     def _plan(self, depth: int = 0) -> None:
         self._replan_at = self.t_s + 4.0

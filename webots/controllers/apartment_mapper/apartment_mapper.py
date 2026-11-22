@@ -13,7 +13,8 @@ replace the stacked recoveries. The default is the stacked behavior.
 veto use one rectangle. Goal scores are unchanged.
 ``RBM_DRIVER`` is off unless set. On, an outside command file names one
 waypoint in the robot's own odometry frame. At each stop this process
-writes a snapshot and does not step again until the next command file
+writes a snapshot, including the frontier ``select_goal`` would pick and
+the path to it, and does not step again until the next command file
 appears. The simulator pose is not in that snapshot.
 
 Stop condition: no reachable frontier longer than 0.3 m, or
@@ -35,7 +36,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.mapping.body import FLOOR_CAM, OAK_DEPTH
-from src.mapping.brain_port import wait_for_command, write_stop
+from src.mapping.brain_port import format_frontier, wait_for_command, write_stop
 from src.mapping.bubble import _CORNERS, _FRONT, _LEFT, _REAR, _RIGHT
 from src.mapping.driver import WaypointDriver
 from src.mapping.explore import Explorer
@@ -274,6 +275,8 @@ def _driver_shots(rgb, rgb_w, rgb_h, floor_cam, floor_w, floor_h, rear, rear_w, 
 
 def _write_driver_stop(folder, index, driver, explorer, now, shots) -> None:
     report = driver.report(explorer)
+    proposal = explorer.frontier_proposal()
+    report["frontier"] = proposal
     pose = report["pose"]
     print(
         f"MAPPING driver {report['status']} t={now:.1f}s "
@@ -284,6 +287,7 @@ def _write_driver_stop(folder, index, driver, explorer, now, shots) -> None:
         f"battery={report['battery']['pct']:.1f}%",
         flush=True,
     )
+    print(f"MAPPING frontier proposal {format_frontier(proposal)}", flush=True)
     write_stop(folder, index, report, now, shots, explorer.grid.labels(), explorer.grid.meta())
 
 

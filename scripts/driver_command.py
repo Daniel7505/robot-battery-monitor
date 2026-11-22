@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.mapping.brain_port import latest_stop, publish_command, read_status
+from src.mapping.brain_port import format_frontier, latest_stop, publish_command, read_status
 
 
 def run_dir_from(explicit: str | None) -> Path:
@@ -61,6 +61,8 @@ def show(folder: Path) -> dict | None:
         f"wheel={travel.get('wheel_m')}  floor={travel.get('floor_m')}"
     )
     print(f"battery {battery.get('pct')}%  detail {status.get('detail')}")
+    if "frontier" in status:
+        print(f"frontier {format_frontier(status.get('frontier'))}")
     return status
 
 

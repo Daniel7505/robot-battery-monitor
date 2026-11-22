@@ -10,11 +10,23 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.mapping.brain_port import latest_stop, publish_command, read_status, wait_for_command, write_png, write_stop
+from src.mapping.brain_port import (
+    _color_map,
+    format_frontier,
+    latest_stop,
+    publish_command,
+    read_status,
+    wait_for_command,
+    write_png,
+    write_stop,
+)
+from src.mapping.body import ROBOT_RADIUS_M
 from src.mapping.bubble import BubbleView
-from src.mapping.driver import STALL_WINDOW_S, WaypointDriver, parse_command
+from src.mapping.driver import STALL_WINDOW_S, WAYPOINT_ARRIVE_M, WaypointDriver, parse_command
 from src.mapping.explore import Explorer
+from src.mapping.frontiers import select_goal
 from src.mapping.grid import OccupancyGrid
+from src.mapping.rooms import segment_map
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +127,150 @@ def test_an_open_command_the_pose_does_not_follow_is_stuck():
             break
     assert driver.outcome == "stuck"
     assert driver._t >= STALL_WINDOW_S - 1e-6
+
+
+def test_a_straight_door_the_rectangle_clips_still_drives():
+    """The nose test leaves a centred doorway open. The rectangle does not.
+
+    Zeroing that straight command sits the shell in the opening.
+    """
+    from src.mapping.footprint import footprint_clips
+    from src.mapping.tick import _ahead_blocked
+
+    bot = _Bot()
+    for x in (0.10, 0.15, 0.20, 0.25, 0.30, 0.35):
+        for y in (0.20, -0.20):
+            cell = bot.grid.cell_of(x, y)
+            bot.grid.log[cell] = bot.grid.l_max
+    pose = bot.pose()
+    assert footprint_clips(bot.grid, pose, 0.28, 0.0)
+    assert _ahead_blocked(bot.grid, pose) is False
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    left, right = driver.wheels(bot, 0.6, 0.6, _open(), 0.05)
+    assert driver.outcome is None
+    assert left > 0.0 and right > 0.0
+
+
+def _vw(left: float, right: float) -> tuple[float, float]:
+    v = 0.5 * (left + right) * 0.08
+    w = (right - left) * 0.08 / 0.34
+    return v, w
+
+
+def test_a_door_back_off_is_not_redecided_every_frame():
+    """A side gap that flickers used to swap creep and reverse every tick.
+
+    The back-off stays for the 2 s clock. The next command is a turn
+    toward the opening, not another creep on the heading that failed.
+    """
+    bot = _Bot()
+    for x in (0.25, 0.45, 0.65):
+        bot.grid.log[bot.grid.cell_of(x, 0.20)] = bot.grid.l_max
+        bot.grid.log[bot.grid.cell_of(x, -0.55)] = bot.grid.l_max
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    left, right = driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    held = _vw(left, right)
+    assert held[0] < -0.02
+    saw_turn = False
+    for _ in range(80):
+        left, right = driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        v, w = _vw(left, right)
+        if driver._backoff_vw is None:
+            assert abs(v) < 0.02
+            assert abs(w) > 0.05
+            saw_turn = True
+            break
+        assert v == pytest.approx(held[0], abs=1e-6)
+        assert w == pytest.approx(held[1], abs=1e-6)
+    assert saw_turn
+    assert driver._t >= STALL_WINDOW_S - 1e-6
+    assert driver.outcome is None
+
+
+def test_a_reaim_heading_does_not_flip_when_the_gap_flickers(monkeypatch):
+    """The opening is measured once. A gap that comes and goes used to reverse the spin."""
+    bot = _Bot()
+    calls = {"n": 0}
+
+    def heading(grid, pose, failed):
+        calls["n"] += 1
+        return 1.2 if calls["n"] == 1 else -1.2
+
+    monkeypatch.setattr("src.mapping.driver._approach_heading", heading)
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 1.5, "y": 0.0}, bot)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    signs = []
+    for _ in range(80):
+        left, right = driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        v, w = _vw(left, right)
+        if driver._backoff_vw is None and abs(w) > 0.05 and abs(v) < 0.02:
+            signs.append(1 if w > 0 else -1)
+            bot.odometry.yaw_rad += 0.02
+            bot.odometry.yaw_unwrapped_rad += 0.02
+        if len(signs) >= 8:
+            break
+    assert len(signs) >= 8
+    assert set(signs) == {1}
+    assert driver.outcome is None
+    # The turn is still going after the 2 s clock. The old stall ended it here.
+    assert driver._t >= STALL_WINDOW_S - 1e-6
+
+
+def test_a_goal_on_a_mapped_wall_stops_short_instead_of_driving_into_it():
+    """A cell the map calls occupied is not a straight aim through that wall."""
+    bot = _Bot()
+    row, col = bot.grid.cell_of(0.0, 0.0)
+    bot.grid.log[row, col + 1] = bot.grid.l_max
+    goal = bot.grid.cell_center(row, col + 1)
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": goal[0], "y": goal[1]}, bot)
+    view = BubbleView(1.5, 1.5, 1.5, 1.5, 1.5)
+    left, right = driver.wheels(bot, 1.5, 1.5, view, 0.05)
+    assert (left, right) == (0.0, 0.0)
+    assert driver.outcome == "stopped_short"
+    assert driver.remaining_m > WAYPOINT_ARRIVE_M
+
+
+def test_a_return_after_the_back_off_is_closer_than_the_backed_up_pose():
+    """The 2 s reverse leaves the doorway on purpose.
+
+    The closest point before that reverse is not the bar for the try
+    that follows. A shell that is closing again, and has not yet beaten
+    the old point, keeps the command.
+    """
+    bot = _Bot()
+    bot.odometry.x_m = 1.60
+    driver = WaypointDriver()
+    driver.arm({"cmd": "go_to", "x": 2.0, "y": 0.0}, bot)
+    assert driver._best_dist == pytest.approx(0.40, abs=1e-6)
+    close = BubbleView(1.5, 0.08, 1.2, 1.5, 0.08)
+    left, right = driver.wheels(bot, 0.08, 1.2, close, 0.05)
+    assert _vw(left, right)[0] < -0.02
+    backed_up = False
+    for _ in range(50):
+        if driver._t > 0.4:
+            bot.odometry.x_m = 1.00
+            backed_up = True
+        driver.wheels(bot, 0.40, 1.2, close, 0.05)
+        if driver._backoff_vw is None:
+            break
+    assert backed_up
+    assert driver._backoff_vw is None
+    assert driver.outcome is None
+    assert driver._best_dist == pytest.approx(1.00, abs=0.02)
+    opened = BubbleView(1.5, 0.40, 1.2, 1.5, 0.40)
+    for i in range(45):
+        bot.odometry.x_m = 1.00 + i * 0.003
+        driver.wheels(bot, 0.40, 1.2, opened, 0.05)
+        assert driver.outcome is None
+    assert driver._best_dist < 0.90
 
 
 def test_a_vetoed_go_to_stops_short_with_the_gap():
@@ -340,9 +496,74 @@ def test_cli_reads_a_snapshot_and_writes_a_command(tmp_path, capsys):
     assert "odometry" in capsys.readouterr().out
 
 
+def test_a_stop_proposal_is_the_existing_frontier_and_does_not_drive():
+    """The waypoint stop asks ``select_goal``. It does not take that goal."""
+    grid = OccupancyGrid(size_m=8.0)
+    grid.stamp_footprint(0.0, 0.0, radius_m=1.2)
+    bot = Explorer(grid=grid, fusion=False, floor=False, loop=False)
+    phase = bot.phase
+    proposal = bot.frontier_proposal()
+    rooms = segment_map(grid.labels(), grid.res)
+    chosen = select_goal(
+        grid,
+        (0.0, 0.0),
+        radius_m=ROBOT_RADIUS_M,
+        banned=set(),
+        avoid=[],
+        rooms=rooms,
+        heading_xy=(1.0, 0.0),
+        visited=bot.visited,
+    )
+    assert chosen is not None and proposal is not None
+    assert proposal["goal_xy_m"][0] == pytest.approx(chosen[0][0], abs=1e-4)
+    assert proposal["goal_xy_m"][1] == pytest.approx(chosen[0][1], abs=1e-4)
+    assert len(proposal["path_xy_m"]) == len(chosen[1])
+    assert bot.goal_xy is None
+    assert bot.path_xy == []
+    assert bot.phase == phase
+    assert format_frontier(proposal).startswith("(")
+    assert "path=" in format_frontier(proposal)
+    assert format_frontier(None) == "none"
+
+
+def test_the_snapshot_map_draws_the_frontier_path(tmp_path, capsys):
+    labels = np.zeros((12, 12), dtype=np.int8)
+    labels[0, :] = -1
+    labels[2, 5] = 1
+    meta = {"resolution_m": 0.05, "origin_xy_m": [0.0, 0.0], "width": 12, "height": 12}
+    path = [[0.10, 0.10], [0.40, 0.10]]
+    rgb = _color_map(labels, meta, (0.10, 0.30), path, [0.40, 0.10])
+    # Path cells are free and green. The occupied cell the segment crosses is magenta.
+    assert tuple(rgb[2, 4]) == (40, 170, 60)
+    assert tuple(rgb[2, 5]) == (230, 40, 180)
+    # The goal is blue, and the pose is painted last so it stays red.
+    assert tuple(rgb[2, 8]) == (40, 90, 220)
+    assert tuple(rgb[6, 2]) == (220, 40, 40)
+    report = {
+        "status": "ready",
+        "detail": "",
+        "tilt_warning": False,
+        "pose": {"x_m": 0.10, "y_m": 0.30, "yaw_rad": 0.0, "frame": "odometry"},
+        "travel": {"commanded_m": 0.0, "wheel_m": 0.0, "floor_m": 0.0},
+        "battery": {"pct": 100.0, "wh_used": 0.0, "pack_wh": 480.0},
+        "command": None,
+        "frontier": {"goal_xy_m": [0.40, 0.10], "path_xy_m": path},
+    }
+    write_stop(tmp_path, 0, report, 1.0, {}, labels, meta)
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("driver_command", ROOT / "scripts" / "driver_command.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.main(["--run", str(tmp_path)]) == 0
+    assert "frontier (0.40,0.10) path=2" in capsys.readouterr().out
+
+
 def test_driver_flag_defaults_off_and_a_bound_explorer_still_steps():
     mapper = (ROOT / "webots" / "controllers" / "apartment_mapper" / "apartment_mapper.py").read_text(encoding="utf-8")
     assert '_flag("RBM_DRIVER", False)' in mapper
+    assert "frontier_proposal" in mapper
+    assert "MAPPING frontier proposal" in mapper
     plain = Explorer(fusion=False, floor=False, loop=False)
     assert plain._waypoint is None
     driven = Explorer(fusion=False, floor=False, loop=False)

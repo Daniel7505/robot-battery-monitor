@@ -37,7 +37,7 @@ from src.mapping.frontiers import (
 )
 from src.mapping.scan_match import pose_correction, scan_fit
 from src.mapping.grid import OccupancyGrid
-from src.mapping.noise import depth_sigma_m, noisy_depth, noisy_yaw_rate
+from src.mapping.noise import noisy_depth, noisy_yaw_rate
 from src.mapping.odometry import WheelGyroOdometry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1874,7 +1874,7 @@ def test_a_door_is_approached_slowly_on_the_centre_line():
 
 def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():
     """A straight pass misses a wall that sits only on the inside of a turn."""
-    from src.mapping.footprint import fit_motion, footprint_clips
+    from src.mapping.footprint import footprint_clips
 
     grid = OccupancyGrid()
     pose = (0.0, 0.0, 0.0)
@@ -1884,9 +1884,6 @@ def test_open_floor_arc_does_not_clip_and_an_inside_wall_does():
     _fill(grid, 0.05, 0.34, 0.70, 0.70, grid.l_max)
     assert not footprint_clips(grid, pose, 0.18, 0.0)
     assert footprint_clips(grid, pose, 0.18, 0.9)
-    v, w, kind = fit_motion(grid, pose, 0.18, 0.9, 0.0)
-    assert kind in {"wider", "straight", "align"}
-    assert not footprint_clips(grid, pose, v, w)
 
 
 def test_a_pivot_whose_corner_sweeps_into_the_map_backs_up():
@@ -2340,36 +2337,6 @@ def test_reverse_out_of_a_blind_wall_moves_the_pose():
             pass
     assert backed
     assert bot.pose()[0] < -0.08
-
-
-def test_contact_mark_survives_a_later_free_ray():
-    grid = OccupancyGrid()
-    cell = grid.cell_of(0.40, 0.0)
-    assert cell is not None
-    # Only a cell the camera already called a wall can be reinforced.
-    # One free ray does not wipe it. A run of free rays does, so a mark
-    # that landed in an opening cannot stay shut.
-    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
-    grid.integrate((0.0, 0.0), np.array([[0.40, 0.0]]), np.zeros((0, 2)))
-    grid.mark_contact(0.40, 0.0)
-    assert grid.labels()[cell] == 1
-    grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
-    assert grid.labels()[cell] == 1
-    for _ in range(8):
-        grid.integrate((0.0, 0.0), np.zeros((0, 2)), np.array([[2.0, 0.0]]))
-    assert grid.labels()[cell] != 1
-    assert not grid.latch[cell]
-
-
-def test_contact_does_not_invent_a_wall_in_open_space():
-    grid = OccupancyGrid()
-    grid.mark_contact(0.28, 0.0)
-    cell = grid.cell_of(0.28, 0.0)
-    assert cell is not None and grid.labels()[cell] == -1
-    grid.log[cell] = grid.l_min
-    grid.mark_contact(0.28, 0.0)
-    assert grid.labels()[cell] == 0
-    assert not grid.latch[cell]
 
 
 def test_stalled_hubs_turn_away_and_mark_the_contact():
@@ -2841,12 +2808,8 @@ def test_the_rear_camera_looks_behind_the_tail():
 
 def test_depth_error_grows_with_range_squared():
     # Luxonis OAK-D Lite, 480P, 75 mm: below 2% under 3 m.
+    # sigma(z) = (0.06/9) * z^2, so a 3 m draw is nine times a 1 m draw.
     # https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
-    assert depth_sigma_m(3.0) == pytest_approx(0.06)
-    assert depth_sigma_m(3.0) / 3.0 == pytest_approx(0.02)
-    assert depth_sigma_m(1.0) == pytest_approx(0.06 / 9.0)
-    assert depth_sigma_m(2.0) == pytest_approx(4.0 * depth_sigma_m(1.0))
-    assert depth_sigma_m(5.0) / 5.0 < 0.04
     near = np.array(
         [noisy_depth(np.array([[1.0]]), np.random.default_rng(i), 8.0)[0, 0] for i in range(60)]
     )
@@ -4188,142 +4151,6 @@ def test_oracle_pose_is_for_the_planner_and_the_map_stays_on_the_estimate():
     assert float(bot.grid.log[other]) == pytest_approx(0.0)
 
 
-def test_recovery_mode_defaults_to_the_stack(monkeypatch):
-    monkeypatch.delenv("RBM_RECOVERY_MODE", raising=False)
-    from src.mapping.explore import Explorer, recovery_mode
-
-    assert recovery_mode() == "stack"
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    assert bot.recovery_mode == "stack"
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "sideways")
-    assert recovery_mode() == "stack"
-
-
-def test_one_rule_reverses_along_the_trail_and_quarantines(monkeypatch):
-    """A pile reverses on the driven trail and remembers the spot. It does not drive forward."""
-    from src.mapping.explore import Explorer
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
-    bot.phase = "go"
-    bot.t_s = 70.0
-    bot._pile_anchor = (0.0, 0.0, 0.0)
-    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
-    bot._view_blind = False
-    bot._last_clear = (1.2, 1.2, 1.2)
-    bot.goal_xy = (1.5, 0.0)
-    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    left, right = bot._go(False, 0.28)
-    assert left < -0.5 and right < -0.5
-    assert bot.goal_xy is None
-    assert bot._failure_zones == [(0.0, 0.0, 70.0)]
-    assert bot._escape_block is None
-    assert bot._failure_zone_args() == [(0.0, 0.0, 0.45)]
-
-
-def test_trail_only_reverses_without_a_quarantine(monkeypatch):
-    from src.mapping.explore import Explorer
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "trail_only")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
-    bot.phase = "go"
-    bot.t_s = 70.0
-    bot._pile_anchor = (0.0, 0.0, 0.0)
-    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
-    bot._view_blind = False
-    bot._last_clear = (1.2, 1.2, 1.2)
-    bot.goal_xy = (1.5, 0.0)
-    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    left, right = bot._go(False, 0.28)
-    assert left < -0.5 and right < -0.5
-    assert bot.goal_xy == (1.5, 0.0)
-    assert bot._failure_zones == []
-    assert bot._failure_zone_args() is None
-
-
-def test_one_rule_ignores_an_imu_stuck_and_a_blocked_heading(monkeypatch):
-    from src.mapping.drive import wheel_speeds
-    from src.mapping.explore import Explorer
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
-    bot.phase = "go"
-    bot.t_s = 2.5
-    bot._replan_at = 100.0
-    bot.path_xy = [(0.0, 0.0), (1.5, 0.0)]
-    bot.goal_xy = (1.5, 0.0)
-    for i in range(6):
-        bot._imu_samples.append((i * 0.5, 0.50, 0.001, 0.0, 0.02))
-    bot._go(False, 0.28)
-    assert bot._escape_block is None
-    assert bot._stuck_reason() == "imu_stuck"
-    bot._escape_block = (30.0, 0.0, 0.0, 0.0)
-    left, right = bot._issue(wheel_speeds(0.12, 0.0))
-    assert left > 0.5 and right > 0.5
-
-
-def test_one_rule_does_not_treat_the_survey_spin_as_a_stall(monkeypatch):
-    """A finished survey is a sit, not a stall. The clock starts with the drive."""
-    from src.mapping.drive import wheel_speeds
-    from src.mapping.explore import Explorer
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
-    bot.t_s = 10.0
-    bot._commanded = wheel_speeds(0.0, 0.70)
-    bot._body_w = 0.70
-    bot.odometry.yaw_unwrapped_rad = 3.0
-    assert bot._one_rule_command(bot.plan_pose()) is None
-    bot._commanded = wheel_speeds(0.12, 0.0)
-    bot._body_v = 0.12
-    bot._body_w = 0.0
-    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
-    assert bot._one_rule_command(bot.plan_pose()) is None
-    bot.t_s = 12.1
-    left, right = bot._one_rule_command(bot.plan_pose())
-    assert left is not None and left < -0.5 and right < -0.5
-
-
-def test_one_rule_does_not_run_the_stall_creep_or_unknown_paths(monkeypatch):
-    from src.mapping.explore import Explorer
-
-    from src.mapping.drive import wheel_speeds
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.grid.stamp_footprint(0.0, 0.0, radius_m=1.5)
-    bot.phase = "go"
-    bot.t_s = 5.0
-    bot._body_v = 0.12
-    bot._commanded = wheel_speeds(0.12, 0.0)
-    bot._trans_still_from = (0.0, 0.0, 0.0)
-    bot._progress_from = (0.0, 0.0, 0.0, True)
-    bot._crumbs = [(-1.0, 0.0), (0.0, 0.0)]
-    bot._view_blind = False
-    bot._last_clear = (1.0, 1.0, 1.0)
-
-    def _stall(_pose):
-        raise AssertionError("stall escape")
-
-    def _creep(*_args):
-        raise AssertionError("creep")
-
-    monkeypatch.setattr(bot, "_stall_escape", _stall)
-    monkeypatch.setattr(bot, "_creep_through_gap", _creep)
-    left, right = bot._go(False, 0.28)
-    assert left < -0.5 and right < -0.5
-    bot._relief = None
-    bot._motion_anchor = (0.0, 0.0, 0.0, 0.0)
-    bot._body_v = 0.12
-    bot._body_w = 0.0
-    bot._watch_motion()
-    assert bot._relief is None
-
-
 def test_a_quarantine_disk_is_expensive_and_not_a_goal():
     from src.mapping.frontiers import apply_zone_cost, point_in_zones
     from src.mapping.grid import OccupancyGrid
@@ -4340,24 +4167,6 @@ def test_a_quarantine_disk_is_expensive_and_not_a_goal():
     assert not point_in_zones((1.0, 0.0), [(0.0, 0.0, 0.45)])
     # The occupancy log was not painted.
     assert float(grid.log[here]) == 0.0
-
-
-def test_one_rule_plan_hands_the_disk_to_the_goal_picker(monkeypatch):
-    from src.mapping.explore import Explorer
-
-    monkeypatch.setenv("RBM_RECOVERY_MODE", "one_rule")
-    bot = Explorer(camera=_small_oak(), fusion=False, floor=False, loop=False)
-    bot.t_s = 10.0
-    bot._failure_zones = [(1.0, 2.0, 9.0)]
-    seen = {}
-
-    def _select(*_args, **kwargs):
-        seen["zones"] = kwargs.get("zones")
-        return None
-
-    monkeypatch.setattr("src.mapping.explore.select_goal", _select)
-    bot._plan()
-    assert seen["zones"] == [(1.0, 2.0, 0.45)]
 
 
 def test_shared_rectangle_blocks_a_corner_the_disk_misses():
@@ -4380,11 +4189,10 @@ def test_shared_rectangle_blocks_a_corner_the_disk_misses():
     assert blocks.shape[0] == 8
 
 
-def test_aligned_planner_still_crosses_a_centred_door(monkeypatch):
-    """The shared rectangle is not a bigger disk. A 0.81 m opening stays open."""
-    from src.mapping.frontiers import approach_costs, neighbor_blocks, rectangle_masks
+def test_a_centred_door_stays_open_on_the_planning_disk():
+    """A 0.81 m opening stays open. A 0.25 m cell costs 2.5 and a 0.10 m cell costs 6."""
+    from src.mapping.frontiers import approach_costs
 
-    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
     grid = OccupancyGrid()
     _fill(grid, 0.0, -0.9, 3.2, 0.9, grid.l_min)
     _fill(grid, 0.0, 0.405, 3.2, 0.9, grid.l_max)
@@ -4395,19 +4203,6 @@ def test_aligned_planner_still_crosses_a_centred_door(monkeypatch):
     goal = grid.cell_of(2.6, 0.0)
     assert start is not None and goal is not None
     assert free[start] and free[goal]
-    masks = rectangle_masks(labels == 1, grid.res)
-    blocks = neighbor_blocks(masks)
-    path = astar(
-        free,
-        start,
-        goal,
-        step_cost=grid.res,
-        heading_block=blocks,
-        yaw_masks=masks,
-        start_yaw=0.0,
-    )
-    assert path is not None and path[-1] == goal
-    # Clearance weights are the same numbers. A 0.25 m cell is 2.5, a 0.10 m cell is 6.
     clear = np.full((5, 5), 1.0, dtype=np.float32)
     clear[2, 2] = 0.25
     assert float(approach_costs(clear)[2, 2]) == pytest_approx(2.5)
@@ -4415,8 +4210,8 @@ def test_aligned_planner_still_crosses_a_centred_door(monkeypatch):
     assert float(approach_costs(clear)[2, 2]) == pytest_approx(6.0)
 
 
-def test_aligned_veto_uses_the_rectangle_on_a_straight_command(monkeypatch):
-    """Flag off: a smear ahead is not a straight veto. Flag on: the rectangle is."""
+def test_a_smear_ahead_is_not_a_straight_veto():
+    """A one-cell smear on the nose does not veto a straight command."""
     from src.mapping.bubble import BubbleView
     from src.mapping.tick import choose_motion
 
@@ -4424,7 +4219,6 @@ def test_aligned_veto_uses_the_rectangle_on_a_straight_command(monkeypatch):
     _fill(grid, 0.25, -0.05, 0.40, 0.05, grid.l_max)
     view = BubbleView(1.5, 1.5, 1.5, 1.5, 1.5)
     pose = (0.0, 0.0, 0.0)
-    monkeypatch.delenv("RBM_FOOTPRINT_ALIGN", raising=False)
     plain = choose_motion(
         view=view,
         pursuit_v=0.12,
@@ -4437,19 +4231,6 @@ def test_aligned_veto_uses_the_rectangle_on_a_straight_command(monkeypatch):
     )
     assert plain.v > 0.02 and abs(plain.w) < 0.12
     assert not any(item["sensor"] == "map:footprint" for item in plain.vetoes)
-    monkeypatch.setenv("RBM_FOOTPRINT_ALIGN", "1")
-    aligned = choose_motion(
-        view=view,
-        pursuit_v=0.12,
-        pursuit_w=0.0,
-        heading_err=0.0,
-        grid=grid,
-        pose=pose,
-        left_clear=2.0,
-        right_clear=2.0,
-    )
-    assert any(item["motion"] == "cruise" and item["sensor"] == "map:footprint" for item in aligned.vetoes)
-    assert not (aligned.v > 0.2 and abs(aligned.w) < 0.12)
 
 
 def test_a_sharp_turn_the_rectangle_rejects_is_not_planned():
@@ -4584,15 +4365,12 @@ def test_quit_dump_counts_an_astar_expansion_cap(monkeypatch):
     assert quit_info["reason"] == "astar_cap"
 
 
-def test_shared_footprint_uses_the_planner_mask_and_keeps_live_range(monkeypatch):
-    """A spin the rectangle refuses stays legal when the centre is still free."""
+def test_a_corner_sweep_is_a_map_corner_and_a_close_nose_still_stops():
+    """The rectangle rejects the spin. A 4 cm nose still stops the forward command."""
     from src.mapping.bubble import BubbleView
-    from src.mapping.footprint import footprint_clips, shared_footprint_enabled
-    from src.mapping.frontiers import swept_leaves_free
+    from src.mapping.footprint import footprint_clips
     from src.mapping.tick import choose_motion, map_veto
 
-    monkeypatch.delenv("RBM_SHARED_FOOTPRINT", raising=False)
-    assert not shared_footprint_enabled()
     grid = OccupancyGrid()
     _fill(grid, -1.5, -1.5, 1.5, 1.5, grid.l_min)
     cell = grid.cell_of(0.125, 0.275)
@@ -4600,13 +4378,7 @@ def test_shared_footprint_uses_the_planner_mask_and_keeps_live_range(monkeypatch
     grid.log[cell] = grid.l_max
     pose = (0.0, 0.0, 0.0)
     assert footprint_clips(grid, pose, 0.0, 0.70)
-    assert not swept_leaves_free(grid, pose, 0.0, 0.70)
     assert map_veto(grid, pose, 0.0, 0.70) == "map:corner"
-    monkeypatch.setenv("RBM_SHARED_FOOTPRINT", "1")
-    assert shared_footprint_enabled()
-    assert map_veto(grid, pose, 0.0, 0.70) is None
-    _fill(grid, 0.20, -0.20, 0.55, 0.20, grid.l_max)
-    assert map_veto(grid, pose, 0.28, 0.0) == "map:mask"
     view = BubbleView(0.04, 0.40, 0.40, 0.40, 0.04)
     choice = choose_motion(
         view=view,

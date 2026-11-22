@@ -27,15 +27,10 @@ from src.mapping.body import (
 )
 
 
-def depth_sigma_m(range_m: float, at_1m: float = OAK_DEPTH_SIGMA_AT_1M) -> float:
-    """σ at ``range_m``. Stereo error scales with range squared.
-
-    ``at_1m`` is σ at 1 m (6.7 mm for the published OAK-D Lite band).
-    At 0.5 m the error is a quarter of that, at 2 m it is four times,
-    and at 5 m it is about 3.3% of range.
-    """
-    z = max(0.0, float(range_m))
-    return float(at_1m) * z * z
+# depth_sigma_m(z) = OAK_DEPTH_SIGMA_AT_1M * z * z
+# OAK-D Lite, 480P, 75 mm baseline: 6.7 mm at 1 m (0.06/9 m), 0.06 m at 3 m
+# (2% of range), about 3.3% at 5 m. noisy_depth applies that draw.
+# https://docs.luxonis.com/hardware/platform/depth/depth-accuracy
 
 
 def noisy_depth(depth: np.ndarray, rng: np.random.Generator, max_range_m: float) -> np.ndarray:

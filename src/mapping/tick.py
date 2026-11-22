@@ -21,8 +21,7 @@ from src.mapping.bubble import (
     pivot_ready,
     stop_gap,
 )
-from src.mapping.footprint import footprint_align_enabled, footprint_clips, shared_footprint_enabled
-from src.mapping.frontiers import swept_leaves_free
+from src.mapping.footprint import footprint_clips
 
 # Half of cruise. A doorway correction has to finish before the tire meets the frame.
 DOOR_CREEP_M_S = 0.12
@@ -286,20 +285,10 @@ def _costs(
 def map_veto(grid, pose: tuple[float, float, float], v: float, w: float) -> str | None:
     """Map footprint that rejects this command, or None when the shape fits.
 
-    The default checks a turn with the rectangle and a straight command
-    with a three-cell bar. ``RBM_FOOTPRINT_ALIGN`` uses the rectangle for
-    every command, the same outline the planner then inflates with.
-    ``RBM_SHARED_FOOTPRINT`` drops both shapes and uses the planner mask.
+    A turn is checked with the rectangle. A straight command is checked
+    with a three-cell bar.
     """
     if grid is None:
-        return None
-    if shared_footprint_enabled():
-        if swept_leaves_free(grid, pose, v, w):
-            return "map:mask"
-        return None
-    if footprint_align_enabled():
-        if footprint_clips(grid, pose, v, w):
-            return "map:footprint"
         return None
     turning = abs(float(w)) > TURN_W_RAD_S
     if turning and footprint_clips(grid, pose, v, w):
@@ -428,8 +417,6 @@ def _known_free_ahead(grid, pose: tuple[float, float, float]) -> bool:
 
 def _reverse_blocked(grid, pose) -> bool:
     """A mapped wall spans the tail, so a straight backup would enter it."""
-    if shared_footprint_enabled():
-        return swept_leaves_free(grid, pose, -0.10, 0.0)
     return _behind_blocked(grid, pose)
 
 
@@ -518,21 +505,13 @@ def choose_motion(
     # so the robot would sit. A spin the map shows as clear is still a move.
     if grid is not None:
         for name, w in (("spin_left", 0.70), ("spin_right", -0.70)):
-            blocked = (
-                swept_leaves_free(grid, pose, 0.0, w)
-                if shared_footprint_enabled()
-                else footprint_clips(grid, pose, 0.0, w)
-            )
+            blocked = footprint_clips(grid, pose, 0.0, w)
             if not blocked:
                 return MotionChoice(name, 0.0, w, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
     # Sonar can sit at 6 cm on open floor the map has already marked free.
     # Holding there never counts as stuck, so the seed does not move.
     if _known_free_ahead(grid, pose):
-        creep_blocked = (
-            swept_leaves_free(grid, pose, 0.06, 0.0)
-            if shared_footprint_enabled()
-            else footprint_clips(grid, pose, 0.06, 0.0)
-        )
+        creep_blocked = footprint_clips(grid, pose, 0.06, 0.0)
         if not creep_blocked:
             return MotionChoice("creep", 0.06, 0.0, {"total": 0.0, "fallback": 1.0}, vetoes, ballot)
     return MotionChoice("hold", 0.0, 0.0, {"total": 0.0}, vetoes, ballot)

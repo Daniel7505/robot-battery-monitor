@@ -569,6 +569,14 @@ A chapter index of the apartment mapping rounds. Each line is taken from [`LESSO
 - **Lesson:** The condition did not match the logged sits. The crossing differences are divergence. The later throat hold is `d648fe8`, not a claim that this one worked.
 - **Notes:** [Lessons](LESSONS_LEARNED.md#why-the-hold-missed-seeds-78-and-80) · [Decision](DESIGN_DECISIONS.md#2026-11-15-seeds-7880-lose-the-goal-between-fires)
 
+### 2026-11-22 — The off flags and the test-only helpers are deleted
+
+- **Commit:** `4b6f61e`
+- **Tried:** Delete `RBM_RECOVERY_MODE` (`one_rule` and `trail_only`), `RBM_FOOTPRINT_ALIGN`, and `RBM_SHARED_FOOTPRINT`. Delete `fit_motion`, `mark_contact`, `reverse_budget_m`, and `depth_sigma_m`. The stack, the 0.20 m planner disk, and the rectangle veto on a turn stay.
+- **Result:** No driving change. The flags were already off. Pytest here: 1109 passed, 28 skipped, against 1120 passed, 28 skipped before the cut. Eleven tests left with the deleted code. A logged lap is still required before merge.
+- **Lesson:** Code that never runs on a lap is not a recovery. Dan decides the merge.
+- **Notes:** [One recovery rule](LESSONS_LEARNED.md#one-recovery-rule) · [One footprint](LESSONS_LEARNED.md#one-footprint-for-the-planner-and-the-veto)
+
 ## 10. Waypoint driver
 
 ### 2026-11-17 — One command, then a stop

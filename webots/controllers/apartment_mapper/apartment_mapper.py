@@ -7,10 +7,6 @@ module. The inertial unit's yaw is not used for heading. A separate
 controller records the simulator pose for scoring. This process does not
 read that log. ``RBM_ORACLE_POSE=1`` hands the planner its own pose from
 ``oracle_pose.txt``. The grid still integrates the estimate.
-``RBM_RECOVERY_MODE`` is empty unless set. ``one_rule`` and ``trail_only``
-replace the stacked recoveries. The default is the stacked behavior.
-``RBM_FOOTPRINT_ALIGN`` is off unless set. On, the planner and the map
-veto use one rectangle. Goal scores are unchanged.
 ``RBM_DRIVER`` is off unless set. On, an outside command file names one
 waypoint in the robot's own odometry frame. At each stop this process
 writes a snapshot and does not step again until the next command file
@@ -499,7 +495,6 @@ def main() -> None:
     oracle_on = _flag("RBM_ORACLE_POSE", False)
     if oracle_on:
         print("MAPPING oracle pose for the planner; the map still uses the estimate")
-    print(f"MAPPING recovery {explorer.recovery_mode}")
     print(f"MAPPING run folder: {folder}")
     straight_s = _env_float("RBM_STRAIGHT_S")
     if straight_s is not None and straight_s > 0.0:

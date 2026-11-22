@@ -9,11 +9,9 @@ under a tire does not freeze the next move. Ground truth is not read.
 from __future__ import annotations
 
 import math
-import os
 
 from src.mapping.bubble import SHELL_HALF_M, SHELL_NOSE_M, SHELL_TAIL_M
 from src.mapping.grid import OccupancyGrid
-from src.mapping.odometry import wrap_rad
 
 # One clearance outside the ButlerBotSkid outline (nose and tail 0.19 m,
 # side face 0.227 m). This is not the planner's 0.20 m disk: that disk is
@@ -22,7 +20,7 @@ from src.mapping.odometry import wrap_rad
 # swing into a mapped cell. One centimetre was not enough to see that
 # swing, and three centimetres on a 5 cm cell stopped straight passes that
 # only grazed the next cell. Two centimetres leaves a centred 0.81 m door
-# open. ``RBM_FOOTPRINT_ALIGN`` makes the planner use this same rectangle.
+# open.
 FOOTPRINT_MARGIN_M = 0.02
 NOSE_M = SHELL_NOSE_M + FOOTPRINT_MARGIN_M
 TAIL_M = SHELL_TAIL_M + FOOTPRINT_MARGIN_M
@@ -35,27 +33,6 @@ SWEEP_SPIN_RAD = 0.50
 STEP_M = 0.05
 STEP_SPIN_RAD = 0.10
 _REACH_M = math.hypot(max(NOSE_M, TAIL_M), HALF_M)
-
-
-def shared_footprint_enabled() -> bool:
-    """True when the map veto uses the planner's inflated free mask.
-
-    Off unless ``RBM_SHARED_FOOTPRINT`` is set. The planner is unchanged.
-    The veto then rejects a swept pose whose centre has left that mask.
-    Live range still applies. No extra clearance is introduced.
-    """
-    raw = (os.environ.get("RBM_SHARED_FOOTPRINT") or "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
-
-
-def footprint_align_enabled() -> bool:
-    """True when the planner and the map veto share this rectangle.
-
-    Off unless ``RBM_FOOTPRINT_ALIGN`` is set. The default keeps the
-    planner's 0.20 m disk and the straight span check.
-    """
-    raw = (os.environ.get("RBM_FOOTPRINT_ALIGN") or "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
 
 
 def footprint_clips(
@@ -75,40 +52,6 @@ def footprint_clips(
         if _hits_new_obstacle(grid, px, py, pyaw, ignore):
             return True
     return False
-
-
-def fit_motion(
-    grid: OccupancyGrid,
-    pose: tuple[float, float, float],
-    v_m_s: float,
-    w_rad_s: float,
-    target_yaw: float,
-) -> tuple[float, float, str]:
-    """Return a motion whose sweep misses occupied cells.
-
-    The kind is ``clear`` when the request was already safe, ``wider``
-    when a gentler arc is, ``straight`` when only a straight move is,
-    ``align`` when the shell has to spin toward ``target_yaw`` first,
-    and ``stop`` when every one of those clips.
-    """
-    v = float(v_m_s)
-    w = float(w_rad_s)
-    if not footprint_clips(grid, pose, v, w):
-        return v, w, "clear"
-    for scale in (0.5, 0.25):
-        w2 = w * scale
-        if not footprint_clips(grid, pose, v, w2):
-            return v, w2, "wider"
-    if abs(v) > 1e-4:
-        v_straight = math.copysign(min(abs(v), 0.12), v)
-        if not footprint_clips(grid, pose, v_straight, 0.0):
-            return v_straight, 0.0, "straight"
-    err = wrap_rad(float(target_yaw) - float(pose[2]))
-    if abs(err) > 0.08:
-        w_spin = max(-0.55, min(0.55, math.copysign(0.5, err)))
-        if not footprint_clips(grid, pose, 0.0, w_spin):
-            return 0.0, w_spin, "align"
-    return 0.0, 0.0, "stop"
 
 
 def _trajectory(

@@ -27,7 +27,7 @@ The rerun passed the old stuck pose. Truth x reached 3.787, still on the living 
 
 At stop 3 the command swapped every 16 ms between creep `(1.5, 1.5)` and straight reverse `(-1.25, -1.25)`. The encoders rocked and the shell stayed. A side gap under 0.10 m taxes the forward command, and the rectangle vetoes the yaw-away reverse the jamb-press test requires, so the two straight commands take turns. That tax was left in place.
 
-Overlays and the front camera are in `stops/`. `run.mp4` is the pose-logger frames at 2 fps from sim t=8 s. The doorway mouth is about 5 s in (sim t=28 s).
+The stop overlays, the front-camera frames, and `run.mp4` are kept outside the repo. `run.mp4` is the pose-logger frames at 2 fps from sim t=8 s. The doorway mouth is about 5 s in (sim t=28 s).
 
 ## After the back-off clock, `6562ac6`
 
@@ -152,7 +152,7 @@ The kitchen goal was still free. A* was 0.32 m. The shell slid east of it, close
 
 The 0.30 m short was the driver. The goal was beside the shell and inside the 0.25 m lookahead, and pursuit kept a point that was still ahead. `a5bc64a` steers at the goal. The walkway snap at t=54.8–55.5 s is left open.
 
-`f187036` is in the logbook. `RBM_MOVIE=1`. `docs/drives/2026-11-19-hand/lap.mp4`.
+`f187036` is in the logbook. `RBM_MOVIE=1`. The lap movie is kept outside the repo.
 
 | room | truth (x, y) | pos err |
 |---|---|---|
@@ -167,7 +167,7 @@ The 0.30 m short was the driver. The goal was beside the shell and inside the 0.
 
 ## Frontier assist
 
-The morning lap's map is not in the repo. `logs/mapping_runs/` is gitignored, and this machine has no `map.npy` or pose log from that run. `lap.mp4` is the pose logger's viewpoint, not an occupancy grid, so its seen % cannot be scored. No rerun.
+The morning lap's map is not in the repo. `logs/mapping_runs/` is gitignored, and this machine has no `map.npy` or pose log from that run. The lap movie, kept outside the repo, is the pose logger's viewpoint, not an occupancy grid, so its seen % cannot be scored. No rerun.
 
 This session is stock spawn, depth seed 1, `RBM_DRIVER=1`, headless, no movie. At each stop the mapper runs the existing `select_goal` and prints `MAPPING frontier proposal`. The green path on `map.png` is that path. A magenta cell on it is occupied. The goal is blue. Seen % is `coverage_pct` on that stop's own grid. Pose error is the pose log.
 
